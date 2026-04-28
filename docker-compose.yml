@@ -1,0 +1,38 @@
+# Placeholder dev stack — schema agent finalizes volumes / network / app service.
+# `docker compose up -d` brings up Postgres + Redis for local dev.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: finance-hub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: finance
+      POSTGRES_PASSWORD: finance
+      POSTGRES_DB: finance_hub
+    ports:
+      - "5432:5432"
+    volumes:
+      - finance_hub_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance_hub"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: finance-hub-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - finance_hub_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  finance_hub_postgres:
+  finance_hub_redis:

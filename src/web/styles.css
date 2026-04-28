@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+/*
+ * Tailwind v4 — design tokens are declared here via @theme. They become both
+ * Tailwind utility classes (bg-base, text-primary, etc.) AND CSS custom
+ * properties on :root. Light theme is the default; dark theme overrides via
+ * @media (prefers-color-scheme: dark) below.
+ */
+
+@theme {
+  /* radii — tighter than Tailwind defaults */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+
+  /* font scale — well-tuned, no awkward 18px gap */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 15px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 30px;
+
+  /* font stack */
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", "Roboto Mono",
+    Consolas, "Liberation Mono", monospace;
+
+  /* shadows — subtle elevation system */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+  --shadow-md: 0 2px 6px -1px rgb(0 0 0 / 0.06), 0 1px 3px -1px rgb(0 0 0 / 0.04);
+  --shadow-lg: 0 8px 24px -4px rgb(0 0 0 / 0.10), 0 4px 8px -2px rgb(0 0 0 / 0.06);
+
+  /* semantic colors — bound to CSS variables defined below so the theme can
+   * swap at runtime without rebuilding utility classes. */
+  --color-base: var(--c-bg-base);
+  --color-subtle: var(--c-bg-subtle);
+  --color-elevated: var(--c-bg-elevated);
+  --color-default: var(--c-border-default);
+  --color-strong: var(--c-border-strong);
+  --color-primary: var(--c-text-primary);
+  --color-secondary: var(--c-text-secondary);
+  --color-muted: var(--c-text-muted);
+  --color-accent-primary: var(--c-accent-primary);
+  --color-accent-success: var(--c-accent-success);
+  --color-accent-warning: var(--c-accent-warning);
+  --color-accent-danger: var(--c-accent-danger);
+  --color-accent-info: var(--c-accent-info);
+}
+
+/* ---------- Light theme (default) ---------- */
+:root {
+  --c-bg-base: oklch(99% 0.003 250);
+  --c-bg-subtle: oklch(97.5% 0.005 250);
+  --c-bg-elevated: oklch(94% 0.008 250);
+
+  --c-border-default: oklch(91% 0.008 250);
+  --c-border-strong: oklch(82% 0.012 250);
+
+  --c-text-primary: oklch(20% 0.015 250);
+  --c-text-secondary: oklch(40% 0.015 250);
+  --c-text-muted: oklch(58% 0.012 250);
+
+  --c-accent-primary: oklch(58% 0.18 260);
+  --c-accent-success: oklch(60% 0.16 150);
+  --c-accent-warning: oklch(74% 0.16 75);
+  --c-accent-danger: oklch(60% 0.21 25);
+  --c-accent-info: oklch(64% 0.14 220);
+
+  color-scheme: light;
+}
+
+/* ---------- Dark theme ---------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg-base: oklch(15% 0.015 250);
+    --c-bg-subtle: oklch(18% 0.015 250);
+    --c-bg-elevated: oklch(22% 0.018 250);
+
+    --c-border-default: oklch(28% 0.018 250);
+    --c-border-strong: oklch(38% 0.018 250);
+
+    --c-text-primary: oklch(96% 0.005 250);
+    --c-text-secondary: oklch(76% 0.012 250);
+    --c-text-muted: oklch(58% 0.012 250);
+
+    --c-accent-primary: oklch(72% 0.16 260);
+    --c-accent-success: oklch(72% 0.14 150);
+    --c-accent-warning: oklch(82% 0.16 75);
+    --c-accent-danger: oklch(70% 0.18 25);
+    --c-accent-info: oklch(76% 0.13 220);
+
+    color-scheme: dark;
+  }
+}
+
+/* ---------- Reset + base ---------- */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  background-color: var(--c-bg-base);
+  color: var(--c-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
