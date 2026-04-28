@@ -14,9 +14,10 @@ If you're new to this file:
 ## Current phase
 
 **Week 3 — Engine ports + activity ingestion + BullMQ + shadow mode.**
-- Phase A in flight: qb-porter, gmail-porter, anthropic-porter (parallel)
-- Phase B queued: activity-ingester, chase-porter, bullmq-engineer (after Phase A)
-- Reviewer + shadow mode trigger close out the week
+- Phase A complete (`7d662cc`, `33a4492`, `fc14554`)
+- Phase B complete (`5b69ea2`, `e2a1c64`, `7e143b1`)
+- Cross-cutting reviewer running (#15)
+- Then: address findings + flip SHADOW_MODE on for first dry-run
 
 ## Latest checkpoint
 
