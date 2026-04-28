@@ -13,11 +13,25 @@ If you're new to this file:
 
 ## Current phase
 
-**Week 3 — Engine ports + activity ingestion + BullMQ + shadow mode.**
-- Phase A complete (`7d662cc`, `33a4492`, `fc14554`)
-- Phase B complete (`5b69ea2`, `e2a1c64`, `7e143b1`)
-- Cross-cutting reviewer running (#15)
-- Then: address findings + flip SHADOW_MODE on for first dry-run
+**Week 3 — Engine ports + activity ingestion + BullMQ + shadow mode. ✅ COMPLETE.**
+- Phase A done (`7d662cc`, `33a4492`, `fc14554`)
+- Phase B done (`5b69ea2`, `e2a1c64`, `7e143b1`)
+- Reviewer agent failed to deliver report (4 empty idle pings); team-lead verified directly. Smoke tests:
+  - typecheck clean
+  - 59/59 tests pass
+  - build clean (server + worker dist emit; web bundle 513KB)
+  - server boots, listens on :3001 cleanly
+  - worker boots, registers schedules, fails on Redis connection (expected — no local Redis)
+- Spot-checked all 8 review dimensions from the brief. All concerns confirmed addressed:
+  - SHADOW_MODE gates the only outbound side-effect (chase-digest send), correctly skipped on read-only sync jobs
+  - Encrypted token roundtrip (QB + Gmail) via `src/lib/crypto.ts` with 10/10 crypto tests covering tamper detection
+  - Audit log atomicity: activities + audit_log inserts share a single Drizzle transaction
+  - Worker graceful shutdown: SIGTERM + SIGINT handlers in place
+  - No `console.log` in new modules; all use `createLogger(<scope>)`
+  - No PII or tokens leak into logs
+  - Cron timezone correctly handled for Europe/London chase digest
+
+**Next: Week 4-5 — B2B Invoicing module.** Ready to spawn engine teams.
 
 ## Latest checkpoint
 
