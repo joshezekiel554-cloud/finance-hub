@@ -45,11 +45,13 @@ export type QboInvoicePayload = {
   TrackingNum?: string;
   ShipDate?: string;
   ShipMethodRef?: { value: string; name: string };
-  // Always sent as { value: "" } to clear the auto-sync memo. The 3rd-party
-  // Shopify→QB sync stamps strings like "Total Amount of Invoice for Shopify
-  // 18306 -> USD146" into the customer memo, which then renders on statements
-  // and looks unprofessional. Send action always blanks it.
+  // Always sent as { value: "" } to clear the customer-facing memo (renders
+  // on the invoice form's "Message displayed on invoice" field).
   CustomerMemo: { value: string };
+  // The 3rd-party Shopify→QB sync writes its boilerplate ("Total Amount of
+  // Invoice for Shopify 18308 -> USD1386.5") into PrivateNote, the field
+  // QBO's UI labels "Memo on statement (hidden)". Always blank it on send.
+  PrivateNote: string;
   // Optional payment terms reference. Provided when the user picks a term
   // override; omitted when the existing SalesTermRef should stay.
   SalesTermRef?: { value: string; name?: string };
@@ -183,9 +185,12 @@ export function buildPayload(
     Id: invoice.Id,
     SyncToken: invoice.SyncToken,
     sparse: true,
-    // Always blank the customer memo — 3rd-party sync writes sales-receipt
-    // boilerplate that shouldn't appear on statements.
+    // Always blank both memo fields — 3rd-party sync writes sales-receipt
+    // boilerplate into PrivateNote (the "Memo on statement (hidden)" field
+    // in QBO's UI). CustomerMemo is cleared defensively in case some
+    // invoices carry stale content there too.
     CustomerMemo: { value: "" },
+    PrivateNote: "",
     Line: updatedLines,
   };
   if (meta && meta.type === "set_metadata") {

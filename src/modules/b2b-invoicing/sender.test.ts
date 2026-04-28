@@ -300,9 +300,10 @@ describe("buildPayload — realistic 18294-shaped scenario", () => {
 });
 
 describe("buildPayload — customer memo + terms", () => {
-  it("always blanks CustomerMemo on every send", () => {
+  it("always blanks CustomerMemo and PrivateNote on every send", () => {
     const payload = buildPayload(makeInvoice(), [SET_METADATA]);
     expect(payload.CustomerMemo).toEqual({ value: "" });
+    expect(payload.PrivateNote).toBe("");
   });
 
   it("sets SalesTermRef when salesTermId is provided", () => {
