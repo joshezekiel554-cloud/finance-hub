@@ -16,8 +16,8 @@ async function buildServer(): Promise<FastifyInstance> {
 
   // Placeholder plugin registration. Wired up in later phases:
   //   - logger (pino) — observability task
-  //   - db (drizzle + postgres) — schema task
-  //   - auth (sessions + arctic) — auth task
+  //   - db (drizzle + mysql2) — schema task
+  //   - auth (Auth.js v5 user login; Arctic for QB/Shopify integration OAuth) — auth task
   //   - queue (bullmq + redis) — sync task
   //   - sse broker — notifications task
 
