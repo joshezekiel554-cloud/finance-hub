@@ -327,6 +327,13 @@ export class QboClient {
     );
   }
 
+  async getInvoiceByDocNumber(docNumber: string): Promise<QboInvoice | null> {
+    const data = await this.query<QboInvoice>(
+      `SELECT * FROM Invoice WHERE DocNumber = '${escapeQboLiteral(docNumber)}'`,
+    );
+    return data.QueryResponse.Invoice?.[0] ?? null;
+  }
+
   async getQboItemBySku(sku: string): Promise<QboItem | null> {
     const data = await this.query<QboItem>(
       `SELECT * FROM Item WHERE Sku = '${escapeQboLiteral(sku)}'`,

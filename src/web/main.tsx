@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import App from "./App";
 import HomePage from "./pages/home";
+import InvoicingTodayPage from "./pages/invoicing-today";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -35,7 +36,13 @@ const indexRoute = createRoute({
   component: HomePage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute]);
+const invoicingTodayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/invoicing",
+  component: InvoicingTodayPage,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, invoicingTodayRoute]);
 
 const router = createRouter({ routeTree });
 

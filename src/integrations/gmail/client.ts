@@ -13,12 +13,17 @@ const log = createLogger({ module: "gmail.client" });
 // Scopes required by the integration:
 //   - readonly: poll inbound + sent for activity ingestion
 //   - send: outbound from compose surfaces, chase, statement reminders
-//   - settings.basic: enumerate sendAs aliases for the auto-pick logic
+//
+// settings.basic (used by aliases.ts) is checked separately at the call site —
+// it's only needed for the alias-picker UI in week 7, and gating all polling
+// behind it would block the migrated 1.0 token (which lacks that scope).
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/gmail.settings.basic",
 ] as const;
+
+const SCOPE_SETTINGS_BASIC =
+  "https://www.googleapis.com/auth/gmail.settings.basic";
 
 // 1.0 used 5/500ms — keep batching identical so behavior under quota stays the
 // same after the lift. Tuneable later if Google changes per-user limits.
@@ -206,6 +211,42 @@ function extractTextFromParts(parts: gmail_v1.Schema$MessagePart[] | undefined):
     }
   }
   return text;
+}
+
+// Walks the Gmail message tree picking up text/html parts. Used by the B2B
+// invoicing route to feed parseShipmentHtml without going through raw .eml.
+function extractHtmlFromParts(parts: gmail_v1.Schema$MessagePart[] | undefined): string {
+  if (!parts) return "";
+  let html = "";
+  for (const part of parts) {
+    if (part.mimeType === "text/html" && part.body) {
+      html += decodeBody(part.body);
+    } else if (part.parts) {
+      html += extractHtmlFromParts(part.parts);
+    }
+  }
+  return html;
+}
+
+// Extracts the HTML body from a Gmail message. Handles both single-part
+// (payload.body.data direct) and multipart (payload.parts) layouts. Returns
+// empty string if no HTML part exists — caller can fall back to the parsed
+// text body if needed.
+export async function getMessageHtmlBody(
+  messageId: string,
+  externalAccountId?: string,
+): Promise<string> {
+  const { gmail } = await getClient(externalAccountId);
+  const res = await withRetry(
+    () => gmail.users.messages.get({ userId: "me", id: messageId, format: "full" }),
+    `messages.get(${messageId})`,
+  );
+  const msg = res.data;
+  if (!msg.payload) return "";
+  if (msg.payload.mimeType === "text/html" && msg.payload.body?.data) {
+    return decodeBody(msg.payload.body);
+  }
+  return extractHtmlFromParts(msg.payload.parts);
 }
 
 function extractHeaders(
