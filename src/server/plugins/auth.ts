@@ -23,6 +23,7 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
     secret: env.AUTH_SECRET,
     session: { strategy: "database" },
     trustHost: true,
+    basePath: "/api/auth",
     pages: { signIn: "/login" },
     callbacks: {
       async signIn({ user }) {
