@@ -150,7 +150,7 @@ Push the main branch (or trigger via Actions UI). Watch for:
 - `npm run db:migrate` applies all migrations cleanly (first run = full
   schema creation)
 - pm2 starts `finance-hub` process
-- Smoke test `curl https://finance.feldart.com/api/health` → 200
+- Smoke test `curl https://finance.feldart.com/health` → 200
 
 ## 10. pm2 boot persistence
 

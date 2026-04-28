@@ -99,11 +99,11 @@ jobs:
             pm2 save
           EOF
 
-      - name: Smoke test /api/health
+      - name: Smoke test /health
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           # Give pm2 a few seconds to finish restart
           sleep 5
-          curl -sSfL "https://finance.feldart.com/api/health"
+          curl -sSfL "https://finance.feldart.com/health"
           echo
