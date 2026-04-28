@@ -47,3 +47,98 @@ export type ParseResult = {
   // Decoded HTML body, retained for re-parsing/debugging. Not persisted.
   decodedHtml: string;
 };
+
+// ---------- reconciler ----------
+//
+// The reconciler aligns a QB invoice's lines to what Feldart actually shipped.
+// The Feldart Transaction Report is treated as the source of truth: anything
+// on the invoice but missing from the shipment gets qty_change'd to 0 (line
+// stays on the invoice for audit visibility, just zeroed out). Anything on
+// the shipment but missing from the invoice triggers an add (rare; flagged
+// for human review since price provenance is uncertain).
+//
+// The reconciler is pure: caller pre-decorates the QB invoice lines with
+// resolved SKUs (QBO lines reference Items by ID, not SKU directly), and
+// optionally provides Shopify order line prices for the add-fallback.
+
+// Narrow input shape — caller resolves QBO ItemRef.value -> SKU before calling.
+// We accept SKU directly (rather than the raw QboInvoiceLine) so the
+// reconciler doesn't need to depend on QBO types or Item lookup logic.
+export type InvoiceLineForReconcile = {
+  // QBO Line.Id — needed to address the line on update later.
+  lineId: string;
+  // Resolved SKU. May be null if the QBO line has no Item or the item has no
+  // SKU — those lines are passed through as keeps (we don't touch them).
+  sku: string | null;
+  qty: number;
+  unitPrice: number;
+  description?: string | null;
+};
+
+export type ShopifyOrderLineForReconcile = {
+  sku: string;
+  // Shopify storefront retail price as a number. The reconciler halves it for
+  // the add-row B2B price; the caller is responsible for currency conversion
+  // if applicable (US-only at launch, so this is USD throughout).
+  retailPrice: number;
+};
+
+export type ShipmentForReconcile = {
+  trackingNumber: string;
+  shipVia: string;
+  shipDate: string; // ISO YYYY-MM-DD
+  lineItems: Array<{ sku: string; qty: number }>;
+};
+
+export type ReconcileInput = {
+  shipment: ShipmentForReconcile;
+  invoiceLines: InvoiceLineForReconcile[];
+  shopifyOrderLines?: ShopifyOrderLineForReconcile[];
+};
+
+export type ReconcileAction =
+  | {
+      type: "keep";
+      lineId: string;
+      sku: string;
+      qty: number;
+    }
+  | {
+      type: "qty_change";
+      lineId: string;
+      sku: string;
+      fromQty: number;
+      toQty: number;
+      // "shipped_less" / "shipped_more" / "not_shipped" / "split_zero" — UI
+      // can render these distinctly (e.g. red for not_shipped, yellow for
+      // split_zero). Pure metadata; doesn't affect the QBO write.
+      reason: "shipped_less" | "shipped_more" | "not_shipped" | "split_zero";
+    }
+  | {
+      type: "add";
+      sku: string;
+      qty: number;
+      unitPrice: number | null;
+      // shopify_b2b: 50% of Shopify retail (price source confident)
+      // fallback:    no Shopify match — UI prompts user to set the price
+      priceSource: "shopify_b2b" | "fallback";
+    }
+  | {
+      type: "set_metadata";
+      trackingNumber: string;
+      shipVia: string;
+      shipDate: string;
+    };
+
+export type ReconcileResult = {
+  actions: ReconcileAction[];
+  // Convenience counts for UI summaries / logs. Always derivable from actions.
+  summary: {
+    keep: number;
+    qty_change: number;
+    add: number;
+    // SKUs the reconciler couldn't price (priceSource=fallback). Surface in
+    // UI as "needs price" warnings.
+    addsNeedingPrice: string[];
+  };
+};
