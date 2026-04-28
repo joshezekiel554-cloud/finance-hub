@@ -1,0 +1,109 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -l -f ~/.ssh/deploy_key
+
+      - name: Rsync artifact to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          # -vv so the log prints every file rsync touches — makes it
+          # obvious when a newly-added path (e.g. a migration folder) didn't
+          # land on the VPS.
+          rsync -avvz --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.env*' \
+            --exclude='src' \
+            --exclude='**/*.test.ts' \
+            --exclude='**/*.test.tsx' \
+            --exclude='vitest.config.*' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            ./ deploy@"$VPS_HOST":/home/deploy/finance-hub/
+
+      # Safety net: verify migrations folder synced (caught silent issues
+      # twice in the orders project).
+      - name: Verify migration folders synced
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          local_count=$(ls migrations 2>/dev/null | wc -l | tr -d ' ')
+          remote_count=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$VPS_HOST" 'ls /home/deploy/finance-hub/migrations 2>/dev/null | wc -l' | tr -d ' ')
+          echo "Migration folders — local: $local_count, remote: $remote_count"
+          if [ "$local_count" != "$remote_count" ]; then
+            echo "::error::Migration folder count mismatch. Local has $local_count, remote has $remote_count."
+            echo "Local:"
+            ls migrations
+            echo "Remote:"
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$VPS_HOST" 'ls /home/deploy/finance-hub/migrations'
+            exit 1
+          fi
+
+      - name: Install prod deps, run migrations, (re)start pm2
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$VPS_HOST" bash <<'EOF'
+            set -e
+            cd /home/deploy/finance-hub
+
+            npm ci --omit=dev
+
+            # Drizzle migrations: load DATABASE_URL from .env.production via dotenv-cli
+            # so quoted values with spaces don't break under `set -e`.
+            npx dotenv-cli -e .env.production -- npm run db:migrate
+
+            if pm2 describe finance-hub >/dev/null 2>&1; then
+              pm2 reload ecosystem.config.cjs --update-env
+            else
+              pm2 start ecosystem.config.cjs
+            fi
+            pm2 save
+          EOF
+
+      - name: Smoke test /api/health
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          # Give pm2 a few seconds to finish restart
+          sleep 5
+          curl -sSfL "https://finance.feldart.com/api/health"
+          echo

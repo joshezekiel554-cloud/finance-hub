@@ -1,33 +1,37 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { env } from "../lib/env.js";
+import { logger } from "../lib/logger.js";
+import { loggerPlugin } from "./plugins/logger.js";
+import { errorHandlerPlugin } from "./plugins/error-handler.js";
+import { sentryPlugin } from "./plugins/sentry.js";
+import { authPlugin } from "./plugins/auth.js";
+import { healthRoute } from "./routes/health.js";
 import { registerRoutes } from "./routes/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function buildServer(): Promise<FastifyInstance> {
-  const app = Fastify({
-    logger: false,
+  const app: FastifyInstance = Fastify({
+    loggerInstance: logger as unknown as FastifyBaseLogger,
     trustProxy: true,
     disableRequestLogging: true,
+    genReqId: () => crypto.randomUUID(),
   });
 
-  // Placeholder plugin registration. Wired up in later phases:
-  //   - logger (pino) — observability task
-  //   - db (drizzle + mysql2) — schema task
-  //   - auth (Auth.js v5 user login; Arctic for QB/Shopify integration OAuth) — auth task
-  //   - queue (bullmq + redis) — sync task
-  //   - sse broker — notifications task
+  // Order matters:
+  //   1. logger first — every subsequent plugin/route can use req.log
+  //   2. sentry next — wires onError hook before app routes register
+  //   3. routes (health, api)
+  //   4. error handler LAST — catches downstream errors
 
-  // Health check placeholder. Observability task replaces with full readiness probe.
-  app.get("/health", async () => ({
-    status: "ok",
-    env: env.NODE_ENV,
-    uptime: process.uptime(),
-  }));
+  await app.register(loggerPlugin);
+  await app.register(sentryPlugin);
+  await app.register(authPlugin);
 
+  await app.register(healthRoute);
   await registerRoutes(app);
 
   if (env.NODE_ENV === "production") {
@@ -37,15 +41,10 @@ async function buildServer(): Promise<FastifyInstance> {
       prefix: "/",
       wildcard: false,
     });
-
-    app.setNotFoundHandler((req, reply) => {
-      if (req.raw.url?.startsWith("/api") || req.raw.url?.startsWith("/oauth")) {
-        reply.code(404).send({ error: "Not found" });
-        return;
-      }
-      reply.sendFile("index.html");
-    });
   }
+
+  // Register error handler last so it catches errors from all routes/plugins above.
+  await app.register(errorHandlerPlugin);
 
   return app;
 }
@@ -54,12 +53,12 @@ async function start() {
   const app = await buildServer();
 
   const shutdown = async (signal: string) => {
-    app.log.info?.({ signal }, "shutting down");
+    logger.info({ signal }, "shutting down");
     try {
       await app.close();
       process.exit(0);
     } catch (err) {
-      console.error("error during shutdown", err);
+      logger.error({ err }, "error during shutdown");
       process.exit(1);
     }
   };
@@ -67,11 +66,19 @@ async function start() {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
+  process.on("uncaughtException", (err) => {
+    logger.fatal({ err }, "uncaught exception");
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    logger.fatal({ err: reason }, "unhandled rejection");
+  });
+
   try {
     const address = await app.listen({ host: "0.0.0.0", port: env.PORT });
-    console.log(`finance-hub server listening at ${address} (${env.NODE_ENV})`);
+    logger.info({ address, env: env.NODE_ENV }, "finance-hub server listening");
   } catch (err) {
-    console.error("failed to start server", err);
+    logger.fatal({ err }, "failed to start server");
     process.exit(1);
   }
 }

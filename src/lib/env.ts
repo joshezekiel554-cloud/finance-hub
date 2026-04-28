@@ -17,11 +17,22 @@ const schema = z.object({
   AUTH_URL: z.string().url(),
   AUTH_GOOGLE_CLIENT_ID: z.string().min(1),
   AUTH_GOOGLE_CLIENT_SECRET: z.string().min(1),
+  // Comma-separated allow-list of emails permitted to sign in. Lowercased.
+  // Empty in dev is allowed (auth plugin warns); production should set this.
+  ALLOWED_EMAILS: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .join(","),
+    ),
 
   CRYPTO_KEY: z
     .string()
-    .min(1, "CRYPTO_KEY is required (32 bytes = 64 hex chars)")
-    .refine((v) => /^[0-9a-fA-F]{64}$/.test(v), "CRYPTO_KEY must be 64 hex chars (32 bytes)"),
+    .regex(/^[0-9a-f]{64}$/i, "CRYPTO_KEY must be 64 hex chars (32 bytes)"),
 
   ANTHROPIC_API_KEY: z.string().min(1),
 
@@ -41,6 +52,9 @@ const schema = z.object({
   MONDAY_ENABLED: boolish.default(false),
 
   SENTRY_DSN: z.string().optional().default(""),
+  LOG_LEVEL: z
+    .enum(["trace", "debug", "info", "warn", "error", "fatal"])
+    .optional(),
 });
 
 export type Env = z.infer<typeof schema>;
