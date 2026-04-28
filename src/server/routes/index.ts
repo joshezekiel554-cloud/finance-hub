@@ -17,7 +17,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  await app.register(oauthRoutes, { prefix: "/oauth" });
+  await app.register(oauthRoutes, { prefix: "/api/oauth" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });
