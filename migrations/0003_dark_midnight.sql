@@ -1,0 +1,1 @@
+ALTER TABLE `ai_interactions` MODIFY COLUMN `surface` enum('agent_chat','inline_draft_email','inline_summarize','inline_suggest','inline_enhance','task_proposal','background_proposing','chase_digest','email_summary','customer_summary','action_plan') NOT NULL;

@@ -43,6 +43,8 @@ export const AI_SURFACES = [
   "background_proposing",
   "chase_digest",
   "email_summary",
+  "customer_summary",
+  "action_plan",
 ] as const;
 
 export const aiInteractions = mysqlTable(
