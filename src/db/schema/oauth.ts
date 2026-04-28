@@ -1,4 +1,12 @@
-import { index, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import {
+  index,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  unique,
+  varchar,
+} from "drizzle-orm/mysql-core";
 
 // OAuth tokens for *integration* providers (QuickBooks, Gmail/Google, Shopify).
 // Per-account row keyed by (provider, externalAccountId) so we can hold tokens
@@ -29,10 +37,11 @@ export const oauthTokens = mysqlTable(
     // Eventually move to a signed cookie or short-lived Redis entry.
     pendingStateExpiresAt: timestamp("pending_state_expires_at"),
     pendingStateNonce: varchar("pending_state_nonce", { length: 64 }),
-    pendingStateUserId: varchar("pending_state_user_id", { length: 24 }),
+    // Matches users.id width (varchar(255), Auth.js inserts crypto.randomUUID()).
+    pendingStateUserId: varchar("pending_state_user_id", { length: 255 }),
   },
   (t) => ({
-    providerAccountIdx: index("idx_oauth_tokens_provider_account").on(
+    providerAccountUq: unique("uq_oauth_tokens_provider_account").on(
       t.provider,
       t.externalAccountId,
     ),
