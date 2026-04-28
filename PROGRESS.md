@@ -13,32 +13,36 @@ If you're new to this file:
 
 ## Current phase
 
-**Week 1-2 — Foundation.** ~98% complete. Review done; fix waves dispatched.
+**Week 1-2 — Foundation. ✅ COMPLETE.** Ready to start week 3.
 
 ## Latest checkpoint
 
 **Date**: 2026-04-28
-**Commit on `main`**: `f0d357a` (CI workflow added)
+**Commit on `main`**: `f4aef0f` (Wave 2 fixes: build, smoke path, security plugins, cleanups)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub
 **Local repo**: `C:\Users\user\Documents\finance-hub`
+**Status**: typecheck clean, 10/10 tests pass, build clean, server boots in production mode without errors
 
 ## Active work
 
-**Wave 1 complete** (commits below):
-- schema-designer `21f46bc` — oauth_tokens schema fixes + migration `0002_chilly_mother_askani.sql`
-- observability-engineer `39f83a7` — error handler order, sentry timing, session decorator preHandler
-- auth-engineer `ab601e2` — multi-cookie sendWebResponse, atomic consumeState, trustProxy use, cookie ordering, fp wrap, accounts plaintext doc
+**None — week 1-2 closed.** Next batch (week 3) ready to spawn when human gives the go-ahead.
 
-**Wave 2 in flight** — scaffolder working on:
-- CRITICAL: tsc-alias install + build script update (fixes `npm start` ERR_MODULE_NOT_FOUND)
-- CRITICAL: deploy smoke path `/api/health` → `/health` (in deploy.yml + vps-setup.md)
-- HIGH: register `@fastify/helmet`, `cors`, `rate-limit`, `cookie`, `sensible`
-- LOW: drop `argon2` (no password auth), fix React type imports in dialog/toast, decide tailwindcss-animate
+**Wave 1 review fixes shipped:**
+- `21f46bc` (schema): oauth_tokens widened, unique constraint, migration 0002
+- `39f83a7` (observability): error handler order, sentry timing, session preHandler
+- `ab601e2` (auth): multi-cookie response, atomic state, trustProxy, cookie order, fp wrap, accounts plaintext doc
 
-**Deferred to week 3+ (per reviewer's "out of scope" note):**
-- Placeholder routes for `/customers /invoicing /tasks /agent` (week 6 CRM UI)
+**Wave 2 review fixes shipped (`f4aef0f`):**
+- tsc-alias `-f` build pipeline (fixes `npm start` boot)
+- Smoke path corrected (`/api/health` → `/health`)
+- Security plugin stack registered (helmet, cors, rate-limit, cookie, sensible). Rate-limit partitioned by path family, /health allow-listed, /api/auth tighter
+- argon2 removed, React type imports fixed, hand-rolled keyframes for Radix transitions (no tailwindcss-animate dep)
+
+**Deferred to later phases (still tracked):**
 - Encrypt `accounts.access_token/refresh_token/id_token` (v2.1; Auth.js adapter wrapper)
-- Dual-insert orphan in oauth_tokens callback (week 3 when Arctic flows land)
+- Dual-insert orphan in oauth_tokens callback (week 3, when Arctic flows land)
+- Placeholder routes for `/customers /invoicing /tasks /agent` (week 6, CRM UI)
+- CSP tightening in helmet config (week 6, when asset origins are known)
 
 ## What's done
 
@@ -53,16 +57,17 @@ If you're new to this file:
 
 - 🟡 **Cross-cutting review (task #5)** — `reviewer` agent currently examining all week 1-2 work. Findings will land in next checkpoint.
 
-## What's next (week 3 — first work in progress)
+## What's next — Week 3
 
-1. **Review fixes** (if reviewer flags any) — small commits per finding.
-2. **Lift QB sync engine from 1.0** — `dashboard/sync-engine.js` → `src/integrations/qb/sync.ts`. Targets `customers` and `invoices` tables. Drizzle queries replace better-sqlite3.
-3. **Lift Gmail polling** — `dashboard/gmail-engine.js` → `src/integrations/gmail/poller.ts`. Activity ingestion writes to `activities` table.
-4. **Lift chase digest** — `dashboard/chase-engine.js` → `src/modules/chase/`.
-5. **Activity ingestion plumbing** — connect Gmail poll + QBO sync events into `activities` rows.
-6. **Shadow mode begins end of week 3** — 2.0 reads + writes Postgres but does not send emails or write to QBO/Shopify. 1.0 stays operational.
+Per the plan §Effort estimate. Goal: parity with 1.0's QB+Gmail+chase functionality, running in shadow mode against Postgres alongside 1.0's SQLite.
 
-See plan §Effort estimate.
+1. **Lift QB integration** — `dashboard/sync-engine.js` (1,263 lines) → `src/integrations/qb/`. OAuth + intuit-oauth + customer/invoice/payment sync logic. Drizzle queries replace better-sqlite3. Writes to `customers`, `invoices`, `invoice_lines`, `oauth_tokens`.
+2. **Lift Gmail integration** — `dashboard/gmail-engine.js` + `gmail-client.js` → `src/integrations/gmail/`. Polling, message parsing, send.ts. `withRetry` helper preserved.
+3. **Activity ingestion** — wire Gmail poll → match sender → insert `activities(kind=email_in)`. Wire QBO sync → emit activities for invoice_sent / payment_received / balance_change.
+4. **Lift chase logic** — `dashboard/chase-engine.js` → `src/modules/chase/`. Severity scoring + tier filtering. AI digest function.
+5. **Lift Anthropic SDK pattern** — `dashboard/ai-summarizer.js` → `src/integrations/anthropic/`. Cost tracking + tool registry foundation.
+6. **BullMQ wiring** — `src/jobs/worker.ts` (separate pm2 process), repeatable jobs for sync (every 30 min) + chase digest (5pm daily). Update `ecosystem.config.cjs` to enable the worker process.
+7. **Shadow-mode trigger end of week 3** — sync runs against Postgres, no emails sent, 1.0 stays operational. Compare daily output side-by-side for parity.
 
 ## Open items (need human input)
 
@@ -101,19 +106,33 @@ These don't block week 3 work but block specific later phases:
 
 ## Commit log highlights
 
+Week 1-2 (chronological):
+
 - `9e70130` — Initial scaffold
 - `53c8882` — Pivot deps: postgres→mysql2, +Auth.js v5
 - `4d58e1b` — Document VPS deployment
 - `23a2d30` — Week 1-2 foundation bundle (schema, auth, observability, deploy infra)
 - `0e54b67` — Auth.js basePath fix
 - `769a40f` — fastify-plugin wrap to break encapsulation for hooks
+- `6707674` — TODO note on dual-insert orphan in oauth callback
+- `13736a6` — oauth_tokens indexes + cleanup
+- `51912ed` — PROGRESS.md added (resilience layer)
+- `f0d357a` — CI workflow on push/PR
+- `21f46bc` — Schema fix: oauth_tokens widening + unique constraint
+- `41535ce` — PROGRESS update: review dispatched
+- `39f83a7` — Observability fix: error handler before routes, sentry timing
+- `ab601e2` — Auth fix: multi-cookie, atomic state, trustProxy, cookie order, fp wrap
+- `aa5c954` — PROGRESS update: Wave 1 done
+- `f4aef0f` — Wave 2: tsc-alias build + security plugins + smoke path + cleanups
 
 ## Team status snapshot (finance-hub-init)
 
-| Agent | Status | Last task |
+| Agent | Status | Last work |
 |---|---|---|
-| scaffolder | idle | #1 (completed) |
-| schema-designer | idle | #2 (completed) |
-| auth-engineer | idle | #3 (completed) |
-| observability-engineer | idle | #4 (completed) |
-| reviewer | running | #5 (in_progress) |
+| scaffolder | idle | Wave 2 fixes (`f4aef0f`) |
+| schema-designer | idle | oauth_tokens schema fixes (`21f46bc`) |
+| auth-engineer | idle | Auth Wave 1 fixes (`ab601e2`) |
+| observability-engineer | idle | Observability Wave 1 fixes (`39f83a7`) |
+| reviewer | idle | Cross-cutting review (text deliverable; no commit) |
+
+All week 1-2 tasks closed. Team can be reused for week 3 (will need fresh briefs scoped to the 1.0 → 2.0 engine ports).
