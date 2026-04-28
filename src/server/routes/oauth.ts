@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
 import { and, eq, gt, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import OAuthClient from "intuit-oauth";
 import { db } from "~/db/index.js";
 import { oauthTokens, type OAuthProvider } from "~/db/schema/oauth.js";
 import { encrypt } from "~/lib/crypto.js";
@@ -68,17 +69,43 @@ async function exchangeShopifyCode(code: string, shop: string): Promise<Exchange
   };
 }
 
-// TODO(week 4-5): real QuickBooks token exchange (intuit-oauth client.createToken).
+// Real QBO token exchange via intuit-oauth's createToken. Caller passes the
+// full callback URL (with code + state + realmId) and we let the SDK parse it.
+// Returns the access/refresh pair plus realmId, which becomes our
+// externalAccountId for the oauth_tokens row.
 async function exchangeQuickBooksCode(
-  code: string,
-  query: { realmId?: string },
+  callbackUrl: string,
 ): Promise<ExchangedTokens> {
+  const client = new OAuthClient({
+    clientId: env.QB_CLIENT_ID,
+    clientSecret: env.QB_CLIENT_SECRET,
+    environment: "production",
+    redirectUri: env.QB_REDIRECT_URI,
+  });
+  const result = await client.createToken(callbackUrl);
+  const token = result.getJson() as {
+    access_token: string;
+    refresh_token: string;
+    expires_in?: number;
+    x_refresh_token_expires_in?: number;
+    realmId?: string;
+    scope?: string;
+  };
+  if (!token.access_token || !token.refresh_token) {
+    throw new Error("QBO createToken returned no access_token/refresh_token");
+  }
+  // realmId arrives in the callback query string; intuit-oauth surfaces it on
+  // the token result body. Required — that's the company we'll talk to.
+  const realmId = (token as { realmId?: string }).realmId;
+  if (!realmId) {
+    throw new Error("QBO callback did not include realmId");
+  }
   return {
-    accessToken: `placeholder:quickbooks:${code}`,
-    refreshToken: `placeholder-refresh:quickbooks`,
-    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-    externalAccountId: query.realmId ?? "unknown-realm",
-    scope: null,
+    accessToken: token.access_token,
+    refreshToken: token.refresh_token,
+    expiresAt: new Date(Date.now() + (token.expires_in ?? 3600) * 1000),
+    externalAccountId: realmId,
+    scope: token.scope ?? "com.intuit.quickbooks.accounting",
   };
 }
 
@@ -323,16 +350,46 @@ const oauthRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "invalid or expired state" });
     }
 
-    const tokens =
-      provider === "quickbooks"
-        ? await exchangeQuickBooksCode(query.code, { realmId: query.realmId })
-        : await exchangeGmailCode(query.code);
+    let tokens: ExchangedTokens;
+    if (provider === "quickbooks") {
+      // intuit-oauth's createToken parses the full callback URL itself; build
+      // it back from the request's url + host so query params and order match
+      // what Intuit signed.
+      const protocol = (req.headers["x-forwarded-proto"] as string) ?? "http";
+      const host = req.headers.host ?? "localhost:3001";
+      const fullUrl = `${protocol}://${host}${req.url}`;
+      try {
+        tokens = await exchangeQuickBooksCode(fullUrl);
+      } catch (err) {
+        log.error({ err }, "quickbooks token exchange failed");
+        return reply.code(502).send({
+          error: "quickbooks token exchange failed",
+          detail: (err as Error).message,
+        });
+      }
+    } else {
+      tokens = await exchangeGmailCode(query.code);
+    }
 
     await saveExchangedTokens(provider, tokens);
     log.info(
       { provider, externalAccountId: tokens.externalAccountId },
       "oauth callback completed",
     );
+
+    if (provider === "quickbooks") {
+      return reply.type("text/html").send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>QuickBooks connected</title>
+<style>body{font-family:system-ui,sans-serif;background:#f6f6f7;margin:0;padding:48px;color:#202223}
+.card{max-width:480px;margin:64px auto;background:#fff;border:1px solid #e1e3e5;border-radius:12px;padding:32px}
+h1{margin:0 0 8px;font-size:20px;color:#2ca01c}
+p{margin:8px 0;line-height:1.5}
+code{background:#f1f2f3;padding:1px 5px;border-radius:4px;font-size:12.5px}</style></head>
+<body><div class="card"><h1>QuickBooks connected</h1>
+<p>Realm: <code>${tokens.externalAccountId}</code></p>
+<p>Token saved. You can close this tab and return to the dashboard.</p>
+</div></body></html>`);
+    }
 
     return reply.send({ ok: true, provider, externalAccountId: tokens.externalAccountId });
   });
