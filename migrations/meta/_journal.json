@@ -8,6 +8,13 @@
       "when": 1777375889002,
       "tag": "0000_dashing_mikhail_rasputin",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1777376139318,
+      "tag": "0001_parallel_chronomancer",
+      "breakpoints": true
     }
   ]
 }

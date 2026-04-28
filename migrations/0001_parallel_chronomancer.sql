@@ -1,0 +1,2 @@
+CREATE INDEX `idx_oauth_tokens_provider_account` ON `oauth_tokens` (`provider`,`external_account_id`);--> statement-breakpoint
+CREATE INDEX `idx_oauth_tokens_pending_nonce` ON `oauth_tokens` (`pending_state_nonce`);
