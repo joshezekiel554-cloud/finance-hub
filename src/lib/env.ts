@@ -7,17 +7,21 @@ const boolish = z
 
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.coerce.number().int().positive().default(3000),
-  PUBLIC_URL: z.string().url().default("http://localhost:3000"),
+  PORT: z.coerce.number().int().positive().default(3001),
+  PUBLIC_URL: z.string().url().default("http://localhost:3001"),
 
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   REDIS_URL: z.string().min(1, "REDIS_URL is required"),
+
+  AUTH_SECRET: z.string().min(32, "AUTH_SECRET must be at least 32 chars"),
+  AUTH_URL: z.string().url(),
+  AUTH_GOOGLE_CLIENT_ID: z.string().min(1),
+  AUTH_GOOGLE_CLIENT_SECRET: z.string().min(1),
 
   CRYPTO_KEY: z
     .string()
     .min(1, "CRYPTO_KEY is required (32 bytes = 64 hex chars)")
     .refine((v) => /^[0-9a-fA-F]{64}$/.test(v), "CRYPTO_KEY must be 64 hex chars (32 bytes)"),
-  COOKIE_SECRET: z.string().min(32, "COOKIE_SECRET must be at least 32 chars"),
 
   ANTHROPIC_API_KEY: z.string().min(1),
 

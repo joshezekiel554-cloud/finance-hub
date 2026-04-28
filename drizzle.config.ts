@@ -4,9 +4,11 @@ import { defineConfig } from "drizzle-kit";
 export default defineConfig({
   schema: "./src/db/schema.ts",
   out: "./migrations",
-  dialect: "postgresql",
+  dialect: "mysql",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "postgres://finance:finance@localhost:5432/finance_hub",
+    url:
+      process.env.DATABASE_URL ??
+      "mysql://feldart_app:feldart_app@localhost:3306/feldart_finance",
   },
   strict: true,
   verbose: true,

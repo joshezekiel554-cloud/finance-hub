@@ -5,7 +5,7 @@ import path from "node:path";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const backendPort = env.PORT || "3000";
+  const backendPort = env.PORT || "3001";
 
   return {
     root: path.resolve(__dirname, "src/web"),

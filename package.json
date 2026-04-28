@@ -2,7 +2,7 @@
   "name": "finance-hub",
   "version": "2.0.0",
   "private": true,
-  "description": "Feldart Finance Hub 2.0 — Fastify + React + Postgres + BullMQ",
+  "description": "Feldart Finance Hub 2.0 — Fastify + React + MySQL + BullMQ",
   "type": "module",
   "engines": {
     "node": ">=20.11"
@@ -22,6 +22,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
+    "@auth/core": "^0.41.2",
+    "@auth/drizzle-adapter": "^1.11.2",
     "@fastify/cookie": "^11.0.1",
     "@fastify/cors": "^10.0.1",
     "@fastify/helmet": "^13.0.0",
@@ -49,10 +51,10 @@
     "intuit-oauth": "^4.2.0",
     "ioredis": "^5.4.1",
     "lucide-react": "^0.453.0",
+    "mysql2": "^3.22.3",
     "nanoid": "^5.0.7",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
-    "postgres": "^3.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwind-merge": "^2.5.4",

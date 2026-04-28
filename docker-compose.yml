@@ -1,20 +1,22 @@
-# Placeholder dev stack — schema agent finalizes volumes / network / app service.
-# `docker compose up -d` brings up Postgres + Redis for local dev.
+# Local dev only — production uses pm2 on the VPS (alongside orders.feldart.com),
+# not Docker. The schema agent finalizes ports / volumes / app service.
+# `docker compose up -d` brings up MySQL + Redis for local dev.
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: finance-hub-postgres
+  mysql:
+    image: mysql:8
+    container_name: finance-hub-mysql
     restart: unless-stopped
     environment:
-      POSTGRES_USER: finance
-      POSTGRES_PASSWORD: finance
-      POSTGRES_DB: finance_hub
+      MYSQL_ROOT_PASSWORD: feldart_root
+      MYSQL_DATABASE: feldart_finance
+      MYSQL_USER: feldart_app
+      MYSQL_PASSWORD: feldart_app
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - finance_hub_postgres:/var/lib/postgresql/data
+      - finance_hub_mysql:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U finance -d finance_hub"]
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-pfeldart_root"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -34,5 +36,5 @@ services:
       retries: 5
 
 volumes:
-  finance_hub_postgres:
+  finance_hub_mysql:
   finance_hub_redis:
