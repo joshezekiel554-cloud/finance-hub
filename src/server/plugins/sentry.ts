@@ -40,10 +40,12 @@ async function sentryPluginImpl(app: FastifyInstance): Promise<void> {
 
   logger.info({ env: env.NODE_ENV }, "sentry: initialized");
 
-  // Capture 5xx errors. Run after the application's error handler logged
-  // and responded — this just forwards to Sentry.
-  app.addHook("onError", async (req: FastifyRequest, reply: FastifyReply, err) => {
-    const status = reply.statusCode;
+  // Capture 5xx errors. `onError` fires before the error handler has set
+  // reply.statusCode, so derive status from the error itself (defaults to
+  // 500 — anything without an explicit statusCode is a real server error).
+  app.addHook("onError", async (req: FastifyRequest, _reply: FastifyReply, err) => {
+    const e = err as { statusCode?: number; status?: number };
+    const status = e.statusCode ?? e.status ?? 500;
     if (status >= 500) {
       Sentry.captureException(err, {
         tags: {

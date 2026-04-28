@@ -1,20 +1,42 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { getSession } from "../lib/auth.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     startTime?: bigint;
+    session?: { userId: string; email: string | null };
   }
 }
 
 const AUTH_ROUTE_PREFIX = "/api/auth";
+const HEALTH_ROUTE = "/health";
 
 async function loggerPluginImpl(app: FastifyInstance): Promise<void> {
   // Fastify is built with `loggerInstance: logger` (see server.ts), so
   // `app.log` and `req.log` are already pino. This plugin only adds the
-  // per-request lifecycle hook that emits one structured line per request.
+  // per-request lifecycle hooks: timing, session decoration, and the
+  // structured "request completed" line.
+
   app.addHook("onRequest", async (req: FastifyRequest) => {
     req.startTime = process.hrtime.bigint();
+  });
+
+  // Decorate req.session for downstream consumers (route handlers, the
+  // request-completed log line). Skip /api/auth/* (Auth.js owns those)
+  // and /health (uptime monitor traffic — don't query the DB on every poll).
+  // Failures are swallowed: this is best-effort context, not a gate.
+  app.addHook("preHandler", async (req: FastifyRequest) => {
+    const url = req.url ?? "";
+    if (url.startsWith(AUTH_ROUTE_PREFIX)) return;
+    if (url === HEALTH_ROUTE) return;
+
+    try {
+      const s = await getSession(req);
+      if (s) req.session = { userId: s.user.id, email: s.user.email ?? null };
+    } catch (err) {
+      req.log.debug({ err }, "session lookup failed");
+    }
   });
 
   app.addHook("onResponse", async (req: FastifyRequest, reply: FastifyReply) => {
@@ -33,9 +55,7 @@ async function loggerPluginImpl(app: FastifyInstance): Promise<void> {
       request_id: req.id,
     };
 
-    const userId = (req as FastifyRequest & { session?: { userId?: string } }).session
-      ?.userId;
-    if (userId) fields.user_id = userId;
+    if (req.session?.userId) fields.user_id = req.session.userId;
 
     if (isAuthRoute) fields.body_omitted = true;
 

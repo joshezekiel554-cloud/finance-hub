@@ -23,12 +23,20 @@ async function buildServer(): Promise<FastifyInstance> {
 
   // Order matters:
   //   1. logger first — every subsequent plugin/route can use req.log
-  //   2. sentry next — wires onError hook before app routes register
-  //   3. routes (health, api)
-  //   4. error handler LAST — catches downstream errors
+  //   2. sentry next — onError hook ready before any route runs
+  //   3. error handler — setErrorHandler must be installed BEFORE routes
+  //      register so thrown errors hit our handler, not Fastify's default
+  //   4. security plugins (helmet, cors, rate-limit, cookie, sensible) —
+  //      registered by scaffolder; insert at the marker below
+  //   5. auth plugin
+  //   6. routes (health, api)
 
   await app.register(loggerPlugin);
   await app.register(sentryPlugin);
+  await app.register(errorHandlerPlugin);
+
+  // ─── register security plugins here (helmet/cors/rate-limit/cookie/sensible) ───
+
   await app.register(authPlugin);
 
   await app.register(healthRoute);
@@ -42,9 +50,6 @@ async function buildServer(): Promise<FastifyInstance> {
       wildcard: false,
     });
   }
-
-  // Register error handler last so it catches errors from all routes/plugins above.
-  await app.register(errorHandlerPlugin);
 
   return app;
 }
