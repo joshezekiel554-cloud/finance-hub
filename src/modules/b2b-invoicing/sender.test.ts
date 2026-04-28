@@ -299,6 +299,33 @@ describe("buildPayload — realistic 18294-shaped scenario", () => {
   });
 });
 
+describe("buildPayload — customer memo + terms", () => {
+  it("always blanks CustomerMemo on every send", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA]);
+    expect(payload.CustomerMemo).toEqual({ value: "" });
+  });
+
+  it("sets SalesTermRef when salesTermId is provided", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      salesTermId: "3",
+      salesTermName: "Net 30",
+    });
+    expect(payload.SalesTermRef).toEqual({ value: "3", name: "Net 30" });
+  });
+
+  it("omits SalesTermRef from the payload when no override is requested", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA]);
+    expect(payload.SalesTermRef).toBeUndefined();
+  });
+
+  it("includes SalesTermRef without name when only id is provided", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      salesTermId: "5",
+    });
+    expect(payload.SalesTermRef).toEqual({ value: "5" });
+  });
+});
+
 describe("buildPayload — invoice-level discount", () => {
   it("appends DiscountLineDetail with PercentBased=true when discountPercent>0", () => {
     const payload = buildPayload(makeInvoice(), [SET_METADATA], {

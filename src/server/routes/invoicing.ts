@@ -63,6 +63,8 @@ export type InvoicingTodayRow = {
     existingTrackingNum: string | null;
     existingShipDate: string | null;
     existingShipVia: string | null;
+    existingTermsId: string | null;
+    existingTermsName: string | null;
     lines: Array<{
       lineId: string;
       sku: string | null;
@@ -102,9 +104,33 @@ const sendBodySchema = z.object({
   // Optional invoice-level percent discount (0-100). Only applied when > 0;
   // any pre-existing DiscountLineDetail on the invoice is replaced.
   discountPercent: z.number().min(0).max(100).optional(),
+  // Optional QBO Term Id override. When set, replaces SalesTermRef on the
+  // invoice. When omitted, sparse update leaves existing terms in place.
+  salesTermId: z.string().optional(),
+  salesTermName: z.string().optional(),
 });
 
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
+  // Fetch active QBO Term entities for the UI dropdown. Cached client-side via
+  // TanStack Query; the underlying QBO query is fast (<10 terms typical).
+  app.get("/terms", async (_req, reply) => {
+    try {
+      const qb = new QboClient();
+      const terms = await qb.getTerms();
+      const active = terms
+        .filter((t) => t.Active !== false)
+        .map((t) => ({
+          id: t.Id,
+          name: t.Name,
+          dueDays: t.DueDays ?? null,
+        }));
+      return reply.send({ terms: active });
+    } catch (err) {
+      log.error({ err }, "qbo terms fetch failed");
+      return reply.code(502).send({ error: "qbo terms fetch failed" });
+    }
+  });
+
   app.get("/today", async (req, reply) => {
     const lookbackDays = DEFAULT_LOOKBACK_DAYS;
     const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
@@ -135,7 +161,14 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     if (!parse.success) {
       return reply.code(400).send({ error: "invalid body", details: parse.error.flatten() });
     }
-    const { invoiceId, expectedSyncToken, actions, discountPercent } = parse.data;
+    const {
+      invoiceId,
+      expectedSyncToken,
+      actions,
+      discountPercent,
+      salesTermId,
+      salesTermName,
+    } = parse.data;
 
     const qbClient = new QboClient();
     let invoice: QboInvoice | null = null;
@@ -160,6 +193,8 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
         {
           shadowMode: env.SHADOW_MODE,
           discountPercent,
+          salesTermId,
+          salesTermName,
           // Live POST hook: forwards the prepared sparse-update payload to
           // QboClient.updateInvoice. Only invoked when shadowMode=false.
           postUpdate: async (payload) => qbClient.updateInvoice(payload),
@@ -258,6 +293,12 @@ async function buildRow(
             (qbInvoice as unknown as { ShipDate?: string }).ShipDate ?? null,
           existingShipVia:
             (qbInvoice as unknown as { ShipMethodRef?: { name?: string } }).ShipMethodRef?.name ??
+            null,
+          existingTermsId:
+            (qbInvoice as unknown as { SalesTermRef?: { value?: string } }).SalesTermRef?.value ??
+            null,
+          existingTermsName:
+            (qbInvoice as unknown as { SalesTermRef?: { name?: string } }).SalesTermRef?.name ??
             null,
           lines: invoiceLinesForReconcile(qbInvoice).map((l) => ({
             lineId: l.lineId,

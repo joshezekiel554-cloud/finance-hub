@@ -57,6 +57,8 @@ type Row = {
     existingTrackingNum: string | null;
     existingShipDate: string | null;
     existingShipVia: string | null;
+    existingTermsId: string | null;
+    existingTermsName: string | null;
     lines: Array<{
       lineId: string;
       sku: string | null;
@@ -82,6 +84,8 @@ type Row = {
 };
 
 type ApiResponse = { rows: Row[]; shadowMode: boolean };
+type Term = { id: string; name: string; dueDays: number | null };
+type TermsResponse = { terms: Term[] };
 
 export default function InvoicingTodayPage() {
   const { data, isPending, isError, error, refetch, isFetching } = useQuery<ApiResponse>({
@@ -94,6 +98,19 @@ export default function InvoicingTodayPage() {
     // Manual refresh only — saves Gmail+QB+Shopify quota.
     refetchOnWindowFocus: false,
   });
+
+  // QBO term list — small (<10 entries usually), cached for the session.
+  const { data: termsData } = useQuery<TermsResponse>({
+    queryKey: ["invoicing", "terms"],
+    queryFn: async () => {
+      const res = await fetch("/api/invoicing/terms");
+      if (!res.ok) throw new Error(`terms fetch failed: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const terms = termsData?.terms ?? [];
 
   return (
     <div className="space-y-6">
@@ -145,7 +162,12 @@ export default function InvoicingTodayPage() {
       {data && data.rows.length > 0 && <Summary rows={data.rows} />}
 
       {data?.rows.map((row) => (
-        <ShipmentCard key={row.gmailId} row={row} shadowMode={data.shadowMode} />
+        <ShipmentCard
+          key={row.gmailId}
+          row={row}
+          shadowMode={data.shadowMode}
+          terms={terms}
+        />
       ))}
     </div>
   );
@@ -194,7 +216,15 @@ type SendResult =
   | { ok: true; status: "shadow" | "sent"; payload?: unknown; response?: unknown }
   | { ok: false; error: string };
 
-function ShipmentCard({ row, shadowMode }: { row: Row; shadowMode: boolean }) {
+function ShipmentCard({
+  row,
+  shadowMode,
+  terms,
+}: {
+  row: Row;
+  shadowMode: boolean;
+  terms: Term[];
+}) {
   if (row.parseConfidence < 0.5) return null;
 
   // Local editable state. Initialised from the reconciler output and from
@@ -203,12 +233,24 @@ function ShipmentCard({ row, shadowMode }: { row: Row; shadowMode: boolean }) {
     row.reconcileResult?.actions ?? [],
   );
   const [discountPercent, setDiscountPercent] = useState<number>(0);
+  // Terms dropdown defaults to the invoice's existing terms; "" means no
+  // override (omits SalesTermRef from the payload, leaving QB as-is).
+  const [selectedTermId, setSelectedTermId] = useState<string>(
+    row.qbInvoice?.existingTermsId ?? "",
+  );
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
 
   const queryClient = useQueryClient();
   const sendMutation = useMutation({
     mutationFn: async (): Promise<SendResult> => {
       if (!row.qbInvoice) return { ok: false, error: "no qb invoice" };
+      // Only send a SalesTermRef override when the dropdown value differs
+      // from what the invoice already had. Avoids unnecessary churn.
+      const termsChanged =
+        selectedTermId !== "" && selectedTermId !== row.qbInvoice.existingTermsId;
+      const selectedTerm = termsChanged
+        ? terms.find((t) => t.id === selectedTermId)
+        : undefined;
       const res = await fetch("/api/invoicing/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -217,6 +259,8 @@ function ShipmentCard({ row, shadowMode }: { row: Row; shadowMode: boolean }) {
           expectedSyncToken: row.qbInvoice.syncToken,
           actions: editedActions,
           discountPercent: discountPercent > 0 ? discountPercent : undefined,
+          salesTermId: selectedTerm?.id,
+          salesTermName: selectedTerm?.name,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -377,7 +421,33 @@ function ShipmentCard({ row, shadowMode }: { row: Row; shadowMode: boolean }) {
 
         {row.qbInvoice && row.reconcileResult && (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-default pt-3">
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-secondary">
+                <span className="font-medium">Terms</span>
+                <select
+                  value={selectedTermId}
+                  onChange={(e) => {
+                    setSelectedTermId(e.target.value);
+                    setSendResult(null);
+                  }}
+                  className="rounded-md border border-default bg-base px-2 py-1 text-sm"
+                >
+                  <option value="">(keep existing)</option>
+                  {terms.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                      {t.dueDays !== null && t.dueDays !== undefined
+                        ? ` (${t.dueDays}d)`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+                {row.qbInvoice?.existingTermsName && (
+                  <span className="text-[11px] text-muted">
+                    current: {row.qbInvoice.existingTermsName}
+                  </span>
+                )}
+              </label>
               <label className="flex items-center gap-2 text-xs text-secondary">
                 <span className="font-medium">Discount %</span>
                 <input

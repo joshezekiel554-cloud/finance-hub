@@ -45,6 +45,14 @@ export type QboInvoicePayload = {
   TrackingNum?: string;
   ShipDate?: string;
   ShipMethodRef?: { value: string; name: string };
+  // Always sent as { value: "" } to clear the auto-sync memo. The 3rd-party
+  // Shopify→QB sync stamps strings like "Total Amount of Invoice for Shopify
+  // 18306 -> USD146" into the customer memo, which then renders on statements
+  // and looks unprofessional. Send action always blanks it.
+  CustomerMemo: { value: string };
+  // Optional payment terms reference. Provided when the user picks a term
+  // override; omitted when the existing SalesTermRef should stay.
+  SalesTermRef?: { value: string; name?: string };
   Line: QboInvoiceLine[];
 };
 
@@ -56,6 +64,11 @@ export type BuildPayloadOptions = {
   // vary by shipment, and silently preserving an old discount could over-
   // discount a customer who's no longer eligible.
   discountPercent?: number;
+  // Optional QBO Term Id (e.g. "3" for Net 30). When set, the invoice's
+  // SalesTermRef is updated. When unset, the existing SalesTermRef stays —
+  // QBO sparse updates leave omitted fields untouched.
+  salesTermId?: string;
+  salesTermName?: string;
 };
 
 // Pure transform: invoice + actions → sparse update payload. No I/O. The send
@@ -170,12 +183,21 @@ export function buildPayload(
     Id: invoice.Id,
     SyncToken: invoice.SyncToken,
     sparse: true,
+    // Always blank the customer memo — 3rd-party sync writes sales-receipt
+    // boilerplate that shouldn't appear on statements.
+    CustomerMemo: { value: "" },
     Line: updatedLines,
   };
   if (meta && meta.type === "set_metadata") {
     payload.TrackingNum = meta.trackingNumber;
     payload.ShipDate = meta.shipDate;
     payload.ShipMethodRef = { value: meta.shipVia, name: meta.shipVia };
+  }
+  if (options.salesTermId) {
+    payload.SalesTermRef = {
+      value: options.salesTermId,
+      ...(options.salesTermName ? { name: options.salesTermName } : {}),
+    };
   }
   return payload;
 }
@@ -188,6 +210,8 @@ export type SendOptions = {
   postUpdate?: (payload: QboInvoicePayload) => Promise<QboInvoice>;
   // Forwarded to buildPayload — see BuildPayloadOptions.
   discountPercent?: number;
+  salesTermId?: string;
+  salesTermName?: string;
 };
 
 // Wraps buildPayload with side-effects: shadow-mode logging or live POST.
@@ -200,6 +224,8 @@ export async function sendInvoiceUpdate(
 ): Promise<SendOutcome> {
   const payload = buildPayload(invoice, actions, {
     discountPercent: opts.discountPercent,
+    salesTermId: opts.salesTermId,
+    salesTermName: opts.salesTermName,
   });
 
   if (opts.shadowMode) {
