@@ -437,4 +437,53 @@ describe("sendInvoiceUpdate — shadow vs live", () => {
       sendInvoiceUpdate(makeInvoice(), [SET_METADATA], { shadowMode: false }),
     ).rejects.toThrow(/postUpdate/);
   });
+
+  it("calls postSendEmail after a successful update and captures sentTo", async () => {
+    const updated = makeInvoice({ SyncToken: "4" });
+    const sentInvoice = {
+      ...updated,
+      BillEmail: { Address: "buyer@example.com" },
+    } as unknown as ReturnType<typeof makeInvoice>;
+    const postUpdate = vi.fn(async () => updated);
+    const postSendEmail = vi.fn(async () => sentInvoice);
+    const result = await sendInvoiceUpdate(makeInvoice(), [SET_METADATA], {
+      shadowMode: false,
+      postUpdate,
+      postSendEmail,
+    });
+    expect(postSendEmail).toHaveBeenCalledWith(updated.Id);
+    if (result.status === "sent") {
+      expect(result.email?.sentTo).toBe("buyer@example.com");
+      expect(result.emailError).toBeNull();
+    }
+  });
+
+  it("returns emailError when postSendEmail throws but keeps the update", async () => {
+    const updated = makeInvoice({ SyncToken: "4" });
+    const postUpdate = vi.fn(async () => updated);
+    const postSendEmail = vi.fn(async () => {
+      throw new Error("BillEmail not set");
+    });
+    const result = await sendInvoiceUpdate(makeInvoice(), [SET_METADATA], {
+      shadowMode: false,
+      postUpdate,
+      postSendEmail,
+    });
+    expect(result.status).toBe("sent");
+    if (result.status === "sent") {
+      expect(result.email).toBeNull();
+      expect(result.emailError).toMatch(/BillEmail/);
+      // Update is still committed even when email fails.
+      expect(result.response.SyncToken).toBe("4");
+    }
+  });
+
+  it("does not call postSendEmail in shadow mode", async () => {
+    const postSendEmail = vi.fn(async () => makeInvoice());
+    await sendInvoiceUpdate(makeInvoice(), [SET_METADATA], {
+      shadowMode: true,
+      postSendEmail,
+    });
+    expect(postSendEmail).not.toHaveBeenCalled();
+  });
 });

@@ -198,6 +198,9 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           // Live POST hook: forwards the prepared sparse-update payload to
           // QboClient.updateInvoice. Only invoked when shadowMode=false.
           postUpdate: async (payload) => qbClient.updateInvoice(payload),
+          // After update, email the invoice to the customer's BillEmail.
+          // Skipped in shadow mode by sendInvoiceUpdate's own logic.
+          postSendEmail: async (id) => qbClient.sendInvoiceEmail(id),
         },
       );
       return reply.send({ outcome, shadowMode: env.SHADOW_MODE });

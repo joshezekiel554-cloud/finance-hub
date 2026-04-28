@@ -213,7 +213,14 @@ function Summary({ rows }: { rows: Row[] }) {
 }
 
 type SendResult =
-  | { ok: true; status: "shadow" | "sent"; payload?: unknown; response?: unknown }
+  | {
+      ok: true;
+      status: "shadow" | "sent";
+      payload?: unknown;
+      response?: unknown;
+      email?: { sentTo: string | null; sentAt: string } | null;
+      emailError?: string | null;
+    }
   | { ok: false; error: string };
 
 function ShipmentCard({
@@ -272,6 +279,8 @@ function ShipmentCard({
         status: body.outcome?.status ?? "shadow",
         payload: body.outcome?.payload,
         response: body.outcome?.response,
+        email: body.outcome?.email ?? null,
+        emailError: body.outcome?.emailError ?? null,
       };
     },
     onSuccess: (result) => {
@@ -525,7 +534,42 @@ function SendResultPill({
       </Badge>
     );
   }
-  return <Badge tone="success">Sent to QBO</Badge>;
+  // Live send. Compose label from the email step result.
+  if (result.emailError) {
+    return (
+      <Badge tone="high">
+        Updated, email failed: {result.emailError.slice(0, 60)}
+      </Badge>
+    );
+  }
+  if (result.email && result.email.sentTo) {
+    return (
+      <Badge tone="success">
+        Sent to {result.email.sentTo} · {formatTime(result.email.sentAt)}
+      </Badge>
+    );
+  }
+  if (result.email) {
+    return (
+      <Badge tone="success">
+        Updated + emailed · {formatTime(result.email.sentAt)}
+      </Badge>
+    );
+  }
+  return <Badge tone="success">Updated (no email)</Badge>;
+}
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 function ReconcileTable({

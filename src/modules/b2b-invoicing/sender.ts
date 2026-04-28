@@ -33,6 +33,14 @@ export type SendOutcome =
       status: "sent";
       payload: QboInvoicePayload;
       response: QboInvoice;
+      // Populated when QBO accepted the /send (email) call after the update.
+      // Null when the update succeeded but the email step failed or was skipped.
+      email: {
+        sentTo: string | null;
+        sentAt: string;
+      } | null;
+      // Captured if /send threw — the update is still committed.
+      emailError: string | null;
     };
 
 // Sparse update body. QBO accepts a partial Invoice with sparse:true; only
@@ -213,6 +221,9 @@ export type SendOptions = {
   // QBO call (so the sender doesn't depend on QboClient directly — keeps it
   // testable and the surface narrow).
   postUpdate?: (payload: QboInvoicePayload) => Promise<QboInvoice>;
+  // Hook for the /invoice/{id}/send call — emails the invoice to the
+  // customer's BillEmail. Skipped in shadow mode and when not provided.
+  postSendEmail?: (invoiceId: string) => Promise<QboInvoice>;
   // Forwarded to buildPayload — see BuildPayloadOptions.
   discountPercent?: number;
   salesTermId?: string;
@@ -265,7 +276,35 @@ export async function sendInvoiceUpdate(
     },
     "invoice update sent to QBO",
   );
-  return { status: "sent", payload, response };
+
+  // Update succeeded; now email the customer if the caller wired the send
+  // hook. Failures here are non-fatal — the update is committed regardless.
+  let email: { sentTo: string | null; sentAt: string } | null = null;
+  let emailError: string | null = null;
+  if (opts.postSendEmail) {
+    try {
+      const sentInvoice = await opts.postSendEmail(response.Id);
+      const sentTo =
+        (sentInvoice as unknown as { BillEmail?: { Address?: string } })
+          .BillEmail?.Address ??
+        (response as unknown as { BillEmail?: { Address?: string } }).BillEmail
+          ?.Address ??
+        null;
+      email = { sentTo, sentAt: new Date().toISOString() };
+      log.info(
+        { invoiceId: response.Id, sentTo },
+        "invoice emailed to customer",
+      );
+    } catch (err) {
+      emailError = (err as Error).message;
+      log.error(
+        { err, invoiceId: response.Id },
+        "invoice update committed but email send failed",
+      );
+    }
+  }
+
+  return { status: "sent", payload, response, email, emailError };
 }
 
 // ---------- helpers ----------

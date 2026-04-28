@@ -341,6 +341,47 @@ export class QboClient {
     return data.QueryResponse.Invoice?.[0] ?? null;
   }
 
+  // POST to /invoice/{id}/send — QBO emails the invoice to the customer's
+  // BillEmail (or PrimaryEmailAddr fallback). Optional sendToEmail overrides.
+  // Returns the updated invoice with EmailStatus="EmailSent". 401 → forced
+  // refresh → single retry.
+  async sendInvoiceEmail(
+    invoiceId: string,
+    sendToEmail?: string,
+  ): Promise<QboInvoice> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/invoice/${encodeURIComponent(invoiceId)}/send`;
+    const accessToken = await this.getAccessToken();
+
+    const doRequest = async (token: string) => {
+      return this.http.post<{ Invoice: QboInvoice }>(url, "", {
+        params: {
+          minorversion: QBO_MINOR_VERSION,
+          ...(sendToEmail ? { sendTo: sendToEmail } : {}),
+        },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          // Intuit's /send endpoint requires this exact content-type even
+          // though the body is empty. Skipping it produces a 415.
+          "Content-Type": "application/octet-stream",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.Invoice;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.Invoice;
+      }
+      throw err;
+    }
+  }
+
   // Sparse Invoice update. Caller passes a body with Id + SyncToken + sparse:true
   // and the fields to mutate. QBO replies with the updated Invoice (new
   // SyncToken). 401 → forced refresh → single retry, same as query().
