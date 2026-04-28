@@ -110,6 +110,9 @@ const oauthRoutes: FastifyPluginAsync = async (app) => {
 
     const tokens = await exchangeCodeForTokens(provider, code, { realmId, shop });
 
+    // TODO(week-3): UPDATE the pending row in place (matched by pendingStateNonce)
+    // rather than INSERTing a second row. Today this leaves an orphan pending row
+    // alongside the real token row for the same (provider, externalAccountId).
     await db.insert(oauthTokens).values({
       id: nanoid(24),
       provider,
