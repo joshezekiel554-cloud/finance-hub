@@ -299,6 +299,86 @@ describe("buildPayload — realistic 18294-shaped scenario", () => {
   });
 });
 
+describe("buildPayload — invoice-level discount", () => {
+  it("appends DiscountLineDetail with PercentBased=true when discountPercent>0", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      discountPercent: 5,
+    });
+    const discountLine = payload.Line.find(
+      (l) => l.DetailType === "DiscountLineDetail",
+    ) as { DiscountLineDetail?: { PercentBased: boolean; DiscountPercent: number } } | undefined;
+    expect(discountLine).toBeDefined();
+    expect(discountLine?.DiscountLineDetail).toEqual({
+      PercentBased: true,
+      DiscountPercent: 5,
+    });
+  });
+
+  it("strips any pre-existing DiscountLineDetail from the source invoice", () => {
+    const invoice = makeInvoice({
+      Line: [
+        makeLine({ Id: "1" }),
+        {
+          DetailType: "DiscountLineDetail",
+          Amount: -10,
+        } as unknown as QboInvoiceLine,
+      ],
+    });
+    // No discountPercent → existing discount should still be dropped (caller
+    // must opt in each time).
+    const payload = buildPayload(invoice, [
+      SET_METADATA,
+      { type: "keep", lineId: "1", sku: "SKU1", qty: 10 },
+    ]);
+    expect(payload.Line.some((l) => l.DetailType === "DiscountLineDetail")).toBe(
+      false,
+    );
+  });
+
+  it("replaces a pre-existing discount with the user's new value", () => {
+    const invoice = makeInvoice({
+      Line: [
+        makeLine({ Id: "1" }),
+        {
+          DetailType: "DiscountLineDetail",
+          Amount: -10,
+          DiscountLineDetail: { PercentBased: true, DiscountPercent: 10 },
+        } as unknown as QboInvoiceLine,
+      ],
+    });
+    const payload = buildPayload(
+      invoice,
+      [SET_METADATA, { type: "keep", lineId: "1", sku: "SKU1", qty: 10 }],
+      { discountPercent: 5 },
+    );
+    const discountLines = payload.Line.filter(
+      (l) => l.DetailType === "DiscountLineDetail",
+    );
+    expect(discountLines).toHaveLength(1);
+    const dl = discountLines[0] as { DiscountLineDetail?: { DiscountPercent: number } } | undefined;
+    expect(dl?.DiscountLineDetail?.DiscountPercent).toBe(5);
+  });
+
+  it("rejects discount > 100", () => {
+    expect(() =>
+      buildPayload(makeInvoice(), [SET_METADATA], { discountPercent: 150 }),
+    ).toThrow(/exceeds 100/);
+  });
+
+  it("does NOT append a discount line when discountPercent=0 or omitted", () => {
+    const omitted = buildPayload(makeInvoice(), [SET_METADATA]);
+    const zero = buildPayload(makeInvoice(), [SET_METADATA], {
+      discountPercent: 0,
+    });
+    expect(omitted.Line.some((l) => l.DetailType === "DiscountLineDetail")).toBe(
+      false,
+    );
+    expect(zero.Line.some((l) => l.DetailType === "DiscountLineDetail")).toBe(
+      false,
+    );
+  });
+});
+
 describe("sendInvoiceUpdate — shadow vs live", () => {
   it("returns status:shadow without posting when shadowMode=true", async () => {
     const postUpdate = vi.fn();

@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, Package, Truck } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, CheckCircle2, MessageSquare, Package, Truck } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -66,6 +67,7 @@ type Row = {
     orderNumber: number;
     customerEmail: string | null;
     lineCount: number;
+    note: string | null;
   } | null;
   shopifyOrderError: string | null;
   reconcileResult: {
@@ -84,7 +86,8 @@ export default function InvoicingTodayPage() {
       if (!res.ok) throw new Error(`request failed: ${res.status}`);
       return res.json();
     },
-    refetchInterval: 30_000,
+    // Manual refresh only — saves Gmail+QB+Shopify quota.
+    refetchOnWindowFocus: false,
   });
 
   return (
@@ -134,11 +137,11 @@ export default function InvoicingTodayPage() {
         </Card>
       )}
 
-      {data && data.rows.length > 0 && (
-        <Summary rows={data.rows} />
-      )}
+      {data && data.rows.length > 0 && <Summary rows={data.rows} />}
 
-      {data?.rows.map((row) => <ShipmentCard key={row.gmailId} row={row} />)}
+      {data?.rows.map((row) => (
+        <ShipmentCard key={row.gmailId} row={row} shadowMode={data.shadowMode} />
+      ))}
     </div>
   );
 }
@@ -165,7 +168,7 @@ function Summary({ rows }: { rows: Row[] }) {
           <AlertCircle className="size-5 text-accent-warning" />
           <div>
             <div className="text-2xl font-semibold">{missingInvoice.length}</div>
-            <div className="text-xs text-secondary">no QB invoice match</div>
+            <div className="text-xs text-secondary">no QB invoice match (likely sales receipts)</div>
           </div>
         </CardBody>
       </Card>
@@ -182,13 +185,103 @@ function Summary({ rows }: { rows: Row[] }) {
   );
 }
 
-function ShipmentCard({ row }: { row: Row }) {
-  // Skip the truly garbage emails so the page stays focused on actual shipments.
+type SendResult =
+  | { ok: true; status: "shadow" | "sent"; payload?: unknown; response?: unknown }
+  | { ok: false; error: string };
+
+function ShipmentCard({ row, shadowMode }: { row: Row; shadowMode: boolean }) {
   if (row.parseConfidence < 0.5) return null;
+
+  // Local editable state. Initialised from the reconciler output and from
+  // the parsed shipment, both treated as defaults the user can override.
+  const [editedActions, setEditedActions] = useState<ReconcileAction[]>(
+    row.reconcileResult?.actions ?? [],
+  );
+  const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [sendResult, setSendResult] = useState<SendResult | null>(null);
+
+  const queryClient = useQueryClient();
+  const sendMutation = useMutation({
+    mutationFn: async (): Promise<SendResult> => {
+      if (!row.qbInvoice) return { ok: false, error: "no qb invoice" };
+      const res = await fetch("/api/invoicing/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: row.qbInvoice.id,
+          expectedSyncToken: row.qbInvoice.syncToken,
+          actions: editedActions,
+          discountPercent: discountPercent > 0 ? discountPercent : undefined,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+      }
+      return {
+        ok: true,
+        status: body.outcome?.status ?? "shadow",
+        payload: body.outcome?.payload,
+        response: body.outcome?.response,
+      };
+    },
+    onSuccess: (result) => {
+      setSendResult(result);
+      if (result.ok && result.status === "sent") {
+        // Live send succeeded — refresh the list so this row picks up the
+        // new SyncToken (or vanishes if its email is now flagged "sent" by
+        // some downstream tracking). Shadow mode doesn't change anything,
+        // so skip the refetch.
+        queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+      }
+    },
+  });
 
   const po = row.parsed.poNumber ?? "(no PO)";
   const customer = row.qbInvoice?.customerName ?? row.shopifyOrder?.customerEmail ?? "(unknown)";
-  const blocked = row.qbInvoice === null;
+
+  // Flag any add action with no resolved unitPrice — Send is blocked until
+  // the user types one in.
+  const blockingAdds = useMemo(
+    () =>
+      editedActions.filter(
+        (a) => a.type === "add" && (a.unitPrice === null || a.unitPrice <= 0),
+      ),
+    [editedActions],
+  );
+
+  function updateQtyChangeToQty(lineId: string, newQty: number) {
+    setEditedActions((prev) =>
+      prev.map((a) =>
+        a.type === "qty_change" && a.lineId === lineId ? { ...a, toQty: newQty } : a,
+      ),
+    );
+    setSendResult(null);
+  }
+
+  function updateAddPrice(sku: string, newPrice: number) {
+    setEditedActions((prev) =>
+      prev.map((a) =>
+        a.type === "add" && a.sku === sku
+          ? {
+              ...a,
+              unitPrice: Number.isFinite(newPrice) ? newPrice : null,
+              // Once user edits the price, treat it as confident regardless
+              // of the original priceSource.
+              priceSource: "shopify_b2b" as const,
+            }
+          : a,
+      ),
+    );
+    setSendResult(null);
+  }
+
+  function updateAddQty(sku: string, newQty: number) {
+    setEditedActions((prev) =>
+      prev.map((a) => (a.type === "add" && a.sku === sku ? { ...a, qty: newQty } : a)),
+    );
+    setSendResult(null);
+  }
 
   return (
     <Card>
@@ -220,6 +313,18 @@ function ShipmentCard({ row }: { row: Row }) {
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
+        {row.shopifyOrder?.note && (
+          <div className="flex items-start gap-2 rounded-md border border-accent-info/30 bg-accent-info/5 px-3 py-2 text-sm text-secondary">
+            <MessageSquare className="mt-0.5 size-4 shrink-0 text-accent-info" />
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-accent-info">
+                Shopify note
+              </div>
+              <div className="mt-0.5 whitespace-pre-wrap">{row.shopifyOrder.note}</div>
+            </div>
+          </div>
+        )}
+
         {row.qbInvoiceError && !row.qbInvoice && (
           <p className="text-xs text-accent-danger">QB lookup: {row.qbInvoiceError}</p>
         )}
@@ -228,31 +333,61 @@ function ShipmentCard({ row }: { row: Row }) {
         )}
 
         {row.reconcileResult && (
-          <ReconcileTable row={row} />
+          <ReconcileTable
+            row={row}
+            editedActions={editedActions}
+            onQtyChange={updateQtyChangeToQty}
+            onAddPriceChange={updateAddPrice}
+            onAddQtyChange={updateAddQty}
+          />
         )}
 
-        {!blocked && row.reconcileResult && (
-          <div className="flex items-center justify-between border-t border-default pt-3">
-            <div className="text-xs text-secondary">
-              {row.reconcileResult.summary.keep} keep ·{" "}
-              {row.reconcileResult.summary.qty_change} qty change ·{" "}
-              {row.reconcileResult.summary.add} add
-              {row.reconcileResult.summary.addsNeedingPrice.length > 0 && (
-                <>
-                  {" "}
-                  · <span className="text-accent-warning">
-                    {row.reconcileResult.summary.addsNeedingPrice.length} need price
-                  </span>
-                </>
-              )}
+        {row.qbInvoice && row.reconcileResult && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-default pt-3">
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-secondary">
+                <span className="font-medium">Discount %</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={discountPercent}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    setDiscountPercent(Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0);
+                    setSendResult(null);
+                  }}
+                  className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
+                />
+              </label>
+              <div className="text-xs text-secondary">
+                {summarize(editedActions)}
+                {blockingAdds.length > 0 && (
+                  <>
+                    {" "}
+                    · <span className="text-accent-warning">
+                      {blockingAdds.length} add{blockingAdds.length > 1 ? "s" : ""} need price
+                    </span>
+                  </>
+                )}
+              </div>
             </div>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={row.reconcileResult.summary.addsNeedingPrice.length > 0}
-            >
-              Send to QBO
-            </Button>
+            <div className="flex items-center gap-3">
+              {sendResult && <SendResultPill result={sendResult} shadowMode={shadowMode} />}
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={blockingAdds.length > 0 || sendMutation.isPending}
+                onClick={() => sendMutation.mutate()}
+              >
+                {sendMutation.isPending
+                  ? "Sending…"
+                  : shadowMode
+                    ? "Preview send"
+                    : "Send to QBO"}
+              </Button>
+            </div>
           </div>
         )}
       </CardBody>
@@ -260,11 +395,51 @@ function ShipmentCard({ row }: { row: Row }) {
   );
 }
 
-function ReconcileTable({ row }: { row: Row }) {
+function summarize(actions: ReconcileAction[]): string {
+  let keep = 0,
+    qty = 0,
+    add = 0;
+  for (const a of actions) {
+    if (a.type === "keep") keep++;
+    else if (a.type === "qty_change") qty++;
+    else if (a.type === "add") add++;
+  }
+  return `${keep} keep · ${qty} qty change · ${add} add`;
+}
+
+function SendResultPill({
+  result,
+  shadowMode,
+}: {
+  result: SendResult;
+  shadowMode: boolean;
+}) {
+  if (!result.ok) return <Badge tone="critical">Failed: {result.error}</Badge>;
+  if (result.status === "shadow") {
+    return (
+      <Badge tone="info">
+        Shadow OK — payload prepared{shadowMode ? "" : ", but server reported shadow"}
+      </Badge>
+    );
+  }
+  return <Badge tone="success">Sent to QBO</Badge>;
+}
+
+function ReconcileTable({
+  row,
+  editedActions,
+  onQtyChange,
+  onAddPriceChange,
+  onAddQtyChange,
+}: {
+  row: Row;
+  editedActions: ReconcileAction[];
+  onQtyChange: (lineId: string, newQty: number) => void;
+  onAddPriceChange: (sku: string, newPrice: number) => void;
+  onAddQtyChange: (sku: string, newQty: number) => void;
+}) {
   if (!row.qbInvoice || !row.reconcileResult) return null;
 
-  // Build a unified row map keyed by SKU. Each row shows: SKU, current invoice
-  // qty, shipped qty, action.
   type DisplayRow = {
     sku: string;
     itemName: string | null;
@@ -302,10 +477,16 @@ function ReconcileTable({ row }: { row: Row }) {
       });
     }
   }
-  for (const action of row.reconcileResult.actions) {
-    if (action.type === "set_metadata") continue;
+  for (const action of editedActions) {
+    if (action.type === "set_metadata" || action.type === "keep") continue;
     const sku = action.type === "add" ? action.sku.toUpperCase() : action.sku.toUpperCase();
     const r = map.get(sku);
+    if (r) r.action = action;
+  }
+  // keep actions inject themselves too (so badge renders)
+  for (const action of editedActions) {
+    if (action.type !== "keep") continue;
+    const r = map.get(action.sku.toUpperCase());
     if (r) r.action = action;
   }
 
@@ -319,41 +500,94 @@ function ReconcileTable({ row }: { row: Row }) {
             <th className="px-3 py-2 text-left">SKU</th>
             <th className="px-3 py-2 text-right">Invoice qty</th>
             <th className="px-3 py-2 text-right">Shipped qty</th>
+            <th className="px-3 py-2 text-right">Final qty</th>
             <th className="px-3 py-2 text-right">Unit price</th>
             <th className="px-3 py-2 text-left">Action</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.sku} className="border-t border-default">
-              <td className="px-3 py-2">
-                <div className="font-mono text-xs font-medium">{r.sku}</div>
-                {r.itemName && (
-                  <div className="text-xs text-muted">{r.itemName}</div>
-                )}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums">{r.currentQty ?? "—"}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{r.shippedQty ?? "—"}</td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {r.unitPrice !== null ? `$${r.unitPrice.toFixed(2)}` : "—"}
-              </td>
-              <td className="px-3 py-2">
-                <ActionBadge action={r.action} />
-              </td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const action = r.action;
+            const isQtyChange = action?.type === "qty_change";
+            const isAdd = action?.type === "add";
+            const isKeep = action?.type === "keep";
+            const finalQty = isQtyChange
+              ? action.toQty
+              : isAdd
+                ? action.qty
+                : isKeep
+                  ? action.qty
+                  : (r.currentQty ?? 0);
+            const finalPrice = isAdd ? action.unitPrice : r.unitPrice;
+
+            return (
+              <tr key={r.sku} className="border-t border-default">
+                <td className="px-3 py-2">
+                  <div className="font-mono text-xs font-medium">{r.sku}</div>
+                  {r.itemName && <div className="text-xs text-muted">{r.itemName}</div>}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">{r.currentQty ?? "—"}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{r.shippedQty ?? "—"}</td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {isQtyChange ? (
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={finalQty}
+                      onChange={(e) => onQtyChange(action.lineId, Number(e.target.value))}
+                      className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
+                    />
+                  ) : isAdd ? (
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={finalQty}
+                      onChange={(e) => onAddQtyChange(action.sku, Number(e.target.value))}
+                      className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
+                    />
+                  ) : (
+                    finalQty
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {isAdd ? (
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={finalPrice ?? ""}
+                      placeholder="0.00"
+                      onChange={(e) => onAddPriceChange(action.sku, Number(e.target.value))}
+                      className={cn(
+                        "w-24 rounded-md border bg-base px-2 py-1 text-right text-sm tabular-nums",
+                        finalPrice === null || finalPrice <= 0
+                          ? "border-accent-warning"
+                          : "border-default",
+                      )}
+                    />
+                  ) : finalPrice !== null ? (
+                    `$${finalPrice.toFixed(2)}`
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  <ActionBadge action={action} />
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div className="border-t border-default bg-elevated/30 px-3 py-2 text-xs text-secondary">
         <span className="font-medium">Header update:</span>{" "}
-        Tracking{" "}
-        <span className="font-mono">{row.parsed.trackingNumber}</span>
+        Tracking <span className="font-mono">{row.parsed.trackingNumber}</span>
         {", "}
-        ship via{" "}
-        <span className="font-mono">{row.parsed.carrierShort}</span>
+        ship via <span className="font-mono">{row.parsed.carrierShort}</span>
         {", "}
-        ship date{" "}
-        <span className="font-mono">{row.parsed.shipDate}</span>
+        ship date <span className="font-mono">{row.parsed.shipDate}</span>
         {row.qbInvoice.existingTrackingNum && (
           <span className="ml-2 text-accent-warning">
             (overwrites existing: {row.qbInvoice.existingTrackingNum})
@@ -379,19 +613,15 @@ function ActionBadge({ action }: { action: ReconcileAction | null }) {
     return (
       <Badge tone={tone}>
         qty {action.fromQty} → {action.toQty}
-        <span
-          className={cn("ml-1 text-[10px] font-normal opacity-70")}
-        >
-          ({action.reason})
-        </span>
+        <span className="ml-1 text-[10px] font-normal opacity-70">({action.reason})</span>
       </Badge>
     );
   }
   if (action.type === "add") {
-    if (action.priceSource === "fallback") {
+    if (action.unitPrice === null || action.unitPrice <= 0) {
       return <Badge tone="high">add (needs price)</Badge>;
     }
-    return <Badge tone="info">add @ ${action.unitPrice?.toFixed(2)}</Badge>;
+    return <Badge tone="info">add @ ${action.unitPrice.toFixed(2)}</Badge>;
   }
   return null;
 }

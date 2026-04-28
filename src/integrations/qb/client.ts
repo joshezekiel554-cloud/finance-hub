@@ -334,6 +334,45 @@ export class QboClient {
     return data.QueryResponse.Invoice?.[0] ?? null;
   }
 
+  async getInvoiceById(invoiceId: string): Promise<QboInvoice | null> {
+    const data = await this.query<QboInvoice>(
+      `SELECT * FROM Invoice WHERE Id = '${escapeQboLiteral(invoiceId)}'`,
+    );
+    return data.QueryResponse.Invoice?.[0] ?? null;
+  }
+
+  // Sparse Invoice update. Caller passes a body with Id + SyncToken + sparse:true
+  // and the fields to mutate. QBO replies with the updated Invoice (new
+  // SyncToken). 401 → forced refresh → single retry, same as query().
+  async updateInvoice(payload: object): Promise<QboInvoice> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/invoice`;
+    const accessToken = await this.getAccessToken();
+
+    const doRequest = async (token: string) => {
+      return this.http.post<{ Invoice: QboInvoice }>(url, payload, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.Invoice;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.Invoice;
+      }
+      throw err;
+    }
+  }
+
   async getQboItemBySku(sku: string): Promise<QboItem | null> {
     const data = await this.query<QboItem>(
       `SELECT * FROM Item WHERE Sku = '${escapeQboLiteral(sku)}'`,

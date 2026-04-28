@@ -78,6 +78,7 @@ export type InvoicingTodayRow = {
     orderNumber: number;
     customerEmail: string | null;
     lineCount: number;
+    note: string | null;
   } | null;
   shopifyOrderError: string | null;
   reconcileResult: {
@@ -98,6 +99,9 @@ const sendBodySchema = z.object({
   // we re-fetch the invoice and verify SyncToken matches before sending.
   expectedSyncToken: z.string().min(1),
   actions: z.array(z.any()),
+  // Optional invoice-level percent discount (0-100). Only applied when > 0;
+  // any pre-existing DiscountLineDetail on the invoice is replaced.
+  discountPercent: z.number().min(0).max(100).optional(),
 });
 
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
@@ -131,17 +135,12 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     if (!parse.success) {
       return reply.code(400).send({ error: "invalid body", details: parse.error.flatten() });
     }
-    const { invoiceId, expectedSyncToken, actions } = parse.data;
+    const { invoiceId, expectedSyncToken, actions, discountPercent } = parse.data;
 
     const qbClient = new QboClient();
     let invoice: QboInvoice | null = null;
     try {
-      // Re-fetch by Id via a query (Invoice.Id) — using getInvoiceByDocNumber
-      // would require us to round-trip via DocNumber. Faster to query Id.
-      const data = await (qbClient as unknown as {
-        query<T>(q: string): Promise<{ QueryResponse: { Invoice?: T[] } }>;
-      }).query<QboInvoice>(`SELECT * FROM Invoice WHERE Id = '${invoiceId.replace(/'/g, "''")}'`);
-      invoice = data.QueryResponse.Invoice?.[0] ?? null;
+      invoice = await qbClient.getInvoiceById(invoiceId);
     } catch (err) {
       log.error({ err, invoiceId }, "qbo refetch before send failed");
       return reply.code(502).send({ error: "qbo refetch failed" });
@@ -160,9 +159,10 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
         actions as ReconcileAction[],
         {
           shadowMode: env.SHADOW_MODE,
-          // TODO(week-4): live POST hook. For now, even SHADOW_MODE=false will
-          // throw inside sendInvoiceUpdate — keeping the live write gated until
-          // we explicitly wire it up after end-to-end UI smoke.
+          discountPercent,
+          // Live POST hook: forwards the prepared sparse-update payload to
+          // QboClient.updateInvoice. Only invoked when shadowMode=false.
+          postUpdate: async (payload) => qbClient.updateInvoice(payload),
         },
       );
       return reply.send({ outcome, shadowMode: env.SHADOW_MODE });
@@ -276,6 +276,7 @@ async function buildRow(
           orderNumber: shopifyOrder.order_number,
           customerEmail: shopifyOrder.email,
           lineCount: shopifyOrder.line_items.length,
+          note: shopifyOrder.note,
         }
       : null,
     shopifyOrderError,

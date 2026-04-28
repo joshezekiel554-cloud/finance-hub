@@ -48,11 +48,22 @@ export type QboInvoicePayload = {
   Line: QboInvoiceLine[];
 };
 
+export type BuildPayloadOptions = {
+  // Optional invoice-level percent discount (e.g. 5 = 5% off). When > 0, a
+  // DiscountLineDetail row is appended (or replaces any existing one). When
+  // 0/undefined, any existing discount on the invoice is dropped — caller
+  // must opt in explicitly each time. This is intentional: B2B discounts
+  // vary by shipment, and silently preserving an old discount could over-
+  // discount a customer who's no longer eligible.
+  discountPercent?: number;
+};
+
 // Pure transform: invoice + actions → sparse update payload. No I/O. The send
 // function below wraps this with the actual POST or shadow-mode logging.
 export function buildPayload(
   invoice: QboInvoice,
   actions: ReconcileAction[],
+  options: BuildPayloadOptions = {},
 ): QboInvoicePayload {
   if (!invoice.SyncToken) {
     throw new Error(
@@ -76,6 +87,10 @@ export function buildPayload(
   for (const line of sourceLines) {
     // Drop auto-generated subtotal lines — QBO regenerates them.
     if (line.DetailType === "SubTotalLineDetail") continue;
+    // Drop any existing DiscountLineDetail — caller's `discountPercent` is
+    // the source of truth for this update. If they didn't pass one, no
+    // discount is applied.
+    if (line.DetailType === "DiscountLineDetail") continue;
     if (!line.Id) {
       // Unidentifiable line; pass through verbatim. Belt-and-suspenders, since
       // the reconciler shouldn't address lines without IDs.
@@ -120,6 +135,35 @@ export function buildPayload(
     updatedLines.push(buildAddLine(action.sku, action.qty, action.unitPrice));
   }
 
+  // Append a percent-discount line if requested. PercentBased=true tells QBO
+  // to compute Amount server-side from the subtotal × DiscountPercent. We
+  // don't set DiscountAccountRef — QBO falls back to the invoice template
+  // default (existing customers won't need this set explicitly).
+  if (
+    options.discountPercent !== undefined &&
+    options.discountPercent > 0
+  ) {
+    if (options.discountPercent > 100) {
+      throw new Error(
+        `buildPayload: discountPercent ${options.discountPercent} exceeds 100`,
+      );
+    }
+    updatedLines.push({
+      DetailType: "DiscountLineDetail",
+      Amount: 0,
+      // QBO's Drizzle types don't include DiscountLineDetail in
+      // QboInvoiceLine; cast through unknown so the runtime payload has the
+      // field. (We're intentionally tolerating type drift here — full
+      // typing of every QBO Line subtype is YAGNI for our surface.)
+      ...{
+        DiscountLineDetail: {
+          PercentBased: true,
+          DiscountPercent: options.discountPercent,
+        },
+      },
+    } as unknown as QboInvoiceLine);
+  }
+
   // Find the set_metadata action (always present, by reconciler contract).
   const meta = actions.find((a) => a.type === "set_metadata");
   const payload: QboInvoicePayload = {
@@ -142,6 +186,8 @@ export type SendOptions = {
   // QBO call (so the sender doesn't depend on QboClient directly — keeps it
   // testable and the surface narrow).
   postUpdate?: (payload: QboInvoicePayload) => Promise<QboInvoice>;
+  // Forwarded to buildPayload — see BuildPayloadOptions.
+  discountPercent?: number;
 };
 
 // Wraps buildPayload with side-effects: shadow-mode logging or live POST.
@@ -152,7 +198,9 @@ export async function sendInvoiceUpdate(
   actions: ReconcileAction[],
   opts: SendOptions,
 ): Promise<SendOutcome> {
-  const payload = buildPayload(invoice, actions);
+  const payload = buildPayload(invoice, actions, {
+    discountPercent: opts.discountPercent,
+  });
 
   if (opts.shadowMode) {
     log.info(
