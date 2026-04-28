@@ -15,7 +15,12 @@ type ReconcileAction =
       sku: string;
       fromQty: number;
       toQty: number;
-      reason: "shipped_less" | "shipped_more" | "not_shipped" | "split_zero";
+      reason:
+        | "shipped_less"
+        | "shipped_more"
+        | "not_shipped"
+        | "split_zero"
+        | "user_override";
     }
   | {
       type: "add";
@@ -250,11 +255,39 @@ function ShipmentCard({ row, shadowMode }: { row: Row; shadowMode: boolean }) {
     [editedActions],
   );
 
-  function updateQtyChangeToQty(lineId: string, newQty: number) {
+  // Edit the final qty for an existing invoice line. Handles all three
+  // transitions automatically:
+  //   keep        → keep         (newQty matches the original)
+  //   keep        → qty_change   (newQty differs; reason = user_override)
+  //   qty_change  → qty_change   (just updates toQty)
+  //   qty_change  → keep         (newQty matches the original fromQty)
+  function updateLineQty(lineId: string, newQty: number) {
     setEditedActions((prev) =>
-      prev.map((a) =>
-        a.type === "qty_change" && a.lineId === lineId ? { ...a, toQty: newQty } : a,
-      ),
+      prev.map((a) => {
+        if (a.type === "keep" && a.lineId === lineId) {
+          if (newQty === a.qty) return a;
+          return {
+            type: "qty_change",
+            lineId: a.lineId,
+            sku: a.sku,
+            fromQty: a.qty,
+            toQty: newQty,
+            reason: "user_override",
+          };
+        }
+        if (a.type === "qty_change" && a.lineId === lineId) {
+          if (newQty === a.fromQty) {
+            return {
+              type: "keep",
+              lineId: a.lineId,
+              sku: a.sku,
+              qty: a.fromQty,
+            };
+          }
+          return { ...a, toQty: newQty };
+        }
+        return a;
+      }),
     );
     setSendResult(null);
   }
@@ -336,7 +369,7 @@ function ShipmentCard({ row, shadowMode }: { row: Row; shadowMode: boolean }) {
           <ReconcileTable
             row={row}
             editedActions={editedActions}
-            onQtyChange={updateQtyChangeToQty}
+            onLineQtyChange={updateLineQty}
             onAddPriceChange={updateAddPrice}
             onAddQtyChange={updateAddQty}
           />
@@ -428,13 +461,13 @@ function SendResultPill({
 function ReconcileTable({
   row,
   editedActions,
-  onQtyChange,
+  onLineQtyChange,
   onAddPriceChange,
   onAddQtyChange,
 }: {
   row: Row;
   editedActions: ReconcileAction[];
-  onQtyChange: (lineId: string, newQty: number) => void;
+  onLineQtyChange: (lineId: string, newQty: number) => void;
   onAddPriceChange: (sku: string, newPrice: number) => void;
   onAddQtyChange: (sku: string, newQty: number) => void;
 }) {
@@ -529,22 +562,27 @@ function ReconcileTable({
                 <td className="px-3 py-2 text-right tabular-nums">{r.currentQty ?? "—"}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{r.shippedQty ?? "—"}</td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  {isQtyChange ? (
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={finalQty}
-                      onChange={(e) => onQtyChange(action.lineId, Number(e.target.value))}
-                      className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
-                    />
-                  ) : isAdd ? (
+                  {isAdd ? (
                     <input
                       type="number"
                       min={1}
                       step={1}
                       value={finalQty}
                       onChange={(e) => onAddQtyChange(action.sku, Number(e.target.value))}
+                      className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
+                    />
+                  ) : (isKeep || isQtyChange) ? (
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={finalQty}
+                      onChange={(e) =>
+                        onLineQtyChange(
+                          (action as { lineId: string }).lineId,
+                          Number(e.target.value),
+                        )
+                      }
                       className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
                     />
                   ) : (

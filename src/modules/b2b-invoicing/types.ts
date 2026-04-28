@@ -111,8 +111,15 @@ export type ReconcileAction =
       toQty: number;
       // "shipped_less" / "shipped_more" / "not_shipped" / "split_zero" — UI
       // can render these distinctly (e.g. red for not_shipped, yellow for
-      // split_zero). Pure metadata; doesn't affect the QBO write.
-      reason: "shipped_less" | "shipped_more" | "not_shipped" | "split_zero";
+      // split_zero). "user_override" is only emitted client-side when a
+      // human edits a Final qty cell that the reconciler had set as `keep`.
+      // Pure metadata; doesn't affect the QBO write.
+      reason:
+        | "shipped_less"
+        | "shipped_more"
+        | "not_shipped"
+        | "split_zero"
+        | "user_override";
     }
   | {
       type: "add";
