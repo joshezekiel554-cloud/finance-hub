@@ -19,18 +19,22 @@ module.exports = {
       restart_delay: 4000,
       max_restarts: 10,
     },
-    // BullMQ worker process — added in week 4 when the first cron job lands.
-    // Will be a separate node process: `node dist/jobs/worker.js`.
-    // Commented out until the schema + queue infra is ready.
-    // {
-    //   name: "finance-hub-worker",
-    //   cwd: "/home/deploy/finance-hub",
-    //   script: "dist/jobs/worker.js",
-    //   exec_mode: "fork",
-    //   instances: 1,
-    //   env: { NODE_ENV: "production" },
-    //   max_memory_restart: "512M",
-    //   merge_logs: true,
-    // },
+    // BullMQ worker process. Separate node process so sync work doesn't take
+    // the web server down on a crash, and so memory caps can be tuned
+    // independently. Activated in week 3 by bullmq-engineer.
+    {
+      name: "finance-hub-worker",
+      cwd: "/home/deploy/finance-hub",
+      script: "dist/jobs/worker.js",
+      exec_mode: "fork",
+      instances: 1,
+      env: {
+        NODE_ENV: "production",
+      },
+      max_memory_restart: "512M",
+      merge_logs: true,
+      restart_delay: 4000,
+      max_restarts: 10,
+    },
   ],
 };

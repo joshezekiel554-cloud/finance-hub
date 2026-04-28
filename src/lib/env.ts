@@ -55,9 +55,27 @@ const schema = z.object({
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .optional(),
+
+  // Shadow mode: when true, write-side jobs (sending emails, mutating QBO,
+  // mutating Shopify) short-circuit and only log what they would have done.
+  // Read-side syncs (QB pull, Gmail poll) still run normally — the flag only
+  // gates outbound effects. Defaults to true in dev/test, false in production
+  // (resolved post-parse below).
+  SHADOW_MODE: z
+    .union([z.string(), z.boolean()])
+    .transform((v) => (typeof v === "boolean" ? v : v.toLowerCase() === "true"))
+    .optional(),
+
+  // Daily chase digest recipient. When SHADOW_MODE is false the digest job
+  // emails this address. In shadow mode the value is logged but no email is
+  // sent. Defaults empty so the digest job is a no-op until configured.
+  CHASE_DIGEST_RECIPIENT: z.string().optional().default(""),
 });
 
-export type Env = z.infer<typeof schema>;
+// SHADOW_MODE has a NODE_ENV-derived default applied in loadEnv(), so the
+// cached env always has it as a concrete boolean — narrow the inferred type.
+type RawEnv = z.infer<typeof schema>;
+export type Env = Omit<RawEnv, "SHADOW_MODE"> & { SHADOW_MODE: boolean };
 
 let cached: Env | undefined;
 
@@ -72,7 +90,11 @@ export function loadEnv(): Env {
     console.error(`\nInvalid environment configuration:\n${issues}\n`);
     throw new Error("Environment validation failed. See errors above.");
   }
-  cached = result.data;
+  // SHADOW_MODE defaults depend on NODE_ENV: dev/test → true, prod → false.
+  // Done post-parse since zod's default() can't reference another field.
+  const shadowMode =
+    result.data.SHADOW_MODE ?? result.data.NODE_ENV !== "production";
+  cached = { ...result.data, SHADOW_MODE: shadowMode };
   return cached;
 }
 
