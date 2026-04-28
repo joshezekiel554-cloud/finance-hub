@@ -13,7 +13,10 @@ If you're new to this file:
 
 ## Current phase
 
-**Week 1-2 — Foundation. ✅ COMPLETE.** Ready to start week 3.
+**Week 3 — Engine ports + activity ingestion + BullMQ + shadow mode.**
+- Phase A in flight: qb-porter, gmail-porter, anthropic-porter (parallel)
+- Phase B queued: activity-ingester, chase-porter, bullmq-engineer (after Phase A)
+- Reviewer + shadow mode trigger close out the week
 
 ## Latest checkpoint
 
