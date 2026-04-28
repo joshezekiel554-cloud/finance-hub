@@ -47,6 +47,8 @@ const schema = z.object({
   SHOPIFY_STORE_DOMAIN: z.string().min(1),
   SHOPIFY_ADMIN_TOKEN: z.string().min(1),
   SHOPIFY_API_VERSION: z.string().min(1).default("2025-01"),
+  SHOPIFY_CLIENT_ID: z.string().min(1),
+  SHOPIFY_CLIENT_SECRET: z.string().min(1),
 
   MONDAY_API_TOKEN: z.string().optional().default(""),
   MONDAY_ENABLED: boolish.default(false),

@@ -5,46 +5,138 @@ import { nanoid } from "nanoid";
 import { db } from "~/db/index.js";
 import { oauthTokens, type OAuthProvider } from "~/db/schema/oauth.js";
 import { encrypt } from "~/lib/crypto.js";
+import { env } from "~/lib/env.js";
+import { createLogger } from "~/lib/logger.js";
+import { verifyShopifyHmac } from "./oauth-shopify-hmac.js";
 import { requireAuth } from "../lib/auth.js";
+
+const log = createLogger({ component: "oauth" });
 
 const PROVIDERS = ["quickbooks", "gmail", "shopify"] as const;
 
+// Shopify's managed-install flow does NOT send our pre-issued nonce, so `state`
+// is optional. `hmac`/`timestamp`/`host` are Shopify-only. QB/Gmail still get
+// validated against the pending-state row when state is present.
 const callbackQuerySchema = z.object({
   code: z.string().min(1),
-  state: z.string().min(1),
-  // QuickBooks returns realmId; other providers may pass extra params we ignore.
+  state: z.string().min(1).optional(),
   realmId: z.string().optional(),
   shop: z.string().optional(),
+  hmac: z.string().optional(),
+  timestamp: z.string().optional(),
+  host: z.string().optional(),
 });
 
-// TODO(week-3): replace placeholder with real per-provider token exchange.
-// For now: validate state, accept code, store an encrypted placeholder so the
-// pipeline can be wired through end-to-end without external dependencies.
-async function exchangeCodeForTokens(
-  provider: OAuthProvider,
-  code: string,
-  query: { realmId?: string; shop?: string },
-): Promise<{
+type CallbackQuery = z.infer<typeof callbackQuerySchema>;
+
+type ExchangedTokens = {
   accessToken: string;
   refreshToken: string | null;
   expiresAt: Date | null;
   externalAccountId: string;
   scope: string | null;
-}> {
-  const externalAccountId =
-    provider === "quickbooks"
-      ? query.realmId ?? "unknown-realm"
-      : provider === "shopify"
-      ? query.shop ?? "unknown-shop"
-      : `gmail:${code.slice(0, 8)}`;
+};
 
+async function exchangeShopifyCode(code: string, shop: string): Promise<ExchangedTokens> {
+  const url = `https://${shop}/admin/oauth/access_token`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({
+      client_id: env.SHOPIFY_CLIENT_ID,
+      client_secret: env.SHOPIFY_CLIENT_SECRET,
+      code,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Shopify token exchange failed: ${res.status} ${res.statusText} ${body.slice(0, 200)}`,
+    );
+  }
+  const json = (await res.json()) as { access_token?: string; scope?: string };
+  if (!json.access_token) {
+    throw new Error("Shopify token exchange returned no access_token");
+  }
+  // Shopify offline tokens are permanent — no refresh, no expiry.
   return {
-    accessToken: `placeholder:${provider}:${code}`,
-    refreshToken: `placeholder-refresh:${provider}`,
+    accessToken: json.access_token,
+    refreshToken: null,
+    expiresAt: null,
+    externalAccountId: shop,
+    scope: json.scope ?? null,
+  };
+}
+
+// TODO(week 4-5): real QuickBooks token exchange (intuit-oauth client.createToken).
+async function exchangeQuickBooksCode(
+  code: string,
+  query: { realmId?: string },
+): Promise<ExchangedTokens> {
+  return {
+    accessToken: `placeholder:quickbooks:${code}`,
+    refreshToken: `placeholder-refresh:quickbooks`,
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-    externalAccountId,
+    externalAccountId: query.realmId ?? "unknown-realm",
     scope: null,
   };
+}
+
+// TODO(week 4-5): real Gmail token exchange via googleapis OAuth2 client.
+async function exchangeGmailCode(code: string): Promise<ExchangedTokens> {
+  return {
+    accessToken: `placeholder:gmail:${code}`,
+    refreshToken: `placeholder-refresh:gmail`,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    externalAccountId: `gmail:${code.slice(0, 8)}`,
+    scope: null,
+  };
+}
+
+// UPSERT into oauth_tokens keyed by (provider, externalAccountId). On hit,
+// refresh the encrypted token columns, expiry, and scope, and clear any
+// soft revocation. On miss, insert a new row.
+async function saveExchangedTokens(
+  provider: OAuthProvider,
+  tokens: ExchangedTokens,
+): Promise<void> {
+  const existing = await db
+    .select({ id: oauthTokens.id })
+    .from(oauthTokens)
+    .where(
+      and(
+        eq(oauthTokens.provider, provider),
+        eq(oauthTokens.externalAccountId, tokens.externalAccountId),
+      ),
+    )
+    .limit(1);
+
+  const accessTokenEnc = encrypt(tokens.accessToken);
+  const refreshTokenEnc = tokens.refreshToken ? encrypt(tokens.refreshToken) : null;
+
+  if (existing[0]) {
+    await db
+      .update(oauthTokens)
+      .set({
+        accessTokenEnc,
+        refreshTokenEnc,
+        expiresAt: tokens.expiresAt,
+        scope: tokens.scope,
+        revokedAt: null,
+      })
+      .where(eq(oauthTokens.id, existing[0].id));
+    return;
+  }
+
+  await db.insert(oauthTokens).values({
+    id: nanoid(24),
+    provider,
+    externalAccountId: tokens.externalAccountId,
+    accessTokenEnc,
+    refreshTokenEnc,
+    expiresAt: tokens.expiresAt,
+    scope: tokens.scope,
+  });
 }
 
 // Atomically consumes the pending-state row keyed by (provider, nonce, not-yet-expired).
@@ -74,8 +166,6 @@ async function consumeState(
   const row = rows[0];
   if (!row) return null;
 
-  // Atomic clear: only succeeds if the nonce is still set to the same value.
-  // Prevents two concurrent callbacks from both succeeding.
   const result = await db
     .update(oauthTokens)
     .set({
@@ -90,7 +180,6 @@ async function consumeState(
       ),
     );
 
-  // mysql2's ResultSetHeader carries affectedRows in result[0].affectedRows
   const affected =
     Array.isArray(result) && result[0] && typeof (result[0] as { affectedRows?: number }).affectedRows === "number"
       ? (result[0] as { affectedRows: number }).affectedRows
@@ -99,6 +188,16 @@ async function consumeState(
 
   return { userId: row.userId ?? "unknown" };
 }
+
+const SHOPIFY_SUCCESS_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Shopify connected</title>
+<style>body{font-family:system-ui,sans-serif;background:#f6f6f7;margin:0;padding:48px;color:#202223}
+.card{max-width:480px;margin:64px auto;background:#fff;border:1px solid #e1e3e5;border-radius:12px;padding:32px}
+h1{margin:0 0 8px;font-size:20px;color:#008060}
+p{margin:8px 0;line-height:1.5}</style></head>
+<body><div class="card"><h1>Shopify connected</h1>
+<p>The Finance Hub app is now installed. You can close this tab and return to the dashboard.</p>
+</div></body></html>`;
 
 const oauthRoutes: FastifyPluginAsync = async (app) => {
   app.get("/start/:provider", async (req: FastifyRequest, reply: FastifyReply) => {
@@ -136,29 +235,56 @@ const oauthRoutes: FastifyPluginAsync = async (app) => {
 
     const parse = callbackQuerySchema.safeParse(req.query);
     if (!parse.success) {
-      return reply.code(400).send({ error: "missing code or state", details: parse.error.flatten() });
+      return reply.code(400).send({ error: "missing code", details: parse.error.flatten() });
     }
-    const { code, state, realmId, shop } = parse.data;
+    const query: CallbackQuery = parse.data;
 
-    const stateRow = await consumeState(provider, state);
+    if (provider === "shopify") {
+      if (!query.shop) {
+        return reply.code(400).send({ error: "missing shop" });
+      }
+      // HMAC verification is security-critical: reject anything not signed by Shopify.
+      if (!verifyShopifyHmac(req.query as Record<string, string | string[] | undefined>)) {
+        log.warn({ shop: query.shop }, "shopify callback rejected: bad hmac");
+        return reply.code(401).send({ error: "invalid hmac" });
+      }
+
+      let tokens: ExchangedTokens;
+      try {
+        tokens = await exchangeShopifyCode(query.code, query.shop);
+      } catch (err) {
+        log.error({ err, shop: query.shop }, "shopify token exchange failed");
+        return reply.code(502).send({ error: "shopify token exchange failed" });
+      }
+
+      await saveExchangedTokens("shopify", tokens);
+      log.info(
+        { shop: tokens.externalAccountId, scope: tokens.scope },
+        "shopify oauth installed",
+      );
+
+      return reply.type("text/html").send(SHOPIFY_SUCCESS_HTML);
+    }
+
+    // QuickBooks / Gmail: still go through the pre-issued nonce flow.
+    if (!query.state) {
+      return reply.code(400).send({ error: "missing state" });
+    }
+    const stateRow = await consumeState(provider, query.state);
     if (!stateRow) {
       return reply.code(400).send({ error: "invalid or expired state" });
     }
 
-    const tokens = await exchangeCodeForTokens(provider, code, { realmId, shop });
+    const tokens =
+      provider === "quickbooks"
+        ? await exchangeQuickBooksCode(query.code, { realmId: query.realmId })
+        : await exchangeGmailCode(query.code);
 
-    // TODO(week-3): UPDATE the pending row in place (matched by pendingStateNonce)
-    // rather than INSERTing a second row. Today this leaves an orphan pending row
-    // alongside the real token row for the same (provider, externalAccountId).
-    await db.insert(oauthTokens).values({
-      id: nanoid(24),
-      provider,
-      externalAccountId: tokens.externalAccountId,
-      accessTokenEnc: encrypt(tokens.accessToken),
-      refreshTokenEnc: tokens.refreshToken ? encrypt(tokens.refreshToken) : null,
-      expiresAt: tokens.expiresAt,
-      scope: tokens.scope,
-    });
+    await saveExchangedTokens(provider, tokens);
+    log.info(
+      { provider, externalAccountId: tokens.externalAccountId },
+      "oauth callback completed",
+    );
 
     return reply.send({ ok: true, provider, externalAccountId: tokens.externalAccountId });
   });
