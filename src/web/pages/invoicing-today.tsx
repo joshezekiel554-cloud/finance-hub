@@ -97,7 +97,9 @@ export default function InvoicingTodayPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {data?.shadowMode ? (
+          {data === undefined ? (
+            <Badge tone="neutral">…</Badge>
+          ) : data.shadowMode ? (
             <Badge tone="info">Shadow mode — no QBO writes</Badge>
           ) : (
             <Badge tone="critical">LIVE — writes to QBO enabled</Badge>
