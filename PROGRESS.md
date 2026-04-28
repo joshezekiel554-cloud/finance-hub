@@ -13,14 +13,26 @@ If you're new to this file:
 
 ## Current phase
 
-**Week 1-2 — Foundation.** ~95% complete. Cross-cutting review in progress.
+**Week 1-2 — Foundation.** ~98% complete. Review done; fix waves dispatched.
 
 ## Latest checkpoint
 
 **Date**: 2026-04-28
-**Commit on `main`**: `769a40f` (Wrap server plugins with fastify-plugin)
+**Commit on `main`**: `f0d357a` (CI workflow added)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub
 **Local repo**: `C:\Users\user\Documents\finance-hub`
+
+## Active work
+
+**Cross-cutting review (task #5) complete.** Reviewer found 4 CRITICAL, 6 HIGH, 8 MEDIUM, 5 LOW issues. CRITICALs are production blockers (build doesn't rewrite path aliases, error handler registered after routes, deploy smoke tests wrong path, multi-cookie collapse).
+
+**Wave 1 dispatched** (parallel, different files):
+- schema-designer → fix oauth_tokens.pendingStateUserId varchar(24)→varchar(255), add unique on (provider, external_account_id), generate migrations/0002
+- auth-engineer → multi-cookie sendWebResponse fix, atomic consumeState, trustProxy use, cookie ordering, fp wrap, document accounts plaintext decision
+- observability-engineer → move error-handler register BEFORE routes, fix sentry onError timing, add session decorator preHandler
+
+**Wave 2 (after Wave 1 completes):**
+- scaffolder → install tsc-alias + tailwindcss-animate; fix build path/extensions; deploy smoke test `/api/health`→`/health`; register helmet/cors/rate-limit/cookie/sensible plugins; placeholder routes for `/customers /invoicing /tasks /agent`; fix React imports in dialog/toast; drop argon2 if confirming no password auth ever
 
 ## What's done
 
