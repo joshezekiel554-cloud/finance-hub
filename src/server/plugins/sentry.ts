@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
 import { env } from "~/lib/env.js";
 import { logger } from "~/lib/logger.js";
 
@@ -10,7 +11,7 @@ interface SentryLike {
   ) => void;
 }
 
-export async function sentryPlugin(app: FastifyInstance): Promise<void> {
+async function sentryPluginImpl(app: FastifyInstance): Promise<void> {
   if (!env.SENTRY_DSN) {
     logger.debug("sentry: SENTRY_DSN unset — Sentry hook disabled");
     return;
@@ -55,3 +56,5 @@ export async function sentryPlugin(app: FastifyInstance): Promise<void> {
     }
   });
 }
+
+export const sentryPlugin = fp(sentryPluginImpl, { name: "sentry" });

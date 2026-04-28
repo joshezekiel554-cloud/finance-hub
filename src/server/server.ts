@@ -76,7 +76,7 @@ async function start() {
 
   try {
     const address = await app.listen({ host: "0.0.0.0", port: env.PORT });
-    logger.info({ address, env: env.NODE_ENV }, "finance-hub server listening");
+    logger.info({ address }, "finance-hub server listening");
   } catch (err) {
     logger.fatal({ err }, "failed to start server");
     process.exit(1);

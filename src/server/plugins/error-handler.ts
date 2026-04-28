@@ -4,6 +4,7 @@ import type {
   FastifyReply,
   FastifyRequest,
 } from "fastify";
+import fp from "fastify-plugin";
 import { ZodError } from "zod";
 import { env } from "~/lib/env.js";
 
@@ -17,7 +18,7 @@ function isProd(): boolean {
   return env.NODE_ENV === "production";
 }
 
-export async function errorHandlerPlugin(app: FastifyInstance): Promise<void> {
+async function errorHandlerPluginImpl(app: FastifyInstance): Promise<void> {
   app.setErrorHandler((err: FastifyError, req: FastifyRequest, reply: FastifyReply) => {
     const requestId = req.id;
 
@@ -112,6 +113,8 @@ export async function errorHandlerPlugin(app: FastifyInstance): Promise<void> {
     });
   });
 }
+
+export const errorHandlerPlugin = fp(errorHandlerPluginImpl, { name: "error-handler" });
 
 function codeForStatus(status: number): string {
   switch (status) {

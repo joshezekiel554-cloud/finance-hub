@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -8,7 +9,7 @@ declare module "fastify" {
 
 const AUTH_ROUTE_PREFIX = "/api/auth";
 
-export async function loggerPlugin(app: FastifyInstance): Promise<void> {
+async function loggerPluginImpl(app: FastifyInstance): Promise<void> {
   // Fastify is built with `loggerInstance: logger` (see server.ts), so
   // `app.log` and `req.log` are already pino. This plugin only adds the
   // per-request lifecycle hook that emits one structured line per request.
@@ -47,3 +48,5 @@ export async function loggerPlugin(app: FastifyInstance): Promise<void> {
     }
   });
 }
+
+export const loggerPlugin = fp(loggerPluginImpl, { name: "logger" });
