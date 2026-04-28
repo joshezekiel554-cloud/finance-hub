@@ -1,0 +1,86 @@
+Delivered-To: info@feldart.com
+Received: by 2002:a05:6214:e8e:b0:89c:c823:8714 with SMTP id hf14csp6144795qvb;
+        Mon, 27 Apr 2026 11:09:37 -0700 (PDT)
+X-Forwarded-Encrypted: i=2; AFNElJ8r9SSrixb+3cgvZbC2zKHNMBBkW87ThScAuwpe16qzEWJEjvjkNo0JSo59NdjcZdziwFjO@feldart.com
+X-Received: by 2002:a05:620a:480a:b0:8ef:ba6:1a42 with SMTP id af79cd13be357-8f7b49cc81cmr30258985a.29.1777313377697;
+        Mon, 27 Apr 2026 11:09:37 -0700 (PDT)
+ARC-Seal: i=1; a=rsa-sha256; t=1777313377; cv=none;
+        d=google.com; s=arc-20240605;
+        b=iVBKfbobSaddC/5RCuOJS3QIbDMl6zA+2bkzB1zd5k5UwwDW6SQHb+796rWtMq7/uB
+         jpVbHj7v1t0+SXMyaYJ5SAW3EJkyWTKM7DQBjzACEs9qJuv7gRr/MLL9seXVKFDJEtyC
+         MTqc8MkM2+eMwSPkxcIOudhFe1VtZjHyHsXtBbyrqVd1AsqG9WMI8NTiTKQvqYI1XDqQ
+         WXhemXmaMeMGEGDqoTDaq319HKibXSOI5Zy75h6XgKiHgkeTpZTRcP+YdDxIoGotglEk
+         Rf43Al9/O72ieOwmPY3rzoWWN1lUzSHwllVZWPNpid+SAj5YfHGWrnCnnwUXz8U61ohf
+         r6WA==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=feedback-id:message-id:content-transfer-encoding:subject:date
+         :reply-to:to:from:mime-version:keywords:dkim-signature
+         :dkim-signature;
+        bh=80FpY30Ah3y4cr5LlB0646PLPXH2tIJUHCAv7rbOuQE=;
+        fh=8OBpJhxngSTHNqP1SjssEV8VvVexIHZ4qAKM5Ihoevc=;
+        b=koaTnCXGRcrWIEzEobavP92ceDFgi/dp9IcvBvtiSshThjx2T/UyJkhPighbqO01RY
+         97mJGWQTqt4DyO3YlTvtKDovmEZTFWSXPjVqUv3nJ/daALeOQGuzouW+Gu3HXhIYU+ah
+         RAvD1jk07F+Zjb2FqIXqrCn/gm7icufrNL9+RJlQ5MmwozmlzTiyY1EpwoZqQiM5FuWX
+         /w/1tX3aB7X7J38vnoKSAIhS8S91bd4/HOJ0ov+1hUXHzrREJPOAFnJBzWTnBlZw35Y2
+         3rOZi8Uty+Pn9tMDeX/MWb168Tofhbc73RD/d85YpWLDvLWnA3nqpB/+5nTVa8jwqsaj
+         2FPQ==;
+        dara=google.com
+ARC-Authentication-Results: i=1; mx.google.com;
+       dkim=pass header.i=@secure-wms.com header.s=a4lzkrya3oldog3ictrtjol24htujgku header.b=2xnFkkLV;
+       dkim=pass header.i=@amazonses.com header.s=ndjes4mrtuzus6qxu3frw3ubo3gpjndv header.b=46vUsOHS;
+       spf=pass (google.com: domain of 010f019dd021ea40-35dd3c8b-7fb3-408c-b065-05dfc3adb737-000000@us-east-2.amazonses.com designates 23.251.226.55 as permitted sender) smtp.mailfrom=010f019dd021ea40-35dd3c8b-7fb3-408c-b065-05dfc3adb737-000000@us-east-2.amazonses.com
+Return-Path: <010f019dd021ea40-35dd3c8b-7fb3-408c-b065-05dfc3adb737-000000@us-east-2.amazonses.com>
+Received: from e226-55.smtp-out.us-east-2.amazonses.com (e226-55.smtp-out.us-east-2.amazonses.com. [23.251.226.55])
+        by mx.google.com with ESMTPS id af79cd13be357-8e7d94db2acsi3291163285a.162.2026.04.27.11.09.37
+        for <info@feldart.com>
+        (version=TLS1_3 cipher=TLS_AES_128_GCM_SHA256 bits=128/128);
+        Mon, 27 Apr 2026 11:09:37 -0700 (PDT)
+Received-SPF: pass (google.com: domain of 010f019dd021ea40-35dd3c8b-7fb3-408c-b065-05dfc3adb737-000000@us-east-2.amazonses.com designates 23.251.226.55 as permitted sender) client-ip=23.251.226.55;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@secure-wms.com header.s=a4lzkrya3oldog3ictrtjol24htujgku header.b=2xnFkkLV;
+       dkim=pass header.i=@amazonses.com header.s=ndjes4mrtuzus6qxu3frw3ubo3gpjndv header.b=46vUsOHS;
+       spf=pass (google.com: domain of 010f019dd021ea40-35dd3c8b-7fb3-408c-b065-05dfc3adb737-000000@us-east-2.amazonses.com designates 23.251.226.55 as permitted sender) smtp.mailfrom=010f019dd021ea40-35dd3c8b-7fb3-408c-b065-05dfc3adb737-000000@us-east-2.amazonses.com
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/simple;
+	s=a4lzkrya3oldog3ictrtjol24htujgku; d=secure-wms.com; t=1777313376;
+	h=MIME-Version:From:To:Reply-To:Date:Subject:Content-Type:Content-Transfer-Encoding:Message-ID;
+	bh=80FpY30Ah3y4cr5LlB0646PLPXH2tIJUHCAv7rbOuQE=;
+	b=2xnFkkLVX/rRVsjm0NFfN0VKbOm/NPUFfd5qKRjc/sbQisw1sIKJTtk3IeW0opWh
+	s69pV+UNo5pQuBTtmH98tbIcgWmBJtbUI+1q1zYPgsyZPW2MYuUcLEmPFBqEVvhbWOk
+	MuUUCYtqzgK8BQAk9ch7u6LFnReymxvGEO82BBFU=
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/simple;
+	s=ndjes4mrtuzus6qxu3frw3ubo3gpjndv; d=amazonses.com; t=1777313376;
+	h=MIME-Version:From:To:Reply-To:Date:Subject:Content-Type:Content-Transfer-Encoding:Message-ID:Feedback-ID;
+	bh=80FpY30Ah3y4cr5LlB0646PLPXH2tIJUHCAv7rbOuQE=;
+	b=46vUsOHS1c9xZp1hC+yvWED3kwHF7LmqNiRdocVj1+0CtotIm2ihoZp8P39w/+V+
+	YhXvHTTytg5k0UPq/b88ja2DPyZZ1SmTt/4Y9dX6TroeyaK5RikireIM3fVtsMeoEr1
+	udibq5AHG/bEahqrkf4V6Xj7gl0T4Ib2F8pNPY94=
+Keywords: Tplid:3291, Eventnotifyqueueid:102574, Customerid:72
+MIME-Version: 1.0
+From: Feldart <notifications@secure-wms.com>
+To: info@feldartcollection.co.uk, info@feldart.com
+Reply-To: info@feldart.com
+Date: Mon, 27 Apr 2026 18:09:36 +0000
+Subject: requested transaction notification
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: base64
+Message-ID: <010f019dd021ea40-35dd3c8b-7fb3-408c-b065-05dfc3adb737-000000@us-east-2.amazonses.com>
+Feedback-ID: ::1.us-east-2.5oMLz16cszcUjXwkxujkayWVN/OkIOPt6gQKPNcnzm0=:AmazonSES
+X-SES-Outgoing: 2026.04.27-23.251.226.55
+
+RGVhciBWYWx1ZWQgQ3VzdG9tZXIsPGJyLz48YnIvPlBsZWFzZSBiZSBhd2FyZSB0aGF0
+IHlvdXIgT3JkZXIgIyBTSE9QMTgzMDEgKDk5ODYzKSB3YXMganVzdCBzaGlwcGVkIGFu
+ZCBpcyBub3cgaW4gdHJhbnNpdCB0byB5b3VyIGN1c3RvbWVyIERlY29yYXRlIHZpYSBV
+bml0ZWQgUGFyY2VsIFNlcnZpY2UuIEludmVudG9yeSBoYXMgYmVlbiByZWR1Y2VkIGJ5
+IHRoZSBvcmRlciBxdWFudGl0eS4gWW91IG1heSB2aWV3IHRoaXMgdHJhbnNhY3Rpb24g
+b25saW5lIGJ5IGxvZ2dpbmcgb24gdG8gb3VyIHdlYnNpdGUgYW5kIGNsaWNraW5nIG9u
+IHRoZSBWaWV3IFRyYW5zYWN0aW9uIFJlcG9ydC48YnIvPjxici8+UE8gTnVtYmVyOiAg
+U0hPUDE4MzAxPGJyLz5UcmFuc2FjdGlvbiBOdW1iZXI6IDk5ODYzPGJyLz48YnIvPlRo
+ZSBPcmRlciBTdW1tZXJ5IGlzIGFzIGZvbGxvd3M6PGJyLz48dGFibGUgYm9yZGVyPScx
+JyBjZWxscGFkZGluZz0nMScgY2VsbHNwYWNpbmc9JzAnIHN0eWxlPSdtYXJnaW4tdG9w
+OjVweDttYXJnaW4tbGVmdDoxMHB4Oyc+PHRyPjx0aD5JdGVtPC90aD48dGg+UXVhbnRp
+dHk8L3RoPjwvdHI+PHRyPjx0ZD5IQ1RPRzAxPC90ZD48dGQ+MjMuMDA8L3RkPjwvdHI+
+PC90YWJsZT48YnIvPjxici8+Q2FycmllcjogVVBTPGJyLz5UcmFja2luZyBOdW1iZXI6
+IDFaMEpGNTgzMDMyODU4MzMxMiBTaGlwIERhdGU6IDQvMjcvMjAyNjxici8+U2hpcHBp
+bmcgQ29zdDogPGJyLz48YnIvPklmIHlvdSBoYXZlIGFueSBxdWVzdGlvbnMsIHBsZWFz
+ZSBjb250YWN0IHVzIGF0IHlvdXIgY29udmVuaWVuY2Uu
+
