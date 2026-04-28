@@ -53,7 +53,9 @@ export const pushSubscriptions = mysqlTable(
     userId: varchar("user_id", { length: 255 })
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    endpoint: varchar("endpoint", { length: 1024 }).notNull(),
+    // 512 keeps the indexed key under MySQL's 3072-byte utf8mb4 limit
+    // (512 * 4 = 2048 bytes). Real Web Push endpoints are 200-500 chars.
+    endpoint: varchar("endpoint", { length: 512 }).notNull(),
     p256dh: varchar("p256dh", { length: 255 }).notNull(),
     auth: varchar("auth", { length: 255 }).notNull(),
     userAgent: varchar("user_agent", { length: 512 }),

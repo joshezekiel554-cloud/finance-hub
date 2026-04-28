@@ -312,7 +312,7 @@ CREATE TABLE `notifications` (
 CREATE TABLE `push_subscriptions` (
 	`id` varchar(24) NOT NULL,
 	`user_id` varchar(255) NOT NULL,
-	`endpoint` varchar(1024) NOT NULL,
+	`endpoint` varchar(512) NOT NULL,
 	`p256dh` varchar(255) NOT NULL,
 	`auth` varchar(255) NOT NULL,
 	`user_agent` varchar(512),
