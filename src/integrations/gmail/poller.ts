@@ -1,10 +1,11 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "~/db/index.js";
-import { activities, emailLog } from "~/db/schema/crm.js";
+import { emailLog } from "~/db/schema/crm.js";
 import { customers } from "~/db/schema/customers.js";
 import { oauthTokens } from "~/db/schema/oauth.js";
 import { createLogger } from "~/lib/logger.js";
+import { recordActivity } from "~/modules/crm/index.js";
 import { searchEmails } from "./client.js";
 import type {
   GmailProviderMeta,
@@ -146,41 +147,6 @@ function formatGmailDateForQuery(d: Date): string {
   return `${yyyy}/${mm}/${dd}`;
 }
 
-// --- Inline activity ingester (placeholder) ---
-
-// TODO(activity-ingester): the CRM activity-ingester module owns this work.
-// When src/modules/crm/activity-ingester.ts lands, replace this body with a
-// call to recordActivity(...) so all activity creation flows through one
-// place (and writes audit_log uniformly). For now, write the row directly so
-// the poller can run end-to-end without blocking on task #12.
-async function recordEmailActivity(input: {
-  customerId: string;
-  emailLogId: string;
-  email: ParsedEmail;
-  direction: "inbound" | "outbound";
-  occurredAt: Date;
-}): Promise<void> {
-  await db.insert(activities).values({
-    id: nanoid(24),
-    customerId: input.customerId,
-    userId: null,
-    kind: input.direction === "inbound" ? "email_in" : "email_out",
-    occurredAt: input.occurredAt,
-    subject: input.email.subject || null,
-    body: input.email.body || input.email.snippet || null,
-    bodyHtml: null,
-    source: "gmail_poll",
-    refType: "email_log",
-    refId: input.emailLogId,
-    meta: {
-      gmailMessageId: input.email.id,
-      threadId: input.email.threadId,
-      from: input.email.from,
-      to: input.email.to,
-    },
-  });
-}
-
 // --- The main poll ---
 
 export type PollOptions = {
@@ -308,14 +274,27 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
     if (customerId) {
       matched++;
       try {
-        await recordEmailActivity({
+        // Direction is decided by the matched alias upstream: messages from a
+        // BUSINESS_EMAILS sender are outbound; everything else is inbound.
+        // recordActivity handles the audit_log write atomically.
+        const created = await recordActivity({
           customerId,
-          emailLogId,
-          email,
-          direction,
+          kind: direction === "inbound" ? "email_in" : "email_out",
+          source: "gmail_poll",
           occurredAt,
+          subject: email.subject || null,
+          body: email.body || email.snippet || null,
+          bodyHtml: null,
+          refType: "email_log",
+          refId: emailLogId,
+          meta: {
+            gmailMessageId: email.id,
+            threadId: email.threadId,
+            from: email.from,
+            to: email.to,
+          },
         });
-        activitiesCreated++;
+        if (created) activitiesCreated++;
       } catch (err) {
         log.error(
           { err, gmailMessageId: email.id, customerId },

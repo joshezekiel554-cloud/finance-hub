@@ -8,10 +8,11 @@
 // are logged at warn and skipped (so one bad invoice doesn't fail the whole
 // sync). Caller (BullMQ worker job) handles top-level errors.
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
+import { activities } from "../../db/schema/crm.js";
 import { customers, type Customer } from "../../db/schema/customers.js";
 import {
   invoiceLines,
@@ -21,8 +22,10 @@ import {
   type NewInvoiceLine,
 } from "../../db/schema/invoices.js";
 import { createLogger } from "../../lib/logger.js";
+import { recordActivity } from "../../modules/crm/index.js";
 import { QboClient } from "./client.js";
 import type {
+  QboCreditMemo,
   QboCustomer,
   QboInvoice,
   QboInvoiceLine,
@@ -195,6 +198,37 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       balance: desired.balance,
     },
   });
+
+  // Activity: balance_change (only when the balance specifically moved). Other
+  // drift (display name, email) is captured in audit_log already; the activity
+  // timeline is for events the team cares about, and balance changes are the
+  // load-bearing one for chase prioritization.
+  if (before.balance !== desired.balance) {
+    const fromAmt = Number(before.balance);
+    const toAmt = Number(desired.balance);
+    if (Number.isFinite(fromAmt) && Number.isFinite(toAmt)) {
+      try {
+        await recordActivity({
+          customerId: before.id,
+          kind: "balance_change",
+          source: "qbo_sync",
+          refType: "qb_customer",
+          refId: qboCustomer.Id,
+          meta: {
+            from: fromAmt,
+            to: toAmt,
+            delta: Math.round((toAmt - fromAmt) * 100) / 100,
+          },
+        });
+      } catch (err) {
+        customerLog.warn(
+          { err: (err as Error).message },
+          "balance_change activity emission failed",
+        );
+      }
+    }
+  }
+
   customerLog.info({ customer_id: before.id }, "customer updated");
   return "updated";
 }
@@ -272,6 +306,34 @@ async function upsertInvoice(
     const id = nanoid(24);
     await db.insert(invoices).values({ id, ...desired });
     await syncInvoiceLines(id, qboInvoice.Line ?? []);
+
+    // Activity: qbo_invoice_sent — emit when QBO indicates this invoice has
+    // been sent (EmailStatus === 'EmailSent'). Only on the create path; the
+    // refType+refId keys to qb_invoice so a subsequent sync that re-creates
+    // the row (shouldn't happen — UNIQUE constraint) wouldn't double-emit.
+    if (qboInvoice.EmailStatus === "EmailSent") {
+      try {
+        await recordActivity({
+          customerId,
+          kind: "qbo_invoice_sent",
+          source: "qbo_sync",
+          occurredAt: issueDate ?? undefined,
+          refType: "qb_invoice",
+          refId: qboInvoice.Id,
+          meta: {
+            invoice_id: qboInvoice.Id,
+            doc_number: qboInvoice.DocNumber ?? null,
+            total: Number(desired.total),
+          },
+        });
+      } catch (err) {
+        invoiceLog.warn(
+          { err: (err as Error).message },
+          "qbo_invoice_sent activity emission failed",
+        );
+      }
+    }
+
     return "created";
   }
 
@@ -358,22 +420,107 @@ export async function syncPayments(client?: QboClient): Promise<SyncStats> {
   const payments = await qb.getPayments();
   log.info({ count: payments.length }, "fetched QB payments");
 
-  // Delegate to invoice sync — payment postings update invoice balance/status.
-  // This intentionally over-fetches; once a payments table exists, replace
-  // with a targeted re-sync of just the affected invoices.
-  noteRecentPayments(payments);
+  // Emit per-payment activities for any payments we haven't seen before.
+  // Without a payments table the activities row itself is the dedup key:
+  // (refType='qb_payment', refId=payment.Id) is unique per emission.
+  await emitPaymentActivities(payments);
+
   return syncInvoices(qb);
 }
 
-function noteRecentPayments(payments: QboPayment[]): void {
-  // Light bookkeeping for the audit_log — not a full upsert. Useful so the
-  // sync run leaves traces of which payments were observed even before a
-  // payments table exists.
+export async function syncCreditMemos(client?: QboClient): Promise<SyncStats> {
+  const qb = client ?? new QboClient();
+  const stats = emptyStats();
+  log.info("starting QB credit memo sync");
+  const memos = await qb.getCreditMemos();
+  stats.fetched = memos.length;
+  log.info({ count: memos.length }, "fetched QB credit memos");
+
+  await emitCreditMemoActivities(memos);
+  // No dedicated credit_memos table yet — the activity row is the trace.
+  return stats;
+}
+
+async function emitPaymentActivities(payments: QboPayment[]): Promise<void> {
   if (payments.length === 0) return;
-  log.debug(
-    { count: payments.length, sample: payments[0]?.Id },
-    "payments seen in this sync window",
-  );
+  const customerIdMap = await loadCustomerIdMap();
+
+  for (const payment of payments) {
+    const customerId = customerIdMap.get(payment.CustomerRef.value);
+    if (!customerId) continue; // customer not yet synced — skip silently
+
+    if (await activityAlreadyEmitted("qb_payment", payment.Id)) continue;
+
+    try {
+      await recordActivity({
+        customerId,
+        kind: "qbo_payment",
+        source: "qbo_sync",
+        occurredAt: parseQboDate(payment.TxnDate) ?? undefined,
+        refType: "qb_payment",
+        refId: payment.Id,
+        meta: {
+          payment_id: payment.Id,
+          amount: payment.TotalAmt ?? 0,
+          txn_date: payment.TxnDate ?? null,
+        },
+      });
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message, payment_id: payment.Id },
+        "qbo_payment activity emission failed",
+      );
+    }
+  }
+}
+
+async function emitCreditMemoActivities(memos: QboCreditMemo[]): Promise<void> {
+  if (memos.length === 0) return;
+  const customerIdMap = await loadCustomerIdMap();
+
+  for (const memo of memos) {
+    const customerId = customerIdMap.get(memo.CustomerRef.value);
+    if (!customerId) continue;
+
+    if (await activityAlreadyEmitted("qb_credit_memo", memo.Id)) continue;
+
+    try {
+      await recordActivity({
+        customerId,
+        kind: "qbo_credit_memo",
+        source: "qbo_sync",
+        occurredAt: parseQboDate(memo.TxnDate) ?? undefined,
+        refType: "qb_credit_memo",
+        refId: memo.Id,
+        meta: {
+          credit_memo_id: memo.Id,
+          amount: memo.TotalAmt ?? 0,
+          txn_date: memo.TxnDate ?? null,
+        },
+      });
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message, credit_memo_id: memo.Id },
+        "qbo_credit_memo activity emission failed",
+      );
+    }
+  }
+}
+
+// Cross-run dedup: did we already write an activity for this (refType, refId)?
+// Cheaper than a payments table for now; the activities index on (ref_type,
+// ref_id) makes this a key-only lookup. Move this off-table once payments
+// land in their own schema.
+async function activityAlreadyEmitted(
+  refType: string,
+  refId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: activities.id })
+    .from(activities)
+    .where(and(eq(activities.refType, refType), eq(activities.refId, refId)))
+    .limit(1);
+  return rows.length > 0;
 }
 
 // -------- helpers --------
