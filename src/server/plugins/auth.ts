@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
 import { Auth, type AuthConfig } from "@auth/core";
 import Google from "@auth/core/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -57,9 +58,13 @@ function parseAllowList(raw: string): Set<string> {
 }
 
 async function fastifyToWebRequest(req: FastifyRequest): Promise<Request> {
-  const protocol = (req.headers["x-forwarded-proto"] as string | undefined) ?? req.protocol;
-  const host = (req.headers["x-forwarded-host"] as string | undefined) ?? req.headers.host;
-  const url = new URL(req.url, `${protocol}://${host}`);
+  // server.ts sets `trustProxy: true`, so Fastify already resolves these from
+  // X-Forwarded-* headers when present. Reading the headers directly would
+  // bypass Fastify's trust gate and let a non-proxied client spoof them.
+  // Use req.host (host:port, trust-proxy-aware) rather than req.hostname which
+  // strips the port — the URL Auth.js sees needs to match the real origin so
+  // signinUrl/callbackUrl come back with the right port for dev.
+  const url = new URL(req.url, `${req.protocol}://${req.host}`);
 
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
@@ -96,18 +101,27 @@ async function fastifyToWebRequest(req: FastifyRequest): Promise<Request> {
 
 async function sendWebResponse(reply: FastifyReply, response: Response): Promise<void> {
   reply.status(response.status);
+
+  // Set-Cookie needs special handling: cookie expiry strings legally contain
+  // commas (e.g. "Wed, 21 Oct 2026 ..."), so the default header.forEach()
+  // joining behavior would collapse multiple cookies into one comma-joined
+  // string that cannot be split apart again. Use getSetCookie() (Node 20.18+)
+  // which returns the array of original Set-Cookie values.
+  const setCookies = response.headers.getSetCookie();
+  if (setCookies.length > 0) {
+    reply.raw.setHeader("set-cookie", setCookies);
+  }
+
   response.headers.forEach((value, key) => {
-    if (key.toLowerCase() === "set-cookie") {
-      reply.header("set-cookie", value);
-    } else {
-      reply.header(key, value);
-    }
+    if (key.toLowerCase() === "set-cookie") return;
+    reply.header(key, value);
   });
+
   const body = response.body ? await response.text() : "";
   return reply.send(body);
 }
 
-export const authPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
+const authPluginImpl: FastifyPluginAsync = async (app: FastifyInstance) => {
   const allowList = parseAllowList(env.ALLOWED_EMAILS);
   if (allowList.size === 0) {
     app.log.warn?.(
@@ -117,7 +131,10 @@ export const authPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   const config = buildAuthConfig(allowList);
 
-  // Make sure Fastify parses URL-encoded bodies (Auth.js posts forms)
+  // Make sure Fastify parses URL-encoded bodies (Auth.js posts forms).
+  // Wrapped with fastify-plugin (below), so this parser is registered
+  // app-globally — fine because URL-encoded form posts are otherwise rare in
+  // this app and the parser is harmless for non-auth routes.
   app.addContentTypeParser(
     "application/x-www-form-urlencoded",
     { parseAs: "string" },
@@ -137,5 +154,7 @@ export const authPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
 
   app.route({ method: ["GET", "POST"], url: "/api/auth/*", handler });
 };
+
+export const authPlugin = fp(authPluginImpl, { name: "auth" });
 
 export default authPlugin;

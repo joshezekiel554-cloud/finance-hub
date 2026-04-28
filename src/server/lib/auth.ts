@@ -3,9 +3,11 @@ import { eq } from "drizzle-orm";
 import { db } from "~/db/index.js";
 import { sessions, users, type User } from "~/db/schema/auth.js";
 
+// Order matters: prefer the secure (HTTPS-only) cookie when both are present
+// so a plain-name cookie set over HTTP can never override the signed prod one.
 const SESSION_COOKIE_NAMES = [
-  "authjs.session-token",
   "__Secure-authjs.session-token",
+  "authjs.session-token",
 ];
 
 function readSessionToken(req: FastifyRequest): string | null {

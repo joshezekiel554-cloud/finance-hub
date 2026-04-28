@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq, gt, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import { db } from "~/db/index.js";
@@ -47,20 +47,57 @@ async function exchangeCodeForTokens(
   };
 }
 
+// Atomically consumes the pending-state row keyed by (provider, nonce, not-yet-expired).
+// We capture the userId *before* clearing the nonce, then clear within the same
+// WHERE-bound UPDATE so a replayed callback finds nothing to consume. Returns
+// null on any miss: unknown nonce, wrong provider, expired, or already consumed.
 async function consumeState(
   provider: OAuthProvider,
   state: string,
 ): Promise<{ userId: string } | null> {
   const rows = await db
-    .select()
+    .select({
+      id: oauthTokens.id,
+      userId: oauthTokens.pendingStateUserId,
+    })
     .from(oauthTokens)
-    .where(eq(oauthTokens.pendingStateNonce, state))
+    .where(
+      and(
+        eq(oauthTokens.provider, provider),
+        eq(oauthTokens.pendingStateNonce, state),
+        isNotNull(oauthTokens.pendingStateExpiresAt),
+        gt(oauthTokens.pendingStateExpiresAt, new Date()),
+      ),
+    )
     .limit(1);
+
   const row = rows[0];
   if (!row) return null;
-  if (row.provider !== provider) return null;
-  if (!row.pendingStateExpiresAt || row.pendingStateExpiresAt.getTime() < Date.now()) return null;
-  return { userId: row.pendingStateUserId ?? "unknown" };
+
+  // Atomic clear: only succeeds if the nonce is still set to the same value.
+  // Prevents two concurrent callbacks from both succeeding.
+  const result = await db
+    .update(oauthTokens)
+    .set({
+      pendingStateNonce: null,
+      pendingStateExpiresAt: null,
+      pendingStateUserId: null,
+    })
+    .where(
+      and(
+        eq(oauthTokens.id, row.id),
+        eq(oauthTokens.pendingStateNonce, state),
+      ),
+    );
+
+  // mysql2's ResultSetHeader carries affectedRows in result[0].affectedRows
+  const affected =
+    Array.isArray(result) && result[0] && typeof (result[0] as { affectedRows?: number }).affectedRows === "number"
+      ? (result[0] as { affectedRows: number }).affectedRows
+      : 0;
+  if (affected === 0) return null;
+
+  return { userId: row.userId ?? "unknown" };
 }
 
 const oauthRoutes: FastifyPluginAsync = async (app) => {

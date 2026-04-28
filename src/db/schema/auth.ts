@@ -10,6 +10,18 @@ import type { AdapterAccountType } from "@auth/core/adapters";
 
 // @auth/drizzle-adapter MySQL spec — column shapes/lengths must match exactly
 // (see node_modules/@auth/drizzle-adapter/lib/mysql.js).
+//
+// Token-at-rest encryption: `accounts.refresh_token`, `access_token`, and
+// `id_token` are written by Auth.js's adapter in plaintext. This is the
+// standard adapter shape; encrypting them would require shipping a custom
+// adapter wrapper that intercepts the create/get/update/delete-account paths
+// and runs values through `src/lib/crypto.ts`. We're deferring that to v2.1.
+//
+// The risk is bounded: these tokens grant only Google identity scopes (email +
+// profile, NOT Gmail/Drive/Calendar) — distinct from the integration-OAuth
+// tokens for QB/Gmail/Shopify, which DO carry sensitive scopes and ARE
+// encrypted at rest in `oauth_tokens.access_token_enc` (see schema/oauth.ts).
+// If the user-login Google client is ever scoped up, revisit this immediately.
 export const users = mysqlTable("user", {
   id: varchar("id", { length: 255 })
     .primaryKey()
