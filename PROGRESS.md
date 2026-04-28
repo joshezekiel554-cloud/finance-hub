@@ -24,15 +24,21 @@ If you're new to this file:
 
 ## Active work
 
-**Cross-cutting review (task #5) complete.** Reviewer found 4 CRITICAL, 6 HIGH, 8 MEDIUM, 5 LOW issues. CRITICALs are production blockers (build doesn't rewrite path aliases, error handler registered after routes, deploy smoke tests wrong path, multi-cookie collapse).
+**Wave 1 complete** (commits below):
+- schema-designer `21f46bc` — oauth_tokens schema fixes + migration `0002_chilly_mother_askani.sql`
+- observability-engineer `39f83a7` — error handler order, sentry timing, session decorator preHandler
+- auth-engineer `ab601e2` — multi-cookie sendWebResponse, atomic consumeState, trustProxy use, cookie ordering, fp wrap, accounts plaintext doc
 
-**Wave 1 dispatched** (parallel, different files):
-- schema-designer → fix oauth_tokens.pendingStateUserId varchar(24)→varchar(255), add unique on (provider, external_account_id), generate migrations/0002
-- auth-engineer → multi-cookie sendWebResponse fix, atomic consumeState, trustProxy use, cookie ordering, fp wrap, document accounts plaintext decision
-- observability-engineer → move error-handler register BEFORE routes, fix sentry onError timing, add session decorator preHandler
+**Wave 2 in flight** — scaffolder working on:
+- CRITICAL: tsc-alias install + build script update (fixes `npm start` ERR_MODULE_NOT_FOUND)
+- CRITICAL: deploy smoke path `/api/health` → `/health` (in deploy.yml + vps-setup.md)
+- HIGH: register `@fastify/helmet`, `cors`, `rate-limit`, `cookie`, `sensible`
+- LOW: drop `argon2` (no password auth), fix React type imports in dialog/toast, decide tailwindcss-animate
 
-**Wave 2 (after Wave 1 completes):**
-- scaffolder → install tsc-alias + tailwindcss-animate; fix build path/extensions; deploy smoke test `/api/health`→`/health`; register helmet/cors/rate-limit/cookie/sensible plugins; placeholder routes for `/customers /invoicing /tasks /agent`; fix React imports in dialog/toast; drop argon2 if confirming no password auth ever
+**Deferred to week 3+ (per reviewer's "out of scope" note):**
+- Placeholder routes for `/customers /invoicing /tasks /agent` (week 6 CRM UI)
+- Encrypt `accounts.access_token/refresh_token/id_token` (v2.1; Auth.js adapter wrapper)
+- Dual-insert orphan in oauth_tokens callback (week 3 when Arctic flows land)
 
 ## What's done
 
