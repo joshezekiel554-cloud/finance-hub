@@ -189,15 +189,30 @@ async function consumeState(
   return { userId: row.userId ?? "unknown" };
 }
 
-const SHOPIFY_SUCCESS_HTML = `<!doctype html>
+function renderShopifySuccess(opts: { devToken?: string; shop: string }): string {
+  const escape = (s: string) =>
+    s.replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
+    );
+  const devBlock = opts.devToken
+    ? `<hr style="margin:24px 0;border:none;border-top:1px solid #e1e3e5"/>
+<p style="margin:0 0 8px;font-weight:600">Local-dev token (DB unavailable)</p>
+<p style="margin:0 0 12px;font-size:13px;color:#5c5f62">Paste into <code>SHOPIFY_ADMIN_TOKEN</code> in <code>.env</code>. Visible only because <code>NODE_ENV=development</code>.</p>
+<textarea readonly onclick="this.select()" style="width:100%;min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;padding:8px;border:1px solid #e1e3e5;border-radius:6px;background:#fafbfb">${escape(opts.devToken)}</textarea>`
+    : "";
+  return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Shopify connected</title>
 <style>body{font-family:system-ui,sans-serif;background:#f6f6f7;margin:0;padding:48px;color:#202223}
-.card{max-width:480px;margin:64px auto;background:#fff;border:1px solid #e1e3e5;border-radius:12px;padding:32px}
+.card{max-width:560px;margin:64px auto;background:#fff;border:1px solid #e1e3e5;border-radius:12px;padding:32px}
 h1{margin:0 0 8px;font-size:20px;color:#008060}
-p{margin:8px 0;line-height:1.5}</style></head>
+p{margin:8px 0;line-height:1.5}
+code{background:#f1f2f3;padding:1px 5px;border-radius:4px;font-size:12.5px}</style></head>
 <body><div class="card"><h1>Shopify connected</h1>
+<p>Shop: <code>${escape(opts.shop)}</code></p>
 <p>The Finance Hub app is now installed. You can close this tab and return to the dashboard.</p>
+${devBlock}
 </div></body></html>`;
+}
 
 const oauthRoutes: FastifyPluginAsync = async (app) => {
   app.get("/start/:provider", async (req: FastifyRequest, reply: FastifyReply) => {
@@ -257,13 +272,46 @@ const oauthRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(502).send({ error: "shopify token exchange failed" });
       }
 
-      await saveExchangedTokens("shopify", tokens);
-      log.info(
-        { shop: tokens.externalAccountId, scope: tokens.scope },
-        "shopify oauth installed",
-      );
+      // TEMPORARY (local dev only): print the offline access token to stdout
+      // so it can be copied into .env when MySQL isn't running locally.
+      // Remove once a local DB is wired and saveExchangedTokens always
+      // succeeds. Never runs in production.
+      if (env.NODE_ENV === "development") {
+        const banner = "=".repeat(72);
+        // eslint-disable-next-line no-console
+        console.log(
+          `\n${banner}\nSHOPIFY OFFLINE ACCESS TOKEN — copy into SHOPIFY_ADMIN_TOKEN\n  shop:  ${tokens.externalAccountId}\n  scope: ${tokens.scope ?? "(none reported)"}\n  token: ${tokens.accessToken}\n${banner}\n`,
+        );
+      }
 
-      return reply.type("text/html").send(SHOPIFY_SUCCESS_HTML);
+      let dbSavePersisted = false;
+      try {
+        await saveExchangedTokens("shopify", tokens);
+        dbSavePersisted = true;
+        log.info(
+          { shop: tokens.externalAccountId, scope: tokens.scope },
+          "shopify oauth installed",
+        );
+      } catch (err) {
+        // DB unreachable in local dev. Token is already echoed above; keep the
+        // success page so the merchant flow completes cleanly. Production
+        // would reach this with `db: ok` and never enter this catch.
+        log.warn(
+          { err, shop: tokens.externalAccountId },
+          "shopify token persisted to stdout only (db save failed — local dev)",
+        );
+      }
+
+      const html = renderShopifySuccess({
+        shop: tokens.externalAccountId,
+        // Only render the token when the DB save failed AND we're in dev.
+        // A successful prod install must never echo the token to the browser.
+        devToken:
+          env.NODE_ENV === "development" && !dbSavePersisted
+            ? tokens.accessToken
+            : undefined,
+      });
+      return reply.type("text/html").send(html);
     }
 
     // QuickBooks / Gmail: still go through the pre-issued nonce flow.
