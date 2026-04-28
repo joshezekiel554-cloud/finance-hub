@@ -13,33 +13,45 @@ If you're new to this file:
 
 ## Current phase
 
-**Week 3 — Engine ports + activity ingestion + BullMQ + shadow mode. ✅ COMPLETE.**
-- Phase A done (`7d662cc`, `33a4492`, `fc14554`)
-- Phase B done (`5b69ea2`, `e2a1c64`, `7e143b1`)
-- Reviewer agent failed to deliver report (4 empty idle pings); team-lead verified directly. Smoke tests:
-  - typecheck clean
-  - 59/59 tests pass
-  - build clean (server + worker dist emit; web bundle 513KB)
-  - server boots, listens on :3001 cleanly
-  - worker boots, registers schedules, fails on Redis connection (expected — no local Redis)
-- Spot-checked all 8 review dimensions from the brief. All concerns confirmed addressed:
-  - SHADOW_MODE gates the only outbound side-effect (chase-digest send), correctly skipped on read-only sync jobs
-  - Encrypted token roundtrip (QB + Gmail) via `src/lib/crypto.ts` with 10/10 crypto tests covering tamper detection
-  - Audit log atomicity: activities + audit_log inserts share a single Drizzle transaction
-  - Worker graceful shutdown: SIGTERM + SIGINT handlers in place
-  - No `console.log` in new modules; all use `createLogger(<scope>)`
-  - No PII or tokens leak into logs
-  - Cron timezone correctly handled for Europe/London chase digest
+**Week 4 — B2B Invoicing module. 🟡 IN PROGRESS.**
 
-**Next: Week 4-5 — B2B Invoicing module.** Ready to spawn engine teams.
+Foundations landed in-session (Shopify OAuth + parser + Shopify reads).
+Reconciler / send action / dashboard UI still to do.
+
+Done so far:
+- Shopify OAuth callback wired (HMAC-verified, real code→token exchange,
+  UPSERT to `oauth_tokens`) — `67c3576`, `d23b4be`
+- Dev-only token rescue path (browser textarea + stdout banner when local
+  MySQL is unavailable) — `ca94a74`
+- Feldart shipment email parser + 16 unit tests — `01bf027`
+- Shopify integration foundation (REST client, retry, pagination, orders
+  read API) + 21 unit tests — `723b2c0`
+- Live Shopify install on `feldart-usa.myshopify.com` complete; offline
+  access token in `.env`. Smoke-tested: SHOP18301 returns the same line
+  item (HCTOG01 × 23) the parser fixture expects.
+
+Still to do for week 4-5 (per plan §Effort estimate):
+1. Invoice reconciler (diff algorithm: keep / add@50% / remove / qty_change / zero_qty)
+2. QBO send action (fetch invoice + SyncToken, mutate Lines + CustomFields, send)
+3. `/invoicing/today` dashboard page
+4. BullMQ cron `0 11 * * *` Europe/London
+5. End-to-end shadow-mode validation against tomorrow's first real shipment email
+
+**Week 3 — ✅ COMPLETE** (engine ports + activity ingestion + BullMQ + shadow mode).
+- Phase A: `7d662cc`, `33a4492`, `fc14554`. Phase B: `5b69ea2`, `e2a1c64`, `7e143b1`.
+- All 8 review dimensions verified directly (reviewer agent didn't deliver).
+- Crypto roundtrip, audit log atomicity, SHADOW_MODE gate, worker shutdown,
+  scoped logging, no PII leakage, Europe/London timezone all confirmed.
 
 ## Latest checkpoint
 
 **Date**: 2026-04-28
-**Commit on `main`**: `f4aef0f` (Wave 2 fixes: build, smoke path, security plugins, cleanups)
-**GitHub**: https://github.com/joshezekiel554-cloud/finance-hub
+**Commit on `main`**: `723b2c0` (Shopify integration foundation; **local only — not pushed yet**)
+**GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (last pushed: `01bf027` parser)
 **Local repo**: `C:\Users\user\Documents\finance-hub`
-**Status**: typecheck clean, 10/10 tests pass, build clean, server boots in production mode without errors
+**Status**: typecheck silent · 100/100 tests pass · vite build clean · server boots on :3001
+**Local dev gaps**: MySQL + Redis not running locally (Docker not installed). Server boots
+degraded; OAuth tokens persist via dev rescue path (browser textarea) until DB is up.
 
 ## Active work
 
