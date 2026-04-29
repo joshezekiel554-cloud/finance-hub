@@ -13,11 +13,29 @@ If you're new to this file:
 
 ## Current phase
 
-**Week 6 — CRM core. 🟢 SHIPPED.** Customers list + B2B sweep + customer
-detail with 5-tab shell + activity timeline (SSE-wired) + Kanban tasks
-with comments + @mentions + watchers. Bug-check pass landed (commit
-`4641b1f` fixed mention-regex email collision, LIKE wildcard escapes,
-missing SSE events on delete/update, and N+1 counts gap).
+**Week 6 — CRM core. 🟢 SHIPPED + extensively polished.** Beyond the
+core week-6 scope, an extra batch of post-shipping enhancements landed
+(commits `a58f71e` → `18a9294`): dev-auth bypass, $ + PDF + amount on
+activity timeline, Email tab w/ schema + API + UI, twin balance>0 and
+balance=0 sweep selectors, Shopify-tag B2B import, per-customer email
+backfill button, overdue balance recompute, Memurai-backed worker
+process, BUSINESS_EMAILS filter (fix for Abraham Stern over-match),
+labeled "Mark as actioned" chip per email row.
+
+**Local infrastructure now production-realistic:**
+- Memurai installed as Windows service → BullMQ worker runs
+  alongside server + web in single `npm run dev`
+- Worker firing all 3 schedules: qb-sync (30 min), gmail-poll (15
+  min), chase-digest (5pm Europe/London daily). Verified via
+  `sync_runs` table.
+- Initial Gmail backfill landed ~509 emails (worker's 7-day default
+  lookback; the 180-day historical pull hit Gmail's per-minute quota,
+  acceptable since per-customer "Pull email history" button covers
+  on-demand backfill from any customer's detail page).
+
+**Bug-check pass landed (commit `4641b1f`)** fixed mention-regex email
+collision, LIKE wildcard escapes, missing SSE events on delete/update,
+and N+1 counts gap.
 
 **Week 4 — B2B Invoicing module. 🟢 ~95% COMPLETE (feature-shipped, polish-grade).**
 
@@ -73,23 +91,22 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-04-29 (afternoon — week 6 closing)
-**Commit on `main`**: `4641b1f` (tasks integration + bug-check fixes; closes week 6)
+**Date**: 2026-04-29 (evening — post-week-6 polish batch)
+**Commit on `main`**: `18a9294` (labeled "Mark as actioned" chip on email rows)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (in sync)
 **Local repo**: `C:\Users\user\Documents\finance-hub`
-**Status**: typecheck silent · **149/149 tests pass** · server running on :3001 via tsx watch
-**Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · 4,842 activities
-(week 6 boot sync via `scripts/qb-sync-once.ts`)
-**Local dev**: MySQL running locally; QBO OAuth chain healthy (token rotates on refresh
-without intervention now that the `intuit-oauth` validation bug is fixed)
+**Status**: typecheck silent · **149/149 tests pass** · server + web + worker running via `npm run dev`
+**Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · 4,842 activities · 509 emails
+**Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy
 
 ## Active work
 
-**None — week 6 just closed.** Awaiting direction on whether to:
-- close week 4 leftover (invoicing cron registration + parity check), or
-- start week 7 (Statements via QBO API + Shopify hold + email compose
-  + templates + alias picking), or
-- jump to week 9 AI agent if that has more daily-workflow value
+**None — ready for week 7.** Three loose ends to optionally close first:
+1. Invoicing 11am cron not yet registered (code exists, not in `schedule.ts`)
+2. `src/server/routes/invoicing.ts` has no `requireAuth` gate (genuinely a
+   security gap if exposed beyond localhost) — easy 5-min fix
+3. 180-day Gmail backfill still partial (~6 days actually populated;
+   per-customer button covers on-demand needs)
 
 ## What just shipped (last 24h, 25 commits)
 
@@ -140,11 +157,20 @@ fixes culminating in the real one. Highlights:
 **Deferred to later phases (still tracked):**
 - Encrypt `accounts.access_token/refresh_token/id_token` (v2.1; Auth.js adapter wrapper)
 - Dual-insert orphan in oauth_tokens callback (week 3, when Arctic flows land)
-- Placeholder routes for `/customers /tasks /agent` (week 6+, not yet built)
-- CSP tightening in helmet config (week 6, when asset origins are known)
+- `/customers /tasks` shipped week 6; `/agent` still placeholder for week 9
+- CSP tightening in helmet config (week 7+ when asset origins are known)
 - Persist `x_refresh_token_expires_in` to DB so we don't hardcode 100 days
   on every refresh (low priority — every successful refresh resets the
   100-day window anyway)
+- Real Google OAuth credentials (currently `dev` placeholders + the
+  DEV_USER_EMAIL bypass; needed before any non-localhost exposure)
+- `requireAuth` on `src/server/routes/invoicing.ts` — silently
+  unauthenticated since week 4. Genuine security gap if exposed
+  beyond localhost.
+- 11am invoicing cron registration in `src/jobs/schedule.ts`
+- Position rebalancing for tasks Kanban under heavy drag-drop
+  (lazy threshold-based)
+- Inline-edit error toast on task drawer field PATCH failure
 
 ## What's done
 
@@ -206,9 +232,65 @@ fixes culminating in the real one. Highlights:
   (4641b1f), reviewed by bug-checker pass that landed 6 fixes
   (regex tightening, LIKE escape, missing SSE events, N+1 counts).
 
+**Post-week-6 polish batch (commits `a58f71e` → `18a9294`):**
+- ✅ **Dev-only auth bypass** (`a58f71e`) — `DEV_USER_EMAIL` env var
+  synthesizes a session in non-prod when set; production guards via
+  boot-time throw + runtime check + loud warn-log. Lets local dev
+  proceed without real Google OAuth setup.
+- ✅ **Customers list limits** — backend cap 200→5000 (`0bdb30b`),
+  frontend request 500→5000 (`df26c12`) so the sweep covers the full
+  table in one fetch.
+- ✅ **Worker process running locally** — Memurai installed as Windows
+  service; `npm run dev` launches server + web + worker via
+  concurrently (`fa1abec`). Repeatable jobs ticking on schedule.
+- ✅ **Activity timeline polish** (`16bf467`) — amounts (Intl currency-
+  formatted) + #docNumber + inline PDF link rendering for
+  qbo_invoice_sent / qbo_payment / qbo_credit_memo activities.
+  `/api/qb-pdf/{invoice|creditmemo}/{qbId}` proxies QBO's PDF endpoint;
+  no caching, browser opens in a new tab.
+- ✅ **Email tab on customer detail** (`2ed82dd`) — schema:
+  `email_log.actioned_at` + `actioned_by_user_id` + composite index.
+  API: `GET /api/customers/:id/emails` (filterable: direction +
+  actioned), `PATCH /api/email-log/:id` (toggle actioned), `POST
+  /api/email-log/:id/to-task` (promote to task with relatedActivityId
+  resolution). UI: filter chips, expandable rows, per-email actions.
+  Followups: per-row checkbox (`0a74da6`) → labeled chip
+  (`18a9294`).
+- ✅ **Bounded Gmail concurrency** (`c7e0bc8`, `623900e`) —
+  `mapWithLimit` helper at 10 parallel (was unbounded → ENOBUFS on
+  big backfills + per-minute Gmail quota). One-shot
+  `scripts/backfill-activity-meta.ts` rewrote 4,842 pre-norm meta
+  rows to `{ qbId, docNumber, amount, currency, txnDate }` shape.
+- ✅ **Twin sweep selectors** (`07f3133`) — "Select all balance > 0"
+  (B2B candidates) + "Select all balance = 0" (B2C candidates).
+- ✅ **Shopify-tag B2B import** (`926486d`) —
+  `POST /api/customers/import-shopify-preview` queries Shopify for
+  customers tagged `b2b` (configurable), matches by email, returns
+  ids; UI shows preview + commits via existing bulk-tag mutation.
+- ✅ **Overdue balance fix** (`ae10f25`) — `customers.overdue_balance`
+  was always "0.00" because QB sync never wrote it. Added
+  `recomputeOverdueBalances()` at end of `syncInvoices`: single
+  bulk UPDATE...JOIN derives sum of overdue invoice balances per
+  customer. Verified vs QBO: Cadeaux Judaica klein now shows
+  $2,880 / $3,128.50 matching exactly.
+- ✅ **Per-customer email backfill** (`d09ccb4`) — "Pull email
+  history" button on customer Email tab. POST
+  `/api/customers/:id/sync-emails` builds a Gmail query
+  `(from:e1 OR to:e1 …)` for each address in primary + billing
+  emails, fetches up to 1,000 messages, dedupes via UNIQUE
+  constraint. Lets users grab a customer's full historical
+  correspondence on demand instead of waiting for the worker.
+- ✅ **BUSINESS_EMAILS filter** (`4dbebb7`) — extracted to shared
+  `src/integrations/gmail/business-emails.ts`. QB sync's
+  `parseBillingEmails` now strips feldart's own addresses before
+  persisting, preventing the over-match disaster (Abraham Stern had
+  650 emails wrongly attributed because info@feldart.com had been
+  added as a billing CC in QBO). Cleanup ran out-of-band:
+  650 email_log + 650 activity rows deleted, billing_emails stripped.
+
 ## In progress
 
-**None.** Awaiting direction on next phase.
+**None.** Ready for week 7 once loose ends are decided.
 
 ## What's next
 
@@ -334,10 +416,34 @@ These don't block current work but block specific later phases:
   `x_refresh_token_expires_in` to `intuit-oauth.setToken` so its
   client-side `validateToken()` doesn't reject every refresh
 
+**Week 6 — CRM core** (parallel multi-agent build):
+- `5964f01` — Foundation: SSE broker + customer_type schema + initial sync
+- `2e5cf95` — Customers list + detail shell
+- `149de91` — Activity timeline + domain event bus
+- `28d4ebf` — Tasks v2 schema (comments, mentions, watchers)
+- `0063313` — `tasks-api` agent: routes/tasks.ts + comments + users + mentions
+- `dec1e53` — `tasks-ui` agent: Kanban + list + detail drawer + comments + @mentions
+- `4641b1f` — Bug-check pass: regex tightening, LIKE escape, missing SSE events, N+1
+- `28f4e28` — PROGRESS catch-up
+
+**Post-week-6 polish** (commits `a58f71e` → `18a9294`):
+- `a58f71e` — Dev-only auth bypass (DEV_USER_EMAIL)
+- `0bdb30b`, `df26c12` — Customers list limits 200→5000 / 500→5000
+- `fa1abec` — Worker dev script + Gmail backfill one-shot
+- `16bf467` — Activity timeline: amounts, currencies, inline PDF links
+- `2ed82dd` — Email tab on customer detail (schema + API + UI)
+- `c7e0bc8`, `623900e` — Bounded Gmail concurrency 20→10 + activity meta backfill
+- `07f3133` — B2C sweep selector
+- `926486d` — Shopify-tag B2B import
+- `ae10f25` — overdue_balance recompute via UPDATE...JOIN
+- `d09ccb4` — Per-customer email backfill button
+- `4dbebb7` — BUSINESS_EMAILS filter (Abraham Stern over-match fix)
+- `0a74da6`, `18a9294` — Email row 'Mark as actioned' chip
+
 ## Team status snapshot
 
 The `finance-hub-init` multi-agent team idled after week 1-2 closed.
-Week 3-4 work was done conversationally with the lead model rather than
-spawning agents. Team can be re-spawned for week 6 CRM scope if pair-
-implementation pattern is wanted again — or week 6 can proceed
-conversationally like week 3-4 did.
+Week 3-5 work was done conversationally. Week 6 used a fresh parallel
+team (`tasks-api` + `tasks-ui` in isolated worktrees) for the big task
+system; remaining work proceeded conversationally. Same pattern is
+available again for any week-7 module that wants pair-implementation.
