@@ -61,6 +61,11 @@ type Row = {
     existingShipVia: string | null;
     existingTermsId: string | null;
     existingTermsName: string | null;
+    emailStatus: string | null;
+    lastSentAt: string | null;
+    billEmail: string | null;
+    billEmailCc: string | null;
+    billEmailBcc: string | null;
     lines: Array<{
       lineId: string;
       sku: string | null;
@@ -437,6 +442,19 @@ function ShipmentCard({
                 {row.qbInvoice.docNumber} · ${row.qbInvoice.totalAmt.toFixed(2)}{" "}
                 {row.qbInvoice.currency}
               </div>
+              <div className="mt-1 flex justify-end">
+                <SendHistoryPill
+                  status={row.qbInvoice.emailStatus}
+                  sentAt={row.qbInvoice.lastSentAt}
+                  to={row.qbInvoice.billEmail}
+                />
+              </div>
+              {row.qbInvoice.existingTrackingNum && (
+                <div className="mt-1 text-[11px] text-muted">
+                  current tracking:{" "}
+                  <span className="font-mono">{row.qbInvoice.existingTrackingNum}</span>
+                </div>
+              )}
             </div>
           ) : (
             <Badge tone="critical">No QB invoice</Badge>
@@ -647,6 +665,67 @@ function SendResultPill({
   return <Badge tone="success">Updated (no email)</Badge>;
 }
 
+// $-prefixed price input. Displays "$" inside the field; submits/sends a
+// pure number. Uses a controlled <input type="text"> so we can render the
+// glyph without losing keystroke control.
+function PriceInput({
+  value,
+  onChange,
+  warning,
+}: {
+  value: number | null | undefined;
+  onChange: (n: number) => void;
+  warning?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center overflow-hidden rounded-md border bg-base text-sm",
+        warning ? "border-accent-warning" : "border-default",
+      )}
+    >
+      <span className="border-r border-default bg-elevated px-2 py-1 text-xs text-muted">
+        $
+      </span>
+      <input
+        type="number"
+        min={0}
+        step={0.01}
+        value={value ?? ""}
+        placeholder="0.00"
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-20 bg-transparent px-2 py-1 text-right tabular-nums focus:outline-none"
+      />
+    </div>
+  );
+}
+
+function SendHistoryPill({
+  status,
+  sentAt,
+  to,
+}: {
+  status: string | null;
+  sentAt: string | null;
+  to: string | null;
+}) {
+  // QBO's EmailStatus is "EmailSent" once an email has gone out (any path —
+  // 2.0 send, 1.0 send, manual click in QBO web admin). DeliveryInfo.DeliveryTime
+  // is the UTC timestamp of the most recent send.
+  if (status === "EmailSent" && sentAt) {
+    return (
+      <Badge tone="success">
+        Last sent {formatTime(sentAt)}
+        {to ? ` · ${to}` : ""}
+      </Badge>
+    );
+  }
+  if (status === "EmailSent") {
+    return <Badge tone="success">Sent (timestamp unknown)</Badge>;
+  }
+  return <Badge tone="neutral">Not sent yet</Badge>;
+}
+
 function formatTime(iso: string): string {
   try {
     return new Date(iso).toLocaleString(undefined, {
@@ -813,34 +892,17 @@ function ReconcileTable({
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {isAdd ? (
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={finalQbPrice ?? ""}
-                      placeholder="0.00"
-                      onChange={(e) => onAddPriceChange(action.sku, Number(e.target.value))}
-                      className={cn(
-                        "w-24 rounded-md border bg-base px-2 py-1 text-right text-sm tabular-nums",
-                        finalQbPrice === null || finalQbPrice <= 0
-                          ? "border-accent-warning"
-                          : "border-default",
-                      )}
+                    <PriceInput
+                      value={finalQbPrice}
+                      onChange={(n) => onAddPriceChange(action.sku, n)}
+                      warning={finalQbPrice === null || finalQbPrice <= 0}
                     />
                   ) : (isKeep || isQtyChange) && lineId && r.unitPrice !== null ? (
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={finalQbPrice ?? ""}
-                      onChange={(e) =>
-                        onLinePriceChange(
-                          lineId,
-                          r.unitPrice as number,
-                          Number(e.target.value),
-                        )
+                    <PriceInput
+                      value={finalQbPrice}
+                      onChange={(n) =>
+                        onLinePriceChange(lineId, r.unitPrice as number, n)
                       }
-                      className="w-24 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
                     />
                   ) : finalQbPrice !== null && finalQbPrice !== undefined ? (
                     `$${finalQbPrice.toFixed(2)}`

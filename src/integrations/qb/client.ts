@@ -335,10 +335,10 @@ export class QboClient {
   }
 
   // Batch lookup of invoices by DocNumber. One QBO query instead of N. Returns
-  // a Map keyed by DocNumber for O(1) per-row access. Caller passes deduped
-  // doc numbers; we further dedupe and chunk in case the IN clause exceeds
-  // QBO's query length limit (~4000 chars). Empty input returns an empty Map
-  // without a roundtrip.
+  // a Map keyed by the *requested* DocNumber for O(1) per-row access. Two
+  // passes: first an exact-match IN(), then for any docs that didn't match,
+  // a LIKE-based fallback to catch suffixed variants ("18303" → "18303-SP")
+  // so renamed invoices stay findable.
   async getInvoicesByDocNumbers(
     docNumbers: string[],
   ): Promise<Map<string, QboInvoice>> {
@@ -346,9 +346,8 @@ export class QboClient {
     const unique = Array.from(new Set(docNumbers.filter((d) => d && d.length > 0)));
     if (unique.length === 0) return result;
 
-    // Conservative chunk size: each entry is ~10 chars + quoting/comma. 200
-    // entries fits comfortably under QBO's query length limit even with
-    // generous DocNumber widths.
+    // Pass 1: exact match. Conservative chunk size (each entry ~10 chars +
+    // quoting/comma, 200 fits comfortably under QBO's query length cap).
     const CHUNK = 200;
     for (let i = 0; i < unique.length; i += CHUNK) {
       const chunk = unique.slice(i, i + CHUNK);
@@ -360,6 +359,31 @@ export class QboClient {
       );
       for (const inv of data.QueryResponse.Invoice ?? []) {
         if (inv.DocNumber) result.set(inv.DocNumber, inv);
+      }
+    }
+
+    // Pass 2: for any base DocNumbers that didn't exact-match, try suffixed
+    // variants. Example: caller asked for "18303" but the QBO invoice was
+    // renamed to "18303-SP" after a prior special-offer send. We map the
+    // suffixed result back to the original base key the caller passed in.
+    const unmatched = unique.filter((d) => !result.has(d));
+    if (unmatched.length > 0) {
+      const LIKE_CHUNK = 30; // OR clauses are heavier than IN entries
+      for (let i = 0; i < unmatched.length; i += LIKE_CHUNK) {
+        const chunk = unmatched.slice(i, i + LIKE_CHUNK);
+        const orClauses = chunk
+          .map((d) => `DocNumber LIKE '${escapeQboLiteral(d)}-%'`)
+          .join(" OR ");
+        const data = await this.query<QboInvoice>(
+          `SELECT * FROM Invoice WHERE ${orClauses}`,
+        );
+        for (const inv of data.QueryResponse.Invoice ?? []) {
+          if (!inv.DocNumber) continue;
+          const base = chunk.find((d) =>
+            inv.DocNumber!.startsWith(d + "-"),
+          );
+          if (base && !result.has(base)) result.set(base, inv);
+        }
       }
     }
     return result;

@@ -65,6 +65,12 @@ export type InvoicingTodayRow = {
     existingShipVia: string | null;
     existingTermsId: string | null;
     existingTermsName: string | null;
+    // QBO email status + delivery history
+    emailStatus: string | null; // "EmailSent" | "NotSet" | etc
+    lastSentAt: string | null; // ISO from DeliveryInfo.DeliveryTime when present
+    billEmail: string | null;
+    billEmailCc: string | null;
+    billEmailBcc: string | null;
     lines: Array<{
       lineId: string;
       sku: string | null;
@@ -355,6 +361,20 @@ async function buildRow(
           existingTermsName:
             (qbInvoice as unknown as { SalesTermRef?: { name?: string } }).SalesTermRef?.name ??
             null,
+          emailStatus:
+            (qbInvoice as unknown as { EmailStatus?: string }).EmailStatus ?? null,
+          lastSentAt:
+            (qbInvoice as unknown as { DeliveryInfo?: { DeliveryTime?: string } })
+              .DeliveryInfo?.DeliveryTime ?? null,
+          billEmail:
+            (qbInvoice as unknown as { BillEmail?: { Address?: string } }).BillEmail
+              ?.Address ?? null,
+          billEmailCc:
+            (qbInvoice as unknown as { BillEmailCc?: { Address?: string } }).BillEmailCc
+              ?.Address ?? null,
+          billEmailBcc:
+            (qbInvoice as unknown as { BillEmailBcc?: { Address?: string } }).BillEmailBcc
+              ?.Address ?? null,
           lines: invoiceLinesForReconcile(qbInvoice).map((l) => ({
             lineId: l.lineId,
             sku: l.sku,
