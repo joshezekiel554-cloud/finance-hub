@@ -21,6 +21,11 @@ export const customers = mysqlTable(
     holdStatus: mysqlEnum("hold_status", ["active", "hold"]).notNull().default("active"),
     shopifyCustomerId: varchar("shopify_customer_id", { length: 64 }),
     mondayItemId: varchar("monday_item_id", { length: 64 }),
+    // B2B vs B2C classification. NULL until manually tagged via the
+    // customers list bulk-sweep UI; new customers from QB sync land NULL
+    // and surface in a "needs classification" banner. Customer list
+    // defaults to filtering on customer_type='b2b'.
+    customerType: mysqlEnum("customer_type", ["b2b", "b2c"]),
     balance: decimal("balance", { precision: 12, scale: 2 }).notNull().default("0"),
     overdueBalance: decimal("overdue_balance", { precision: 12, scale: 2 })
       .notNull()
@@ -35,6 +40,7 @@ export const customers = mysqlTable(
     displayNameIdx: index("idx_customers_display_name").on(t.displayName),
     holdStatusIdx: index("idx_customers_hold_status").on(t.holdStatus),
     shopifyIdIdx: index("idx_customers_shopify_id").on(t.shopifyCustomerId),
+    customerTypeIdx: index("idx_customers_customer_type").on(t.customerType),
   }),
 );
 

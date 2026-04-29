@@ -12,6 +12,7 @@ import { loggerPlugin } from "./plugins/logger.js";
 import { errorHandlerPlugin } from "./plugins/error-handler.js";
 import { sentryPlugin } from "./plugins/sentry.js";
 import { authPlugin } from "./plugins/auth.js";
+import { ssePlugin } from "./plugins/sse.js";
 import { healthRoute } from "./routes/health.js";
 import { registerRoutes } from "./routes/index.js";
 
@@ -72,6 +73,12 @@ async function buildServer(): Promise<FastifyInstance> {
   await app.register(sensible);
 
   await app.register(authPlugin);
+
+  // SSE broker (in-memory pub/sub keyed by user). Decorates app.sseBroker
+  // so any module that mutates state can publish events to subscribers.
+  // Order: after auth so the broker can be safely consumed by routes; the
+  // /api/events/stream route itself uses requireAuth.
+  await app.register(ssePlugin);
 
   await app.register(healthRoute);
   await registerRoutes(app);

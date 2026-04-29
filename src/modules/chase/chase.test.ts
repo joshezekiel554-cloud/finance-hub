@@ -22,6 +22,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     holdStatus: "active",
     shopifyCustomerId: null,
     mondayItemId: null,
+    customerType: null,
     balance: "1000.00",
     overdueBalance: "0.00",
     internalNotes: null,
