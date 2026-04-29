@@ -109,17 +109,23 @@ export type ReconcileAction =
       sku: string;
       fromQty: number;
       toQty: number;
+      // Optional unit-price override. When set, the sender writes this onto
+      // the QBO line; when undefined, the original line's UnitPrice stays.
+      // Set client-side when the user edits the QB price cell on any row.
+      unitPriceOverride?: number;
       // "shipped_less" / "shipped_more" / "not_shipped" / "split_zero" — UI
       // can render these distinctly (e.g. red for not_shipped, yellow for
       // split_zero). "user_override" is only emitted client-side when a
       // human edits a Final qty cell that the reconciler had set as `keep`.
-      // Pure metadata; doesn't affect the QBO write.
+      // "price_change" is emitted when only the unit price was edited (qty
+      // unchanged). Pure metadata; doesn't affect the QBO write.
       reason:
         | "shipped_less"
         | "shipped_more"
         | "not_shipped"
         | "split_zero"
-        | "user_override";
+        | "user_override"
+        | "price_change";
     }
   | {
       type: "add";

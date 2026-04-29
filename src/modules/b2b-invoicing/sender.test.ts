@@ -105,6 +105,46 @@ describe("buildPayload — Line transformations", () => {
     expect(payload.Line[0]?.Amount).toBe(40);
   });
 
+  it("uses unitPriceOverride on qty_change when provided", () => {
+    const invoice = makeInvoice({
+      Line: [makeLine({ Id: "1", Amount: 100 })],
+    });
+    const payload = buildPayload(invoice, [
+      SET_METADATA,
+      {
+        type: "qty_change",
+        lineId: "1",
+        sku: "SKU1",
+        fromQty: 10,
+        toQty: 4,
+        unitPriceOverride: 8.5,
+        reason: "user_override",
+      },
+    ]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.Qty).toBe(4);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(8.5);
+    expect(payload.Line[0]?.Amount).toBe(34); // 4 × 8.50
+  });
+
+  it("preserves original UnitPrice on qty_change when no override given", () => {
+    const invoice = makeInvoice({
+      Line: [makeLine({ Id: "1", Amount: 100 })], // unit 10, qty 10
+    });
+    const payload = buildPayload(invoice, [
+      SET_METADATA,
+      {
+        type: "qty_change",
+        lineId: "1",
+        sku: "SKU1",
+        fromQty: 10,
+        toQty: 4,
+        reason: "shipped_less",
+      },
+    ]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(10);
+    expect(payload.Line[0]?.Amount).toBe(40);
+  });
+
   it("zeros Amount when qty_change drops qty to 0 (not_shipped)", () => {
     const invoice = makeInvoice();
     const payload = buildPayload(invoice, [
@@ -300,10 +340,47 @@ describe("buildPayload — realistic 18294-shaped scenario", () => {
 });
 
 describe("buildPayload — customer memo + terms", () => {
-  it("always blanks CustomerMemo and PrivateNote on every send", () => {
+  it("blanks CustomerMemo by default + always blanks PrivateNote", () => {
     const payload = buildPayload(makeInvoice(), [SET_METADATA]);
     expect(payload.CustomerMemo).toEqual({ value: "" });
     expect(payload.PrivateNote).toBe("");
+  });
+
+  it("uses the supplied customer memo when provided", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      customerMemo: "Thanks for your order!",
+    });
+    expect(payload.CustomerMemo).toEqual({ value: "Thanks for your order!" });
+    // PrivateNote still always blank — only CustomerMemo is user-controlled.
+    expect(payload.PrivateNote).toBe("");
+  });
+
+  it("trims whitespace-only customer memo to empty", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      customerMemo: "   \n\t  ",
+    });
+    expect(payload.CustomerMemo).toEqual({ value: "" });
+  });
+
+  it("appends docNumberSuffix to DocNumber on the payload", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      docNumberSuffix: "-SP",
+    });
+    expect(payload.DocNumber).toBe("18294-SP");
+  });
+
+  it("is idempotent — does not double-append the suffix", () => {
+    const payload = buildPayload(
+      makeInvoice({ DocNumber: "18294-SP" }),
+      [SET_METADATA],
+      { docNumberSuffix: "-SP" },
+    );
+    expect(payload.DocNumber).toBeUndefined();
+  });
+
+  it("omits DocNumber when no suffix supplied", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA]);
+    expect(payload.DocNumber).toBeUndefined();
   });
 
   it("sets SalesTermRef when salesTermId is provided", () => {

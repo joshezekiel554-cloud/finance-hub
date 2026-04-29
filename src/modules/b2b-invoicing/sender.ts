@@ -53,6 +53,10 @@ export type QboInvoicePayload = {
   TrackingNum?: string;
   ShipDate?: string;
   ShipMethodRef?: { value: string; name: string };
+  // Optional override of the human-readable invoice number. Set when the
+  // caller passed a docNumberSuffix and the current DocNumber didn't
+  // already end with it. Omitted otherwise — sparse update leaves it.
+  DocNumber?: string;
   // Always sent as { value: "" } to clear the customer-facing memo (renders
   // on the invoice form's "Message displayed on invoice" field).
   CustomerMemo: { value: string };
@@ -79,6 +83,14 @@ export type BuildPayloadOptions = {
   // QBO sparse updates leave omitted fields untouched.
   salesTermId?: string;
   salesTermName?: string;
+  // Optional customer-facing memo. When undefined or empty, CustomerMemo is
+  // blanked (default — clears the auto-sync boilerplate). When non-empty,
+  // becomes the visible message on the invoice + statement.
+  customerMemo?: string;
+  // Optional suffix appended to DocNumber (e.g. "-SP" for special-offer
+  // invoices). Idempotent — if the existing DocNumber already ends with
+  // this suffix, it's left alone. Empty/undefined → DocNumber untouched.
+  docNumberSuffix?: string;
 };
 
 // Pure transform: invoice + actions → sparse update payload. No I/O. The send
@@ -132,14 +144,18 @@ export function buildPayload(
     }
     if (action.type === "qty_change") {
       const detail = line.SalesItemLineDetail;
-      const unitPrice = detail?.UnitPrice ?? 0;
       const newQty = action.toQty;
+      const unitPrice =
+        action.unitPriceOverride !== undefined
+          ? action.unitPriceOverride
+          : (detail?.UnitPrice ?? 0);
       updatedLines.push({
         ...line,
         Amount: round2(unitPrice * newQty),
         SalesItemLineDetail: {
           ...detail,
           Qty: newQty,
+          UnitPrice: unitPrice,
         },
       });
       continue;
@@ -193,11 +209,12 @@ export function buildPayload(
     Id: invoice.Id,
     SyncToken: invoice.SyncToken,
     sparse: true,
-    // Always blank both memo fields — 3rd-party sync writes sales-receipt
-    // boilerplate into PrivateNote (the "Memo on statement (hidden)" field
-    // in QBO's UI). CustomerMemo is cleared defensively in case some
-    // invoices carry stale content there too.
-    CustomerMemo: { value: "" },
+    // PrivateNote is always blanked — 3rd-party sync writes sales-receipt
+    // boilerplate into the "Memo on statement (hidden)" field that should
+    // never appear on customer statements.
+    // CustomerMemo defaults to blank; if the caller supplied a customerMemo
+    // string, that becomes the visible message on the invoice + statement.
+    CustomerMemo: { value: (options.customerMemo ?? "").trim() },
     PrivateNote: "",
     Line: updatedLines,
   };
@@ -211,6 +228,14 @@ export function buildPayload(
       value: options.salesTermId,
       ...(options.salesTermName ? { name: options.salesTermName } : {}),
     };
+  }
+  if (
+    options.docNumberSuffix &&
+    options.docNumberSuffix.length > 0 &&
+    invoice.DocNumber &&
+    !invoice.DocNumber.endsWith(options.docNumberSuffix)
+  ) {
+    payload.DocNumber = invoice.DocNumber + options.docNumberSuffix;
   }
   return payload;
 }
@@ -228,6 +253,8 @@ export type SendOptions = {
   discountPercent?: number;
   salesTermId?: string;
   salesTermName?: string;
+  customerMemo?: string;
+  docNumberSuffix?: string;
 };
 
 // Wraps buildPayload with side-effects: shadow-mode logging or live POST.
@@ -242,6 +269,8 @@ export async function sendInvoiceUpdate(
     discountPercent: opts.discountPercent,
     salesTermId: opts.salesTermId,
     salesTermName: opts.salesTermName,
+    customerMemo: opts.customerMemo,
+    docNumberSuffix: opts.docNumberSuffix,
   });
 
   if (opts.shadowMode) {

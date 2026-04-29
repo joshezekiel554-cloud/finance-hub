@@ -15,12 +15,14 @@ type ReconcileAction =
       sku: string;
       fromQty: number;
       toQty: number;
+      unitPriceOverride?: number;
       reason:
         | "shipped_less"
         | "shipped_more"
         | "not_shipped"
         | "split_zero"
-        | "user_override";
+        | "user_override"
+        | "price_change";
     }
   | {
       type: "add";
@@ -75,6 +77,7 @@ type Row = {
     customerEmail: string | null;
     lineCount: number;
     note: string | null;
+    lineItems: Array<{ sku: string; retailPrice: number }>;
   } | null;
   shopifyOrderError: string | null;
   reconcileResult: {
@@ -245,6 +248,8 @@ function ShipmentCard({
   const [selectedTermId, setSelectedTermId] = useState<string>(
     row.qbInvoice?.existingTermsId ?? "",
   );
+  const [customerMemo, setCustomerMemo] = useState<string>("");
+  const [docNumberSuffix, setDocNumberSuffix] = useState<string>("");
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
 
   const queryClient = useQueryClient();
@@ -268,6 +273,8 @@ function ShipmentCard({
           discountPercent: discountPercent > 0 ? discountPercent : undefined,
           salesTermId: selectedTerm?.id,
           salesTermName: selectedTerm?.name,
+          customerMemo: customerMemo.trim() || undefined,
+          docNumberSuffix: docNumberSuffix.trim() || undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -369,6 +376,44 @@ function ShipmentCard({
     setSendResult(null);
   }
 
+  // Edit the QB unit price for an existing invoice line. Promotes a `keep`
+  // to `qty_change` (with reason="price_change", qty unchanged) so the
+  // sender's unitPriceOverride path engages. If the user types the
+  // original price back in, demotes the action back to `keep`.
+  function updateLinePrice(
+    lineId: string,
+    originalPrice: number,
+    newPrice: number,
+  ) {
+    setEditedActions((prev) =>
+      prev.map((a) => {
+        if (a.type === "keep" && a.lineId === lineId) {
+          if (newPrice === originalPrice) return a;
+          return {
+            type: "qty_change",
+            lineId: a.lineId,
+            sku: a.sku,
+            fromQty: a.qty,
+            toQty: a.qty,
+            unitPriceOverride: newPrice,
+            reason: "price_change",
+          };
+        }
+        if (a.type === "qty_change" && a.lineId === lineId) {
+          // If price reverts AND qty reverts, demote back to keep.
+          const qtyMatches = a.toQty === a.fromQty;
+          const priceMatches = newPrice === originalPrice;
+          if (qtyMatches && priceMatches) {
+            return { type: "keep", lineId: a.lineId, sku: a.sku, qty: a.fromQty };
+          }
+          return { ...a, unitPriceOverride: newPrice };
+        }
+        return a;
+      }),
+    );
+    setSendResult(null);
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -423,13 +468,55 @@ function ShipmentCard({
             row={row}
             editedActions={editedActions}
             onLineQtyChange={updateLineQty}
+            onLinePriceChange={updateLinePrice}
             onAddPriceChange={updateAddPrice}
             onAddQtyChange={updateAddQty}
           />
         )}
 
         {row.qbInvoice && row.reconcileResult && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-default pt-3">
+          <div className="space-y-3 border-t border-default pt-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="block text-xs text-secondary">
+                <span className="mb-1 block font-medium">
+                  Customer note (renders on invoice + statement)
+                </span>
+                <textarea
+                  rows={2}
+                  value={customerMemo}
+                  onChange={(e) => {
+                    setCustomerMemo(e.target.value);
+                    setSendResult(null);
+                  }}
+                  placeholder="Leave blank to clear the auto-sync memo"
+                  className="w-full resize-y rounded-md border border-default bg-base px-2 py-1 text-sm"
+                />
+              </label>
+              <div className="flex items-end gap-3">
+                <label className="flex-1 text-xs text-secondary">
+                  <span className="mb-1 block font-medium">DocNumber suffix</span>
+                  <input
+                    type="text"
+                    value={docNumberSuffix}
+                    onChange={(e) => {
+                      setDocNumberSuffix(e.target.value);
+                      setSendResult(null);
+                    }}
+                    placeholder="-SP for special offer"
+                    className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+                  />
+                </label>
+                <a
+                  href={`https://qbo.intuit.com/app/invoice?txnId=${row.qbInvoice.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-md border border-default bg-base px-3 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
+                >
+                  Preview in QBO ↗
+                </a>
+              </div>
+            </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-4">
               <label className="flex items-center gap-2 text-xs text-secondary">
                 <span className="font-medium">Terms</span>
@@ -500,6 +587,7 @@ function ShipmentCard({
                     : "Send to QBO"}
               </Button>
             </div>
+          </div>
           </div>
         )}
       </CardBody>
@@ -576,16 +664,25 @@ function ReconcileTable({
   row,
   editedActions,
   onLineQtyChange,
+  onLinePriceChange,
   onAddPriceChange,
   onAddQtyChange,
 }: {
   row: Row;
   editedActions: ReconcileAction[];
   onLineQtyChange: (lineId: string, newQty: number) => void;
+  onLinePriceChange: (lineId: string, originalPrice: number, newPrice: number) => void;
   onAddPriceChange: (sku: string, newPrice: number) => void;
   onAddQtyChange: (sku: string, newQty: number) => void;
 }) {
   if (!row.qbInvoice || !row.reconcileResult) return null;
+
+  // Build SKU → Shopify retail price map for the read-only "Shopify price"
+  // column. Falls back to undefined when the order isn't matched.
+  const shopifyPriceBySku = new Map<string, number>();
+  for (const li of row.shopifyOrder?.lineItems ?? []) {
+    shopifyPriceBySku.set(li.sku.toUpperCase(), li.retailPrice);
+  }
 
   type DisplayRow = {
     sku: string;
@@ -593,6 +690,7 @@ function ReconcileTable({
     currentQty: number | null;
     shippedQty: number | null;
     unitPrice: number | null;
+    shopifyPrice: number | undefined;
     action: ReconcileAction | null;
   };
   const map = new Map<string, DisplayRow>();
@@ -604,6 +702,7 @@ function ReconcileTable({
       currentQty: line.qty,
       shippedQty: null,
       unitPrice: line.unitPrice,
+      shopifyPrice: shopifyPriceBySku.get(key),
       action: null,
     });
   }
@@ -620,6 +719,7 @@ function ReconcileTable({
         currentQty: null,
         shippedQty: qty,
         unitPrice: null,
+        shopifyPrice: shopifyPriceBySku.get(key),
         action: null,
       });
     }
@@ -648,7 +748,8 @@ function ReconcileTable({
             <th className="px-3 py-2 text-right">Invoice qty</th>
             <th className="px-3 py-2 text-right">Shipped qty</th>
             <th className="px-3 py-2 text-right">Final qty</th>
-            <th className="px-3 py-2 text-right">Unit price</th>
+            <th className="px-3 py-2 text-right">Shopify price</th>
+            <th className="px-3 py-2 text-right">QB price</th>
             <th className="px-3 py-2 text-left">Action</th>
           </tr>
         </thead>
@@ -665,7 +766,14 @@ function ReconcileTable({
                 : isKeep
                   ? action.qty
                   : (r.currentQty ?? 0);
-            const finalPrice = isAdd ? action.unitPrice : r.unitPrice;
+            // QB price for display: add → action.unitPrice; qty_change with
+            // override → that override; otherwise the original line price.
+            const finalQbPrice = isAdd
+              ? action.unitPrice
+              : isQtyChange && action.unitPriceOverride !== undefined
+                ? action.unitPriceOverride
+                : r.unitPrice;
+            const lineId = (action as { lineId?: string } | null)?.lineId;
 
             return (
               <tr key={r.sku} className="border-t border-default">
@@ -685,23 +793,23 @@ function ReconcileTable({
                       onChange={(e) => onAddQtyChange(action.sku, Number(e.target.value))}
                       className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
                     />
-                  ) : (isKeep || isQtyChange) ? (
+                  ) : (isKeep || isQtyChange) && lineId ? (
                     <input
                       type="number"
                       min={0}
                       step={1}
                       value={finalQty}
-                      onChange={(e) =>
-                        onLineQtyChange(
-                          (action as { lineId: string }).lineId,
-                          Number(e.target.value),
-                        )
-                      }
+                      onChange={(e) => onLineQtyChange(lineId, Number(e.target.value))}
                       className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
                     />
                   ) : (
                     finalQty
                   )}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted">
+                  {r.shopifyPrice !== undefined
+                    ? `$${r.shopifyPrice.toFixed(2)}`
+                    : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {isAdd ? (
@@ -709,18 +817,33 @@ function ReconcileTable({
                       type="number"
                       min={0}
                       step={0.01}
-                      value={finalPrice ?? ""}
+                      value={finalQbPrice ?? ""}
                       placeholder="0.00"
                       onChange={(e) => onAddPriceChange(action.sku, Number(e.target.value))}
                       className={cn(
                         "w-24 rounded-md border bg-base px-2 py-1 text-right text-sm tabular-nums",
-                        finalPrice === null || finalPrice <= 0
+                        finalQbPrice === null || finalQbPrice <= 0
                           ? "border-accent-warning"
                           : "border-default",
                       )}
                     />
-                  ) : finalPrice !== null ? (
-                    `$${finalPrice.toFixed(2)}`
+                  ) : (isKeep || isQtyChange) && lineId && r.unitPrice !== null ? (
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={finalQbPrice ?? ""}
+                      onChange={(e) =>
+                        onLinePriceChange(
+                          lineId,
+                          r.unitPrice as number,
+                          Number(e.target.value),
+                        )
+                      }
+                      className="w-24 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
+                    />
+                  ) : finalQbPrice !== null && finalQbPrice !== undefined ? (
+                    `$${finalQbPrice.toFixed(2)}`
                   ) : (
                     "—"
                   )}
@@ -762,9 +885,25 @@ function ActionBadge({ action }: { action: ReconcileAction | null }) {
           : action.reason === "shipped_less"
             ? "medium"
             : "info";
+    // When only the price changed (qty unchanged), surface that distinctly
+    // rather than showing "qty 5 → 5".
+    if (
+      action.reason === "price_change" &&
+      action.fromQty === action.toQty &&
+      action.unitPriceOverride !== undefined
+    ) {
+      return (
+        <Badge tone="info">
+          price → ${action.unitPriceOverride.toFixed(2)}
+        </Badge>
+      );
+    }
     return (
       <Badge tone={tone}>
         qty {action.fromQty} → {action.toQty}
+        {action.unitPriceOverride !== undefined && (
+          <> · ${action.unitPriceOverride.toFixed(2)}</>
+        )}
         <span className="ml-1 text-[10px] font-normal opacity-70">({action.reason})</span>
       </Badge>
     );

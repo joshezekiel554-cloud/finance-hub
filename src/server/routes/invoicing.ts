@@ -81,6 +81,8 @@ export type InvoicingTodayRow = {
     customerEmail: string | null;
     lineCount: number;
     note: string | null;
+    // SKU → retail price for the UI's "Shopify price" column.
+    lineItems: Array<{ sku: string; retailPrice: number }>;
   } | null;
   shopifyOrderError: string | null;
   reconcileResult: {
@@ -108,6 +110,13 @@ const sendBodySchema = z.object({
   // invoice. When omitted, sparse update leaves existing terms in place.
   salesTermId: z.string().optional(),
   salesTermName: z.string().optional(),
+  // Optional customer-facing message rendered on the invoice + statement.
+  // Empty/omitted → blanked (clears the auto-sync junk).
+  customerMemo: z.string().max(4000).optional(),
+  // Optional DocNumber suffix (e.g. "-SP" for special-offer invoices).
+  // Idempotent server-side: skipped if the current DocNumber already ends
+  // with this suffix.
+  docNumberSuffix: z.string().max(20).optional(),
 });
 
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
@@ -212,6 +221,8 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       discountPercent,
       salesTermId,
       salesTermName,
+      customerMemo,
+      docNumberSuffix,
     } = parse.data;
 
     const qbClient = new QboClient();
@@ -239,6 +250,8 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           discountPercent,
           salesTermId,
           salesTermName,
+          customerMemo,
+          docNumberSuffix,
           // Live POST hook: forwards the prepared sparse-update payload to
           // QboClient.updateInvoice. Only invoked when shadowMode=false.
           postUpdate: async (payload) => qbClient.updateInvoice(payload),
@@ -360,6 +373,12 @@ async function buildRow(
           customerEmail: shopifyOrder.email,
           lineCount: shopifyOrder.line_items.length,
           note: shopifyOrder.note,
+          lineItems: shopifyOrder.line_items
+            .filter((li) => li.sku !== null)
+            .map((li) => ({
+              sku: li.sku as string,
+              retailPrice: Number(li.price),
+            })),
         }
       : null,
     shopifyOrderError,
