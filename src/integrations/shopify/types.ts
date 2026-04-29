@@ -97,6 +97,21 @@ export type ShopifyProduct = {
   variants: ShopifyVariant[];
 };
 
+// Full customer record from /admin/api/.../customers/search.json — used by
+// the "import B2B by tag" sweep. Intentionally narrow: we only need email
+// + tags + an id we can store back on customers.shopify_customer_id.
+export type ShopifyCustomer = {
+  id: number;
+  email: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  tags: string;
+  state?: string | null;
+  default_address?: ShopifyAddress | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
 // A page returned by the cursor pager: the items plus the next-page token (or
 // null at end of stream).
 export type Page<T> = {

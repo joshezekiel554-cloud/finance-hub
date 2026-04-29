@@ -95,6 +95,35 @@ export default function CustomersPage() {
     },
   });
 
+  // Shopify-tag import. Two-step: preview fetches Shopify customers
+  // matching the tag, returns matched-by-email ids; user confirms; then
+  // we fan out via bulkTagMutation. The preview state holds the result
+  // between those two clicks.
+  const [shopifyTag, setShopifyTag] = useState("b2b");
+  const [shopifyPreview, setShopifyPreview] = useState<{
+    tag: string;
+    fetched: number;
+    matchedIds: string[];
+    sampleNames: string[];
+  } | null>(null);
+  const previewMutation = useMutation({
+    mutationFn: async (tag: string) => {
+      const res = await fetch("/api/customers/import-shopify-preview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tag }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<{
+        tag: string;
+        fetched: number;
+        matchedIds: string[];
+        sampleNames: string[];
+      }>;
+    },
+    onSuccess: (data) => setShopifyPreview(data),
+  });
+
   const visibleRows = data?.rows ?? [];
 
   // Twin heuristics for the bulk-tag sweep:
@@ -176,6 +205,82 @@ export default function CustomersPage() {
               }}
             >
               Review now
+            </Button>
+          </CardBody>
+        </Card>
+      )}
+
+      {tab === "uncategorized" && (
+        <Card>
+          <CardBody className="flex flex-wrap items-center gap-3 py-3 text-sm">
+            <span className="text-secondary">
+              Or import B2B from a Shopify customer tag:
+            </span>
+            <Input
+              value={shopifyTag}
+              onChange={(e) => setShopifyTag(e.target.value)}
+              placeholder="b2b"
+              className="!w-32"
+              aria-label="Shopify tag to import"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => previewMutation.mutate(shopifyTag.trim() || "b2b")}
+              disabled={previewMutation.isPending}
+            >
+              {previewMutation.isPending ? "Searching…" : "Find matches"}
+            </Button>
+            {previewMutation.isError && (
+              <span className="text-accent-danger">
+                {(previewMutation.error as Error)?.message ?? "Lookup failed"}
+              </span>
+            )}
+          </CardBody>
+        </Card>
+      )}
+
+      {shopifyPreview && (
+        <Card>
+          <CardBody className="flex flex-wrap items-center gap-3 py-3 text-sm">
+            <div className="flex-1">
+              <div className="font-medium">
+                Found {shopifyPreview.fetched} Shopify customer
+                {shopifyPreview.fetched === 1 ? "" : "s"} tagged "
+                {shopifyPreview.tag}". {shopifyPreview.matchedIds.length} matched
+                to your customers by email.
+              </div>
+              {shopifyPreview.sampleNames.length > 0 && (
+                <div className="mt-1 text-xs text-muted">
+                  Sample: {shopifyPreview.sampleNames.slice(0, 5).join(", ")}
+                  {shopifyPreview.matchedIds.length >
+                    shopifyPreview.sampleNames.length && " …"}
+                </div>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShopifyPreview(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={
+                shopifyPreview.matchedIds.length === 0 ||
+                bulkTagMutation.isPending
+              }
+              onClick={() => {
+                bulkTagMutation.mutate({
+                  ids: shopifyPreview.matchedIds,
+                  customerType: "b2b",
+                });
+                setShopifyPreview(null);
+              }}
+            >
+              Mark {shopifyPreview.matchedIds.length} as B2B
             </Button>
           </CardBody>
         </Card>

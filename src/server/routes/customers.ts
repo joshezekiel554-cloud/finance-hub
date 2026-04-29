@@ -29,6 +29,8 @@ import { auditLog } from "../../db/schema/audit.js";
 import { nanoid } from "nanoid";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
+import { ShopifyClient } from "../../integrations/shopify/client.js";
+import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 
 const log = createLogger({ component: "routes.customers" });
 
@@ -148,6 +150,64 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         uncategorized: Number(totals.uncategorized ?? 0),
         all: Number(totals.all ?? 0),
       },
+    });
+  });
+
+  // POST /api/customers/import-shopify-preview — fetch every Shopify
+  // customer whose tags include the given tag (default "b2b"), match
+  // them by email against our customers table, and return the matched
+  // customer IDs so the UI can confirm + commit via the existing
+  // bulk-tag endpoint. This is the "preview" half — no writes.
+  app.post("/import-shopify-preview", async (req, reply) => {
+    await requireAuth(req);
+    const schema = z.object({
+      tag: z.string().min(1).max(64).default("b2b"),
+    });
+    const parse = schema.safeParse(req.body ?? {});
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const { tag } = parse.data;
+
+    let shopifyCustomers;
+    try {
+      const shopify = new ShopifyClient();
+      shopifyCustomers = await listCustomersByTag(shopify, tag);
+    } catch (err) {
+      log.error({ err, tag }, "shopify customer fetch failed");
+      return reply.code(502).send({ error: "shopify fetch failed" });
+    }
+
+    const shopifyEmails = new Set(
+      shopifyCustomers
+        .map((c) => c.email?.toLowerCase().trim())
+        .filter((e): e is string => Boolean(e)),
+    );
+    if (shopifyEmails.size === 0) {
+      return reply.send({
+        tag,
+        fetched: shopifyCustomers.length,
+        matchedIds: [],
+        sampleNames: [],
+      });
+    }
+
+    // Match by primary_email (case-insensitive). The billingEmails JSON
+    // array could also match in theory but in practice QB customers
+    // are keyed on a single primary email — covering the 99% case
+    // without needing per-row JSON_CONTAINS calls.
+    const matches = await db
+      .select({ id: customers.id, displayName: customers.displayName, email: customers.primaryEmail })
+      .from(customers)
+      .where(inArray(customers.primaryEmail, Array.from(shopifyEmails)));
+
+    return reply.send({
+      tag,
+      fetched: shopifyCustomers.length,
+      matchedIds: matches.map((m) => m.id),
+      sampleNames: matches.slice(0, 10).map((m) => m.displayName),
     });
   });
 
