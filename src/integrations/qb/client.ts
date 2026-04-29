@@ -92,6 +92,17 @@ export class QboClient {
 
   // Calls intuit-oauth's refresh endpoint and returns a fresh QbTokens.
   // Wrapped so tokens.ts doesn't need to know about intuit-oauth.
+  //
+  // The x_refresh_token_expires_in field is CRITICAL. intuit-oauth's
+  // setToken() defaults x_refresh_token_expires_in to 0 when not supplied,
+  // which causes validateToken() to throw "The Refresh token is invalid"
+  // before any HTTP call to Intuit ever happens — a client-side false
+  // negative that masquerades as a server rejection. We don't persist
+  // refresh-token expiry in our DB, so we pass Intuit's maximum (100
+  // days) as a hardcoded value: every successful refresh resets the
+  // 100-day window anyway, and we OAuth more often than that. If the
+  // chain is genuinely dead, Intuit returns the real error from the
+  // HTTP call.
   private async performRefresh(current: QbTokens): Promise<QbTokens> {
     this.oauth.setToken({
       access_token: current.accessToken,
@@ -99,7 +110,8 @@ export class QboClient {
       realmId: current.realmId,
       token_type: "bearer",
       expires_in: 3600,
-    });
+      x_refresh_token_expires_in: 100 * 24 * 3600,
+    } as Parameters<typeof this.oauth.setToken>[0]);
     const result = await this.oauth.refresh();
     // result.token is typed as `Token | string`. After a successful refresh
     // it is always a Token instance — getJson() returns the raw response
