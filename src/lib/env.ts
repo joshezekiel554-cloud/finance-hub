@@ -72,6 +72,15 @@ const schema = z.object({
   // emails this address. In shadow mode the value is logged but no email is
   // sent. Defaults empty so the digest job is a no-op until configured.
   CHASE_DIGEST_RECIPIENT: z.string().optional().default(""),
+
+  // Dev-only auth bypass. When NODE_ENV !== production AND this email is
+  // set, requireAuth synthesizes a session for the matching user (creating
+  // the row on first use). Real Google OAuth is still wired and works in
+  // parallel; this just skips the OAuth dance for local development. The
+  // server logs a loud warning at boot when this is active. UNSET in
+  // production — the auth helper hard-fails if both DEV_USER_EMAIL is set
+  // and NODE_ENV is production.
+  DEV_USER_EMAIL: z.string().email().optional(),
 });
 
 // SHADOW_MODE has a NODE_ENV-derived default applied in loadEnv(), so the
