@@ -266,6 +266,39 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ rows, dismissed, shadowMode: env.SHADOW_MODE });
   });
 
+  // Batch dismiss for the "Dismiss all visible" page-level button.
+  app.post("/dismiss-bulk", async (req, reply) => {
+    const schema = z.object({
+      gmailIds: z.array(z.string().min(1).max(64)).min(1).max(200),
+      reason: z.enum(DISMISS_REASONS),
+      reasonNote: z.string().max(500).optional(),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const { gmailIds, reason, reasonNote } = parse.data;
+    const now = new Date();
+    // Bulk insert via a single VALUES clause; on duplicate, refresh reason +
+    // timestamp so a re-bulk overrides the prior categorization.
+    await db
+      .insert(dismissedShipments)
+      .values(
+        gmailIds.map((gmailId) => ({
+          gmailId,
+          reason,
+          reasonNote: reasonNote ?? null,
+          dismissedAt: now,
+        })),
+      )
+      .onDuplicateKeyUpdate({
+        set: { reason, reasonNote: reasonNote ?? null, dismissedAt: now },
+      });
+    return reply.send({ ok: true, count: gmailIds.length });
+  });
+
   app.post("/dismiss", async (req, reply) => {
     const schema = z.object({
       gmailId: z.string().min(1).max(64),

@@ -201,17 +201,30 @@ export default function InvoicingTodayPage() {
       )}
 
       {data && (
-        <TabToggle
-          tab={tab}
-          onChange={setTab}
-          activeCount={
-            data.rows.filter((r) => !data.dismissed[r.gmailId] && r.parseConfidence >= 0.5)
-              .length
-          }
-          dismissedCount={
-            data.rows.filter((r) => data.dismissed[r.gmailId]).length
-          }
-        />
+        <div className="flex items-center justify-between">
+          <TabToggle
+            tab={tab}
+            onChange={setTab}
+            activeCount={
+              data.rows.filter(
+                (r) => !data.dismissed[r.gmailId] && r.parseConfidence >= 0.5,
+              ).length
+            }
+            dismissedCount={
+              data.rows.filter((r) => data.dismissed[r.gmailId]).length
+            }
+          />
+          {tab === "active" && (
+            <BulkDismissButton
+              candidateGmailIds={data.rows
+                .filter(
+                  (r) =>
+                    !data.dismissed[r.gmailId] && r.parseConfidence < 0.5,
+                )
+                .map((r) => r.gmailId)}
+            />
+          )}
+        </div>
       )}
 
       {data?.rows
@@ -225,11 +238,99 @@ export default function InvoicingTodayPage() {
             shadowMode={data.shadowMode}
             terms={terms}
             dismissedRecord={data.dismissed[row.gmailId] ?? null}
-            onAfterDismissChange={() => {
-              queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
-            }}
           />
         ))}
+    </div>
+  );
+}
+
+function BulkDismissButton({
+  candidateGmailIds,
+}: {
+  candidateGmailIds: string[];
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const queryClient = useQueryClient();
+
+  const bulkMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/invoicing/dismiss-bulk", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          gmailIds: candidateGmailIds,
+          reason: "etsy_faire",
+          reasonNote: "bulk-dismissed unparseable WMS noise",
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["invoicing", "today"] });
+      const prev = queryClient.getQueryData<ApiResponse>(["invoicing", "today"]);
+      if (prev) {
+        const next = { ...prev.dismissed };
+        const now = new Date().toISOString();
+        for (const id of candidateGmailIds) {
+          next[id] = {
+            reason: "etsy_faire",
+            reasonNote: "bulk-dismissed unparseable WMS noise",
+            dismissedAt: now,
+          };
+        }
+        queryClient.setQueryData<ApiResponse>(["invoicing", "today"], {
+          ...prev,
+          dismissed: next,
+        });
+      }
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev)
+        queryClient.setQueryData(["invoicing", "today"], ctx.prev);
+    },
+    onSettled: () => setConfirmOpen(false),
+  });
+
+  if (candidateGmailIds.length === 0) return null;
+
+  return (
+    <div className="relative">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setConfirmOpen((v) => !v)}
+      >
+        Bulk dismiss unparseable ({candidateGmailIds.length})
+      </Button>
+      {confirmOpen && (
+        <div className="absolute right-0 top-full z-10 mt-1 w-72 rounded-md border border-default bg-base p-3 text-xs shadow-lg">
+          <p className="text-secondary">
+            Dismiss <strong>{candidateGmailIds.length}</strong> shipments that
+            don't parse as Feldart shipment notifications? They'll move to the
+            Dismissed tab with reason "Etsy / Faire (unparseable)".
+          </p>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirmOpen(false)}
+              disabled={bulkMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => bulkMutation.mutate()}
+              disabled={bulkMutation.isPending}
+            >
+              {bulkMutation.isPending ? "Dismissing…" : "Confirm"}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -337,13 +438,11 @@ function ShipmentCard({
   shadowMode,
   terms,
   dismissedRecord,
-  onAfterDismissChange,
 }: {
   row: Row;
   shadowMode: boolean;
   terms: Term[];
   dismissedRecord: DismissedRecord | null;
-  onAfterDismissChange: () => void;
 }) {
   // Low-confidence rows still render in the dismissed tab if they were
   // dismissed manually. Hide from the active tab as before.
@@ -396,10 +495,35 @@ function ShipmentCard({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
+    // Optimistic: write the dismissal into the cached query immediately so
+    // the card vanishes from the active tab without a full refetch. On
+    // error, the snapshot is restored.
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["invoicing", "today"] });
+      const prev = queryClient.getQueryData<ApiResponse>(["invoicing", "today"]);
+      if (prev) {
+        queryClient.setQueryData<ApiResponse>(["invoicing", "today"], {
+          ...prev,
+          dismissed: {
+            ...prev.dismissed,
+            [row.gmailId]: {
+              reason: dismissReason,
+              reasonNote:
+                dismissReason === "other" ? dismissNote.trim() || null : null,
+              dismissedAt: new Date().toISOString(),
+            },
+          },
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev)
+        queryClient.setQueryData(["invoicing", "today"], ctx.prev);
+    },
     onSuccess: () => {
       setShowDismissForm(false);
       setDismissNote("");
-      onAfterDismissChange();
     },
   });
 
@@ -413,7 +537,23 @@ function ShipmentCard({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    onSuccess: () => onAfterDismissChange(),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["invoicing", "today"] });
+      const prev = queryClient.getQueryData<ApiResponse>(["invoicing", "today"]);
+      if (prev) {
+        const next = { ...prev.dismissed };
+        delete next[row.gmailId];
+        queryClient.setQueryData<ApiResponse>(["invoicing", "today"], {
+          ...prev,
+          dismissed: next,
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev)
+        queryClient.setQueryData(["invoicing", "today"], ctx.prev);
+    },
   });
 
   const sendMutation = useMutation({
