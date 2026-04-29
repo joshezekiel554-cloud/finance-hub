@@ -11,11 +11,9 @@
 import axios, { type AxiosError, type AxiosInstance } from "axios";
 import OAuthClient from "intuit-oauth";
 import { env } from "../../lib/env.js";
-import { createLogger } from "../../lib/logger.js";
 import {
-  loadQbTokens,
+  forceRefresh as forceTokenRefresh,
   refreshIfNeeded,
-  saveQbTokens,
   type QbTokens,
 } from "./tokens.js";
 import type {
@@ -29,8 +27,6 @@ import type {
   QboQueryResponse,
   QboTerm,
 } from "./types.js";
-
-const log = createLogger({ component: "qb-client" });
 
 const QBO_PROD = "https://quickbooks.api.intuit.com";
 const QBO_SANDBOX = "https://sandbox-quickbooks.api.intuit.com";
@@ -117,18 +113,15 @@ export class QboClient {
     };
   }
 
-  // Forces a refresh ignoring the buffer (used after a 401). Still goes
-  // through the persistence path so other workers see the new tokens.
+  // Forces a refresh ignoring the buffer (used after a 401). Delegates to
+  // the single-flight forceRefresh in tokens.ts so concurrent 401s share
+  // one refresh attempt — without that, parallel 401s would each fire
+  // their own refresh with the same refresh token and Intuit would
+  // invalidate the chain.
   private async forceRefresh(): Promise<string> {
-    const current = await loadQbTokens(this.config.realmId);
-    if (!current) {
-      throw new Error(
-        `No QB tokens found for realmId=${this.config.realmId}; reauthorize first`,
-      );
-    }
-    log.warn({ realmId: this.config.realmId }, "forcing QB token refresh after 401");
-    const next = await this.performRefresh(current);
-    await saveQbTokens(next);
+    const next = await forceTokenRefresh(this.config.realmId, (current) =>
+      this.performRefresh(current),
+    );
     return next.accessToken;
   }
 
