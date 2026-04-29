@@ -228,6 +228,28 @@ export function EmailList({ customerId }: { customerId: string }) {
                   )}
                 >
                   <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={isActioned}
+                      onChange={() =>
+                        actionMutation.mutate({
+                          id: email.id,
+                          actioned: !isActioned,
+                        })
+                      }
+                      disabled={actionMutation.isPending}
+                      className="mt-1.5 size-4 shrink-0 rounded border-default"
+                      aria-label={
+                        isActioned
+                          ? "Mark as unactioned"
+                          : "Mark as actioned"
+                      }
+                      title={
+                        isActioned
+                          ? "Mark as unactioned"
+                          : "Mark as actioned"
+                      }
+                    />
                     <div
                       className={cn(
                         "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full",
