@@ -9,6 +9,7 @@
 // sync). Caller (BullMQ worker job) handles top-level errors.
 
 import { and, eq, sql } from "drizzle-orm";
+import { BUSINESS_EMAILS } from "../gmail/business-emails.js";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
@@ -588,10 +589,18 @@ function deriveInvoiceStatus(qboInvoice: QboInvoice): Invoice["status"] {
 
 function parseBillingEmails(raw: string | undefined): string[] {
   if (!raw) return [];
+  // Filter feldart's own outbound addresses out of the billing list. If
+  // a customer's QBO BillEmail field is "cust@x.com, info@feldart.com"
+  // (someone added our address as a CC for record-keeping), naively
+  // storing both makes the per-customer email backfill match every
+  // email that ever touched our business inbox — false-positives in the
+  // thousands. Sender direction is decided separately, so we don't lose
+  // anything by dropping these from billing_emails.
   return raw
     .split(",")
     .map((e) => e.trim().toLowerCase())
-    .filter((e) => e.length > 0 && e.includes("@"));
+    .filter((e) => e.length > 0 && e.includes("@"))
+    .filter((e) => !BUSINESS_EMAILS.has(e));
 }
 
 // MySQL DECIMAL(12,2) is stored as a string in mysql2; coerce numbers consistently.

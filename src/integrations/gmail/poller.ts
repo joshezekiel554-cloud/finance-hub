@@ -6,6 +6,7 @@ import { customers } from "~/db/schema/customers.js";
 import { oauthTokens } from "~/db/schema/oauth.js";
 import { createLogger } from "~/lib/logger.js";
 import { recordActivity } from "~/modules/crm/index.js";
+import { BUSINESS_EMAILS } from "./business-emails.js";
 import { searchEmails } from "./client.js";
 import type {
   GmailProviderMeta,
@@ -19,18 +20,6 @@ const log = createLogger({ module: "gmail.poller" });
 // that we use the lastPollAt cursor and ratchet forward.
 const DEFAULT_INITIAL_LOOKBACK_DAYS = 7;
 const DEFAULT_MAX_RESULTS = 500;
-
-// Business outbound addresses — anything sent FROM these counts as outbound.
-// Sourced from 1.0's gmail-engine.js. Should eventually be derived from the
-// connected mailbox's aliases instead of hardcoded; tracked for week 7.
-//
-// TODO(week-7): replace with listAliases() result so adding a new sendAs
-// inside Gmail automatically classifies outbound without a code change.
-const BUSINESS_EMAILS = new Set<string>([
-  "info@feldart.com",
-  "accounts@feldart.com",
-  "admin@feldart.co.uk",
-]);
 
 // --- Cursor persistence (oauth_tokens.meta as JSON) ---
 
