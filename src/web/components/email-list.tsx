@@ -101,6 +101,30 @@ export function EmailList({ customerId }: { customerId: string }) {
     },
   });
 
+  // Per-customer Gmail backfill. The worker only pulls deltas from the
+  // global cursor; this lets the user grab historical email for a
+  // specific customer without waiting for the cursor to catch up.
+  const backfillMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/customers/${customerId}/sync-emails`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ maxResults: 1000 }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<{
+        fetched: number;
+        inserted: number;
+        activitiesCreated: number;
+        emails: string[];
+      }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    },
+  });
+
   function toggleExpand(id: string) {
     const next = new Set(expanded);
     if (next.has(id)) next.delete(id);
@@ -133,6 +157,32 @@ export function EmailList({ customerId }: { customerId: string }) {
           ]}
           onChange={(v) => setDirection(v as DirectionFilter)}
         />
+        <div className="ml-auto flex items-center gap-2">
+          {backfillMutation.data && (
+            <span className="text-muted">
+              Pulled {backfillMutation.data.inserted} new
+              {backfillMutation.data.fetched > backfillMutation.data.inserted
+                ? ` (${backfillMutation.data.fetched - backfillMutation.data.inserted} duplicates)`
+                : ""}
+            </span>
+          )}
+          {backfillMutation.isError && (
+            <span className="text-accent-danger">
+              {(backfillMutation.error as Error)?.message ?? "Sync failed"}
+            </span>
+          )}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => backfillMutation.mutate()}
+            disabled={backfillMutation.isPending}
+            title="Pull this customer's email history from Gmail (may take 10-30 seconds)"
+          >
+            {backfillMutation.isPending
+              ? "Pulling history…"
+              : "Pull email history"}
+          </Button>
+        </div>
       </div>
 
       {isError && (

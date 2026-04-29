@@ -337,3 +337,167 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
     cursorAdvancedTo,
   };
 }
+
+// ---------------------------------------------------------------------
+// Per-customer email backfill. Triggered from the customer-detail Email
+// tab when a user wants the historical email feed for a specific
+// customer rather than waiting for the worker's incremental polling to
+// catch up. Searches Gmail for messages to/from any of the customer's
+// known email addresses and writes new rows to email_log + activities.
+// Idempotent — duplicates dedupe on email_log.gmailMessageId UNIQUE.
+
+export type CustomerSyncResult = {
+  fetched: number;
+  inserted: number;
+  activitiesCreated: number;
+  emails: string[]; // the addresses we searched against
+};
+
+export async function syncEmailsForCustomer(
+  customerId: string,
+  opts: { maxResults?: number; externalAccountId?: string } = {},
+): Promise<CustomerSyncResult> {
+  const maxResults = opts.maxResults ?? 1000;
+
+  // Collect every known email address for this customer — primary +
+  // billing list. Lowercased + deduped.
+  const rows = await db
+    .select({
+      primaryEmail: customers.primaryEmail,
+      billingEmails: customers.billingEmails,
+    })
+    .from(customers)
+    .where(eq(customers.id, customerId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    throw new Error(`customer not found: ${customerId}`);
+  }
+  const addresses = new Set<string>();
+  if (row.primaryEmail) addresses.add(row.primaryEmail.toLowerCase());
+  if (Array.isArray(row.billingEmails)) {
+    for (const e of row.billingEmails) {
+      if (typeof e === "string" && e) addresses.add(e.toLowerCase());
+    }
+  }
+  if (addresses.size === 0) {
+    return { fetched: 0, inserted: 0, activitiesCreated: 0, emails: [] };
+  }
+
+  // Build the Gmail search query: (from:e OR to:e OR from:e2 OR to:e2 ...)
+  // Wrap each address in quotes to handle plus-addressing or special chars
+  // safely. Cap at ~10 addresses to keep query length sane (Gmail's
+  // operator OR-tree caps somewhere around 1000 chars total).
+  const cappedAddresses = Array.from(addresses).slice(0, 10);
+  const clauses: string[] = [];
+  for (const a of cappedAddresses) {
+    clauses.push(`from:${a}`);
+    clauses.push(`to:${a}`);
+  }
+  const query = clauses.join(" OR ");
+
+  log.info(
+    { customerId, addressCount: cappedAddresses.length, maxResults },
+    "starting per-customer email sync",
+  );
+
+  const fetched = await searchEmails(query, maxResults, opts.externalAccountId);
+  if (fetched.length === 0) {
+    return {
+      fetched: 0,
+      inserted: 0,
+      activitiesCreated: 0,
+      emails: cappedAddresses,
+    };
+  }
+
+  // Dedup: which message IDs already exist?
+  const ids = fetched
+    .map((e) => e.id)
+    .filter((id): id is string => Boolean(id));
+  const existing =
+    ids.length > 0
+      ? await db
+          .select({ gmailMessageId: emailLog.gmailMessageId })
+          .from(emailLog)
+          .where(inArray(emailLog.gmailMessageId, ids))
+      : [];
+  const seen = new Set(existing.map((r) => r.gmailMessageId));
+  const newEmails = fetched.filter((e) => e.id && !seen.has(e.id));
+
+  let inserted = 0;
+  let activitiesCreated = 0;
+
+  for (const email of newEmails) {
+    const direction = classifyDirection(email);
+    const occurredAt = email.emailDate ?? new Date();
+    const emailLogId = nanoid(24);
+    try {
+      await db.insert(emailLog).values({
+        id: emailLogId,
+        gmailMessageId: email.id,
+        threadId: email.threadId || null,
+        customerId,
+        userId: null,
+        direction,
+        aliasUsed: direction === "outbound" ? email.fromEmail || null : null,
+        fromAddress: email.fromEmail || null,
+        toAddress: email.toEmail || null,
+        subject: email.subject || null,
+        body: email.body || null,
+        snippet: email.snippet ? email.snippet.slice(0, 510) : null,
+        classification: null,
+        emailDate: occurredAt,
+      });
+      inserted++;
+    } catch (err) {
+      const msg = (err as { message?: string }).message ?? "";
+      if (/duplicate|ER_DUP_ENTRY|unique/i.test(msg)) {
+        continue;
+      }
+      log.error(
+        { err, gmailMessageId: email.id, customerId },
+        "per-customer sync — email_log insert failed",
+      );
+      continue;
+    }
+
+    try {
+      const created = await recordActivity({
+        customerId,
+        kind: direction === "inbound" ? "email_in" : "email_out",
+        source: "gmail_poll",
+        occurredAt,
+        subject: email.subject || null,
+        body: email.body || email.snippet || null,
+        bodyHtml: null,
+        refType: "email_log",
+        refId: emailLogId,
+        meta: {
+          gmailMessageId: email.id,
+          threadId: email.threadId,
+          from: email.from,
+          to: email.to,
+        },
+      });
+      if (created) activitiesCreated++;
+    } catch (err) {
+      log.error(
+        { err, gmailMessageId: email.id, customerId },
+        "per-customer sync — activity write failed",
+      );
+    }
+  }
+
+  log.info(
+    { customerId, fetched: fetched.length, inserted, activitiesCreated },
+    "per-customer email sync complete",
+  );
+
+  return {
+    fetched: fetched.length,
+    inserted,
+    activitiesCreated,
+    emails: cappedAddresses,
+  };
+}

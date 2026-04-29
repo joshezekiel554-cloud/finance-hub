@@ -31,6 +31,7 @@ import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
 import { ShopifyClient } from "../../integrations/shopify/client.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
+import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 
 const log = createLogger({ component: "routes.customers" });
 
@@ -255,6 +256,38 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     );
 
     return reply.send({ updated: auditRows.length, total: ids.length });
+  });
+
+  // POST /api/customers/:id/sync-emails — pull this customer's email
+  // history from Gmail. Searches for messages to/from any of the
+  // customer's known email addresses (primary + billing) up to
+  // maxResults (default 1000, cap 5000). Idempotent — duplicates
+  // dedupe on email_log.gmailMessageId UNIQUE.
+  app.post("/:id/sync-emails", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const bodySchema = z.object({
+      maxResults: z.coerce.number().int().min(1).max(5000).default(1000),
+    });
+    const parse = bodySchema.safeParse(req.body ?? {});
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    try {
+      const result = await syncEmailsForCustomer(id, {
+        maxResults: parse.data.maxResults,
+      });
+      return reply.send(result);
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.startsWith("customer not found")) {
+        return reply.code(404).send({ error: msg });
+      }
+      log.error({ err, customerId: id }, "per-customer email sync failed");
+      return reply.code(502).send({ error: "gmail sync failed" });
+    }
   });
 
   // GET /api/customers/:id/emails — email_log rows for a customer,
