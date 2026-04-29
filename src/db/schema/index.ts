@@ -3,6 +3,7 @@ export * from "./customers";
 export * from "./catalog";
 export * from "./invoices";
 export * from "./crm";
+export * from "./email-templates";
 export * from "./notifications";
 export * from "./audit";
 export * from "./oauth";

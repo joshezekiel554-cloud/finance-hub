@@ -7,6 +7,7 @@ import {
   CheckSquare,
   Sparkles,
   Bell,
+  Settings,
 } from "lucide-react";
 import { cn } from "./lib/cn";
 
@@ -16,6 +17,7 @@ const navItems = [
   { to: "/invoicing", label: "Invoicing", icon: FileText },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/agent", label: "Agent", icon: Sparkles },
+  { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 export default function App({ children }: { children: ReactNode }) {
