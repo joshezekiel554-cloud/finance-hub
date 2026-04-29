@@ -67,6 +67,11 @@ export type QboInvoicePayload = {
   // Optional payment terms reference. Provided when the user picks a term
   // override; omitted when the existing SalesTermRef should stay.
   SalesTermRef?: { value: string; name?: string };
+  // Optional email recipient overrides. Set when the user adds extra
+  // To/CC/BCC addresses on the card before sending.
+  BillEmail?: { Address: string };
+  BillEmailCc?: { Address: string };
+  BillEmailBcc?: { Address: string };
   Line: QboInvoiceLine[];
 };
 
@@ -91,6 +96,11 @@ export type BuildPayloadOptions = {
   // invoices). Idempotent — if the existing DocNumber already ends with
   // this suffix, it's left alone. Empty/undefined → DocNumber untouched.
   docNumberSuffix?: string;
+  // Optional email recipient overrides. When set, persisted on the invoice
+  // before /send fires (so future statements + manual sends see them too).
+  billEmailTo?: string;
+  billEmailCc?: string;
+  billEmailBcc?: string;
 };
 
 // Pure transform: invoice + actions → sparse update payload. No I/O. The send
@@ -239,6 +249,15 @@ export function buildPayload(
   ) {
     payload.DocNumber = invoice.DocNumber + options.docNumberSuffix;
   }
+  if (options.billEmailTo && options.billEmailTo.trim()) {
+    payload.BillEmail = { Address: options.billEmailTo.trim() };
+  }
+  if (options.billEmailCc && options.billEmailCc.trim()) {
+    payload.BillEmailCc = { Address: options.billEmailCc.trim() };
+  }
+  if (options.billEmailBcc && options.billEmailBcc.trim()) {
+    payload.BillEmailBcc = { Address: options.billEmailBcc.trim() };
+  }
   return payload;
 }
 
@@ -257,6 +276,9 @@ export type SendOptions = {
   salesTermName?: string;
   customerMemo?: string;
   docNumberSuffix?: string;
+  billEmailTo?: string;
+  billEmailCc?: string;
+  billEmailBcc?: string;
 };
 
 // Wraps buildPayload with side-effects: shadow-mode logging or live POST.
@@ -273,6 +295,9 @@ export async function sendInvoiceUpdate(
     salesTermName: opts.salesTermName,
     customerMemo: opts.customerMemo,
     docNumberSuffix: opts.docNumberSuffix,
+    billEmailTo: opts.billEmailTo,
+    billEmailCc: opts.billEmailCc,
+    billEmailBcc: opts.billEmailBcc,
   });
 
   if (opts.shadowMode) {

@@ -265,6 +265,18 @@ function ShipmentCard({
   );
   const [customerMemo, setCustomerMemo] = useState<string>("");
   const [docNumberSuffix, setDocNumberSuffix] = useState<string>("");
+  // Email override state. Defaults to the QBO invoice's existing values so
+  // editing starts from the truth and the user only changes what they need.
+  const [billEmailTo, setBillEmailTo] = useState<string>(
+    row.qbInvoice?.billEmail ?? "",
+  );
+  const [billEmailCc, setBillEmailCc] = useState<string>(
+    row.qbInvoice?.billEmailCc ?? "",
+  );
+  const [billEmailBcc, setBillEmailBcc] = useState<string>(
+    row.qbInvoice?.billEmailBcc ?? "",
+  );
+  const [emailExpanded, setEmailExpanded] = useState<boolean>(false);
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
 
   const queryClient = useQueryClient();
@@ -290,6 +302,23 @@ function ShipmentCard({
           salesTermName: selectedTerm?.name,
           customerMemo: customerMemo.trim() || undefined,
           docNumberSuffix: docNumberSuffix.trim() || undefined,
+          // Only send overrides when the user changed them from the QBO
+          // values; otherwise leave the invoice alone.
+          billEmailTo:
+            billEmailTo.trim() &&
+            billEmailTo.trim() !== (row.qbInvoice?.billEmail ?? "")
+              ? billEmailTo.trim()
+              : undefined,
+          billEmailCc:
+            billEmailCc.trim() &&
+            billEmailCc.trim() !== (row.qbInvoice?.billEmailCc ?? "")
+              ? billEmailCc.trim()
+              : undefined,
+          billEmailBcc:
+            billEmailBcc.trim() &&
+            billEmailBcc.trim() !== (row.qbInvoice?.billEmailBcc ?? "")
+              ? billEmailBcc.trim()
+              : undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -533,6 +562,28 @@ function ShipmentCard({
               onRemoveAddLine={removeAddLine}
             />
             <AddLinePicker onPick={addQbItemLine} />
+            <EmailRecipients
+              defaultTo={row.qbInvoice?.billEmail ?? ""}
+              defaultCc={row.qbInvoice?.billEmailCc ?? ""}
+              defaultBcc={row.qbInvoice?.billEmailBcc ?? ""}
+              billEmailTo={billEmailTo}
+              billEmailCc={billEmailCc}
+              billEmailBcc={billEmailBcc}
+              expanded={emailExpanded}
+              onToggle={() => setEmailExpanded((v) => !v)}
+              onChangeTo={(v) => {
+                setBillEmailTo(v);
+                setSendResult(null);
+              }}
+              onChangeCc={(v) => {
+                setBillEmailCc(v);
+                setSendResult(null);
+              }}
+              onChangeBcc={(v) => {
+                setBillEmailBcc(v);
+                setSendResult(null);
+              }}
+            />
           </>
         )}
 
@@ -707,6 +758,114 @@ function SendResultPill({
     );
   }
   return <Badge tone="success">Updated (no email)</Badge>;
+}
+
+// Email recipient block — shows the current BillEmail in collapsed form
+// with optional expansion to add CC, BCC, or override the To. Tracks
+// whether each value differs from the QBO default so the parent can
+// only send overrides when something actually changed.
+function EmailRecipients({
+  defaultTo,
+  defaultCc,
+  defaultBcc,
+  billEmailTo,
+  billEmailCc,
+  billEmailBcc,
+  expanded,
+  onToggle,
+  onChangeTo,
+  onChangeCc,
+  onChangeBcc,
+}: {
+  defaultTo: string;
+  defaultCc: string;
+  defaultBcc: string;
+  billEmailTo: string;
+  billEmailCc: string;
+  billEmailBcc: string;
+  expanded: boolean;
+  onToggle: () => void;
+  onChangeTo: (v: string) => void;
+  onChangeCc: (v: string) => void;
+  onChangeBcc: (v: string) => void;
+}) {
+  const toChanged = billEmailTo.trim() !== defaultTo.trim();
+  const ccChanged = billEmailCc.trim() !== defaultCc.trim();
+  const bccChanged = billEmailBcc.trim() !== defaultBcc.trim();
+  const anyChanged = toChanged || ccChanged || bccChanged;
+
+  return (
+    <div className="rounded-md border border-default px-3 py-2 text-sm">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-secondary">
+          <span className="font-medium">Sending to:</span>{" "}
+          {billEmailTo ? (
+            <span className="font-mono">{billEmailTo}</span>
+          ) : (
+            <span className="text-accent-warning">no BillEmail set</span>
+          )}
+          {billEmailCc && (
+            <>
+              {" · "}
+              <span className="font-medium">CC:</span>{" "}
+              <span className="font-mono">{billEmailCc}</span>
+            </>
+          )}
+          {billEmailBcc && (
+            <>
+              {" · "}
+              <span className="font-medium">BCC:</span>{" "}
+              <span className="font-mono">{billEmailBcc}</span>
+            </>
+          )}
+          {anyChanged && (
+            <span className="ml-2 text-accent-warning">(modified)</span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="text-xs text-secondary hover:text-primary underline-offset-2 hover:underline"
+        >
+          {expanded ? "Done" : "Edit recipients"}
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+          <label className="text-xs text-secondary">
+            <span className="mb-1 block font-medium">To</span>
+            <input
+              type="email"
+              value={billEmailTo}
+              onChange={(e) => onChangeTo(e.target.value)}
+              placeholder={defaultTo || "buyer@example.com"}
+              className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="text-xs text-secondary">
+            <span className="mb-1 block font-medium">CC</span>
+            <input
+              type="text"
+              value={billEmailCc}
+              onChange={(e) => onChangeCc(e.target.value)}
+              placeholder="comma-separated"
+              className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="text-xs text-secondary">
+            <span className="mb-1 block font-medium">BCC</span>
+            <input
+              type="text"
+              value={billEmailBcc}
+              onChange={(e) => onChangeBcc(e.target.value)}
+              placeholder="comma-separated"
+              className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Search input with debounced QB Item lookup. Pick a row → fires onPick →

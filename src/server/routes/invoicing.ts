@@ -123,6 +123,11 @@ const sendBodySchema = z.object({
   // Idempotent server-side: skipped if the current DocNumber already ends
   // with this suffix.
   docNumberSuffix: z.string().max(20).optional(),
+  // Optional email recipient overrides. When provided, persisted on the
+  // invoice's BillEmail* fields before /send fires.
+  billEmailTo: z.string().max(2000).optional(),
+  billEmailCc: z.string().max(2000).optional(),
+  billEmailBcc: z.string().max(2000).optional(),
 });
 
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
@@ -253,6 +258,9 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       salesTermName,
       customerMemo,
       docNumberSuffix,
+      billEmailTo,
+      billEmailCc,
+      billEmailBcc,
     } = parse.data;
 
     const qbClient = new QboClient();
@@ -282,6 +290,9 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           salesTermName,
           customerMemo,
           docNumberSuffix,
+          billEmailTo,
+          billEmailCc,
+          billEmailBcc,
           // Live POST hook: forwards the prepared sparse-update payload to
           // QboClient.updateInvoice. Only invoked when shadowMode=false.
           postUpdate: async (payload) => qbClient.updateInvoice(payload),
