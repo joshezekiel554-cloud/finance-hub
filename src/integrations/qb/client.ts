@@ -33,6 +33,12 @@ const QBO_SANDBOX = "https://sandbox-quickbooks.api.intuit.com";
 const QBO_MINOR_VERSION = 65;
 const PAGE_SIZE = 1000;
 
+// Window for the suffix-fallback lookup in getInvoicesByDocNumbers. Any
+// renamed invoice (e.g., "18303" → "18303-SP") created within this many
+// days is findable; older renames fall through silently. 90 days covers
+// the longest plausible billing cycle without inflating the response.
+const SUFFIX_LOOKBACK_DAYS = 90;
+
 type QboEnvironment = "sandbox" | "production";
 
 export type QboClientConfig = {
@@ -355,28 +361,29 @@ export class QboClient {
       }
     }
 
-    // Pass 2: for any base DocNumbers that didn't exact-match, try suffixed
-    // variants. Example: caller asked for "18303" but the QBO invoice was
-    // renamed to "18303-SP" after a prior special-offer send. We map the
-    // suffixed result back to the original base key the caller passed in.
+    // Pass 2: for any base DocNumbers that didn't exact-match, look for
+    // suffixed variants. Example: caller asked for "18303" but the QBO
+    // invoice was renamed to "18303-SP" after a prior special-offer send.
+    // QBO's query language doesn't support OR between LIKE clauses (and
+    // there's no IN-with-LIKE), so the only options would be N individual
+    // LIKE queries (one per unmatched docNumber) or one bulk fetch +
+    // client-side filter. The bulk fetch wins by a wide margin: a single
+    // ~90-day window typically pulls fewer than 1000 invoices, which is
+    // cheap to iterate, vs. firing 30+ LIKE queries on every /today.
     const unmatched = unique.filter((d) => !result.has(d));
     if (unmatched.length > 0) {
-      const LIKE_CHUNK = 30; // OR clauses are heavier than IN entries
-      for (let i = 0; i < unmatched.length; i += LIKE_CHUNK) {
-        const chunk = unmatched.slice(i, i + LIKE_CHUNK);
-        const orClauses = chunk
-          .map((d) => `DocNumber LIKE '${escapeQboLiteral(d)}-%'`)
-          .join(" OR ");
-        const data = await this.query<QboInvoice>(
-          `SELECT * FROM Invoice WHERE ${orClauses}`,
+      const since = new Date();
+      since.setDate(since.getDate() - SUFFIX_LOOKBACK_DAYS);
+      const sinceISO = since.toISOString().slice(0, 10);
+      const data = await this.query<QboInvoice>(
+        `SELECT * FROM Invoice WHERE TxnDate >= '${sinceISO}' MAXRESULTS 1000`,
+      );
+      for (const inv of data.QueryResponse.Invoice ?? []) {
+        if (!inv.DocNumber) continue;
+        const base = unmatched.find((d) =>
+          inv.DocNumber!.startsWith(d + "-"),
         );
-        for (const inv of data.QueryResponse.Invoice ?? []) {
-          if (!inv.DocNumber) continue;
-          const base = chunk.find((d) =>
-            inv.DocNumber!.startsWith(d + "-"),
-          );
-          if (base && !result.has(base)) result.set(base, inv);
-        }
+        if (base && !result.has(base)) result.set(base, inv);
       }
     }
     return result;
