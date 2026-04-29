@@ -1,33 +1,49 @@
 import { createLogger } from "~/lib/logger.js";
 import { getInternalGmailClient, withRetry } from "./client.js";
-import type { AliasContext, MailAlias } from "./types.js";
 
 const log = createLogger({ module: "gmail.aliases" });
 
-// In-memory cache. Aliases change rarely (admin action in Gmail settings) so
-// caching for a session is fine. Bust manually via clearAliasCache() if a
-// teammate adds a new sendAs entry.
-let cache:
-  | {
-      externalAccountId: string;
-      aliases: MailAlias[];
-      fetchedAt: number;
-    }
-  | null = null;
+export type GmailAlias = {
+  sendAsEmail: string;
+  displayName: string | null;
+  isPrimary: boolean;
+  isDefault: boolean;
+  treatAsAlias: boolean;
+  verificationStatus: string | null;
+};
 
-const CACHE_TTL_MS = 60 * 60 * 1000;
+// 5-minute TTL: aliases change rarely (admin action in Gmail settings) but
+// we'd rather not hit Gmail every time the compose modal opens. The
+// per-account map lets us cache distinct mailboxes independently.
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_KEY = "__default__";
 
-export function clearAliasCache(): void {
-  cache = null;
+type CacheEntry = {
+  aliases: GmailAlias[];
+  fetchedAt: number;
+};
+
+const cache = new Map<string, CacheEntry>();
+
+function cacheKey(externalAccountId?: string): string {
+  return externalAccountId ?? DEFAULT_KEY;
 }
 
-export async function listAliases(externalAccountId?: string): Promise<MailAlias[]> {
-  if (
-    cache &&
-    (externalAccountId === undefined || cache.externalAccountId === externalAccountId) &&
-    Date.now() - cache.fetchedAt < CACHE_TTL_MS
-  ) {
-    return cache.aliases;
+export function clearAliasCache(externalAccountId?: string): void {
+  if (externalAccountId === undefined) {
+    cache.clear();
+    return;
+  }
+  cache.delete(cacheKey(externalAccountId));
+}
+
+export async function listAliases(
+  externalAccountId?: string,
+): Promise<GmailAlias[]> {
+  const key = cacheKey(externalAccountId);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
+    return hit.aliases;
   }
 
   const gmail = await getInternalGmailClient(externalAccountId);
@@ -36,46 +52,16 @@ export async function listAliases(externalAccountId?: string): Promise<MailAlias
     "settings.sendAs.list",
   );
 
-  const aliases: MailAlias[] = (res.data.sendAs ?? []).map((s) => ({
+  const aliases: GmailAlias[] = (res.data.sendAs ?? []).map((s) => ({
     sendAsEmail: s.sendAsEmail ?? "",
     displayName: s.displayName ?? null,
     isPrimary: Boolean(s.isPrimary),
     isDefault: Boolean(s.isDefault),
-    replyToAddress: s.replyToAddress ?? null,
+    treatAsAlias: Boolean(s.treatAsAlias),
     verificationStatus: s.verificationStatus ?? null,
   }));
 
-  // We can't know externalAccountId without round-tripping, but the client
-  // caches per-account and listAliases() is read-after-getClient. Stamp with
-  // whatever caller passed (or empty) — TTL handles correctness.
-  cache = {
-    externalAccountId: externalAccountId ?? "",
-    aliases,
-    fetchedAt: Date.now(),
-  };
-
-  log.info({ count: aliases.length }, "fetched gmail aliases");
+  cache.set(key, { aliases, fetchedAt: Date.now() });
+  log.info({ count: aliases.length, key }, "fetched gmail aliases");
   return aliases;
-}
-
-// Context → alias mapping is configured in week 7 (see plan §Open items).
-// For now, accept the context arg and return the default/primary alias if no
-// mapping is configured. Callers should treat the result as a recommendation
-// the UI can override.
-//
-// TODO(week-7): load mapping from a config file (e.g., src/modules/email-compose/alias-map.ts)
-// keyed by context, falling back to default. Until that config exists, default.
-export async function resolveAliasFromContext(
-  _context: AliasContext,
-  externalAccountId?: string,
-): Promise<MailAlias | null> {
-  const aliases = await listAliases(externalAccountId);
-  if (aliases.length === 0) return null;
-
-  // Prefer isDefault, then isPrimary, then first.
-  const def = aliases.find((a) => a.isDefault);
-  if (def) return def;
-  const primary = aliases.find((a) => a.isPrimary);
-  if (primary) return primary;
-  return aliases[0] ?? null;
 }
