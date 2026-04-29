@@ -11,6 +11,8 @@ import {
 import App from "./App";
 import HomePage from "./pages/home";
 import InvoicingTodayPage from "./pages/invoicing-today";
+import CustomersPage from "./pages/customers";
+import CustomerDetailPage from "./pages/customer-detail";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -42,7 +44,24 @@ const invoicingTodayRoute = createRoute({
   component: InvoicingTodayPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, invoicingTodayRoute]);
+const customersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/customers",
+  component: CustomersPage,
+});
+
+const customerDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/customers/$customerId",
+  component: CustomerDetailPage,
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  invoicingTodayRoute,
+  customersRoute,
+  customerDetailRoute,
+]);
 
 const router = createRouter({ routeTree });
 

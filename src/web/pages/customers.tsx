@@ -1,0 +1,443 @@
+import { useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { Search, AlertCircle, Pause } from "lucide-react";
+import { Card, CardBody, CardHeader } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { cn } from "../lib/cn";
+
+type CustomerType = "b2b" | "b2c" | null;
+
+type CustomerRow = {
+  id: string;
+  displayName: string;
+  primaryEmail: string | null;
+  balance: string;
+  overdueBalance: string;
+  holdStatus: "active" | "hold";
+  customerType: CustomerType;
+  paymentTerms: string | null;
+  lastSyncedAt: string | null;
+};
+
+type ListResponse = {
+  rows: CustomerRow[];
+  hasMore: boolean;
+  totals: { b2b: number; b2c: number; uncategorized: number; all: number };
+};
+
+type FilterTab = "b2b" | "b2c" | "uncategorized" | "all";
+type SortKey = "displayName" | "balance" | "overdueBalance" | "lastSyncedAt";
+
+const TAB_LABELS: Record<FilterTab, string> = {
+  b2b: "B2B",
+  b2c: "B2C",
+  uncategorized: "Uncategorized",
+  all: "All",
+};
+
+export default function CustomersPage() {
+  const [tab, setTab] = useState<FilterTab>("b2b");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<SortKey>("displayName");
+  const [dir, setDir] = useState<"asc" | "desc">("asc");
+  const [sweepMode, setSweepMode] = useState(false);
+  // Selected gmailIds in sweep mode. When the user toggles "Select all
+  // (balance > 0)" we pre-fill with the matching ids; individual checkbox
+  // clicks add/remove from this set.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const queryClient = useQueryClient();
+
+  const queryKey = ["customers", { tab, search, sort, dir }] as const;
+  const { data, isPending, isError, error } = useQuery<ListResponse>({
+    queryKey,
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        customerType: tab,
+        sort,
+        dir,
+        limit: "500",
+      });
+      if (search.trim()) params.set("q", search.trim());
+      const res = await fetch(`/api/customers?${params.toString()}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const bulkTagMutation = useMutation({
+    mutationFn: async (input: {
+      ids: string[];
+      customerType: "b2b" | "b2c";
+    }) => {
+      const res = await fetch("/api/customers/bulk-tag", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<{ updated: number; total: number }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      setSelectedIds(new Set());
+      setSweepMode(false);
+    },
+  });
+
+  const visibleRows = data?.rows ?? [];
+
+  // "Select all (balance > 0)" auto-includes only the rows in the current
+  // visible list whose balance is above zero — your B2B heuristic. The
+  // user can manually flip individuals before committing.
+  const balancePositiveIds = useMemo(
+    () =>
+      visibleRows
+        .filter((r) => Number(r.balance) > 0)
+        .map((r) => r.id),
+    [visibleRows],
+  );
+
+  function toggleSelectAllBalancePositive() {
+    if (
+      balancePositiveIds.length > 0 &&
+      balancePositiveIds.every((id) => selectedIds.has(id))
+    ) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(balancePositiveIds));
+    }
+  }
+
+  function toggleId(id: string) {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedIds(next);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Customers</h1>
+          <p className="mt-1 text-sm text-secondary">
+            All customers from QuickBooks. Filter by type or search by name.
+          </p>
+        </div>
+      </div>
+
+      {data && data.totals.uncategorized > 0 && tab !== "uncategorized" && (
+        <Card>
+          <CardBody className="flex items-center justify-between gap-4 py-3">
+            <div className="flex items-start gap-2 text-sm">
+              <AlertCircle className="mt-0.5 size-4 shrink-0 text-accent-warning" />
+              <div>
+                <span className="font-medium">
+                  {data.totals.uncategorized} customer
+                  {data.totals.uncategorized === 1 ? "" : "s"} need classification.
+                </span>{" "}
+                <span className="text-secondary">
+                  Switch to the Uncategorized tab and run the bulk-tag sweep —
+                  the "Select all" checkbox auto-includes only customers with a
+                  balance.
+                </span>
+              </div>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setTab("uncategorized");
+                setSweepMode(true);
+              }}
+            >
+              Review now
+            </Button>
+          </CardBody>
+        </Card>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
+          {(["b2b", "uncategorized", "b2c", "all"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => {
+                  setTab(t);
+                  setSelectedIds(new Set());
+                }}
+                className={cn(
+                  "rounded px-3 py-1 transition-colors",
+                  tab === t
+                    ? "bg-base font-medium text-primary shadow-sm"
+                    : "text-secondary hover:text-primary",
+                )}
+              >
+                {TAB_LABELS[t]} ({data?.totals[t] ?? 0})
+              </button>
+            ))}
+        </div>
+
+        <div className="relative ml-auto">
+          <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name or email…"
+            className="!pl-8"
+            aria-label="Search customers"
+          />
+        </div>
+
+        {tab === "uncategorized" && (
+          <Button
+            variant={sweepMode ? "primary" : "secondary"}
+            size="sm"
+            onClick={() => {
+              setSweepMode((v) => !v);
+              setSelectedIds(new Set());
+            }}
+          >
+            {sweepMode ? "Exit sweep" : "Bulk-tag sweep"}
+          </Button>
+        )}
+      </div>
+
+      {sweepMode && (
+        <Card>
+          <CardBody className="flex flex-wrap items-center gap-3 py-3 text-sm">
+            <span className="text-secondary">
+              {selectedIds.size} of {visibleRows.length} selected
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={toggleSelectAllBalancePositive}
+            >
+              {balancePositiveIds.every((id) => selectedIds.has(id)) &&
+              balancePositiveIds.length > 0
+                ? "Clear selection"
+                : `Select all balance > 0 (${balancePositiveIds.length})`}
+            </Button>
+            <div className="ml-auto flex gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={selectedIds.size === 0 || bulkTagMutation.isPending}
+                onClick={() =>
+                  bulkTagMutation.mutate({
+                    ids: Array.from(selectedIds),
+                    customerType: "b2b",
+                  })
+                }
+              >
+                Mark as B2B
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={selectedIds.size === 0 || bulkTagMutation.isPending}
+                onClick={() =>
+                  bulkTagMutation.mutate({
+                    ids: Array.from(selectedIds),
+                    customerType: "b2c",
+                  })
+                }
+              >
+                Mark as B2C
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-secondary">
+              {isPending
+                ? "Loading…"
+                : `${visibleRows.length}${data?.hasMore ? "+" : ""} customers`}
+            </h2>
+          </div>
+        </CardHeader>
+        <CardBody className="p-0">
+          {isError && (
+            <div className="p-4 text-sm text-accent-danger">
+              {(error as Error)?.message ?? "Failed to load customers"}
+            </div>
+          )}
+          <table className="w-full text-sm">
+            <thead className="border-b border-default bg-subtle text-left text-xs uppercase tracking-wide text-muted">
+              <tr>
+                {sweepMode && <th className="w-10 px-3 py-2"></th>}
+                <SortableTh
+                  label="Customer"
+                  active={sort === "displayName"}
+                  dir={dir}
+                  onClick={() => toggleSort("displayName", sort, setSort, dir, setDir)}
+                />
+                <th className="px-3 py-2">Email</th>
+                <SortableTh
+                  label="Balance"
+                  active={sort === "balance"}
+                  dir={dir}
+                  onClick={() => toggleSort("balance", sort, setSort, dir, setDir)}
+                  align="right"
+                />
+                <SortableTh
+                  label="Overdue"
+                  active={sort === "overdueBalance"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("overdueBalance", sort, setSort, dir, setDir)
+                  }
+                  align="right"
+                />
+                <th className="px-3 py-2">Terms</th>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((row) => {
+                const balance = Number(row.balance);
+                const overdue = Number(row.overdueBalance);
+                const checked = selectedIds.has(row.id);
+                return (
+                  <tr
+                    key={row.id}
+                    className="border-b border-default last:border-b-0 hover:bg-elevated"
+                  >
+                    {sweepMode && (
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleId(row.id)}
+                          className="size-4 rounded border-default"
+                          aria-label={`Select ${row.displayName}`}
+                        />
+                      </td>
+                    )}
+                    <td className="px-3 py-2 font-medium">
+                      <Link
+                        to="/customers/$customerId"
+                        params={{ customerId: row.id }}
+                        className="hover:text-accent-primary hover:underline underline-offset-2"
+                      >
+                        {row.displayName}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
+                      {row.primaryEmail ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {balance > 0 ? (
+                        <span className="font-medium">${balance.toFixed(2)}</span>
+                      ) : (
+                        <span className="text-muted">$0.00</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {overdue > 0 ? (
+                        <span className="font-medium text-accent-warning">
+                          ${overdue.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
+                      {row.paymentTerms ?? "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      <CustomerTypeBadge type={row.customerType} />
+                    </td>
+                    <td className="px-3 py-2">
+                      {row.holdStatus === "hold" ? (
+                        <Badge tone="medium">
+                          <Pause className="mr-1 size-3" />
+                          Hold
+                        </Badge>
+                      ) : (
+                        <Badge tone="success">Active</Badge>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!isPending && visibleRows.length === 0 && (
+                <tr>
+                  <td
+                    className="p-8 text-center text-sm text-muted"
+                    colSpan={sweepMode ? 8 : 7}
+                  >
+                    No customers match.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+function CustomerTypeBadge({ type }: { type: CustomerType }) {
+  if (type === "b2b") return <Badge tone="info">B2B</Badge>;
+  if (type === "b2c") return <Badge tone="neutral">B2C</Badge>;
+  return <Badge tone="medium">Untagged</Badge>;
+}
+
+function SortableTh({
+  label,
+  active,
+  dir,
+  onClick,
+  align = "left",
+}: {
+  label: string;
+  active: boolean;
+  dir: "asc" | "desc";
+  onClick: () => void;
+  align?: "left" | "right";
+}) {
+  return (
+    <th
+      onClick={onClick}
+      className={cn(
+        "cursor-pointer select-none px-3 py-2 hover:text-primary",
+        align === "right" && "text-right",
+      )}
+    >
+      {label}
+      {active && <span className="ml-1">{dir === "asc" ? "▲" : "▼"}</span>}
+    </th>
+  );
+}
+
+function toggleSort(
+  col: SortKey,
+  current: SortKey,
+  setSort: (s: SortKey) => void,
+  currentDir: "asc" | "desc",
+  setDir: (d: "asc" | "desc") => void,
+): void {
+  if (current === col) {
+    setDir(currentDir === "asc" ? "desc" : "asc");
+  } else {
+    setSort(col);
+    setDir(col === "balance" || col === "overdueBalance" ? "desc" : "asc");
+  }
+}
