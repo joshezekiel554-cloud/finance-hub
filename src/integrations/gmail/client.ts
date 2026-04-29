@@ -411,7 +411,12 @@ export async function searchEmails(
   // withRetry handles 429s with exponential backoff, so flooding within
   // the bound is fine.
   const toFetch = allMessages.slice(0, maxResults);
-  const FETCH_CONCURRENCY = 20;
+  // 10 parallel is comfortable under Gmail's per-minute quota (250
+  // queries/min/user). 20 was fine for steady state but tipped over
+  // during burst backfills of thousands of messages — the script
+  // would 403-rate-limit mid-run. The worker's 15-min cron has
+  // natural breathing room; this matters most for one-shot scripts.
+  const FETCH_CONCURRENCY = 10;
   const detailed: ParsedEmail[] = await mapWithLimit(
     toFetch,
     FETCH_CONCURRENCY,
