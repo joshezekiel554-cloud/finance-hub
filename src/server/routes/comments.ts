@@ -47,13 +47,16 @@ const editBodySchema = z.object({
 // the create-comment endpoint without duplicating the logic.
 // ---------------------------------------------------------------------
 
-const MENTION_RX = /@([\w.-]+)/g;
+// Negative lookbehind on word-or-period stops the regex from matching the
+// domain part of an email. Without it, "user@example.com" would parse as
+// a mention of "@example" — false positives that pollute mention rows.
+// `(?<![\w.])` accepts start-of-string, whitespace, punctuation, etc.
+const MENTION_RX = /(?<![\w.])@([\w.-]+)/g;
 
 export function parseMentions(body: string): string[] {
   const matches = new Set<string>();
-  // Reset lastIndex defensively — global RegExps maintain state and a
-  // leftover index from a previous call would skip the head of the next
-  // string. The reassignment below avoids needing to reset.
+  // Fresh RegExp per call so the global flag's lastIndex can't leak
+  // across invocations and skip the head of the next string.
   let m: RegExpExecArray | null;
   const rx = new RegExp(MENTION_RX.source, "g");
   while ((m = rx.exec(body)) !== null) {
@@ -61,6 +64,14 @@ export function parseMentions(body: string): string[] {
     if (fragment) matches.add(fragment);
   }
   return Array.from(matches);
+}
+
+// MySQL LIKE wildcards (`%` zero+ chars, `_` exactly one) must be escaped
+// when the input is user-controlled, otherwise a search for "a_b" matches
+// "aXb" and "100%off" matches everything. Backslash is the escape char;
+// the SQL clauses below pair this with `ESCAPE '\\'`.
+function escapeLikeFragment(s: string): string {
+  return s.replace(/[\\%_]/g, "\\$&");
 }
 
 export type ResolveMentionsArgs = {
@@ -90,10 +101,13 @@ export async function resolveMentions(
   // "Joshua Ezekiel" should match @joshua, @ezekiel, AND @joshua.ezekiel.
   // Email match is prefix-only because that's how @-handles map: the
   // local-part of a corporate email is the canonical handle.
-  const orClauses = fragments.flatMap((frag) => [
-    sql`LOWER(${users.name}) LIKE LOWER(${`%${frag}%`})`,
-    sql`LOWER(${users.email}) LIKE LOWER(${`${frag}%`})`,
-  ]);
+  const orClauses = fragments.flatMap((frag) => {
+    const escaped = escapeLikeFragment(frag);
+    return [
+      sql`LOWER(${users.name}) LIKE LOWER(${`%${escaped}%`}) ESCAPE '\\'`,
+      sql`LOWER(${users.email}) LIKE LOWER(${`${escaped}%`}) ESCAPE '\\'`,
+    ];
+  });
 
   const matched = await db
     .select({
@@ -239,6 +253,12 @@ const commentsRoute: FastifyPluginAsync = async (app) => {
       },
     });
 
+    events.emit("comment.updated", {
+      commentId: id,
+      parentType: before.parentType,
+      parentId: before.parentId,
+    });
+
     return reply.send({ comment: after, mentions: updatedMentions });
   });
 
@@ -277,6 +297,12 @@ const commentsRoute: FastifyPluginAsync = async (app) => {
         createdAt: before.createdAt.toISOString(),
       },
       after: null,
+    });
+
+    events.emit("comment.deleted", {
+      commentId: id,
+      parentType: before.parentType,
+      parentId: before.parentId,
     });
 
     log.info({ commentId: id, userId: user.id }, "comment deleted");

@@ -21,8 +21,21 @@ export type SSEEvent =
   | { type: "task.created"; taskId: string; customerId: string | null }
   | { type: "task.updated"; taskId: string; customerId: string | null }
   | { type: "task.completed"; taskId: string; customerId: string | null }
+  | { type: "task.deleted"; taskId: string; customerId: string | null }
   | {
       type: "comment.created";
+      commentId: string;
+      parentType: string;
+      parentId: string;
+    }
+  | {
+      type: "comment.updated";
+      commentId: string;
+      parentType: string;
+      parentId: string;
+    }
+  | {
+      type: "comment.deleted";
       commentId: string;
       parentType: string;
       parentId: string;

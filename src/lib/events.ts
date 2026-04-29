@@ -19,7 +19,18 @@ export type DomainEventMap = {
   "task.created": { taskId: string; customerId: string | null };
   "task.updated": { taskId: string; customerId: string | null };
   "task.completed": { taskId: string; customerId: string | null };
+  "task.deleted": { taskId: string; customerId: string | null };
   "comment.created": {
+    commentId: string;
+    parentType: string;
+    parentId: string;
+  };
+  "comment.updated": {
+    commentId: string;
+    parentType: string;
+    parentId: string;
+  };
+  "comment.deleted": {
     commentId: string;
     parentType: string;
     parentId: string;

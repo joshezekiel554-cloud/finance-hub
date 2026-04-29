@@ -34,8 +34,21 @@ export type SSEEvent =
   | { type: "task.created"; taskId: string; customerId: string | null }
   | { type: "task.updated"; taskId: string; customerId: string | null }
   | { type: "task.completed"; taskId: string; customerId: string | null }
+  | { type: "task.deleted"; taskId: string; customerId: string | null }
   | {
       type: "comment.created";
+      commentId: string;
+      parentType: string;
+      parentId: string;
+    }
+  | {
+      type: "comment.updated";
+      commentId: string;
+      parentType: string;
+      parentId: string;
+    }
+  | {
+      type: "comment.deleted";
       commentId: string;
       parentType: string;
       parentId: string;
@@ -170,8 +183,17 @@ export const ssePlugin = fp(async function ssePlugin(app: FastifyInstance) {
   const offTaskCompleted = events.on("task.completed", (e) => {
     broker.publishAll({ type: "task.completed", ...e });
   });
+  const offTaskDeleted = events.on("task.deleted", (e) => {
+    broker.publishAll({ type: "task.deleted", ...e });
+  });
   const offComment = events.on("comment.created", (e) => {
     broker.publishAll({ type: "comment.created", ...e });
+  });
+  const offCommentUpdated = events.on("comment.updated", (e) => {
+    broker.publishAll({ type: "comment.updated", ...e });
+  });
+  const offCommentDeleted = events.on("comment.deleted", (e) => {
+    broker.publishAll({ type: "comment.deleted", ...e });
   });
   const offMention = events.on("mention", (e) => {
     // Mentions ARE per-user — only push to the mentioned user. They'll
@@ -187,7 +209,10 @@ export const ssePlugin = fp(async function ssePlugin(app: FastifyInstance) {
     offTaskCreated();
     offTaskUpdated();
     offTaskCompleted();
+    offTaskDeleted();
     offComment();
+    offCommentUpdated();
+    offCommentDeleted();
     offMention();
   });
 });

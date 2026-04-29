@@ -12,7 +12,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, like, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import {
@@ -167,8 +167,34 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
     }[sort];
     const orderFn = dir === "asc" ? asc : desc;
 
+    // Scalar subqueries enrich each row with the badge counts the Kanban
+    // card renders (comments, watchers, mentions-for-me). Cheaper at this
+    // scale than a JOIN+GROUP BY and avoids breaking the natural ORDER BY.
+    // Mention count is filtered to the current user — that's the bell-
+    // badge semantic ("how many of these mention me?"), not a global count.
     const rowsRaw = await db
-      .select()
+      .select({
+        id: tasks.id,
+        customerId: tasks.customerId,
+        assigneeUserId: tasks.assigneeUserId,
+        createdByUserId: tasks.createdByUserId,
+        title: tasks.title,
+        body: tasks.body,
+        dueAt: tasks.dueAt,
+        priority: tasks.priority,
+        status: tasks.status,
+        tags: tasks.tags,
+        position: tasks.position,
+        relatedActivityId: tasks.relatedActivityId,
+        aiProposed: tasks.aiProposed,
+        completedAt: tasks.completedAt,
+        completedByUserId: tasks.completedByUserId,
+        createdAt: tasks.createdAt,
+        updatedAt: tasks.updatedAt,
+        commentCount: sql<number>`(SELECT COUNT(*) FROM comments WHERE parent_type = 'task' AND parent_id = ${tasks.id})`,
+        watcherCount: sql<number>`(SELECT COUNT(*) FROM task_watchers WHERE task_id = ${tasks.id})`,
+        mentionCount: sql<number>`(SELECT COUNT(*) FROM mentions WHERE parent_type = 'task' AND parent_id = ${tasks.id} AND mentioned_user_id = ${user.id})`,
+      })
       .from(tasks)
       .where(where)
       .orderBy(orderFn(sortCol), asc(tasks.id))
@@ -420,6 +446,11 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       entityId: id,
       before: serializeTask(before),
       after: null,
+    });
+
+    events.emit("task.deleted", {
+      taskId: id,
+      customerId: before.customerId,
     });
 
     log.info({ taskId: id, userId: user.id }, "task deleted");

@@ -13,6 +13,7 @@ import HomePage from "./pages/home";
 import InvoicingTodayPage from "./pages/invoicing-today";
 import CustomersPage from "./pages/customers";
 import CustomerDetailPage from "./pages/customer-detail";
+import TasksPage from "./pages/tasks";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -56,11 +57,18 @@ const customerDetailRoute = createRoute({
   component: CustomerDetailPage,
 });
 
+const tasksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks",
+  component: TasksPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
   customersRoute,
   customerDetailRoute,
+  tasksRoute,
 ]);
 
 const router = createRouter({ routeTree });

@@ -5,7 +5,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { asc, like, or, sql } from "drizzle-orm";
+import { asc, or, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/auth.js";
 import { requireAuth } from "../lib/auth.js";
@@ -34,12 +34,18 @@ const usersRoute: FastifyPluginAsync = async (app) => {
     }
     const { q, limit } = parse.data;
 
+    // Escape LIKE wildcards in the user-supplied fragment — `%` and `_`
+    // would otherwise match across char boundaries (a search for "a_b"
+    // matching "aXb"). Pair the escape with `ESCAPE '\\'`.
     const where =
       q && q.trim()
-        ? or(
-            sql`LOWER(${users.name}) LIKE LOWER(${`%${q.trim()}%`})`,
-            sql`LOWER(${users.email}) LIKE LOWER(${`%${q.trim()}%`})`,
-          )
+        ? (() => {
+            const escaped = q.trim().replace(/[\\%_]/g, "\\$&");
+            return or(
+              sql`LOWER(${users.name}) LIKE LOWER(${`%${escaped}%`}) ESCAPE '\\'`,
+              sql`LOWER(${users.email}) LIKE LOWER(${`%${escaped}%`}) ESCAPE '\\'`,
+            );
+          })()
         : undefined;
 
     const rows = await db

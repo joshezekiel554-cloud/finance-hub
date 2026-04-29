@@ -4,6 +4,10 @@ import oauthRoutes from "./oauth.js";
 import invoicingRoutes from "./invoicing.js";
 import eventsRoute from "./events.js";
 import customersRoute from "./customers.js";
+import tasksRoute from "./tasks.js";
+import commentsRoute from "./comments.js";
+import usersRoute from "./users.js";
+import mentionsRoute from "./mentions.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -24,6 +28,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(invoicingRoutes, { prefix: "/api/invoicing" });
   await app.register(eventsRoute, { prefix: "/api/events" });
   await app.register(customersRoute, { prefix: "/api/customers" });
+  await app.register(tasksRoute, { prefix: "/api/tasks" });
+  await app.register(commentsRoute, { prefix: "/api/comments" });
+  await app.register(usersRoute, { prefix: "/api/users" });
+  await app.register(mentionsRoute, { prefix: "/api/mentions" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });
