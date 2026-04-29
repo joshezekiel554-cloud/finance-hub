@@ -9,10 +9,12 @@ import {
   ListChecks,
   ChevronRight,
   ChevronDown,
+  Reply,
 } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import ComposeModal, { type ComposeContext } from "./compose-modal";
 import { useEventStream } from "../lib/use-event-stream";
 import { cn } from "../lib/cn";
 
@@ -40,10 +42,23 @@ type ListResponse = { rows: EmailLogRow[] };
 type DirectionFilter = "all" | "inbound" | "outbound";
 type ActionedFilter = "open" | "done" | "all";
 
-export function EmailList({ customerId }: { customerId: string }) {
+export function EmailList({
+  customerId,
+  customerName,
+  customerEmail,
+}: {
+  customerId: string;
+  customerName?: string;
+  customerEmail?: string | null;
+}) {
   const [direction, setDirection] = useState<DirectionFilter>("all");
   const [actioned, setActioned] = useState<ActionedFilter>("open");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Single modal instance reused across rows. Keying by the email row's
+  // identity (rather than mounting one modal per row) keeps state clean
+  // when the user bounces between replies without closing the drawer.
+  const [composeContext, setComposeContext] =
+    useState<ComposeContext | null>(null);
   const queryClient = useQueryClient();
 
   const queryKey = useMemo(
@@ -212,6 +227,14 @@ export function EmailList({ customerId }: { customerId: string }) {
         </Card>
       )}
 
+      <ComposeModal
+        open={composeContext !== null}
+        onOpenChange={(next) => {
+          if (!next) setComposeContext(null);
+        }}
+        context={composeContext ?? undefined}
+      />
+
       <Card>
         <CardBody className="p-0">
           <ul className="divide-y divide-default">
@@ -353,8 +376,31 @@ export function EmailList({ customerId }: { customerId: string }) {
                             <ListChecks className="size-3.5" />
                             Turn into task
                           </Button>
-                          <Button variant="ghost" size="sm" disabled>
-                            Reply (week 7)
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() =>
+                              setComposeContext({
+                                customerId,
+                                customerName,
+                                customerEmail: customerEmail ?? undefined,
+                                inReplyTo: {
+                                  messageId: email.gmailMessageId,
+                                  threadId: email.threadId ?? "",
+                                  subject: email.subject ?? "",
+                                  from:
+                                    email.fromAddress ??
+                                    customerEmail ??
+                                    "",
+                                  bodyExcerpt: email.body
+                                    ? email.body.slice(0, 1000)
+                                    : "",
+                                },
+                              })
+                            }
+                          >
+                            <Reply className="size-3.5" />
+                            Reply
                           </Button>
                         </div>
                       )}
