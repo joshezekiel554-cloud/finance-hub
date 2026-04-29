@@ -15,6 +15,7 @@ import CustomersPage from "./pages/customers";
 import CustomerDetailPage from "./pages/customer-detail";
 import TasksPage from "./pages/tasks";
 import SettingsPage from "./pages/settings";
+import ChasePage from "./pages/chase";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -70,6 +71,12 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const chaseRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/chase",
+  component: ChasePage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -77,6 +84,7 @@ const routeTree = rootRoute.addChildren([
   customerDetailRoute,
   tasksRoute,
   settingsRoute,
+  chaseRoute,
 ]);
 
 const router = createRouter({ routeTree });

@@ -14,6 +14,7 @@ import emailTemplatesRoute from "./email-templates.js";
 import holdsRoute from "./holds.js";
 import statementsRoute from "./statements.js";
 import emailSendRoute from "./email-send.js";
+import chaseRoute from "./chase.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -44,6 +45,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(holdsRoute, { prefix: "/api/customers" });
   await app.register(statementsRoute, { prefix: "/api/customers" });
   await app.register(emailSendRoute, { prefix: "/api" });
+  await app.register(chaseRoute, { prefix: "/api/chase" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });
