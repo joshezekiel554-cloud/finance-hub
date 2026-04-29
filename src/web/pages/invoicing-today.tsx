@@ -121,8 +121,24 @@ const REASON_LABELS: Record<DismissReason, string> = {
   other: "Other",
 };
 
+type Tab = "open" | "sent" | "dismissed";
+
+// Single source of truth for which tab a row belongs in. Dismissed wins
+// (a dismissed-but-sent row still appears under Dismissed). Otherwise we
+// classify by QBO's EmailStatus — already populated in the API response
+// and rendered in the SendHistoryPill, so this mirrors what the user sees
+// per-card.
+function classifyRow(
+  row: Row,
+  dismissed: Record<string, DismissedRecord>,
+): Tab {
+  if (dismissed[row.gmailId]) return "dismissed";
+  if (row.qbInvoice?.emailStatus === "EmailSent") return "sent";
+  return "open";
+}
+
 export default function InvoicingTodayPage() {
-  const [tab, setTab] = useState<"active" | "dismissed">("active");
+  const [tab, setTab] = useState<Tab>("open");
   const queryClient = useQueryClient();
 
   const { data, isPending, isError, error, refetch, isFetching } = useQuery<ApiResponse>({
@@ -205,21 +221,27 @@ export default function InvoicingTodayPage() {
           <TabToggle
             tab={tab}
             onChange={setTab}
-            activeCount={
-              data.rows.filter(
-                (r) => !data.dismissed[r.gmailId] && r.parseConfidence >= 0.5,
-              ).length
-            }
-            dismissedCount={
-              data.rows.filter((r) => data.dismissed[r.gmailId]).length
-            }
+            counts={{
+              open: data.rows.filter(
+                (r) =>
+                  classifyRow(r, data.dismissed) === "open" &&
+                  r.parseConfidence >= 0.5,
+              ).length,
+              sent: data.rows.filter(
+                (r) => classifyRow(r, data.dismissed) === "sent",
+              ).length,
+              dismissed: data.rows.filter(
+                (r) => classifyRow(r, data.dismissed) === "dismissed",
+              ).length,
+            }}
           />
-          {tab === "active" && (
+          {tab === "open" && (
             <BulkDismissButton
               candidateGmailIds={data.rows
                 .filter(
                   (r) =>
-                    !data.dismissed[r.gmailId] && r.parseConfidence < 0.5,
+                    classifyRow(r, data.dismissed) === "open" &&
+                    r.parseConfidence < 0.5,
                 )
                 .map((r) => r.gmailId)}
             />
@@ -228,9 +250,7 @@ export default function InvoicingTodayPage() {
       )}
 
       {data?.rows
-        .filter((r) =>
-          tab === "active" ? !data.dismissed[r.gmailId] : !!data.dismissed[r.gmailId],
-        )
+        .filter((r) => classifyRow(r, data.dismissed) === tab)
         .map((row) => (
           <ShipmentCard
             key={row.gmailId}
@@ -338,40 +358,34 @@ function BulkDismissButton({
 function TabToggle({
   tab,
   onChange,
-  activeCount,
-  dismissedCount,
+  counts,
 }: {
-  tab: "active" | "dismissed";
-  onChange: (t: "active" | "dismissed") => void;
-  activeCount: number;
-  dismissedCount: number;
+  tab: Tab;
+  onChange: (t: Tab) => void;
+  counts: Record<Tab, number>;
 }) {
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "open", label: "Open" },
+    { key: "sent", label: "Sent" },
+    { key: "dismissed", label: "Dismissed" },
+  ];
   return (
     <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
-      <button
-        type="button"
-        onClick={() => onChange("active")}
-        className={cn(
-          "rounded px-3 py-1 transition-colors",
-          tab === "active"
-            ? "bg-base font-medium text-primary shadow-sm"
-            : "text-secondary hover:text-primary",
-        )}
-      >
-        Active ({activeCount})
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange("dismissed")}
-        className={cn(
-          "rounded px-3 py-1 transition-colors",
-          tab === "dismissed"
-            ? "bg-base font-medium text-primary shadow-sm"
-            : "text-secondary hover:text-primary",
-        )}
-      >
-        Dismissed ({dismissedCount})
-      </button>
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          onClick={() => onChange(t.key)}
+          className={cn(
+            "rounded px-3 py-1 transition-colors",
+            tab === t.key
+              ? "bg-base font-medium text-primary shadow-sm"
+              : "text-secondary hover:text-primary",
+          )}
+        >
+          {t.label} ({counts[t.key]})
+        </button>
+      ))}
     </div>
   );
 }
