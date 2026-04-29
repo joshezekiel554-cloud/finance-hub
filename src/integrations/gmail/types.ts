@@ -13,6 +13,11 @@ export type ParsedEmail = {
   date: string;
   emailDate: Date | null;
   body: string;
+  // Optional text/html body extracted alongside the text body. Only
+  // populated by formatMessage when an HTML part exists; consumers like
+  // the B2B invoicing parser can use it directly without a second
+  // messages.get round-trip.
+  htmlBody: string;
   snippet: string;
   labelIds: string[];
 };

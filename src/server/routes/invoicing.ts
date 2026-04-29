@@ -12,7 +12,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { searchEmails, getMessageHtmlBody } from "../../integrations/gmail/client.js";
+import { searchEmails } from "../../integrations/gmail/client.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
 import { eq } from "drizzle-orm";
@@ -199,23 +199,14 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     const qbClient = new QboClient();
     const shopifyClient = new ShopifyClient();
 
-    // Phase 1: fetch + parse all emails in parallel (Gmail limits are
-    // generous; we already chunked the search above).
-    const parsed = await Promise.all(
-      emails.map(async (email) => {
-        let html = "";
-        try {
-          html = await getMessageHtmlBody(email.id);
-        } catch (err) {
-          log.warn({ err, gmailId: email.id }, "gmail message fetch failed");
-        }
-        return {
-          gmailId: email.id,
-          receivedAt: email.emailDate,
-          parseResult: parseShipmentHtml(html),
-        };
-      }),
-    );
+    // Phase 1: parse htmlBody already populated by searchEmails. The Gmail
+    // client extracts text/html alongside text/plain in one messages.get
+    // pass, so no second round-trip is needed here.
+    const parsed = emails.map((email) => ({
+      gmailId: email.id,
+      receivedAt: email.emailDate,
+      parseResult: parseShipmentHtml(email.htmlBody),
+    }));
 
     // Phase 2: ONE batched QBO query for all docNumbers we managed to parse.
     // Replaces the N parallel per-row queries that were tripping QBO's

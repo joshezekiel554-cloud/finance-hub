@@ -228,27 +228,6 @@ function extractHtmlFromParts(parts: gmail_v1.Schema$MessagePart[] | undefined):
   return html;
 }
 
-// Extracts the HTML body from a Gmail message. Handles both single-part
-// (payload.body.data direct) and multipart (payload.parts) layouts. Returns
-// empty string if no HTML part exists — caller can fall back to the parsed
-// text body if needed.
-export async function getMessageHtmlBody(
-  messageId: string,
-  externalAccountId?: string,
-): Promise<string> {
-  const { gmail } = await getClient(externalAccountId);
-  const res = await withRetry(
-    () => gmail.users.messages.get({ userId: "me", id: messageId, format: "full" }),
-    `messages.get(${messageId})`,
-  );
-  const msg = res.data;
-  if (!msg.payload) return "";
-  if (msg.payload.mimeType === "text/html" && msg.payload.body?.data) {
-    return decodeBody(msg.payload.body);
-  }
-  return extractHtmlFromParts(msg.payload.parts);
-}
-
 function extractHeaders(
   headers: gmail_v1.Schema$MessagePartHeader[] | undefined,
   names: string[],
@@ -279,6 +258,7 @@ export function formatMessage(msg: gmail_v1.Schema$Message): ParsedEmail {
       date: "",
       emailDate: null,
       body: "",
+      htmlBody: "",
       snippet: msg?.snippet ?? "",
       labelIds: [],
     };
@@ -295,6 +275,14 @@ export function formatMessage(msg: gmail_v1.Schema$Message): ParsedEmail {
     body = decodeBody(msg.payload.body);
   } else if (msg.payload.parts) {
     body = extractTextFromParts(msg.payload.parts);
+  }
+
+  // HTML body — same walk but for text/html parts. Empty string when none.
+  let htmlBody = "";
+  if (msg.payload.mimeType === "text/html" && msg.payload.body?.data) {
+    htmlBody = decodeBody(msg.payload.body);
+  } else if (msg.payload.parts) {
+    htmlBody = extractHtmlFromParts(msg.payload.parts);
   }
 
   // Prefer the integer internalDate (ms) which Gmail provides reliably; fall
@@ -321,6 +309,7 @@ export function formatMessage(msg: gmail_v1.Schema$Message): ParsedEmail {
     date: headers["Date"] ?? "",
     emailDate,
     body,
+    htmlBody,
     snippet: msg.snippet ?? "",
     labelIds: msg.labelIds ?? [],
   };
@@ -392,21 +381,19 @@ export async function searchEmails(
     if (pageToken) await delay(BATCH_DELAY_MS);
   } while (pageToken && allMessages.length < maxResults);
 
-  const detailed: ParsedEmail[] = [];
+  // Fire all detail fetches in parallel. withRetry handles 429 / quota
+  // exhaustion with exponential backoff, so flooding here is safe and ~5x
+  // faster than the 5-at-a-time + 500ms-delay loop we had before.
   const toFetch = allMessages.slice(0, maxResults);
-  for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
-    const batch = toFetch.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.map((m) =>
-        withRetry(
-          () => gmail.users.messages.get({ userId: "me", id: m.id ?? "", format: "full" }),
-          `messages.get(${m.id})`,
-        ),
-      ),
-    );
-    for (const r of results) detailed.push(formatMessage(r.data));
-    if (i + BATCH_SIZE < toFetch.length) await delay(BATCH_DELAY_MS);
-  }
+  const detailed: ParsedEmail[] = await Promise.all(
+    toFetch.map(async (m) => {
+      const res = await withRetry(
+        () => gmail.users.messages.get({ userId: "me", id: m.id ?? "", format: "full" }),
+        `messages.get(${m.id})`,
+      );
+      return formatMessage(res.data);
+    }),
+  );
 
   return detailed.sort((a, b) => {
     const dateA = a.emailDate?.getTime() ?? new Date(a.date).getTime() ?? 0;
