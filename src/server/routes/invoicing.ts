@@ -126,6 +126,30 @@ const sendBodySchema = z.object({
 });
 
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
+  // Item search for the add-line picker. Returns up to 20 matches.
+  app.get("/items/search", async (req, reply) => {
+    const q = (req.query as { q?: string }).q ?? "";
+    if (q.trim().length < 2) {
+      return reply.send({ items: [] });
+    }
+    try {
+      const qb = new QboClient();
+      const items = await qb.searchItems(q, 20);
+      return reply.send({
+        items: items.map((it) => ({
+          id: it.Id,
+          name: it.Name,
+          sku: it.Sku ?? null,
+          unitPrice: it.UnitPrice ?? null,
+          type: it.Type ?? null,
+        })),
+      });
+    } catch (err) {
+      log.error({ err, q }, "qbo item search failed");
+      return reply.code(502).send({ error: "qbo item search failed" });
+    }
+  });
+
   // Fetch active QBO Term entities for the UI dropdown. Cached client-side via
   // TanStack Query; the underlying QBO query is fast (<10 terms typical).
   app.get("/terms", async (_req, reply) => {

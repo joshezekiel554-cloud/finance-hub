@@ -469,6 +469,27 @@ export class QboClient {
     }
   }
 
+  // Fuzzy item search for the UI's add-line picker. Matches against Sku
+  // (prefix) OR Name (substring) — QBO's LIKE is case-sensitive so we
+  // search both ALL-CAPS and the user's literal text. Caller-side dedupe.
+  async searchItems(query: string, max = 20): Promise<QboItem[]> {
+    const q = query.trim();
+    if (!q) return [];
+    const escaped = escapeQboLiteral(q);
+    const escapedUpper = escapeQboLiteral(q.toUpperCase());
+    const data = await this.query<QboItem>(
+      `SELECT * FROM Item WHERE Active = true AND (Sku LIKE '${escaped}%' OR Sku LIKE '${escapedUpper}%' OR Name LIKE '%${escaped}%') MAXRESULTS ${max}`,
+    );
+    const seen = new Set<string>();
+    const out: QboItem[] = [];
+    for (const item of data.QueryResponse.Item ?? []) {
+      if (seen.has(item.Id)) continue;
+      seen.add(item.Id);
+      out.push(item);
+    }
+    return out;
+  }
+
   async getQboItemBySku(sku: string): Promise<QboItem | null> {
     const data = await this.query<QboItem>(
       `SELECT * FROM Item WHERE Sku = '${escapeQboLiteral(sku)}'`,

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, MessageSquare, Package, Truck } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
@@ -29,8 +29,18 @@ type ReconcileAction =
       sku: string;
       qty: number;
       unitPrice: number | null;
-      priceSource: "shopify_b2b" | "fallback";
+      priceSource: "shopify_b2b" | "fallback" | "qb_item_lookup";
+      itemId?: string;
+      itemName?: string;
     };
+
+type QbItemSearchHit = {
+  id: string;
+  name: string;
+  sku: string | null;
+  unitPrice: number | null;
+  type: string | null;
+};
 
 type Row = {
   gmailId: string;
@@ -381,6 +391,36 @@ function ShipmentCard({
     setSendResult(null);
   }
 
+  function addQbItemLine(item: QbItemSearchHit) {
+    const existing = editedActions.find(
+      (a) => a.type === "add" && a.itemId === item.id,
+    );
+    if (existing) {
+      setSendResult({ ok: false, error: `${item.name} is already in this invoice` });
+      return;
+    }
+    setEditedActions((prev) => [
+      ...prev,
+      {
+        type: "add",
+        sku: item.sku ?? item.name,
+        qty: 1,
+        unitPrice: item.unitPrice,
+        priceSource: "qb_item_lookup",
+        itemId: item.id,
+        itemName: item.name,
+      },
+    ]);
+    setSendResult(null);
+  }
+
+  function removeAddLine(sku: string) {
+    setEditedActions((prev) =>
+      prev.filter((a) => !(a.type === "add" && a.sku === sku)),
+    );
+    setSendResult(null);
+  }
+
   // Edit the QB unit price for an existing invoice line. Promotes a `keep`
   // to `qty_change` (with reason="price_change", qty unchanged) so the
   // sender's unitPriceOverride path engages. If the user types the
@@ -482,14 +522,18 @@ function ShipmentCard({
         )}
 
         {row.reconcileResult && (
-          <ReconcileTable
-            row={row}
-            editedActions={editedActions}
-            onLineQtyChange={updateLineQty}
-            onLinePriceChange={updateLinePrice}
-            onAddPriceChange={updateAddPrice}
-            onAddQtyChange={updateAddQty}
-          />
+          <>
+            <ReconcileTable
+              row={row}
+              editedActions={editedActions}
+              onLineQtyChange={updateLineQty}
+              onLinePriceChange={updateLinePrice}
+              onAddPriceChange={updateAddPrice}
+              onAddQtyChange={updateAddQty}
+              onRemoveAddLine={removeAddLine}
+            />
+            <AddLinePicker onPick={addQbItemLine} />
+          </>
         )}
 
         {row.qbInvoice && row.reconcileResult && (
@@ -665,6 +709,105 @@ function SendResultPill({
   return <Badge tone="success">Updated (no email)</Badge>;
 }
 
+// Search input with debounced QB Item lookup. Pick a row → fires onPick →
+// caller appends an `add` action to the card's editedActions.
+function AddLinePicker({ onPick }: { onPick: (item: QbItemSearchHit) => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<QbItemSearchHit[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  // Debounced fetch — 250ms after the last keystroke.
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setResults([]);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(
+          `/api/invoicing/items/search?q=${encodeURIComponent(trimmed)}`,
+        );
+        if (!res.ok) {
+          setResults([]);
+          return;
+        }
+        const body = (await res.json()) as { items: QbItemSearchHit[] };
+        setResults(body.items);
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  return (
+    <div className="relative">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-3 py-1.5 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
+        >
+          + Add line
+        </button>
+        {open && (
+          <input
+            autoFocus
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search QB items by SKU or name (min 2 chars)…"
+            className="flex-1 rounded-md border border-default bg-base px-2 py-1.5 text-sm"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setOpen(false);
+                setQuery("");
+                setResults([]);
+              }
+            }}
+          />
+        )}
+      </div>
+      {open && query.trim().length >= 2 && (
+        <div className="absolute left-0 top-full z-10 mt-1 max-h-80 w-full overflow-y-auto rounded-md border border-default bg-base shadow-lg">
+          {loading && (
+            <div className="px-3 py-2 text-xs text-muted">Searching QB items…</div>
+          )}
+          {!loading && results.length === 0 && (
+            <div className="px-3 py-2 text-xs text-muted">No matches.</div>
+          )}
+          {results.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => {
+                onPick(item);
+                setQuery("");
+                setResults([]);
+                setOpen(false);
+              }}
+              className="flex w-full items-center justify-between gap-3 border-b border-default px-3 py-2 text-left text-sm last:border-b-0 hover:bg-elevated"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{item.name}</div>
+                {item.sku && (
+                  <div className="font-mono text-xs text-muted">{item.sku}</div>
+                )}
+              </div>
+              <div className="shrink-0 tabular-nums text-secondary">
+                {item.unitPrice !== null ? `$${item.unitPrice.toFixed(2)}` : "—"}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // $-prefixed price input. Displays "$" inside the field; submits/sends a
 // pure number. Uses a controlled <input type="text"> so we can render the
 // glyph without losing keystroke control.
@@ -746,6 +889,7 @@ function ReconcileTable({
   onLinePriceChange,
   onAddPriceChange,
   onAddQtyChange,
+  onRemoveAddLine,
 }: {
   row: Row;
   editedActions: ReconcileAction[];
@@ -753,6 +897,7 @@ function ReconcileTable({
   onLinePriceChange: (lineId: string, originalPrice: number, newPrice: number) => void;
   onAddPriceChange: (sku: string, newPrice: number) => void;
   onAddQtyChange: (sku: string, newQty: number) => void;
+  onRemoveAddLine: (sku: string) => void;
 }) {
   if (!row.qbInvoice || !row.reconcileResult) return null;
 
@@ -807,7 +952,21 @@ function ReconcileTable({
     if (action.type === "set_metadata" || action.type === "keep") continue;
     const sku = action.type === "add" ? action.sku.toUpperCase() : action.sku.toUpperCase();
     const r = map.get(sku);
-    if (r) r.action = action;
+    if (r) {
+      r.action = action;
+    } else if (action.type === "add") {
+      // QB-picker add: doesn't correspond to any invoice or shipment line.
+      // Inject it so the user can see + edit it in the table.
+      map.set(sku, {
+        sku: action.sku,
+        itemName: action.itemName ?? null,
+        currentQty: null,
+        shippedQty: null,
+        unitPrice: action.unitPrice,
+        shopifyPrice: shopifyPriceBySku.get(sku),
+        action,
+      });
+    }
   }
   // keep actions inject themselves too (so badge renders)
   for (const action of editedActions) {
@@ -911,7 +1070,28 @@ function ReconcileTable({
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  <ActionBadge action={action} />
+                  <div className="flex items-center gap-2">
+                    <ActionBadge action={action} />
+                    {isAdd && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveAddLine(action.sku)}
+                        title="Remove this added line"
+                        className="rounded-md p-1 text-muted hover:bg-elevated hover:text-accent-danger"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          width="14"
+                          height="14"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        >
+                          <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             );

@@ -132,9 +132,16 @@ export type ReconcileAction =
       sku: string;
       qty: number;
       unitPrice: number | null;
-      // shopify_b2b: 50% of Shopify retail (price source confident)
-      // fallback:    no Shopify match — UI prompts user to set the price
-      priceSource: "shopify_b2b" | "fallback";
+      // shopify_b2b:    50% of Shopify retail (price source confident)
+      // fallback:       no Shopify match — UI prompts user to set the price
+      // qb_item_lookup: user picked a QB Item from search; price defaulted
+      //                 from the Item's UnitPrice
+      priceSource: "shopify_b2b" | "fallback" | "qb_item_lookup";
+      // QBO Item reference. Set when the user picked the line via the QB
+      // search picker. When present, the sender writes ItemRef.{value,name}
+      // on the new line so the merchant gets a fully linked invoice.
+      itemId?: string;
+      itemName?: string;
     }
   | {
       type: "set_metadata";

@@ -171,7 +171,9 @@ export function buildPayload(
         `buildPayload: add action for SKU ${action.sku} has no unitPrice; UI must resolve fallback price before send`,
       );
     }
-    updatedLines.push(buildAddLine(action.sku, action.qty, action.unitPrice));
+    updatedLines.push(
+      buildAddLine(action.sku, action.qty, action.unitPrice, action.itemId, action.itemName),
+    );
   }
 
   // Append a percent-discount line if requested. PercentBased=true tells QBO
@@ -340,25 +342,30 @@ export async function sendInvoiceUpdate(
 
 // Build a fresh SalesItemLineDetail row for an add action. SKU goes into
 // Description (matching the 3rd-party sync's convention on existing lines).
-// ItemRef is omitted: we don't have the QBO Item Id for a SKU not on the
-// invoice. QBO's sparse update tolerates this for new lines as long as
-// SalesItemLineDetail is present; the merchant resolves it in QBO admin
-// post-send. Future improvement: look up the Item by SKU and populate
-// ItemRef before sending.
+// When the caller picked the line via the QB Item search picker, ItemRef
+// is populated so the merchant gets a fully-linked invoice without a
+// post-send fixup. Without an itemId, QBO's sparse update still accepts
+// the line but it'll show as un-linked until the merchant edits.
 function buildAddLine(
   sku: string,
   qty: number,
   unitPrice: number,
+  itemId?: string,
+  itemName?: string,
 ): QboInvoiceLine {
+  const detail: NonNullable<QboInvoiceLine["SalesItemLineDetail"]> = {
+    Qty: qty,
+    UnitPrice: unitPrice,
+    TaxCodeRef: { ...NON_TAXABLE_REF },
+  };
+  if (itemId) {
+    detail.ItemRef = itemName ? { value: itemId, name: itemName } : { value: itemId };
+  }
   return {
     Description: sku,
     Amount: round2(unitPrice * qty),
     DetailType: "SalesItemLineDetail",
-    SalesItemLineDetail: {
-      Qty: qty,
-      UnitPrice: unitPrice,
-      TaxCodeRef: { ...NON_TAXABLE_REF },
-    },
+    SalesItemLineDetail: detail,
   };
 }
 
