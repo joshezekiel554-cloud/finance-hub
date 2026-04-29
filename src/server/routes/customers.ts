@@ -10,6 +10,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import axios, { type AxiosError } from "axios";
 import {
   and,
   asc,
@@ -25,13 +26,17 @@ import {
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { activities, emailLog } from "../../db/schema/crm.js";
+import { invoices } from "../../db/schema/invoices.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { nanoid } from "nanoid";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
+import { env } from "../../lib/env.js";
 import { ShopifyClient } from "../../integrations/shopify/client.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
+import { loadQbTokens } from "../../integrations/qb/tokens.js";
+import { QboClient } from "../../integrations/qb/client.js";
 
 const log = createLogger({ component: "routes.customers" });
 
@@ -334,6 +339,152 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     return reply.send({ rows });
   });
 
+  // GET /api/customers/:id/statement-preview — preview the statement
+  // payload before the user confirms a send. Returns the open-invoice
+  // list (capped at 50, mirrors statements/send.ts), aggregate balances
+  // and the recipients we would address (To = primary, CC = billing
+  // emails minus primary, BCC = accounts@feldart.com). The
+  // hasInvoiceLink flag is best-effort — we ask QBO if a Pay-now link
+  // exists for each invoice so the dialog can surface a presence dot,
+  // but the preview tolerates QBO failure (returns null on each row
+  // rather than 502'ing) so the user can still confirm a send when QBO
+  // is flaky. The actual send still re-fetches links itself.
+  //
+  // Error codes mirror the send route so the UI can show the same
+  // inline messages on either path: customer_not_found,
+  // no_primary_email, no_open_invoices, too_many_invoices.
+  app.get("/:id/statement-preview", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+
+    const customerRows = await db
+      .select()
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    const customer = customerRows[0];
+    if (!customer) {
+      return reply
+        .code(404)
+        .send({ error: "customer not found", code: "customer_not_found" });
+    }
+    if (!customer.primaryEmail) {
+      return reply.code(400).send({
+        error: "customer has no primary email",
+        code: "no_primary_email",
+      });
+    }
+
+    const openInvoiceRows = await db
+      .select({
+        qbInvoiceId: invoices.qbInvoiceId,
+        docNumber: invoices.docNumber,
+        issueDate: invoices.issueDate,
+        dueDate: invoices.dueDate,
+        balance: invoices.balance,
+      })
+      .from(invoices)
+      .where(and(eq(invoices.customerId, id), gt(invoices.balance, "0")))
+      .orderBy(asc(invoices.issueDate))
+      .limit(STATEMENT_PREVIEW_INVOICE_CAP + 1);
+
+    if (openInvoiceRows.length === 0) {
+      return reply.code(400).send({
+        error: "no open invoices to send",
+        code: "no_open_invoices",
+      });
+    }
+    const tooMany = openInvoiceRows.length > STATEMENT_PREVIEW_INVOICE_CAP;
+    const previewInvoices = tooMany
+      ? openInvoiceRows.slice(0, STATEMENT_PREVIEW_INVOICE_CAP)
+      : openInvoiceRows;
+
+    // Best-effort QBO lookup for InvoiceLink presence. Failure here
+    // doesn't block the preview — we just return null on each row and
+    // the dialog renders the dot as "unknown". The send path will
+    // still try to fetch links itself when the user confirms.
+    let invoiceLinks: Map<string, string> | null = null;
+    try {
+      invoiceLinks = await fetchInvoiceLinkPresence(
+        previewInvoices.map((r) => r.qbInvoiceId),
+      );
+    } catch (err) {
+      log.warn(
+        { err, customerId: id },
+        "statement-preview invoiceLink lookup failed — falling back to unknown",
+      );
+    }
+
+    const now = new Date();
+    const today = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
+
+    let totalOpenBalance = 0;
+    let totalOverdueBalance = 0;
+    const previewRows = previewInvoices.map((inv) => {
+      const balanceNum = Number(inv.balance);
+      totalOpenBalance += Number.isFinite(balanceNum) ? balanceNum : 0;
+
+      const issueIso = isoDateString(inv.issueDate);
+      const dueIso = isoDateString(inv.dueDate);
+
+      // Match send.ts overdue calc: due-date strictly before today (UTC).
+      if (dueIso) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dueIso);
+        if (m) {
+          const due = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00.000Z`);
+          if (due.getTime() < today.getTime()) {
+            totalOverdueBalance += Number.isFinite(balanceNum) ? balanceNum : 0;
+          }
+        }
+      }
+
+      // hasInvoiceLink: true (QBO returned a link), false (QBO returned
+      // no link), or null (lookup failed/skipped — UI shows gray dot).
+      const hasInvoiceLink: boolean | null =
+        invoiceLinks === null ? null : invoiceLinks.has(inv.qbInvoiceId);
+
+      return {
+        qbInvoiceId: inv.qbInvoiceId,
+        docNumber: inv.docNumber,
+        issueDate: issueIso,
+        dueDate: dueIso,
+        balance: inv.balance,
+        hasInvoiceLink,
+      };
+    });
+
+    // Recipients mirror the construction in modules/statements/send.ts
+    // so the preview shows what the send will actually do.
+    const primaryLower = customer.primaryEmail.toLowerCase();
+    const cc: string[] = [];
+    const seen = new Set<string>();
+    for (const e of customer.billingEmails ?? []) {
+      if (!e) continue;
+      const trimmed = e.trim();
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (lower === primaryLower) continue;
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      cc.push(trimmed);
+    }
+
+    return reply.send({
+      openInvoices: previewRows,
+      totalOpenBalance: round2(totalOpenBalance),
+      totalOverdueBalance: round2(totalOverdueBalance),
+      recipients: {
+        to: customer.primaryEmail,
+        cc,
+        bcc: STATEMENT_BCC_ALIAS,
+      },
+      truncated: tooMany,
+      invoiceLinkLookupOk: invoiceLinks !== null,
+    });
+  });
+
   // GET /api/customers/:id — full record for the detail page. Returns
   // the customer plus a few related rollups: recent activities, open
   // invoice summary, open task count. Detail page can request more via
@@ -406,5 +557,108 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     return reply.send({ customer: after });
   });
 };
+
+// --- statement-preview helpers ----------------------------------------
+
+// Mirror the cap in modules/statements/send.ts so the preview never
+// shows more rows than the send route would actually accept.
+const STATEMENT_PREVIEW_INVOICE_CAP = 50;
+const STATEMENT_BCC_ALIAS = "accounts@feldart.com";
+const QBO_PROD = "https://quickbooks.api.intuit.com";
+const QBO_MINOR_VERSION = 65;
+
+// MySQL date columns come back as Date | null. Normalize to YYYY-MM-DD
+// strings for the wire so the client doesn't have to deal with the
+// DST/timezone quirks of new Date() on a date-only column.
+function isoDateString(d: Date | string | null | undefined): string | null {
+  if (!d) return null;
+  if (d instanceof Date) {
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 10);
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : d;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+// Best-effort batch lookup of QBO Pay-now InvoiceLink for a list of
+// QBO invoice IDs. The send module has the same logic — we duplicate
+// rather than reach across module boundaries because the brief locks
+// modules/statements/*. Returns a Map of qbInvoiceId → link (only for
+// invoices that have one populated). Throws on QBO/auth failure; the
+// caller catches and falls back to "unknown" UI.
+async function fetchInvoiceLinkPresence(
+  qbInvoiceIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (qbInvoiceIds.length === 0) return map;
+
+  const realmId = env.QB_REALM_ID;
+  const tokens = await loadQbTokens(realmId);
+  if (!tokens) {
+    throw new Error(`No QB tokens for realm ${realmId}`);
+  }
+
+  const CHUNK = 200;
+  const url = `${QBO_PROD}/v3/company/${realmId}/query`;
+
+  for (let i = 0; i < qbInvoiceIds.length; i += CHUNK) {
+    const chunk = qbInvoiceIds.slice(i, i + CHUNK);
+    const inClause = chunk
+      .map((id) => `'${id.replace(/'/g, "''")}'`)
+      .join(",");
+
+    const params: Record<string, string | number> = {
+      query: `SELECT Id, InvoiceLink FROM Invoice WHERE Id IN (${inClause})`,
+      minorversion: QBO_MINOR_VERSION,
+      include: "invoiceLink",
+    };
+
+    const doRequest = async (token: string) =>
+      axios.get<{
+        QueryResponse: { Invoice?: { Id: string; InvoiceLink?: string }[] };
+      }>(url, {
+        params,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+        timeout: 30_000,
+      });
+
+    let res;
+    try {
+      res = await doRequest(tokens.accessToken);
+    } catch (err) {
+      const ax = err as AxiosError;
+      // 401 → token went stale. Bounce off QboClient.getTerms() to
+      // trigger the single-flight refresh path in tokens.ts (same
+      // pattern as send.ts), then retry once with the fresh token.
+      if (ax.response?.status === 401) {
+        const qb = new QboClient();
+        try {
+          await qb.getTerms();
+        } catch {
+          // ignore — we just want the refresh side effect
+        }
+        const fresh = await loadQbTokens(realmId);
+        if (!fresh) throw new Error("QB tokens disappeared mid-refresh");
+        res = await doRequest(fresh.accessToken);
+      } else {
+        throw err;
+      }
+    }
+
+    for (const inv of res.data.QueryResponse.Invoice ?? []) {
+      if (inv.Id && inv.InvoiceLink) {
+        map.set(inv.Id, inv.InvoiceLink);
+      }
+    }
+  }
+  return map;
+}
 
 export default customersRoute;

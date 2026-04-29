@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Pause, Play, Mail } from "lucide-react";
+import { ArrowLeft, Pause, Play, Mail, FileText, CheckCircle2 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -16,6 +16,9 @@ import {
 import { ActivityTimeline } from "../components/activity-timeline";
 import { EmailList } from "../components/email-list";
 import { HoldBanner } from "../components/hold-banner";
+import StatementSendDialog, {
+  type StatementSendSuccess,
+} from "../components/statement-send-dialog";
 import { cn } from "../lib/cn";
 
 type Customer = {
@@ -66,7 +69,20 @@ export default function CustomerDetailPage() {
   const { customerId } = useParams({ from: "/customers/$customerId" });
   const [tab, setTab] = useState<TabKey>("activity");
   const [holdDialogOpen, setHoldDialogOpen] = useState(false);
+  const [statementDialogOpen, setStatementDialogOpen] = useState(false);
+  const [statementSuccess, setStatementSuccess] =
+    useState<StatementSendSuccess | null>(null);
   const queryClient = useQueryClient();
+
+  // Auto-dismiss the "statement sent" pill after ~6s. We don't have a
+  // ToastProvider mounted on this page (only /tasks does) and the
+  // confirmation is non-essential, so an inline auto-fading pill is
+  // simpler than retrofitting toast plumbing here.
+  useEffect(() => {
+    if (!statementSuccess) return;
+    const t = setTimeout(() => setStatementSuccess(null), 6000);
+    return () => clearTimeout(t);
+  }, [statementSuccess]);
 
   const { data, isPending, isError, error } = useQuery<DetailResponse>({
     queryKey: ["customer", customerId],
@@ -174,6 +190,25 @@ export default function CustomerDetailPage() {
         </div>
 
         <div className="flex flex-wrap items-end gap-2">
+          {/* Statements only make sense when there's something to chase
+              for. balance comes back as a string from MySQL DECIMAL —
+              Number(...) > 0 weeds out "0.00" and the rare unparseable
+              edge case (NaN > 0 is false). Held customers are still
+              chase-able, so holdStatus is intentionally not gating. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setStatementDialogOpen(true)}
+            disabled={!(balance > 0)}
+            title={
+              balance > 0
+                ? "Send a statement of open invoices to this customer"
+                : "No open balance — nothing to send"
+            }
+          >
+            <FileText className="size-3.5" />
+            Send statement
+          </Button>
           <Button
             variant={customer.holdStatus === "hold" ? "secondary" : "danger"}
             size="sm"
@@ -194,6 +229,32 @@ export default function CustomerDetailPage() {
           </Button>
         </div>
       </div>
+
+      {statementSuccess && (
+        <div
+          role="status"
+          className="flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+        >
+          <CheckCircle2 className="size-4" />
+          <span>
+            Sent to {statementSuccess.to} ·{" "}
+            {statementSuccess.invoiceCount} invoice
+            {statementSuccess.invoiceCount === 1 ? "" : "s"} ·{" "}
+            {new Intl.NumberFormat("en-US", {
+              style: "currency",
+              currency: "USD",
+            }).format(statementSuccess.totalOpenBalance)}
+          </span>
+        </div>
+      )}
+
+      <StatementSendDialog
+        open={statementDialogOpen}
+        onOpenChange={setStatementDialogOpen}
+        customerId={customer.id}
+        customerName={customer.displayName}
+        onSent={(result) => setStatementSuccess(result)}
+      />
 
       <Dialog open={holdDialogOpen} onOpenChange={setHoldDialogOpen}>
         <DialogContent>
