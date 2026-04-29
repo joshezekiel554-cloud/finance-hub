@@ -5,8 +5,17 @@ import { ArrowLeft, Pause, Play, Mail } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { ActivityTimeline } from "../components/activity-timeline";
 import { EmailList } from "../components/email-list";
+import { HoldBanner } from "../components/hold-banner";
 import { cn } from "../lib/cn";
 
 type Customer = {
@@ -47,9 +56,16 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "notes", label: "Notes" },
 ];
 
+type ShopifyTagsResponse = {
+  matched: boolean;
+  shopifyCustomerId?: string;
+  tags: string[];
+};
+
 export default function CustomerDetailPage() {
   const { customerId } = useParams({ from: "/customers/$customerId" });
   const [tab, setTab] = useState<TabKey>("activity");
+  const [holdDialogOpen, setHoldDialogOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const { data, isPending, isError, error } = useQuery<DetailResponse>({
@@ -61,18 +77,36 @@ export default function CustomerDetailPage() {
     },
   });
 
-  const patchMutation = useMutation({
-    mutationFn: async (input: Partial<Customer>) => {
-      const res = await fetch(`/api/customers/${customerId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
-      });
+  const tagsQuery = useQuery<ShopifyTagsResponse>({
+    queryKey: ["shopify-tags", customerId],
+    queryFn: async () => {
+      const res = await fetch(`/api/customers/${customerId}/shopify-tags`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
+  });
+
+  const holdToggleMutation = useMutation({
+    mutationFn: async (targetState: "hold" | "active") => {
+      const res = await fetch(`/api/customers/${customerId}/hold-toggle`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ targetState }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{
+        holdStatus: "active" | "hold";
+        tagsAfter: string[];
+      }>;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      queryClient.invalidateQueries({ queryKey: ["shopify-tags", customerId] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      setHoldDialogOpen(false);
     },
   });
 
@@ -92,6 +126,9 @@ export default function CustomerDetailPage() {
   const balance = Number(customer.balance);
   const overdue = Number(customer.overdueBalance);
 
+  const targetHoldState: "hold" | "active" =
+    customer.holdStatus === "hold" ? "active" : "hold";
+
   return (
     <div className="space-y-4">
       <Link
@@ -101,6 +138,12 @@ export default function CustomerDetailPage() {
         <ArrowLeft className="size-3.5" />
         All customers
       </Link>
+
+      <HoldBanner
+        customerId={customer.id}
+        customerName={customer.displayName}
+        holdStatus={customer.holdStatus}
+      />
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -119,7 +162,7 @@ export default function CustomerDetailPage() {
             )}
             <CustomerTypeBadge type={customer.customerType} />
             {customer.holdStatus === "hold" ? (
-              <Badge tone="medium">
+              <Badge tone="critical">
                 <Pause className="mr-1 size-3" />
                 On hold
               </Badge>
@@ -127,18 +170,15 @@ export default function CustomerDetailPage() {
               <Badge tone="success">Active</Badge>
             )}
           </div>
+          <ShopifyTagsRow tagsQuery={tagsQuery} />
         </div>
 
         <div className="flex flex-wrap items-end gap-2">
           <Button
-            variant="secondary"
+            variant={customer.holdStatus === "hold" ? "secondary" : "danger"}
             size="sm"
-            onClick={() =>
-              patchMutation.mutate({
-                holdStatus: customer.holdStatus === "hold" ? "active" : "hold",
-              })
-            }
-            disabled={patchMutation.isPending}
+            onClick={() => setHoldDialogOpen(true)}
+            disabled={holdToggleMutation.isPending}
           >
             {customer.holdStatus === "hold" ? (
               <>
@@ -154,6 +194,45 @@ export default function CustomerDetailPage() {
           </Button>
         </div>
       </div>
+
+      <Dialog open={holdDialogOpen} onOpenChange={setHoldDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {targetHoldState === "hold" ? "Put on hold?" : "Release hold?"}
+            </DialogTitle>
+            <DialogDescription>
+              {targetHoldState === "hold"
+                ? `This will remove ${customer.displayName} from the B2B program by removing the 'b2b' Shopify tag. Continue?`
+                : `This will restore ${customer.displayName} to the B2B program by re-adding the 'b2b' Shopify tag. Continue?`}
+            </DialogDescription>
+          </DialogHeader>
+          {holdToggleMutation.isError && (
+            <div className="mt-2 text-sm text-accent-danger">
+              {(holdToggleMutation.error as Error)?.message ?? "Toggle failed"}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setHoldDialogOpen(false)}
+              disabled={holdToggleMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant={targetHoldState === "hold" ? "danger" : "primary"}
+              size="sm"
+              onClick={() => holdToggleMutation.mutate(targetHoldState)}
+              disabled={holdToggleMutation.isPending}
+              loading={holdToggleMutation.isPending}
+            >
+              {targetHoldState === "hold" ? "Put on hold" : "Release hold"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Open balance" value={`$${balance.toFixed(2)}`} />
@@ -249,6 +328,51 @@ function CustomerTypeBadge({ type }: { type: "b2b" | "b2c" | null }) {
   if (type === "b2b") return <Badge tone="info">B2B</Badge>;
   if (type === "b2c") return <Badge tone="neutral">B2C</Badge>;
   return <Badge tone="medium">Untagged</Badge>;
+}
+
+// Read-only Shopify tag chips. Renders below the badge row so the page
+// always shows the source-of-truth tag set for the matched Shopify
+// customer. The "b2b" tag is highlighted with the info tone so it's
+// visually distinct from the other (neutral) tags — that's the tag
+// hold/release toggles, so it deserves emphasis.
+function ShopifyTagsRow({
+  tagsQuery,
+}: {
+  tagsQuery: ReturnType<typeof useQuery<ShopifyTagsResponse>>;
+}) {
+  if (tagsQuery.isPending) {
+    return (
+      <div className="mt-2 text-xs text-muted">Loading Shopify tags…</div>
+    );
+  }
+  if (tagsQuery.isError || !tagsQuery.data) {
+    return null;
+  }
+  const { matched, tags } = tagsQuery.data;
+  if (!matched) {
+    return (
+      <div className="mt-2 text-xs text-muted">No matched Shopify customer</div>
+    );
+  }
+  if (tags.length === 0) {
+    return (
+      <div className="mt-2 text-xs text-muted">
+        Shopify customer matched, no tags set
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-xs uppercase tracking-wide text-muted">
+        Shopify tags:
+      </span>
+      {tags.map((t) => (
+        <Badge key={t} tone={t === "b2b" ? "info" : "neutral"}>
+          {t}
+        </Badge>
+      ))}
+    </div>
+  );
 }
 
 function PlaceholderPanel({ label }: { label: string }) {

@@ -444,10 +444,16 @@ export default function CustomersPage() {
                 const balance = Number(row.balance);
                 const overdue = Number(row.overdueBalance);
                 const checked = selectedIds.has(row.id);
+                const onHold = row.holdStatus === "hold";
                 return (
                   <tr
                     key={row.id}
-                    className="border-b border-default last:border-b-0 hover:bg-elevated"
+                    className={cn(
+                      "border-b border-default last:border-b-0",
+                      onHold
+                        ? "bg-accent-danger/10 hover:bg-accent-danger/15"
+                        : "hover:bg-elevated",
+                    )}
                   >
                     {sweepMode && (
                       <td className="px-3 py-2">
@@ -495,8 +501,8 @@ export default function CustomersPage() {
                       <CustomerTypeBadge type={row.customerType} />
                     </td>
                     <td className="px-3 py-2">
-                      {row.holdStatus === "hold" ? (
-                        <Badge tone="medium">
+                      {onHold ? (
+                        <Badge tone="critical">
                           <Pause className="mr-1 size-3" />
                           Hold
                         </Badge>
