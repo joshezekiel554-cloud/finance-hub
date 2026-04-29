@@ -63,7 +63,10 @@ export default function CustomersPage() {
         customerType: tab,
         sort,
         dir,
-        limit: "500",
+        // 5000 covers the full customer table (~2,400 today) so the
+        // sweep + filter chips operate on the complete dataset rather
+        // than the first page. Backend caps at 5000 in the route schema.
+        limit: "5000",
       });
       if (search.trim()) params.set("q", search.trim());
       const res = await fetch(`/api/customers?${params.toString()}`);
