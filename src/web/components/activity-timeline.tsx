@@ -24,6 +24,7 @@ import {
   CircleDot,
   ChevronDown,
   ChevronRight,
+  FileDown,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
@@ -58,6 +59,16 @@ export type Activity = {
   source: string;
   refType: string | null;
   refId: string | null;
+  // Normalized payload written by the QB sync. Present on qbo_invoice_sent,
+  // qbo_payment, qbo_credit_memo activities and used to render an amount
+  // pill + an inline PDF link when applicable.
+  meta: {
+    qbId?: string;
+    docNumber?: string | null;
+    amount?: number;
+    currency?: string | null;
+    txnDate?: string | null;
+  } | null;
 };
 
 const KIND_META: Record<
@@ -243,8 +254,23 @@ export function ActivityTimeline({
                           {formatTime(activity.occurredAt)}
                         </span>
                       </div>
-                      <div className="mt-1 flex items-center gap-2 text-xs text-secondary">
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-secondary">
                         <Badge tone={m.tone}>{m.label}</Badge>
+                        {activity.meta?.amount !== undefined &&
+                          activity.meta.amount > 0 && (
+                            <Badge tone="neutral">
+                              {formatAmount(
+                                activity.meta.amount,
+                                activity.meta.currency,
+                              )}
+                            </Badge>
+                          )}
+                        {activity.meta?.docNumber && (
+                          <span className="text-muted">
+                            #{activity.meta.docNumber}
+                          </span>
+                        )}
+                        <PdfLink kind={activity.kind} qbId={activity.meta?.qbId} />
                         <span className="text-muted">via {activity.source}</span>
                       </div>
                       {hasBody && isExpanded && (
@@ -267,6 +293,54 @@ export function ActivityTimeline({
       </Card>
     </div>
   );
+}
+
+// PDF link for invoice + credit-memo activities. Streams from the
+// /api/qb-pdf proxy so the user gets a real PDF in a new tab; nothing
+// is stored locally. Renders nothing for kinds without a PDF endpoint
+// (payments, hold toggles, emails, etc.).
+function PdfLink({
+  kind,
+  qbId,
+}: {
+  kind: string;
+  qbId: string | undefined;
+}) {
+  if (!qbId) return null;
+  const route =
+    kind === "qbo_invoice_sent"
+      ? "invoice"
+      : kind === "qbo_credit_memo"
+        ? "creditmemo"
+        : null;
+  if (!route) return null;
+  return (
+    <a
+      href={`/api/qb-pdf/${route}/${qbId}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-accent-primary hover:underline"
+    >
+      <FileDown className="size-3" />
+      PDF
+    </a>
+  );
+}
+
+function formatAmount(amount: number, currency: string | null | undefined): string {
+  // Prefer Intl.NumberFormat when we have a real ISO 4217 currency code;
+  // fall back to a simple "$" prefix for unknown / null currencies.
+  if (currency && /^[A-Z]{3}$/.test(currency)) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency,
+      }).format(amount);
+    } catch {
+      // Unsupported currency code; fall through to the plain format
+    }
+  }
+  return `$${amount.toFixed(2)}`;
 }
 
 function formatTime(iso: string): string {

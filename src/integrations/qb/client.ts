@@ -143,6 +143,41 @@ export class QboClient {
     return next.accessToken;
   }
 
+  // Fetch a PDF for an invoice or credit memo. QBO returns
+  // `application/pdf` directly from /v3/company/{realm}/{kind}/{id}/pdf.
+  // We stream the raw bytes back as a Buffer so the caller (route layer)
+  // can pipe it into the HTTP response without re-encoding. Same 401 →
+  // forceRefresh retry as the query path.
+  async getPdf(
+    kind: "invoice" | "creditmemo",
+    qbId: string,
+  ): Promise<Buffer> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/${kind}/${encodeURIComponent(qbId)}/pdf`;
+    const accessToken = await this.getAccessToken();
+    const doRequest = async (token: string) => {
+      return this.http.get<ArrayBuffer>(url, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/pdf",
+        },
+        responseType: "arraybuffer",
+      });
+    };
+    try {
+      const response = await doRequest(accessToken);
+      return Buffer.from(response.data);
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return Buffer.from(response.data);
+      }
+      throw err;
+    }
+  }
+
   // Single QBO query call. Auto-retries once on 401 by forcing a token refresh —
   // covers the "another worker rotated the token mid-flight" race.
   private async query<T>(query: string): Promise<QboQueryResponse<T>> {

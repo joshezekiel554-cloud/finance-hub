@@ -50,6 +50,13 @@
       "when": 1777473848799,
       "tag": "0006_moaning_starbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1777478630516,
+      "tag": "0007_clear_veda",
+      "breakpoints": true
     }
   ]
 }

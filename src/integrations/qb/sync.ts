@@ -320,10 +320,14 @@ async function upsertInvoice(
           occurredAt: issueDate ?? undefined,
           refType: "qb_invoice",
           refId: qboInvoice.Id,
+          // Normalized meta shape across qbo_* activities so the UI can
+          // render { amount, currency } uniformly. qbId enables the PDF
+          // link route. doc_number kept for display ("Invoice #18307").
           meta: {
-            invoice_id: qboInvoice.Id,
-            doc_number: qboInvoice.DocNumber ?? null,
-            total: Number(desired.total),
+            qbId: qboInvoice.Id,
+            docNumber: qboInvoice.DocNumber ?? null,
+            amount: Number(desired.total),
+            currency: qboInvoice.CurrencyRef?.value ?? null,
           },
         });
       } catch (err) {
@@ -460,9 +464,10 @@ async function emitPaymentActivities(payments: QboPayment[]): Promise<void> {
         refType: "qb_payment",
         refId: payment.Id,
         meta: {
-          payment_id: payment.Id,
+          qbId: payment.Id,
           amount: payment.TotalAmt ?? 0,
-          txn_date: payment.TxnDate ?? null,
+          currency: payment.CurrencyRef?.value ?? null,
+          txnDate: payment.TxnDate ?? null,
         },
       });
     } catch (err) {
@@ -493,9 +498,11 @@ async function emitCreditMemoActivities(memos: QboCreditMemo[]): Promise<void> {
         refType: "qb_credit_memo",
         refId: memo.Id,
         meta: {
-          credit_memo_id: memo.Id,
+          qbId: memo.Id,
+          docNumber: memo.DocNumber ?? null,
           amount: memo.TotalAmt ?? 0,
-          txn_date: memo.TxnDate ?? null,
+          currency: memo.CurrencyRef?.value ?? null,
+          txnDate: memo.TxnDate ?? null,
         },
       });
     } catch (err) {

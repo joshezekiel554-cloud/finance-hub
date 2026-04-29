@@ -2,6 +2,7 @@ import {
   boolean,
   index,
   json,
+  mediumtext,
   mysqlEnum,
   mysqlTable,
   primaryKey,
@@ -50,8 +51,12 @@ export const activities = mysqlTable(
     kind: mysqlEnum("kind", ACTIVITY_KINDS).notNull(),
     occurredAt: timestamp("occurred_at").notNull(),
     subject: varchar("subject", { length: 512 }),
-    body: text("body"),
-    bodyHtml: text("body_html"),
+    // mediumtext (16 MB) rather than text (64 KB). Email bodies in
+    // activities can exceed 64 KB easily — long threads, quoted replies,
+    // signatures with embedded images. Same for body_html, which is
+    // typically larger still.
+    body: mediumtext("body"),
+    bodyHtml: mediumtext("body_html"),
     source: mysqlEnum("source", ACTIVITY_SOURCES).notNull(),
     refType: varchar("ref_type", { length: 64 }),
     refId: varchar("ref_id", { length: 64 }),
@@ -246,7 +251,9 @@ export const emailLog = mysqlTable(
     fromAddress: varchar("from_address", { length: 255 }),
     toAddress: varchar("to_address", { length: 1024 }),
     subject: varchar("subject", { length: 512 }),
-    body: text("body"),
+    // mediumtext (16 MB) — Gmail bodies of 64 KB+ are routine for long
+    // threads with quoted replies + signatures + base64 inline images.
+    body: mediumtext("body"),
     snippet: varchar("snippet", { length: 512 }),
     classification: varchar("classification", { length: 64 }),
     emailDate: timestamp("email_date").notNull(),

@@ -26,20 +26,9 @@ type Customer = {
   updatedAt: string;
 };
 
-type Activity = {
-  id: string;
-  customerId: string;
-  userId: string | null;
-  kind: string;
-  occurredAt: string;
-  subject: string | null;
-  body: string | null;
-  bodyHtml: string | null;
-  source: string;
-  refType: string | null;
-  refId: string | null;
-  meta: Record<string, unknown> | null;
-};
+// Activity type imported from the timeline component so the meta shape
+// stays in sync with what it renders (amount, currency, qbId, etc.).
+import type { Activity } from "../components/activity-timeline";
 
 type DetailResponse = {
   customer: Customer;

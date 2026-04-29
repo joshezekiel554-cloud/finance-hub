@@ -102,6 +102,7 @@ export type QboCreditMemo = {
   Balance?: number;
   DocNumber?: string;
   CustomerRef: QboReference;
+  CurrencyRef?: QboReference;
   SyncToken?: string;
 };
 
