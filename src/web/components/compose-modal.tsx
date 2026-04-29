@@ -239,7 +239,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
         threadId: reply?.threadId,
         customerId: context?.customerId,
       };
-      const res = await fetch("/api/email/send", {
+      const res = await fetch("/api/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),

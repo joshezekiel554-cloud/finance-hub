@@ -12,6 +12,8 @@ import qbPdfRoute from "./qb-pdf.js";
 import emailLogRoute from "./email-log.js";
 import emailTemplatesRoute from "./email-templates.js";
 import holdsRoute from "./holds.js";
+import statementsRoute from "./statements.js";
+import emailSendRoute from "./email-send.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -40,6 +42,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(emailLogRoute, { prefix: "/api/email-log" });
   await app.register(emailTemplatesRoute, { prefix: "/api/email-templates" });
   await app.register(holdsRoute, { prefix: "/api/customers" });
+  await app.register(statementsRoute, { prefix: "/api/customers" });
+  await app.register(emailSendRoute, { prefix: "/api" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });

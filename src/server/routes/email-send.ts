@@ -81,6 +81,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
   // GET /api/aliases — proxy listAliases() through to the compose modal's
   // From dropdown. Cached at the integration layer (5m TTL) so this is a
   // cheap call from the UI's perspective.
+  // Mounted with prefix `/api` so this resolves to GET /api/aliases.
   app.get("/aliases", async (req, reply) => {
     await requireAuth(req);
     try {
@@ -92,7 +93,8 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // POST /api/email/send — user-initiated send. Body validated above.
+  // POST /api/email/send — user-initiated send. Mounted with prefix
+  // `/api/email` so this resolves to /api/email/send.
   app.post("/send", async (req, reply) => {
     const user = await requireAuth(req);
     const parse = sendBodySchema.safeParse(req.body);

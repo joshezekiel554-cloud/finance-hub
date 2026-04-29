@@ -283,7 +283,13 @@ export default function CustomerDetailPage() {
             queryKey={["customer", customerId]}
           />
         )}
-        {tab === "emails" && <EmailList customerId={customer.id} />}
+        {tab === "emails" && (
+          <EmailList
+            customerId={customer.id}
+            customerName={customer.displayName}
+            customerEmail={customer.primaryEmail}
+          />
+        )}
         {tab === "invoices" && <PlaceholderPanel label="Invoices" />}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
         {tab === "tasks" && <PlaceholderPanel label="Tasks" />}
