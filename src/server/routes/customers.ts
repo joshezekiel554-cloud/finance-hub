@@ -44,7 +44,12 @@ const listQuerySchema = z.object({
     .enum(["displayName", "balance", "overdueBalance", "lastSyncedAt"])
     .default("displayName"),
   dir: z.enum(["asc", "desc"]).default("asc"),
-  limit: z.coerce.number().int().min(1).max(200).default(100),
+  // 5000 cap covers the full customer table in a single response (we
+  // have ~2,400 today). The sweep UI loads all rows so the user can
+  // bulk-tag without paging — a 200-row cap would force 12 round trips
+  // for a single sweep. Pagination can come back later if the dataset
+  // grows past that.
+  limit: z.coerce.number().int().min(1).max(5000).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
