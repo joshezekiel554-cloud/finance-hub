@@ -228,28 +228,32 @@ export function EmailList({ customerId }: { customerId: string }) {
                   )}
                 >
                   <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={isActioned}
-                      onChange={() =>
-                        actionMutation.mutate({
-                          id: email.id,
-                          actioned: !isActioned,
-                        })
-                      }
-                      disabled={actionMutation.isPending}
-                      className="mt-1.5 size-4 shrink-0 rounded border-default"
-                      aria-label={
+                    <label
+                      className={cn(
+                        "mt-0.5 inline-flex shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors",
                         isActioned
-                          ? "Mark as unactioned"
-                          : "Mark as actioned"
-                      }
+                          ? "border-accent-success/40 bg-accent-success/10 text-accent-success"
+                          : "border-default bg-base text-secondary hover:border-strong hover:text-primary",
+                        actionMutation.isPending && "opacity-60",
+                      )}
                       title={
-                        isActioned
-                          ? "Mark as unactioned"
-                          : "Mark as actioned"
+                        isActioned ? "Click to un-action" : "Click to mark as actioned"
                       }
-                    />
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isActioned}
+                        onChange={() =>
+                          actionMutation.mutate({
+                            id: email.id,
+                            actioned: !isActioned,
+                          })
+                        }
+                        disabled={actionMutation.isPending}
+                        className="size-3.5 rounded border-default"
+                      />
+                      {isActioned ? "Actioned" : "Mark as actioned"}
+                    </label>
                     <div
                       className={cn(
                         "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full",
