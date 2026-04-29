@@ -334,6 +334,37 @@ export class QboClient {
     return data.QueryResponse.Invoice?.[0] ?? null;
   }
 
+  // Batch lookup of invoices by DocNumber. One QBO query instead of N. Returns
+  // a Map keyed by DocNumber for O(1) per-row access. Caller passes deduped
+  // doc numbers; we further dedupe and chunk in case the IN clause exceeds
+  // QBO's query length limit (~4000 chars). Empty input returns an empty Map
+  // without a roundtrip.
+  async getInvoicesByDocNumbers(
+    docNumbers: string[],
+  ): Promise<Map<string, QboInvoice>> {
+    const result = new Map<string, QboInvoice>();
+    const unique = Array.from(new Set(docNumbers.filter((d) => d && d.length > 0)));
+    if (unique.length === 0) return result;
+
+    // Conservative chunk size: each entry is ~10 chars + quoting/comma. 200
+    // entries fits comfortably under QBO's query length limit even with
+    // generous DocNumber widths.
+    const CHUNK = 200;
+    for (let i = 0; i < unique.length; i += CHUNK) {
+      const chunk = unique.slice(i, i + CHUNK);
+      const inClause = chunk
+        .map((d) => `'${escapeQboLiteral(d)}'`)
+        .join(",");
+      const data = await this.query<QboInvoice>(
+        `SELECT * FROM Invoice WHERE DocNumber IN (${inClause})`,
+      );
+      for (const inv of data.QueryResponse.Invoice ?? []) {
+        if (inv.DocNumber) result.set(inv.DocNumber, inv);
+      }
+    }
+    return result;
+  }
+
   async getInvoiceById(invoiceId: string): Promise<QboInvoice | null> {
     const data = await this.query<QboInvoice>(
       `SELECT * FROM Invoice WHERE Id = '${escapeQboLiteral(invoiceId)}'`,

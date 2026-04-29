@@ -149,8 +149,52 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     const qbClient = new QboClient();
     const shopifyClient = new ShopifyClient();
 
+    // Phase 1: fetch + parse all emails in parallel (Gmail limits are
+    // generous; we already chunked the search above).
+    const parsed = await Promise.all(
+      emails.map(async (email) => {
+        let html = "";
+        try {
+          html = await getMessageHtmlBody(email.id);
+        } catch (err) {
+          log.warn({ err, gmailId: email.id }, "gmail message fetch failed");
+        }
+        return {
+          gmailId: email.id,
+          receivedAt: email.emailDate,
+          parseResult: parseShipmentHtml(html),
+        };
+      }),
+    );
+
+    // Phase 2: ONE batched QBO query for all docNumbers we managed to parse.
+    // Replaces the N parallel per-row queries that were tripping QBO's
+    // leaky-bucket rate limit (HTTP 429).
+    const docNumbers = parsed
+      .map((p) => p.parseResult.shipment.shopifyOrderNumber)
+      .filter((d): d is string => Boolean(d));
+    let qbInvoiceMap = new Map<string, QboInvoice>();
+    let qbBatchError: string | null = null;
+    try {
+      qbInvoiceMap = await qbClient.getInvoicesByDocNumbers(docNumbers);
+    } catch (err) {
+      qbBatchError = (err as Error).message;
+      log.error({ err }, "batched qbo invoice lookup failed");
+    }
+
+    // Phase 3: Shopify lookups in parallel (their rate limits are looser),
+    // then assemble. Keep parallelism since we no longer compete with QBO.
     const rows: InvoicingTodayRow[] = await Promise.all(
-      emails.map((email) => buildRow(email.id, email.emailDate, qbClient, shopifyClient)),
+      parsed.map((p) =>
+        buildRow(
+          p.gmailId,
+          p.receivedAt,
+          p.parseResult,
+          qbInvoiceMap,
+          qbBatchError,
+          shopifyClient,
+        ),
+      ),
     );
 
     return reply.send({ rows, shadowMode: env.SHADOW_MODE });
@@ -218,22 +262,17 @@ export default invoicingRoutes;
 async function buildRow(
   gmailId: string,
   receivedAt: Date | null,
-  qb: QboClient,
+  parseResult: ReturnType<typeof parseShipmentHtml>,
+  qbInvoiceMap: Map<string, QboInvoice>,
+  qbBatchError: string | null,
   shopify: ShopifyClient,
 ): Promise<InvoicingTodayRow> {
-  let html = "";
-  try {
-    html = await getMessageHtmlBody(gmailId);
-  } catch (err) {
-    log.warn({ err, gmailId }, "gmail message fetch failed");
-  }
-  const parseResult = parseShipmentHtml(html);
-
   const docNumber = parseResult.shipment.shopifyOrderNumber;
 
-  // Parallel: QB invoice + Shopify order. Either may fail independently.
+  // Resolve QB invoice from the batched lookup map; Shopify still goes
+  // per-row but parallel-safe since QBO isn't competing.
   const [qbInvoice, qbInvoiceError, shopifyOrder, shopifyOrderError] =
-    await fetchLookups(docNumber, qb, shopify);
+    await resolveLookups(docNumber, qbInvoiceMap, qbBatchError, shopify);
 
   // Run reconciler only when we have a QB invoice + complete shipment metadata.
   let reconcileResult: InvoicingTodayRow["reconcileResult"] = null;
@@ -328,32 +367,33 @@ async function buildRow(
   };
 }
 
-async function fetchLookups(
+async function resolveLookups(
   docNumber: string | null,
-  qb: QboClient,
+  qbInvoiceMap: Map<string, QboInvoice>,
+  qbBatchError: string | null,
   shopify: ShopifyClient,
 ): Promise<[QboInvoice | null, string | null, Awaited<ReturnType<typeof getOrderByName>>, string | null]> {
   if (!docNumber) {
     return [null, "no shopify order number parsed", null, "no shopify order number parsed"];
   }
-  const [qbInv, shopOrder] = await Promise.all([
-    qb.getInvoiceByDocNumber(docNumber).catch((err: Error) => err),
-    getOrderByName(shopify, docNumber).catch((err: Error) => err),
-  ]);
-  const qbInvoice = qbInv instanceof Error ? null : qbInv;
+  const qbInvoice = qbInvoiceMap.get(docNumber) ?? null;
   const qbErr =
-    qbInv instanceof Error
-      ? qbInv.message
-      : qbInv === null
-        ? `no QB invoice with DocNumber=${docNumber}`
-        : null;
-  const shopifyOrder = shopOrder instanceof Error ? null : shopOrder;
-  const shopErr =
-    shopOrder instanceof Error
-      ? shopOrder.message
-      : shopOrder === null
-        ? `no Shopify order matching ${docNumber}`
-        : null;
+    qbInvoice === null
+      ? qbBatchError ?? `no QB invoice with DocNumber=${docNumber}`
+      : null;
+
+  // Shopify per-row — fast and rarely the bottleneck.
+  let shopifyOrder: Awaited<ReturnType<typeof getOrderByName>> = null;
+  let shopErr: string | null = null;
+  try {
+    shopifyOrder = await getOrderByName(shopify, docNumber);
+    if (shopifyOrder === null) {
+      shopErr = `no Shopify order matching ${docNumber}`;
+    }
+  } catch (err) {
+    shopErr = (err as Error).message;
+  }
+
   return [qbInvoice, qbErr, shopifyOrder, shopErr];
 }
 
