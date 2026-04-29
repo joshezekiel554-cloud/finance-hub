@@ -8,7 +8,7 @@
 // are logged at warn and skipped (so one bad invoice doesn't fail the whole
 // sync). Caller (BullMQ worker job) handles top-level errors.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
@@ -262,8 +262,38 @@ export async function syncInvoices(client?: QboClient): Promise<SyncStats> {
     }
   }
 
+  // Recompute customers.overdue_balance from the now-current invoices
+  // table. QBO's Customer.Balance gives us open AR (which we sync
+  // directly) but doesn't expose overdue separately — we derive it from
+  // invoice rows where due_date is past and balance is still positive.
+  // Done as one bulk UPDATE...JOIN rather than per-customer to keep the
+  // sync end-time bounded as the customer count grows.
+  await recomputeOverdueBalances();
+
   log.info({ stats }, "QB invoice sync complete");
   return stats;
+}
+
+// One bulk UPDATE that sets customers.overdue_balance to the sum of
+// invoice.balance for invoices that are overdue (due_date < today AND
+// balance > 0). Customers without overdue invoices get 0. Run this at
+// the end of every invoice sync so the denormalized field stays in
+// step with the invoice table.
+async function recomputeOverdueBalances(): Promise<void> {
+  // MySQL UPDATE...JOIN with a derived table — one statement covers
+  // both "set to sum" and "reset to 0 when no overdue rows" via the
+  // LEFT JOIN + COALESCE. Drizzle doesn't expose UPDATE...JOIN
+  // directly, so this goes through the sql tagged template.
+  await db.execute(sql`
+    UPDATE customers c
+    LEFT JOIN (
+      SELECT customer_id, SUM(balance) AS overdue
+      FROM invoices
+      WHERE balance > 0 AND due_date IS NOT NULL AND due_date < CURRENT_DATE
+      GROUP BY customer_id
+    ) i ON i.customer_id = c.id
+    SET c.overdue_balance = COALESCE(i.overdue, 0)
+  `);
 }
 
 async function upsertInvoice(
