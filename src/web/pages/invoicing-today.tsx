@@ -101,11 +101,30 @@ type Row = {
   } | null;
 };
 
-type ApiResponse = { rows: Row[]; shadowMode: boolean };
+type DismissReason = "b2c_paid_upfront" | "etsy_faire" | "other";
+type DismissedRecord = {
+  reason: DismissReason;
+  reasonNote: string | null;
+  dismissedAt: string;
+};
+type ApiResponse = {
+  rows: Row[];
+  dismissed: Record<string, DismissedRecord>;
+  shadowMode: boolean;
+};
 type Term = { id: string; name: string; dueDays: number | null };
 type TermsResponse = { terms: Term[] };
 
+const REASON_LABELS: Record<DismissReason, string> = {
+  b2c_paid_upfront: "B2C / paid upfront",
+  etsy_faire: "Etsy / Faire",
+  other: "Other",
+};
+
 export default function InvoicingTodayPage() {
+  const [tab, setTab] = useState<"active" | "dismissed">("active");
+  const queryClient = useQueryClient();
+
   const { data, isPending, isError, error, refetch, isFetching } = useQuery<ApiResponse>({
     queryKey: ["invoicing", "today"],
     queryFn: async () => {
@@ -177,24 +196,96 @@ export default function InvoicingTodayPage() {
         </Card>
       )}
 
-      {data && data.rows.length > 0 && <Summary rows={data.rows} />}
+      {data && data.rows.length > 0 && (
+        <Summary rows={data.rows} dismissed={data.dismissed} />
+      )}
 
-      {data?.rows.map((row) => (
-        <ShipmentCard
-          key={row.gmailId}
-          row={row}
-          shadowMode={data.shadowMode}
-          terms={terms}
+      {data && (
+        <TabToggle
+          tab={tab}
+          onChange={setTab}
+          activeCount={
+            data.rows.filter((r) => !data.dismissed[r.gmailId] && r.parseConfidence >= 0.5)
+              .length
+          }
+          dismissedCount={
+            data.rows.filter((r) => data.dismissed[r.gmailId]).length
+          }
         />
-      ))}
+      )}
+
+      {data?.rows
+        .filter((r) =>
+          tab === "active" ? !data.dismissed[r.gmailId] : !!data.dismissed[r.gmailId],
+        )
+        .map((row) => (
+          <ShipmentCard
+            key={row.gmailId}
+            row={row}
+            shadowMode={data.shadowMode}
+            terms={terms}
+            dismissedRecord={data.dismissed[row.gmailId] ?? null}
+            onAfterDismissChange={() => {
+              queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+            }}
+          />
+        ))}
     </div>
   );
 }
 
-function Summary({ rows }: { rows: Row[] }) {
-  const ready = rows.filter((r) => r.reconcileResult !== null);
-  const lowConfidence = rows.filter((r) => r.parseConfidence < 0.5);
-  const missingInvoice = rows.filter(
+function TabToggle({
+  tab,
+  onChange,
+  activeCount,
+  dismissedCount,
+}: {
+  tab: "active" | "dismissed";
+  onChange: (t: "active" | "dismissed") => void;
+  activeCount: number;
+  dismissedCount: number;
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
+      <button
+        type="button"
+        onClick={() => onChange("active")}
+        className={cn(
+          "rounded px-3 py-1 transition-colors",
+          tab === "active"
+            ? "bg-base font-medium text-primary shadow-sm"
+            : "text-secondary hover:text-primary",
+        )}
+      >
+        Active ({activeCount})
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("dismissed")}
+        className={cn(
+          "rounded px-3 py-1 transition-colors",
+          tab === "dismissed"
+            ? "bg-base font-medium text-primary shadow-sm"
+            : "text-secondary hover:text-primary",
+        )}
+      >
+        Dismissed ({dismissedCount})
+      </button>
+    </div>
+  );
+}
+
+function Summary({
+  rows,
+  dismissed,
+}: {
+  rows: Row[];
+  dismissed: Record<string, DismissedRecord>;
+}) {
+  const visible = rows.filter((r) => !dismissed[r.gmailId]);
+  const ready = visible.filter((r) => r.reconcileResult !== null);
+  const lowConfidence = visible.filter((r) => r.parseConfidence < 0.5);
+  const missingInvoice = visible.filter(
     (r) => r.parseConfidence >= 0.5 && r.qbInvoice === null,
   );
   return (
@@ -245,12 +336,18 @@ function ShipmentCard({
   row,
   shadowMode,
   terms,
+  dismissedRecord,
+  onAfterDismissChange,
 }: {
   row: Row;
   shadowMode: boolean;
   terms: Term[];
+  dismissedRecord: DismissedRecord | null;
+  onAfterDismissChange: () => void;
 }) {
-  if (row.parseConfidence < 0.5) return null;
+  // Low-confidence rows still render in the dismissed tab if they were
+  // dismissed manually. Hide from the active tab as before.
+  if (row.parseConfidence < 0.5 && !dismissedRecord) return null;
 
   // Local editable state. Initialised from the reconciler output and from
   // the parsed shipment, both treated as defaults the user can override.
@@ -280,6 +377,45 @@ function ShipmentCard({
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
 
   const queryClient = useQueryClient();
+
+  const [showDismissForm, setShowDismissForm] = useState(false);
+  const [dismissReason, setDismissReason] = useState<DismissReason>("etsy_faire");
+  const [dismissNote, setDismissNote] = useState("");
+
+  const dismissMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/invoicing/dismiss", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          gmailId: row.gmailId,
+          reason: dismissReason,
+          reasonNote: dismissReason === "other" ? dismissNote.trim() || undefined : undefined,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      setShowDismissForm(false);
+      setDismissNote("");
+      onAfterDismissChange();
+    },
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/invoicing/restore", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ gmailId: row.gmailId }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => onAfterDismissChange(),
+  });
+
   const sendMutation = useMutation({
     mutationFn: async (): Promise<SendResult> => {
       if (!row.qbInvoice) return { ok: false, error: "no qb invoice" };
@@ -489,7 +625,7 @@ function ShipmentCard({
   }
 
   return (
-    <Card>
+    <Card className={cn(dismissedRecord && "opacity-60")}>
       <CardHeader>
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -502,6 +638,14 @@ function ShipmentCard({
                 Feldart Tx #{row.parsed.transactionNumber} · {row.parsed.carrierShort} ·{" "}
                 {row.parsed.trackingNumber} · ship date {row.parsed.shipDate}
               </div>
+              {dismissedRecord && (
+                <div className="mt-1 text-xs">
+                  <Badge tone="neutral">
+                    Dismissed: {REASON_LABELS[dismissedRecord.reason]}
+                    {dismissedRecord.reasonNote ? ` — ${dismissedRecord.reasonNote}` : ""}
+                  </Badge>
+                </div>
+              )}
             </div>
           </div>
           {row.qbInvoice ? (
@@ -531,6 +675,46 @@ function ShipmentCard({
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
+        {dismissedRecord ? (
+          <div className="flex items-center justify-between gap-4">
+            <div className="text-xs text-secondary">
+              Dismissed{" "}
+              {formatTime(dismissedRecord.dismissedAt)}. This shipment is hidden
+              from the active list.
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => restoreMutation.mutate()}
+              disabled={restoreMutation.isPending}
+            >
+              {restoreMutation.isPending ? "Restoring…" : "Restore"}
+            </Button>
+          </div>
+        ) : showDismissForm ? (
+          <DismissForm
+            reason={dismissReason}
+            note={dismissNote}
+            onChangeReason={setDismissReason}
+            onChangeNote={setDismissNote}
+            onCancel={() => setShowDismissForm(false)}
+            onConfirm={() => dismissMutation.mutate()}
+            pending={dismissMutation.isPending}
+          />
+        ) : (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowDismissForm(true)}
+              className="text-xs text-secondary hover:text-accent-danger underline-offset-2 hover:underline"
+            >
+              Dismiss this shipment
+            </button>
+          </div>
+        )}
+
+        {!dismissedRecord && (
+          <>
         {row.shopifyOrder?.note && (
           <div className="flex items-start gap-2 rounded-md border border-accent-info/30 bg-accent-info/5 px-3 py-2 text-sm text-secondary">
             <MessageSquare className="mt-0.5 size-4 shrink-0 text-accent-info" />
@@ -703,6 +887,8 @@ function ShipmentCard({
           </div>
           </div>
         )}
+          </>
+        )}
       </CardBody>
     </Card>
   );
@@ -758,6 +944,71 @@ function SendResultPill({
     );
   }
   return <Badge tone="success">Updated (no email)</Badge>;
+}
+
+function DismissForm({
+  reason,
+  note,
+  onChangeReason,
+  onChangeNote,
+  onCancel,
+  onConfirm,
+  pending,
+}: {
+  reason: DismissReason;
+  note: string;
+  onChangeReason: (r: DismissReason) => void;
+  onChangeNote: (n: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+  pending: boolean;
+}) {
+  return (
+    <div className="rounded-md border border-accent-warning/40 bg-accent-warning/5 px-3 py-3">
+      <div className="text-xs font-medium text-accent-warning">
+        Dismiss this shipment from the active list?
+      </div>
+      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+        <label className="text-xs text-secondary">
+          <span className="mb-1 block font-medium">Reason</span>
+          <select
+            value={reason}
+            onChange={(e) => onChangeReason(e.target.value as DismissReason)}
+            className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+          >
+            <option value="b2c_paid_upfront">B2C / paid upfront</option>
+            <option value="etsy_faire">Etsy / Faire</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        {reason === "other" && (
+          <label className="text-xs text-secondary">
+            <span className="mb-1 block font-medium">Reason note (optional)</span>
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => onChangeNote(e.target.value)}
+              placeholder="e.g. wholesale not yet billed"
+              className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+            />
+          </label>
+        )}
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={onConfirm}
+          disabled={pending}
+        >
+          {pending ? "Dismissing…" : "Confirm dismiss"}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 // Email recipient block — shows the current BillEmail in collapsed form

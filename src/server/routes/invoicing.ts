@@ -15,6 +15,7 @@ import { z } from "zod";
 import { searchEmails, getMessageHtmlBody } from "../../integrations/gmail/client.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
+import { eq } from "drizzle-orm";
 import {
   parseShipmentHtml,
   reconcile,
@@ -25,6 +26,11 @@ import {
   type ShopifyOrderLineForReconcile,
 } from "../../modules/b2b-invoicing/index.js";
 import type { QboInvoice } from "../../integrations/qb/types.js";
+import { db } from "../../db/index.js";
+import {
+  dismissedShipments,
+  DISMISS_REASONS,
+} from "../../db/schema/dismissed-shipments.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -241,7 +247,65 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       ),
     );
 
-    return reply.send({ rows, shadowMode: env.SHADOW_MODE });
+    // Phase 4: load the dismissed-shipments map so the UI can split rows
+    // into Active vs Dismissed tabs. We always send all rows; the tab
+    // toggle is purely client-side filtering.
+    const dismissedRows = await db.select().from(dismissedShipments);
+    const dismissed: Record<
+      string,
+      { reason: string; reasonNote: string | null; dismissedAt: string }
+    > = {};
+    for (const row of dismissedRows) {
+      dismissed[row.gmailId] = {
+        reason: row.reason,
+        reasonNote: row.reasonNote,
+        dismissedAt: row.dismissedAt.toISOString(),
+      };
+    }
+
+    return reply.send({ rows, dismissed, shadowMode: env.SHADOW_MODE });
+  });
+
+  app.post("/dismiss", async (req, reply) => {
+    const schema = z.object({
+      gmailId: z.string().min(1).max(64),
+      reason: z.enum(DISMISS_REASONS),
+      reasonNote: z.string().max(500).optional(),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      return reply.code(400).send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const { gmailId, reason, reasonNote } = parse.data;
+    // Upsert so re-dismissing a previously dismissed shipment refreshes the
+    // reason without a unique-constraint error.
+    await db
+      .insert(dismissedShipments)
+      .values({
+        gmailId,
+        reason,
+        reasonNote: reasonNote ?? null,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          reason,
+          reasonNote: reasonNote ?? null,
+          dismissedAt: new Date(),
+        },
+      });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/restore", async (req, reply) => {
+    const schema = z.object({ gmailId: z.string().min(1).max(64) });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      return reply.code(400).send({ error: "invalid body" });
+    }
+    await db
+      .delete(dismissedShipments)
+      .where(eq(dismissedShipments.gmailId, parse.data.gmailId));
+    return reply.send({ ok: true });
   });
 
   app.post("/send", async (req, reply) => {
