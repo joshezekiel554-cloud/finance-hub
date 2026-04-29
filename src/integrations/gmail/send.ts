@@ -5,61 +5,127 @@ import {
   withRetry,
 } from "./client.js";
 import { listAliases } from "./aliases.js";
-import type { SendEmailInput, SendEmailResult } from "./types.js";
+import type {
+  EmailAttachment,
+  SendEmailInput,
+  SendEmailResult,
+} from "./types.js";
 
 const log = createLogger({ module: "gmail.send" });
 
-// Build an RFC 822 MIME multipart/alternative message. Gmail's
-// users.messages.send accepts this base64url-encoded as the `raw` field.
+// Build an RFC 822 MIME message Gmail accepts as users.messages.send `raw`.
 //
-// Notes on format:
-//   - Boundary string is randomized per message; the trailing `--` marks end.
-//   - We send both text and html parts so non-HTML clients have a fallback.
-//   - Replies wrapped from web Gmail use \r\n line endings; we match.
-//   - Reply-To header is optional but useful when sending from a sales@ alias
-//     while wanting replies to land at accounts@ etc.
-export function buildRawMessage({
-  from,
-  to,
-  subject,
-  html,
-  text,
-  replyTo,
-}: {
+// MIME structure depends on whether attachments are present:
+//   - No attachments: top-level multipart/alternative (text + html parts)
+//   - With attachments: multipart/mixed
+//       part 1: multipart/alternative (text + html)
+//       parts 2..N: each attachment as base64
+//
+// Reply threading: if `inReplyTo` is supplied, we write the In-Reply-To
+// AND References headers so non-Gmail clients render the thread. The
+// message is also tagged with `threadId` at the API call site (not the
+// MIME layer) — that's how Gmail itself groups it.
+export function buildRawMessage(input: {
   from: string;
   to: string;
+  cc?: string;
+  bcc?: string;
   subject: string;
   html?: string;
   text?: string;
   replyTo?: string;
+  inReplyTo?: string;
+  attachments?: EmailAttachment[];
 }): string {
-  const boundary = "----=_Part_" + Math.random().toString(36).slice(2);
+  const {
+    from,
+    to,
+    cc,
+    bcc,
+    subject,
+    html,
+    text,
+    replyTo,
+    inReplyTo,
+    attachments,
+  } = input;
+  const hasAttachments = (attachments?.length ?? 0) > 0;
 
-  const headerLines = [
+  // Outer boundary (multipart/mixed) used only when attachments exist.
+  // Inner boundary (multipart/alternative) always wraps text + html.
+  const altBoundary =
+    "----=_Alt_" + Math.random().toString(36).slice(2);
+  const mixedBoundary = hasAttachments
+    ? "----=_Mixed_" + Math.random().toString(36).slice(2)
+    : null;
+
+  const headerLines: string[] = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
+  if (cc) headerLines.push(`Cc: ${cc}`);
+  if (bcc) headerLines.push(`Bcc: ${bcc}`);
+  headerLines.push(`Subject: ${subject}`, "MIME-Version: 1.0");
   if (replyTo) headerLines.push(`Reply-To: ${replyTo}`);
+  if (inReplyTo) {
+    // RFC 5322: angle-bracketed Message-ID. We accept either a bare id
+    // or one already wrapped, and normalize.
+    const wrapped = inReplyTo.startsWith("<") ? inReplyTo : `<${inReplyTo}>`;
+    headerLines.push(`In-Reply-To: ${wrapped}`);
+    headerLines.push(`References: ${wrapped}`);
+  }
+  headerLines.push(
+    `Content-Type: ${
+      hasAttachments
+        ? `multipart/mixed; boundary="${mixedBoundary}"`
+        : `multipart/alternative; boundary="${altBoundary}"`
+    }`,
+  );
   const headers = headerLines.join("\r\n");
 
-  const bodyParts = [
-    `--${boundary}`,
+  // multipart/alternative payload — always present.
+  const altPart = [
+    `--${altBoundary}`,
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: 7bit",
     "",
     text ?? "",
-    `--${boundary}`,
+    `--${altBoundary}`,
     'Content-Type: text/html; charset="UTF-8"',
     "Content-Transfer-Encoding: 7bit",
     "",
     html ?? "",
-    `--${boundary}--`,
+    `--${altBoundary}--`,
   ].join("\r\n");
 
-  const message = headers + "\r\n\r\n" + bodyParts;
+  let body: string;
+  if (hasAttachments) {
+    const parts: string[] = [
+      `--${mixedBoundary}`,
+      `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+      "",
+      altPart,
+    ];
+    for (const att of attachments!) {
+      parts.push(`--${mixedBoundary}`);
+      parts.push(`Content-Type: ${att.mimeType}; name="${att.filename}"`);
+      parts.push("Content-Transfer-Encoding: base64");
+      parts.push(
+        `Content-Disposition: attachment; filename="${att.filename}"`,
+      );
+      parts.push("");
+      // Base64 with line-wraps every 76 chars per RFC 2045.
+      const b64 = att.data.toString("base64");
+      const wrapped = b64.match(/.{1,76}/g)?.join("\r\n") ?? b64;
+      parts.push(wrapped);
+    }
+    parts.push(`--${mixedBoundary}--`);
+    body = parts.join("\r\n");
+  } else {
+    body = altPart;
+  }
+
+  const message = headers + "\r\n\r\n" + body;
   return Buffer.from(message)
     .toString("base64")
     .replace(/\+/g, "-")
@@ -75,7 +141,19 @@ export async function sendEmail(
   input: SendEmailInput,
   externalAccountId?: string,
 ): Promise<SendEmailResult> {
-  const { to, subject, html, text, replyTo, alias } = input;
+  const {
+    to,
+    cc,
+    bcc,
+    subject,
+    html,
+    text,
+    replyTo,
+    alias,
+    attachments,
+    threadId,
+    inReplyTo,
+  } = input;
 
   let from: string;
   if (alias) {
@@ -102,11 +180,26 @@ export async function sendEmail(
     from = await getProfileEmail(externalAccountId);
   }
 
-  const raw = buildRawMessage({ from, to, subject, html, text, replyTo });
+  const raw = buildRawMessage({
+    from,
+    to,
+    cc,
+    bcc,
+    subject,
+    html,
+    text,
+    replyTo,
+    inReplyTo,
+    attachments,
+  });
 
   const gmail = await getInternalGmailClient(externalAccountId);
   const res = await withRetry(
-    () => gmail.users.messages.send({ userId: "me", requestBody: { raw } }),
+    () =>
+      gmail.users.messages.send({
+        userId: "me",
+        requestBody: threadId ? { raw, threadId } : { raw },
+      }),
     "messages.send",
   );
 
@@ -116,7 +209,16 @@ export async function sendEmail(
     from,
   };
   log.info(
-    { to, subject, alias: alias ?? "primary", messageId: result.messageId },
+    {
+      to,
+      cc: cc ?? null,
+      bcc: bcc ?? null,
+      subject,
+      alias: alias ?? "primary",
+      messageId: result.messageId,
+      attachmentCount: attachments?.length ?? 0,
+      threaded: Boolean(threadId || inReplyTo),
+    },
     "gmail message sent",
   );
   return result;
