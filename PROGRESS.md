@@ -13,6 +13,18 @@ If you're new to this file:
 
 ## Current phase
 
+**Week 7 — Statements + Hold + Compose. 🟢 SHIPPED.** Multi-agent
+parallel build across 3 waves (commits `72d93b9` → `af80bfd`).
+Settings + email templates · Shopify hold (tag-based with prominent UI
+signaling + confirm dialog) · Gmail aliases enumeration · template
+variables resolver · gmail/send.ts extended (CC/BCC/attachments/reply
+threading) · compose modal (slide-over with template picker, alias
+dropdown, attachments) · Reply button wired into compose · statement
+send backend (Path B: per-invoice InvoiceLink + unapplied credit
+memos + attached PDFs) · single-customer Send Statement button +
+preview dialog · /chase page with overdue list + batch send (bounded
+concurrency, per-row failure isolation).
+
 **Week 6 — CRM core. 🟢 SHIPPED + extensively polished.** Beyond the
 core week-6 scope, an extra batch of post-shipping enhancements landed
 (commits `a58f71e` → `18a9294`): dev-auth bypass, $ + PDF + amount on
@@ -91,22 +103,31 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-04-29 (evening — post-week-6 polish batch)
-**Commit on `main`**: `18a9294` (labeled "Mark as actioned" chip on email rows)
+**Date**: 2026-04-29 (late — week 7 closed)
+**Commit on `main`**: `af80bfd` (wave 3 integration: chase route + page + nav)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (in sync)
 **Local repo**: `C:\Users\user\Documents\finance-hub`
-**Status**: typecheck silent · **149/149 tests pass** · server + web + worker running via `npm run dev`
-**Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · 4,842 activities · 509 emails
+**Status**: typecheck silent · **181/181 tests pass** · server + web + worker running via `npm run dev`
+**Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · 4,842 activities · 509 emails · 6 email templates seeded
 **Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy
 
 ## Active work
 
-**None — ready for week 7.** Three loose ends to optionally close first:
+**None — ready for week 8 (Notifications) or v2.0 polish pass.** Loose
+ends carrying over from earlier weeks:
 1. Invoicing 11am cron not yet registered (code exists, not in `schedule.ts`)
-2. `src/server/routes/invoicing.ts` has no `requireAuth` gate (genuinely a
-   security gap if exposed beyond localhost) — easy 5-min fix
-3. 180-day Gmail backfill still partial (~6 days actually populated;
-   per-customer button covers on-demand needs)
+2. `src/server/routes/invoicing.ts` has no `requireAuth` gate
+3. 180-day Gmail backfill still partial (~6 days populated; per-customer
+   button covers on-demand)
+4. `In-Reply-To` header uses Gmail API messageId not RFC 5322 Message-Id
+   (threading still works for Gmail recipients via threadId; non-Gmail
+   recipients render as new threads). Fix: extract Message-Id header in
+   gmail poller and store on email_log rows.
+5. `customer-detail.tsx` doesn't have a ToastProvider (only `/tasks`
+   does); statement-send shows an inline pill instead. If we want toasts
+   globally, lift ToastProvider into App.tsx.
+6. The `relatedTaskId` field on `email_log` was never added to schema;
+   the linkage is via `tasks.relatedActivityId` instead. Acceptable.
 
 ## What just shipped (last 24h, 25 commits)
 
@@ -288,24 +309,68 @@ fixes culminating in the real one. Highlights:
   added as a billing CC in QBO). Cleanup ran out-of-band:
   650 email_log + 650 activity rows deleted, billing_emails stripped.
 
+**Week 7 — Statements + Hold + Compose** (multi-agent, 3 waves,
+commits `72d93b9` → `af80bfd`):
+- ✅ **Settings + email_templates** (`72d93b9`) — `email_templates`
+  table + migration + 6 seeded templates (chase L1/L2/L3,
+  statement_open_items HTML body with `{{statement_table}}`
+  placeholder, payment_confirmation, generic_reply). CRUD route
+  `/api/email-templates`. Settings page (`/settings`) with
+  tap-to-insert merge-variable chips in the editor.
+- ✅ **Wave 1 — foundation** (parallel agents `8d511b2` `e2c8dbc`):
+  - Agent A: `template-vars.ts` resolver + `buildTemplateVars` + 22
+    new tests; rewrote `aliases.ts` with 5-min TTL cache and locked
+    `GmailAlias` shape.
+  - Agent B: Shopify hold full-stack — `findCustomerByEmail`,
+    `getCustomerTags`, tag mutation helpers; `/api/customers/:id/
+    {shopify-tags,hold-toggle}` route; `<HoldBanner>` red full-width
+    component; customer-detail.tsx tags chips + confirm dialog;
+    customers.tsx red-row + `Hold` critical badge.
+- ✅ **gmail/send.ts extension** (`f657574`, team-lead) — added
+  CC/BCC fields, `attachments?: Array<{ filename, mimeType, data:
+  Buffer }>`, `threadId` + `inReplyTo` for reply threading. Switches
+  MIME envelope from `multipart/alternative` to `multipart/mixed`
+  when attachments are present.
+- ✅ **Wave 2 — compose + statement backend** (parallel agents
+  `ef5a06f` `d8ac948`):
+  - Agent C: `<ComposeModal>` slide-over (From dropdown defaults to
+    accounts@feldart.com, To/CC/BCC, Subject, Template picker,
+    Body); POST `/api/email/send` (now mounted as `/api/send`);
+    Reply button on Email tab wired to compose with thread context.
+  - Agent D: `src/modules/statements/{render,send}.ts` — pulls open
+    invoices + per-invoice `Invoice.InvoiceLink` (QBO Payments
+    pay-now URLs) + unapplied credit memos; renders HTML statement
+    table; fetches each invoice PDF (concurrency 5); sends via
+    Gmail with all PDFs attached. POST
+    `/api/customers/:id/statement-send`.
+- ✅ **Wave 3 — UIs** (parallel agents `ba34c27` `6389c95` `af80bfd`):
+  - Agent E: `<StatementSendDialog>` confirm + preview; "Send
+    statement" button on customer detail (gated on balance > 0);
+    auto-fading success pill. `GET /:id/statement-preview` extension
+    on customers.ts.
+  - Agent F: `/chase` page (overdue customers table with sortable
+    cols, last-activity rollup via correlated subquery,
+    holdStatus/customerType filter chips); `POST
+    /api/chase/batch-statement` with concurrency-bounded fanout
+    (max 5 parallel sends, per-row failure isolation, batch-level
+    audit row); per-row Sent/Skipped/Failed pills after batch
+    completes.
+- ✅ **Verified end-to-end**: `GET /api/aliases` returns 8 verified
+  Gmail aliases including `accounts@feldart.com`. `GET
+  /api/chase/customers` returns Torah Judaica $104k overdue first.
+  `GET /api/customers/:id/shopify-tags` returns real Shopify tags.
+  Statement send route 404s correctly on invalid customer ids.
+  181/181 tests green; typecheck silent.
+
 ## In progress
 
-**None.** Ready for week 7 once loose ends are decided.
+**None.** Ready for week 8 (Notifications) or v2.0 polish pass.
 
 ## What's next
 
 **Week 4 leftovers (~1 hour, deferred from earlier):**
 1. Register the 11am invoicing cron in `src/jobs/schedule.ts`
 2. Real-invoice parity check vs 1.0
-
-**Week 7 — Statements + Shopify hold + Email compose:**
-1. QBO statement send (single-customer button + batch via chase list)
-2. Shopify hold tag write (read scope already in place; need write
-   scope on the Shopify install)
-3. Email compose surface (template picker + alias auto-pick + AI
-   enhance button)
-4. Templates pre-loaded in `src/modules/email-compose/templates.ts`
-5. Gmail `users.settings.sendAs.list` aliases enumerated + cached
 
 **Week 8 — Notifications:**
 - Email digest BullMQ job (7am daily)
@@ -337,9 +402,9 @@ These don't block current work but block specific later phases:
 | Verify VPS RAM headroom (KVM1 vs KVM2) | Week 9 | User offered to upgrade if needed |
 | ~~QBO custom field IDs (tracking_number, ship_via, ship_date)~~ | ~~Week 5~~ | ✅ Resolved during week 4 — IDs known + wired in `sender.ts` |
 | ~~Feldart shipment email format consistency check~~ | ~~Week 4~~ | ✅ Resolved — parser handles real-world variants; bulk-dismiss covers WMS noise |
-| Shopify "active" tag name | Week 7 (Shopify hold) | Pending |
-| List of Gmail aliases + context mapping | Week 7 (email compose) | Pending |
-| Initial email templates (chase L1/L2/L3, etc.) | Week 7 | Pending |
+| ~~Shopify "active" tag name~~ | ~~Week 7~~ | ✅ Resolved — tag is `b2b`; remove for hold, add to release. Hardcoded as `B2B_TAG` in `holds.ts`. |
+| ~~List of Gmail aliases + context mapping~~ | ~~Week 7~~ | ✅ Resolved — `listAliases()` enumerates from Gmail; default to accounts@feldart.com (verified) |
+| ~~Initial email templates (chase L1/L2/L3, etc.)~~ | ~~Week 7~~ | ✅ Resolved — 6 default templates seeded; user can edit via `/settings` |
 | GitHub Actions secrets (`VPS_SSH_KEY`, `VPS_HOST`) | Week 9 | Reuse from orders project |
 | Auth.js Google OAuth client redirect URI for `finance.feldart.com` | Week 9 | Add to existing client |
 | MySQL DB + user provisioned on VPS (`feldart_finance` / `feldart_finance_app`) | Week 9 | See `deployment/vps-setup.md` step 2 |
