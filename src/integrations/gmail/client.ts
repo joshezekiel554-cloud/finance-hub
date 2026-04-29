@@ -32,6 +32,29 @@ const BATCH_DELAY_MS = 500;
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 2000;
 
+// Bounded-concurrency Promise.all replacement. N workers pull off a
+// shared queue until the items list is exhausted. Preserves input order
+// in the result. Local utility — no new dep needed for what amounts to
+// 15 lines.
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i] as T, i);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
+}
+
 const TOKEN_REFRESH_LEAD_MS = 60_000;
 
 type CachedClient = {
@@ -381,18 +404,24 @@ export async function searchEmails(
     if (pageToken) await delay(BATCH_DELAY_MS);
   } while (pageToken && allMessages.length < maxResults);
 
-  // Fire all detail fetches in parallel. withRetry handles 429 / quota
-  // exhaustion with exponential backoff, so flooding here is safe and ~5x
-  // faster than the 5-at-a-time + 500ms-delay loop we had before.
+  // Bounded-concurrency detail fetch. Unbounded Promise.all over thousands
+  // of messages exhausts Windows TCP buffers (ENOBUFS) on big backfills —
+  // each in-flight fetch holds a socket. 20 parallel is a safe sweet spot
+  // that's still ~4× faster than serial without burning the network stack.
+  // withRetry handles 429s with exponential backoff, so flooding within
+  // the bound is fine.
   const toFetch = allMessages.slice(0, maxResults);
-  const detailed: ParsedEmail[] = await Promise.all(
-    toFetch.map(async (m) => {
+  const FETCH_CONCURRENCY = 20;
+  const detailed: ParsedEmail[] = await mapWithLimit(
+    toFetch,
+    FETCH_CONCURRENCY,
+    async (m) => {
       const res = await withRetry(
         () => gmail.users.messages.get({ userId: "me", id: m.id ?? "", format: "full" }),
         `messages.get(${m.id})`,
       );
       return formatMessage(res.data);
-    }),
+    },
   );
 
   return detailed.sort((a, b) => {
