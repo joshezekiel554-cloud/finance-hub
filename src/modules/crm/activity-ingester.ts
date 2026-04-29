@@ -20,6 +20,7 @@ import {
   type Activity,
   type NewActivity,
 } from "../../db/schema/crm.js";
+import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 
 const log = createLogger({ module: "activity-ingester" });
@@ -105,6 +106,16 @@ export async function recordActivity(
     },
     "activity recorded",
   );
+
+  // Fire after the transaction commits so subscribers see committed
+  // state. The SSE plugin listens to this and rebroadcasts to all
+  // connected clients; the activity timeline component invalidates its
+  // query when the customerId matches.
+  events.emit("activity.created", {
+    activityId: id,
+    customerId: input.customerId,
+    kind: input.kind,
+  });
 
   return id;
 }

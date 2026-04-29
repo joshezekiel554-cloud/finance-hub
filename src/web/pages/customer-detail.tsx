@@ -5,6 +5,7 @@ import { ArrowLeft, Pause, Play, Mail } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { ActivityTimeline } from "../components/activity-timeline";
 import { cn } from "../lib/cn";
 
 type Customer = {
@@ -206,7 +207,11 @@ export default function CustomerDetailPage() {
 
       <div>
         {tab === "activity" && (
-          <ActivityPanel activities={recentActivities} />
+          <ActivityTimeline
+            customerId={customer.id}
+            activities={recentActivities}
+            queryKey={["customer", customerId]}
+          />
         )}
         {tab === "invoices" && <PlaceholderPanel label="Invoices" />}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
@@ -252,47 +257,6 @@ function CustomerTypeBadge({ type }: { type: "b2b" | "b2c" | null }) {
   if (type === "b2b") return <Badge tone="info">B2B</Badge>;
   if (type === "b2c") return <Badge tone="neutral">B2C</Badge>;
   return <Badge tone="medium">Untagged</Badge>;
-}
-
-// Activity panel — temporary inline implementation. Task #6 replaces this
-// with the dedicated <ActivityTimeline /> component (SSE-wired, kind
-// filter chips, click-to-expand).
-function ActivityPanel({ activities }: { activities: Activity[] }) {
-  if (activities.length === 0) {
-    return (
-      <Card>
-        <CardBody className="py-8 text-center text-sm text-muted">
-          No activity yet for this customer.
-        </CardBody>
-      </Card>
-    );
-  }
-  return (
-    <Card>
-      <CardBody className="space-y-2 p-0">
-        {activities.map((a) => (
-          <div
-            key={a.id}
-            className="border-b border-default px-4 py-3 text-sm last:border-b-0"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-medium">{a.subject ?? a.kind}</span>
-              <span className="text-xs text-muted">
-                {new Date(a.occurredAt).toLocaleString()}
-              </span>
-            </div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-secondary">
-              <Badge tone="neutral">{a.kind}</Badge>
-              <span>{a.source}</span>
-            </div>
-            {a.body && (
-              <p className="mt-2 line-clamp-2 text-secondary">{a.body}</p>
-            )}
-          </div>
-        ))}
-      </CardBody>
-    </Card>
-  );
 }
 
 function PlaceholderPanel({ label }: { label: string }) {

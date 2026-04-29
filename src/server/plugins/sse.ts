@@ -14,6 +14,7 @@
 
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 
 const log = createLogger({ component: "sse-broker" });
@@ -151,7 +152,42 @@ export const ssePlugin = fp(async function ssePlugin(app: FastifyInstance) {
   // alive. Fastify's app.close() doesn't know about this timer.
   interval.unref();
 
+  // Bridge from the in-process domain event bus to connected clients.
+  // Activity events fan out to ALL users (the customer detail page
+  // filters client-side); task/comment/mention events do too for now,
+  // and the relevant components filter on customerId / mentionedUserId.
+  // When we add per-user routing (e.g., notifications addressed only to
+  // the assignee), switch publishAll → broker.publish(userId, …).
+  const offActivity = events.on("activity.created", (e) => {
+    broker.publishAll({ type: "activity.created", ...e });
+  });
+  const offTaskCreated = events.on("task.created", (e) => {
+    broker.publishAll({ type: "task.created", ...e });
+  });
+  const offTaskUpdated = events.on("task.updated", (e) => {
+    broker.publishAll({ type: "task.updated", ...e });
+  });
+  const offTaskCompleted = events.on("task.completed", (e) => {
+    broker.publishAll({ type: "task.completed", ...e });
+  });
+  const offComment = events.on("comment.created", (e) => {
+    broker.publishAll({ type: "comment.created", ...e });
+  });
+  const offMention = events.on("mention", (e) => {
+    // Mentions ARE per-user — only push to the mentioned user. They'll
+    // see a toast / bell badge from this. The other listeners use
+    // publishAll because everyone benefits from seeing the timeline
+    // update; mentions are personal.
+    broker.publish(e.mentionedUserId, { type: "mention", ...e });
+  });
+
   app.addHook("onClose", async () => {
     clearInterval(interval);
+    offActivity();
+    offTaskCreated();
+    offTaskUpdated();
+    offTaskCompleted();
+    offComment();
+    offMention();
   });
 });
