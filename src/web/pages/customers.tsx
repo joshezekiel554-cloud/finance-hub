@@ -94,14 +94,16 @@ export default function CustomersPage() {
 
   const visibleRows = data?.rows ?? [];
 
-  // "Select all (balance > 0)" auto-includes only the rows in the current
-  // visible list whose balance is above zero — your B2B heuristic. The
-  // user can manually flip individuals before committing.
+  // Twin heuristics for the bulk-tag sweep:
+  //   balance > 0 → likely B2B (have an outstanding statement balance)
+  //   balance = 0 → likely B2C (paid-at-checkout via Shopify, no AR)
+  // Either selector can be flipped to "Clear selection" when fully selected.
   const balancePositiveIds = useMemo(
-    () =>
-      visibleRows
-        .filter((r) => Number(r.balance) > 0)
-        .map((r) => r.id),
+    () => visibleRows.filter((r) => Number(r.balance) > 0).map((r) => r.id),
+    [visibleRows],
+  );
+  const balanceZeroIds = useMemo(
+    () => visibleRows.filter((r) => Number(r.balance) === 0).map((r) => r.id),
     [visibleRows],
   );
 
@@ -113,6 +115,17 @@ export default function CustomersPage() {
       setSelectedIds(new Set());
     } else {
       setSelectedIds(new Set(balancePositiveIds));
+    }
+  }
+
+  function toggleSelectAllBalanceZero() {
+    if (
+      balanceZeroIds.length > 0 &&
+      balanceZeroIds.every((id) => selectedIds.has(id))
+    ) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(balanceZeroIds));
     }
   }
 
@@ -227,6 +240,16 @@ export default function CustomersPage() {
               balancePositiveIds.length > 0
                 ? "Clear selection"
                 : `Select all balance > 0 (${balancePositiveIds.length})`}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={toggleSelectAllBalanceZero}
+            >
+              {balanceZeroIds.every((id) => selectedIds.has(id)) &&
+              balanceZeroIds.length > 0
+                ? "Clear selection"
+                : `Select all balance = 0 (${balanceZeroIds.length})`}
             </Button>
             <div className="ml-auto flex gap-2">
               <Button
