@@ -43,6 +43,13 @@
       "when": 1777472730489,
       "tag": "0005_pink_wiccan",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1777473848799,
+      "tag": "0006_moaning_starbolt",
+      "breakpoints": true
     }
   ]
 }

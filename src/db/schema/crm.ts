@@ -4,6 +4,7 @@ import {
   json,
   mysqlEnum,
   mysqlTable,
+  primaryKey,
   text,
   timestamp,
   varchar,
@@ -69,7 +70,17 @@ export const activities = mysqlTable(
   }),
 );
 
-export const TASK_STATUSES = ["open", "in_progress", "done", "cancelled"] as const;
+// Status as varchar(32) (not mysqlEnum) so future Kanban columns are a
+// config change rather than a schema migration. The TASK_STATUSES array
+// is the source of truth; routes validate against it via zod.
+export const TASK_STATUSES = [
+  "open",
+  "in_progress",
+  "blocked",
+  "done",
+  "cancelled",
+] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 
 export const tasks = mysqlTable(
@@ -91,7 +102,16 @@ export const tasks = mysqlTable(
     body: text("body"),
     dueAt: timestamp("due_at"),
     priority: mysqlEnum("priority", TASK_PRIORITIES).notNull().default("normal"),
-    status: mysqlEnum("status", TASK_STATUSES).notNull().default("open"),
+    status: varchar("status", { length: 32 }).notNull().default("open"),
+    // Free-form tags. Stored as a JSON array of strings so the API
+    // doesn't need a join table for what's basically a label set. Cap
+    // count + length is enforced at the route layer.
+    tags: json("tags").$type<string[]>().default([]).notNull(),
+    // Position within its Kanban column. Kanban drag-drop sets this
+    // when a card moves; sort by status + position to render columns.
+    // Floats so reorder is O(1) without rewriting every other row's
+    // position (insert between A and B → (A.position + B.position) / 2).
+    position: varchar("position", { length: 32 }).notNull().default("0"),
     relatedActivityId: varchar("related_activity_id", { length: 24 }).references(
       () => activities.id,
       { onDelete: "set null" },
@@ -113,6 +133,97 @@ export const tasks = mysqlTable(
       t.dueAt,
     ),
     statusDueIdx: index("idx_tasks_status_due").on(t.status, t.dueAt),
+    // Composite for Kanban column queries: WHERE status='open' ORDER BY position
+    statusPositionIdx: index("idx_tasks_status_position").on(
+      t.status,
+      t.position,
+    ),
+  }),
+);
+
+// Watchers — users who get notifications about a task without being
+// assignees. Composite primary key on (taskId, userId) is the natural
+// key; no surrogate id needed.
+export const taskWatchers = mysqlTable(
+  "task_watchers",
+  {
+    taskId: varchar("task_id", { length: 24 })
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    userId: varchar("user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taskId, t.userId] }),
+    userIdx: index("idx_task_watchers_user").on(t.userId),
+  }),
+);
+
+// Generic comments. parent_type+parent_id keys allow comments on tasks
+// today, customers/invoices/whatever later — adding a new parent type
+// is a route change, not a schema migration.
+export const COMMENT_PARENT_TYPES = [
+  "task",
+  "customer",
+  "invoice",
+] as const;
+export type CommentParentType = (typeof COMMENT_PARENT_TYPES)[number];
+
+export const comments = mysqlTable(
+  "comments",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    parentType: varchar("parent_type", { length: 32 }).notNull(),
+    parentId: varchar("parent_id", { length: 24 }).notNull(),
+    userId: varchar("user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    editedAt: timestamp("edited_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    parentIdx: index("idx_comments_parent").on(t.parentType, t.parentId),
+    userIdx: index("idx_comments_user").on(t.userId),
+    createdAtIdx: index("idx_comments_created_at").on(t.createdAt),
+  }),
+);
+
+// @-mentions. Written when a comment body matches /@\w+/ and resolves
+// to a known user. Drives the per-user mention bell + inbox view, and
+// the SSE "mention" event.
+export const mentions = mysqlTable(
+  "mentions",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    commentId: varchar("comment_id", { length: 24 })
+      .notNull()
+      .references(() => comments.id, { onDelete: "cascade" }),
+    mentionedUserId: varchar("mentioned_user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    byUserId: varchar("by_user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Denormalized parent reference so we can list "mentions for me on
+    // task XYZ" without joining through comments.
+    parentType: varchar("parent_type", { length: 32 }).notNull(),
+    parentId: varchar("parent_id", { length: 24 }).notNull(),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    // Primary read pattern: my unread mentions, newest first.
+    mentionedReadIdx: index("idx_mentions_mentioned_read").on(
+      t.mentionedUserId,
+      t.readAt,
+      t.createdAt,
+    ),
+    parentIdx: index("idx_mentions_parent").on(t.parentType, t.parentId),
+    commentIdx: index("idx_mentions_comment").on(t.commentId),
   }),
 );
 
@@ -177,6 +288,12 @@ export type Activity = typeof activities.$inferSelect;
 export type NewActivity = typeof activities.$inferInsert;
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
+export type TaskWatcher = typeof taskWatchers.$inferSelect;
+export type NewTaskWatcher = typeof taskWatchers.$inferInsert;
+export type Comment = typeof comments.$inferSelect;
+export type NewComment = typeof comments.$inferInsert;
+export type Mention = typeof mentions.$inferSelect;
+export type NewMention = typeof mentions.$inferInsert;
 export type EmailLog = typeof emailLog.$inferSelect;
 export type NewEmailLog = typeof emailLog.$inferInsert;
 export type StatementSend = typeof statementSends.$inferSelect;
