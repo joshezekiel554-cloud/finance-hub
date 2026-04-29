@@ -13,6 +13,12 @@ If you're new to this file:
 
 ## Current phase
 
+**Week 6 — CRM core. 🟢 SHIPPED.** Customers list + B2B sweep + customer
+detail with 5-tab shell + activity timeline (SSE-wired) + Kanban tasks
+with comments + @mentions + watchers. Bug-check pass landed (commit
+`4641b1f` fixed mention-regex email collision, LIKE wildcard escapes,
+missing SSE events on delete/update, and N+1 counts gap).
+
 **Week 4 — B2B Invoicing module. 🟢 ~95% COMPLETE (feature-shipped, polish-grade).**
 
 Reconciler + sender + `/invoicing/today` end-to-end interactive UI all live.
@@ -67,19 +73,23 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-04-29
-**Commit on `main`**: `f30526e` (QB refresh fix — `x_refresh_token_expires_in`)
-**GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (in sync, last push includes f30526e)
+**Date**: 2026-04-29 (afternoon — week 6 closing)
+**Commit on `main`**: `4641b1f` (tasks integration + bug-check fixes; closes week 6)
+**GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (in sync)
 **Local repo**: `C:\Users\user\Documents\finance-hub`
 **Status**: typecheck silent · **149/149 tests pass** · server running on :3001 via tsx watch
+**Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · 4,842 activities
+(week 6 boot sync via `scripts/qb-sync-once.ts`)
 **Local dev**: MySQL running locally; QBO OAuth chain healthy (token rotates on refresh
 without intervention now that the `intuit-oauth` validation bug is fixed)
 
 ## Active work
 
-**None.** Week 4 substantially shipped. Awaiting direction on whether to:
-- close week 4 (cron registration + 1-2 real-invoice parity check), or
-- start week 6 (CRM core: customers list + detail + activity timeline + tasks)
+**None — week 6 just closed.** Awaiting direction on whether to:
+- close week 4 leftover (invoicing cron registration + parity check), or
+- start week 7 (Statements via QBO API + Shopify hold + email compose
+  + templates + alias picking), or
+- jump to week 9 AI agent if that has more daily-workflow value
 
 ## What just shipped (last 24h, 25 commits)
 
@@ -154,37 +164,86 @@ fixes culminating in the real one. Highlights:
 - ✅ **Anthropic SDK pattern lifted** (`src/integrations/anthropic/`) — cost tracking + tool registry foundation. 13 tests.
 - ✅ **BullMQ wiring** (`src/jobs/worker.ts`) — separate pm2 process, sync-every-30-min repeatable + chase-digest 5pm daily. SHADOW_MODE gate verified.
 
-**Week 4 — B2B Invoicing (the big one — see "Current phase" above for full breakdown):**
+**Week 4 — B2B Invoicing:**
 - ✅ Parser + Shopify integration + reconciler + sender + interactive `/invoicing/today` UI + email delivery + tab split (Open/Sent/Dismissed) + dismiss/restore + bulk dismiss + suffix-rename support + QB token refresh fully working.
+
+**Week 6 — CRM core (just shipped):**
+- ✅ **SSE infra** — domain event bus (`src/lib/events.ts`) + Fastify
+  plugin (`src/server/plugins/sse.ts`) + auth-gated `/api/events/stream`
+  + `useEventStream()` hook with single-tab connection + exp-backoff
+  reconnect. Events: `activity.created` / `task.{created,updated,
+  completed,deleted}` / `comment.{created,updated,deleted}` / `mention`.
+- ✅ **Customer schema sweep** — `customer_type` enum('b2b','b2c') NULL
+  on customers, indexed. Bulk-tag UI: select-all-balance-positive
+  heuristic auto-includes 124 candidates of 2,407 customers.
+- ✅ **Customers list** (`/customers`) — searchable table, tab filter
+  (B2B/B2C/Uncategorized/All) with live counts, uncategorized banner +
+  "Review now" sweep mode, sortable columns, links to detail.
+- ✅ **Customer detail** (`/customers/:id`) — header (name, email,
+  terms, type badge, hold pill, hold toggle), 4 stat cards, 5 tabs.
+- ✅ **Activity timeline** — kind icons + tone, click-to-expand body,
+  filter chips for kinds present, relative time ("3m ago"), SSE
+  invalidation on `activity.created` for current customer.
+- ✅ **Tasks Kanban** (`/tasks`) — Open/In progress/Blocked/Done columns,
+  HTML5 drag-drop with float-position math + optimistic UI, list view
+  toggle, filter bar (assignee, status, customer, priority, tags).
+- ✅ **Task detail drawer** — slide-over with inline editing (title,
+  body), assignee + customer pickers, due/priority/tags, watchers
+  avatar stack + watch/unwatch, comments thread.
+- ✅ **Comments + @mentions** — generic comments table keyed on
+  `parent_type`+`parent_id`. Mention regex `(?<![\w.])@([\w.-]+)/g`
+  rejects email-domain false positives. Resolves @-fragments to users
+  by name-substring + email-prefix (LIKE-escaped). Mentions table
+  drives bell-badge + per-user `mention` SSE event.
+- ✅ **MentionInput** — textarea with @-trigger autocomplete, arrow
+  keys + Enter + Escape; companion `MentionText` renders bodies with
+  bolded mentions.
+- ✅ **Initial QB data populated** — `scripts/qb-sync-once.ts` boot:
+  2,407 customers + 3,119 invoices + 19,184 lines + 4,842 activities.
+
+  Multi-agent execution: parallel `tasks-api` (commit 0063313) +
+  `tasks-ui` (dec1e53) in isolated worktrees, integrated by team-lead
+  (4641b1f), reviewed by bug-checker pass that landed 6 fixes
+  (regex tightening, LIKE escape, missing SSE events, N+1 counts).
 
 ## In progress
 
 **None.** Awaiting direction on next phase.
 
-## What's next — close week 4 + start week 6
+## What's next
 
-**Week 4 closeout (~1 hour total):**
+**Week 4 leftovers (~1 hour, deferred from earlier):**
+1. Register the 11am invoicing cron in `src/jobs/schedule.ts`
+2. Real-invoice parity check vs 1.0
 
-1. **Register the 11am invoicing cron in `src/jobs/schedule.ts`** —
-   the cron job code exists; just needs registration so it fires daily
-   at `0 11 * * *` Europe/London.
-2. **Real-invoice parity check** — pick one B2B invoice, send via 2.0,
-   confirm QBO state matches what 1.0 would have produced. Validates
-   the entire B2B invoicing pipeline end-to-end with real data.
+**Week 7 — Statements + Shopify hold + Email compose:**
+1. QBO statement send (single-customer button + batch via chase list)
+2. Shopify hold tag write (read scope already in place; need write
+   scope on the Shopify install)
+3. Email compose surface (template picker + alias auto-pick + AI
+   enhance button)
+4. Templates pre-loaded in `src/modules/email-compose/templates.ts`
+5. Gmail `users.settings.sendAs.list` aliases enumerated + cached
 
-**Week 6 — CRM core (next major scope, per plan):**
+**Week 8 — Notifications:**
+- Email digest BullMQ job (7am daily)
+- In-app notifications panel (bell badge with unread count) — SSE
+  broker already in place from week 6
 
-1. **Customers list** — table view of all customers with filter/search,
-   pulling from `customers` table (already populated by week 3 sync).
-2. **Customer detail page** — single-customer view with invoice history,
-   open balance, recent activity, contact info, notes.
-3. **Activity timeline** — chronological feed of `activities` rows
-   (email_in, email_out, invoice_sent, payment_received, etc.) with
-   filters by kind and date range.
-4. **Tasks CRUD** — create/edit/complete tasks tied to a customer or
-   activity. Schema already in `db/schema/crm.ts`.
-5. **Placeholder routes activated** — `/customers`, `/customer/:id`,
-   `/tasks` were stubbed in week 1-2; now wire real data + UI.
+**Week 9 — AI agent:**
+- `/agent` chat with `@customer-name` scoping
+- Tool registry (lookup_customer, draft_email, send_email, etc.) with
+  confirmation gating on writes
+- Prompt caching for customer context
+
+**Week 10 — Cutover:**
+- Shadow-mode parity verification
+- Switch 2.0 to live writes; freeze 1.0
+
+**Tasks system follow-ups (deferred from week 6 bug-check):**
+- Position rebalancing under heavy drag-drop (lazy threshold-based)
+- Inline-edit error toast on task drawer field PATCH failure
+- Drag-drop keyboard accessibility
 
 ## Open items (need human input)
 
