@@ -8,10 +8,11 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "concurrently -n server,web,worker -c blue,magenta,green \"npm:dev:server\" \"npm:dev:web\" \"npm:dev:worker\"",
     "dev:server": "tsx watch src/server/server.ts",
     "dev:web": "vite",
     "dev:worker": "tsx watch src/jobs/worker.ts",
+    "dev:no-worker": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "build": "tsc -b && tsc-alias -p tsconfig.json -f && vite build",
     "start": "node dist/server/server.js",
     "start:worker": "node dist/jobs/worker.js",
