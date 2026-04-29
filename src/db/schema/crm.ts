@@ -257,6 +257,15 @@ export const emailLog = mysqlTable(
     snippet: varchar("snippet", { length: 512 }),
     classification: varchar("classification", { length: 64 }),
     emailDate: timestamp("email_date").notNull(),
+    // Set when a user marks the email "actioned" — drives the email-tab
+    // filter that hides done items by default. Null = not yet actioned;
+    // un-actioning sets back to null. Persisted so other team members
+    // see the same state.
+    actionedAt: timestamp("actioned_at"),
+    actionedByUserId: varchar("actioned_by_user_id", { length: 255 }).references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
@@ -264,6 +273,13 @@ export const emailLog = mysqlTable(
     threadIdx: index("idx_email_log_thread").on(t.threadId),
     emailDateIdx: index("idx_email_log_email_date").on(t.emailDate),
     directionIdx: index("idx_email_log_direction").on(t.direction),
+    // Composite for the per-customer "open" inbox query: unactioned
+    // emails, newest first.
+    customerActionedIdx: index("idx_email_log_customer_actioned").on(
+      t.customerId,
+      t.actionedAt,
+      t.emailDate,
+    ),
   }),
 );
 

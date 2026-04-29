@@ -9,6 +9,7 @@ import commentsRoute from "./comments.js";
 import usersRoute from "./users.js";
 import mentionsRoute from "./mentions.js";
 import qbPdfRoute from "./qb-pdf.js";
+import emailLogRoute from "./email-log.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -34,6 +35,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(usersRoute, { prefix: "/api/users" });
   await app.register(mentionsRoute, { prefix: "/api/mentions" });
   await app.register(qbPdfRoute, { prefix: "/api/qb-pdf" });
+  await app.register(emailLogRoute, { prefix: "/api/email-log" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });

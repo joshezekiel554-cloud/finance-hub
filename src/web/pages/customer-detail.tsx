@@ -6,6 +6,7 @@ import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ActivityTimeline } from "../components/activity-timeline";
+import { EmailList } from "../components/email-list";
 import { cn } from "../lib/cn";
 
 type Customer = {
@@ -35,10 +36,11 @@ type DetailResponse = {
   recentActivities: Activity[];
 };
 
-type TabKey = "activity" | "invoices" | "orders" | "tasks" | "notes";
+type TabKey = "activity" | "emails" | "invoices" | "orders" | "tasks" | "notes";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "Activity" },
+  { key: "emails", label: "Emails" },
   { key: "invoices", label: "Invoices" },
   { key: "orders", label: "Orders" },
   { key: "tasks", label: "Tasks" },
@@ -202,6 +204,7 @@ export default function CustomerDetailPage() {
             queryKey={["customer", customerId]}
           />
         )}
+        {tab === "emails" && <EmailList customerId={customer.id} />}
         {tab === "invoices" && <PlaceholderPanel label="Invoices" />}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
         {tab === "tasks" && <PlaceholderPanel label="Tasks" />}

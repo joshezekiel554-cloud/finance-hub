@@ -24,7 +24,7 @@ import {
 } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
-import { activities } from "../../db/schema/crm.js";
+import { activities, emailLog } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { nanoid } from "nanoid";
 import { requireAuth } from "../lib/auth.js";
@@ -195,6 +195,50 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     );
 
     return reply.send({ updated: auditRows.length, total: ids.length });
+  });
+
+  // GET /api/customers/:id/emails — email_log rows for a customer,
+  // newest first. Used by the Email tab on customer detail. Filter
+  // params: `direction=inbound|outbound|all` (default all),
+  // `actioned=open|done|all` (default open — hide actioned items).
+  // Limit cap is generous because a single customer's full email
+  // history fits in one fetch for any reasonable usage.
+  app.get("/:id/emails", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const querySchema = z.object({
+      direction: z.enum(["inbound", "outbound", "all"]).default("all"),
+      actioned: z.enum(["open", "done", "all"]).default("open"),
+      limit: z.coerce.number().int().min(1).max(500).default(200),
+    });
+    const parse = querySchema.safeParse(req.query);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid query", details: parse.error.flatten() });
+    }
+    const { direction, actioned, limit } = parse.data;
+
+    const filters = [eq(emailLog.customerId, id)];
+    if (direction !== "all") {
+      filters.push(eq(emailLog.direction, direction));
+    }
+    // SQL nullability: actioned="open" → actionedAt IS NULL.
+    // actioned="done" → actionedAt IS NOT NULL.
+    if (actioned === "open") {
+      filters.push(isNull(emailLog.actionedAt));
+    } else if (actioned === "done") {
+      filters.push(sql`${emailLog.actionedAt} IS NOT NULL`);
+    }
+
+    const rows = await db
+      .select()
+      .from(emailLog)
+      .where(and(...filters))
+      .orderBy(desc(emailLog.emailDate))
+      .limit(limit);
+
+    return reply.send({ rows });
   });
 
   // GET /api/customers/:id — full record for the detail page. Returns
