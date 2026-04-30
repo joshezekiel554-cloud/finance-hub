@@ -181,12 +181,13 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
   //   - paymentTerms (Monday import + per-customer pencil)
   //   - primaryEmail + billingEmails (per-channel email overrides on
   //     the customer profile push to QBO; QBO sync no longer wins)
+  //   - phone (operator can edit on the profile + add labelled extras
+  //     in additional_phones; the main line pushes back to QBO too)
   // We still seed all three on the first INSERT above so a brand-
   // new customer picks up whatever QBO had at sync time.
   const drift =
     before.displayName !== desired.displayName ||
     before.balance !== desired.balance ||
-    before.phone !== desired.phone ||
     before.billingAddressLine1 !== desired.billingAddressLine1 ||
     before.billingAddressLine2 !== desired.billingAddressLine2 ||
     before.billingAddressCity !== desired.billingAddressCity ||
@@ -207,7 +208,6 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     .update(customers)
     .set({
       displayName: desired.displayName,
-      phone: desired.phone,
       balance: desired.balance,
       billingAddressLine1: desired.billingAddressLine1,
       billingAddressLine2: desired.billingAddressLine2,

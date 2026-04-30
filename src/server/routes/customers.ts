@@ -39,6 +39,7 @@ import { env } from "../../lib/env.js";
 import { ShopifyClient } from "../../integrations/shopify/client.js";
 import { pushCustomerTermsToQbo } from "../../modules/customer-terms/push-to-qbo.js";
 import { pushCustomerInvoiceEmailsToQbo } from "../../modules/customer-emails/push-to-qbo.js";
+import { pushCustomerPhoneToQbo } from "../../modules/customer-phone/push-to-qbo.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
@@ -68,6 +69,7 @@ const listQuerySchema = z.object({
   // New filter chips (all default false → no filtering applied):
   hideZeroBalance: boolish,
   hasOverdue: boolish,
+  hasUnactionedEmail: boolish,
   missingTerms: boolish,
   sort: z
     .enum(["displayName", "balance", "overdueBalance", "lastSyncedAt"])
@@ -112,6 +114,20 @@ const patchBodySchema = z.object({
     .max(20)
     .nullable()
     .optional(),
+  // Main phone — pushed back to QBO PrimaryPhone on change.
+  phone: z.string().max(64).nullable().optional(),
+  // Labelled extras alongside the main line. Local-only — not pushed
+  // to QBO since QBO's customer schema doesn't have a free-form list.
+  additionalPhones: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(64),
+        number: z.string().min(3).max(64),
+      }),
+    )
+    .max(10)
+    .nullable()
+    .optional(),
   // Free-form display string ("Net 30", "Net 60", "Due on Receipt"…).
   // Not constrained to an enum — operators can write whatever the
   // customer agreement actually says, and the chase/statement flows
@@ -138,6 +154,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       withBalance,
       hideZeroBalance,
       hasOverdue,
+      hasUnactionedEmail,
       missingTerms,
       sort,
       dir,
@@ -175,6 +192,21 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     if (missingTerms) {
       filters.push(isNull(customers.paymentTerms));
     }
+    if (hasUnactionedEmail) {
+      // EXISTS subquery — Drizzle renders this as `> 0` against the
+      // count expression below, but for filtering we want a cheaper
+      // EXISTS (stops scanning email_log as soon as one row matches).
+      // Hand-qualify customers.id because the sql template drops the
+      // table prefix otherwise (same gotcha as elsewhere).
+      filters.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${emailLog}
+          WHERE ${emailLog.customerId} = \`customers\`.\`id\`
+            AND ${emailLog.actionedAt} IS NULL
+            AND ${emailLog.direction} = 'inbound'
+        )`,
+      );
+    }
     const where = filters.length > 0 ? and(...filters) : undefined;
 
     const sortCol = {
@@ -207,12 +239,24 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       FROM ${statementSends}
       WHERE ${statementSends.customerId} = \`customers\`.\`id\`
     )`;
+    // Inbound emails the operator hasn't ticked off yet. Drives the
+    // small red badge on the customers list and the "Has unactioned
+    // email" filter chip. Outbound is excluded — operators only act
+    // on inbound (replies, escalations, etc.); outbound being in the
+    // log isn't actionable.
+    const unactionedEmailCountExpr = sql<number>`(
+      SELECT COUNT(*) FROM ${emailLog}
+      WHERE ${emailLog.customerId} = \`customers\`.\`id\`
+        AND ${emailLog.actionedAt} IS NULL
+        AND ${emailLog.direction} = 'inbound'
+    )`;
 
     const rowsPromise = db
       .select({
         id: customers.id,
         displayName: customers.displayName,
         primaryEmail: customers.primaryEmail,
+        phone: customers.phone,
         balance: customers.balance,
         overdueBalance: customers.overdueBalance,
         holdStatus: customers.holdStatus,
@@ -222,6 +266,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         daysOverdue: daysOverdueExpr,
         lastPaymentAt: lastPaymentExpr,
         lastStatementSentAt: lastStatementSentExpr,
+        unactionedEmailCount: unactionedEmailCountExpr,
       })
       .from(customers)
       .where(where)
@@ -253,6 +298,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           : Number(r.daysOverdue),
       lastPaymentAt: normalizeDateValue(r.lastPaymentAt),
       lastStatementSentAt: normalizeDateValue(r.lastStatementSentAt),
+      // COUNT(*) comes back as a string in some mysql2 modes — coerce.
+      unactionedEmailCount: Number(r.unactionedEmailCount ?? 0),
     }));
     const hasMore = rowsRaw.length > limit;
     const totals = totalsRaw[0] ?? { b2b: 0, b2c: 0, uncategorized: 0, all: 0 };
@@ -704,6 +751,25 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         log.warn(
           { err, customerId: id, qbCustomerId: after.qbCustomerId },
           "qbo terms push failed (local write succeeded)",
+        );
+      });
+    }
+
+    // Main phone changed → push to QBO's PrimaryPhone. Same fire-and-
+    // forget pattern as the other push helpers; additional_phones is
+    // local-only and never round-trips.
+    if (
+      updates.phone !== undefined &&
+      updates.phone !== before.phone &&
+      after.qbCustomerId
+    ) {
+      void pushCustomerPhoneToQbo({
+        qbCustomerId: after.qbCustomerId,
+        phone: after.phone,
+      }).catch((err) => {
+        log.warn(
+          { err, customerId: id, qbCustomerId: after.qbCustomerId },
+          "qbo phone push failed (local write succeeded)",
         );
       });
     }

@@ -1,0 +1,1 @@
+ALTER TABLE `customers` ADD `additional_phones` json;

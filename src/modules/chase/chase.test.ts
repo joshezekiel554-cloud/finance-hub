@@ -24,6 +24,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     statementCcEmails: null,
     tags: null,
     phone: null,
+    additionalPhones: null,
     paymentTerms: "Net 30",
     holdStatus: "active",
     shopifyCustomerId: null,

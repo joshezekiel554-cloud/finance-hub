@@ -21,6 +21,7 @@ type CustomerRow = {
   id: string;
   displayName: string;
   primaryEmail: string | null;
+  phone: string | null;
   balance: string;
   overdueBalance: string;
   holdStatus: HoldStatus;
@@ -30,6 +31,7 @@ type CustomerRow = {
   daysOverdue: number | null;
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
+  unactionedEmailCount: number;
 };
 
 type ListResponse = {
@@ -64,6 +66,8 @@ export default function CustomersPage() {
   const [hasOverdueFilter, setHasOverdueFilter] = useState(false);
   const [onHoldFilter, setOnHoldFilter] = useState(false);
   const [missingTermsFilter, setMissingTermsFilter] = useState(false);
+  const [hasUnactionedEmailFilter, setHasUnactionedEmailFilter] =
+    useState(false);
   useEffect(() => {
     setHideZero(tab === "b2b");
   }, [tab]);
@@ -85,6 +89,7 @@ export default function CustomersPage() {
       hasOverdueFilter,
       onHoldFilter,
       missingTermsFilter,
+      hasUnactionedEmailFilter,
     },
   ] as const;
   const { data, isPending, isError, error } = useQuery<ListResponse>({
@@ -104,6 +109,8 @@ export default function CustomersPage() {
       if (hasOverdueFilter) params.set("hasOverdue", "true");
       if (onHoldFilter) params.set("holdStatus", "hold");
       if (missingTermsFilter) params.set("missingTerms", "true");
+      if (hasUnactionedEmailFilter)
+        params.set("hasUnactionedEmail", "true");
       const res = await fetch(`/api/customers?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -390,7 +397,16 @@ export default function CustomersPage() {
           active={missingTermsFilter}
           onClick={() => setMissingTermsFilter((v) => !v)}
         />
-        {(hideZero || hasOverdueFilter || onHoldFilter || missingTermsFilter) ? (
+        <FilterChip
+          label="Has unactioned email"
+          active={hasUnactionedEmailFilter}
+          onClick={() => setHasUnactionedEmailFilter((v) => !v)}
+        />
+        {hideZero ||
+        hasOverdueFilter ||
+        onHoldFilter ||
+        missingTermsFilter ||
+        hasUnactionedEmailFilter ? (
           <button
             type="button"
             onClick={() => {
@@ -398,6 +414,7 @@ export default function CustomersPage() {
               setHasOverdueFilter(false);
               setOnHoldFilter(false);
               setMissingTermsFilter(false);
+              setHasUnactionedEmailFilter(false);
             }}
             className="ml-1 text-muted hover:text-primary"
           >
@@ -490,7 +507,7 @@ export default function CustomersPage() {
                   dir={dir}
                   onClick={() => toggleSort("displayName", sort, setSort, dir, setDir)}
                 />
-                <th className="px-3 py-2">Email</th>
+                <th className="px-3 py-2">Phone</th>
                 <SortableTh
                   label="Balance"
                   active={sort === "balance"}
@@ -545,16 +562,23 @@ export default function CustomersPage() {
                       <Link
                         to="/customers/$customerId"
                         params={{ customerId: row.id }}
-                        className="hover:text-accent-primary hover:underline underline-offset-2"
+                        className="inline-flex items-center gap-2 hover:text-accent-primary hover:underline underline-offset-2"
                       >
                         {row.displayName}
+                        {row.unactionedEmailCount > 0 ? (
+                          <span
+                            className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-accent-danger px-1 text-[10px] font-semibold leading-4 text-white"
+                            title={`${row.unactionedEmailCount} unactioned email${row.unactionedEmailCount === 1 ? "" : "s"}`}
+                          >
+                            {row.unactionedEmailCount > 99
+                              ? "99+"
+                              : row.unactionedEmailCount}
+                          </span>
+                        ) : null}
                       </Link>
                     </td>
-                    <td
-                      className="px-3 py-2 text-secondary"
-                      title={row.primaryEmail ?? undefined}
-                    >
-                      {emailLocalPart(row.primaryEmail)}
+                    <td className="px-3 py-2 text-secondary">
+                      {row.phone ?? <span className="text-muted">—</span>}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {balance > 0 ? (
@@ -661,14 +685,6 @@ function FilterChip({
       {label}
     </button>
   );
-}
-
-// First chunk before "@" (or full address if there's no @). Used so the
-// table stays scannable; full email available on hover via title.
-function emailLocalPart(email: string | null): string {
-  if (!email) return "—";
-  const at = email.indexOf("@");
-  return at < 0 ? email : email.slice(0, at);
 }
 
 // "3d ago" / "2w ago" / "1 May" — short by design. Anything within 24h

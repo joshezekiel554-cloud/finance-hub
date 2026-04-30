@@ -45,6 +45,7 @@ type Customer = {
   statementCcEmails: string[] | null;
   tags: string[] | null;
   phone: string | null;
+  additionalPhones: Array<{ label: string; number: string }> | null;
   paymentTerms: string | null;
   holdStatus: "active" | "hold" | "payment_upfront";
   shopifyCustomerId: string | null;
@@ -842,7 +843,7 @@ function StatusActions({
 // the route handles the QBO push for invoice-side fields.
 function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
       <ChannelEmailsCard
         customerId={customer.id}
         title="Invoice recipients"
@@ -864,6 +865,11 @@ function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
         billingEmails={customer.billingEmails}
         toField="statementToEmail"
         ccField="statementCcEmails"
+      />
+      <PhonesCard
+        customerId={customer.id}
+        phone={customer.phone}
+        additionalPhones={customer.additionalPhones}
       />
       <TagsCard
         customerId={customer.id}
@@ -1206,6 +1212,214 @@ function TagsCard({
           >
             Add
           </Button>
+        </div>
+        {mutation.isError ? (
+          <div className="text-[11px] text-accent-danger">
+            {(mutation.error as Error)?.message ?? "save failed"}
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+// Phones card. The "Main" line is mirrored from QBO (Customer.PrimaryPhone)
+// on first sync, then locally authoritative — edits push back to QBO via
+// pushCustomerPhoneToQbo (handled in the PATCH route). The labelled
+// `additional_phones` list is local-only; QBO has no free-form list slot
+// for "bookkeeper" / "owner" / "AR clerk" extras.
+function PhonesCard({
+  customerId,
+  phone,
+  additionalPhones,
+}: {
+  customerId: string;
+  phone: string | null;
+  additionalPhones: Array<{ label: string; number: string }> | null;
+}) {
+  const queryClient = useQueryClient();
+  const [phoneDraft, setPhoneDraft] = useState<string>(phone ?? "");
+  const [extras, setExtras] = useState<
+    Array<{ label: string; number: string }>
+  >(additionalPhones ?? []);
+  const [newLabel, setNewLabel] = useState<string>("");
+  const [newNumber, setNewNumber] = useState<string>("");
+
+  // Re-sync from props when the parent refetches after a mutation.
+  useEffect(() => {
+    setPhoneDraft(phone ?? "");
+  }, [phone]);
+  useEffect(() => {
+    setExtras(additionalPhones ?? []);
+  }, [additionalPhones]);
+
+  const mutation = useMutation({
+    mutationFn: async (input: {
+      phone?: string | null;
+      additionalPhones?: Array<{ label: string; number: string }> | null;
+    }) => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    },
+  });
+
+  function savePhone() {
+    const next = phoneDraft.trim();
+    const payload = next.length > 0 ? next : null;
+    if (payload === phone) return;
+    mutation.mutate({ phone: payload });
+  }
+
+  function addExtra() {
+    const label = newLabel.trim();
+    const number = newNumber.trim();
+    // Server enforces label.min(1) + number.min(3); enforce here too so
+    // we don't fire a doomed PATCH and surface a confusing 400.
+    if (!label || number.length < 3) return;
+    if (extras.length >= 10) return;
+    const next = [...extras, { label, number }];
+    setExtras(next);
+    setNewLabel("");
+    setNewNumber("");
+    mutation.mutate({ additionalPhones: next });
+  }
+
+  function removeExtra(idx: number) {
+    const next = extras.filter((_, i) => i !== idx);
+    setExtras(next);
+    // Empty list → null so the column is clean rather than `[]`.
+    mutation.mutate({ additionalPhones: next.length > 0 ? next : null });
+  }
+
+  function updateExtra(
+    idx: number,
+    patch: Partial<{ label: string; number: string }>,
+  ) {
+    setExtras((prev) =>
+      prev.map((e, i) => (i === idx ? { ...e, ...patch } : e)),
+    );
+  }
+
+  function saveExtras() {
+    // Skip empty/short rows — the server would 400 anyway.
+    if (
+      extras.some(
+        (e) => !e.label.trim() || e.number.trim().length < 3,
+      )
+    ) {
+      return;
+    }
+    mutation.mutate({ additionalPhones: extras.length > 0 ? extras : null });
+  }
+
+  return (
+    <Card>
+      <CardBody className="space-y-2 py-3">
+        <div className="text-xs uppercase tracking-wide text-muted">Phones</div>
+        <div className="text-[11px] text-muted">
+          Main syncs to QuickBooks. Additional lines are local-only.
+        </div>
+        <label className="block">
+          <span className="mb-0.5 block text-[11px] text-muted">Main</span>
+          <input
+            type="tel"
+            value={phoneDraft}
+            onChange={(e) => setPhoneDraft(e.target.value)}
+            onBlur={savePhone}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            placeholder="(555) 123-4567"
+            className="w-full rounded-md border border-default bg-base px-2 py-1 text-xs"
+          />
+        </label>
+        <div>
+          <span className="mb-0.5 block text-[11px] text-muted">
+            Additional ({extras.length}/10)
+          </span>
+          {extras.length > 0 ? (
+            <ul className="mb-1 space-y-1">
+              {extras.map((e, i) => (
+                <li key={i} className="flex gap-1">
+                  <input
+                    type="text"
+                    value={e.label}
+                    onChange={(ev) =>
+                      updateExtra(i, { label: ev.target.value })
+                    }
+                    onBlur={saveExtras}
+                    placeholder="Label"
+                    className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                  />
+                  <input
+                    type="tel"
+                    value={e.number}
+                    onChange={(ev) =>
+                      updateExtra(i, { number: ev.target.value })
+                    }
+                    onBlur={saveExtras}
+                    placeholder="Number"
+                    className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeExtra(i)}
+                    className="rounded p-1 text-muted hover:text-accent-danger"
+                    aria-label={`Remove ${e.label || "phone"}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {extras.length < 10 ? (
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                placeholder="Label"
+                className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+              />
+              <input
+                type="tel"
+                value={newNumber}
+                onChange={(e) => setNewNumber(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addExtra();
+                  }
+                }}
+                placeholder="Number"
+                className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={addExtra}
+                disabled={!newLabel.trim() || newNumber.trim().length < 3}
+              >
+                Add
+              </Button>
+            </div>
+          ) : null}
         </div>
         {mutation.isError ? (
           <div className="text-[11px] text-accent-danger">

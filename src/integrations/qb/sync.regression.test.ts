@@ -27,6 +27,7 @@ const LOCAL_AUTHORITATIVE_FIELDS = [
   "paymentTerms",
   "primaryEmail",
   "billingEmails",
+  "phone",
 ];
 
 describe("syncCustomers UPDATE invariants", () => {

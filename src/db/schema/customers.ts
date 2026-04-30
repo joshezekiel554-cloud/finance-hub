@@ -31,10 +31,19 @@ export const customers = mysqlTable(
     // through to QBO's BillEmailBcc so even QBO auto-sends pick it
     // up). Lower-cased + trimmed before persisting.
     tags: json("tags").$type<string[]>(),
-    // Primary phone — synced from QBO Customer.PrimaryPhone.FreeFormNumber
-    // at sync time. Free-form (no normalization) since QBO accepts any
-    // string; we render it verbatim. Null when QBO has nothing.
+    // Main phone — seeded from QBO Customer.PrimaryPhone.FreeFormNumber
+    // on first INSERT, then locally authoritative (operator edits in
+    // finance-hub push back to QBO; the 30-min sync no longer
+    // overwrites). Free-form text; we render verbatim.
     phone: varchar("phone", { length: 64 }),
+    // Extra labelled phones the operator wants to track alongside the
+    // main line — bookkeeper, owner, AR clerk, etc. Local-only;
+    // doesn't round-trip to QBO. Each entry is a small object, not a
+    // separate table, because phones are leafy data with no need for
+    // joins or per-row metadata beyond the label.
+    additionalPhones: json("additional_phones").$type<
+      Array<{ label: string; number: string }>
+    >(),
     paymentTerms: varchar("payment_terms", { length: 64 }),
     // hold_status carries the customer's current account state. Despite
     // the historical name, it has three values:
