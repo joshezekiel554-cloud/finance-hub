@@ -7,11 +7,11 @@ import {
   Receipt,
   CheckSquare,
   Sparkles,
-  Bell,
   Settings,
   AlertCircle,
 } from "lucide-react";
 import { cn } from "./lib/cn";
+import { NotificationBell } from "./components/notification-bell";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -59,13 +59,7 @@ export default function App({ children }: { children: ReactNode }) {
       <main className="flex flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b border-default bg-base px-4 md:px-6">
           <div className="text-sm font-medium text-primary">Welcome back</div>
-          <button
-            type="button"
-            aria-label="Notifications"
-            className="rounded-md p-2 text-secondary hover:bg-elevated hover:text-primary"
-          >
-            <Bell className="size-4" />
-          </button>
+          <NotificationBell />
         </header>
         <div className="flex-1 overflow-y-auto p-4 md:p-6">{children}</div>
       </main>

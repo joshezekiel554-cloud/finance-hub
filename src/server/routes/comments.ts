@@ -33,6 +33,7 @@ import {
 import { users } from "../../db/schema/auth.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
+import { recordNotification } from "../../modules/notifications/index.js";
 import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -78,6 +79,8 @@ export type ResolveMentionsArgs = {
   body: string;
   commentId: string;
   byUserId: string;
+  byUserName?: string | null;
+  byUserEmail?: string | null;
   parentType: string;
   parentId: string;
   // Mention rows already on this comment (when re-resolving for an edit).
@@ -92,7 +95,15 @@ export type ResolveMentionsArgs = {
 export async function resolveMentions(
   args: ResolveMentionsArgs,
 ): Promise<Mention[]> {
-  const { body, commentId, byUserId, parentType, parentId } = args;
+  const {
+    body,
+    commentId,
+    byUserId,
+    byUserName,
+    byUserEmail,
+    parentType,
+    parentId,
+  } = args;
   const fragments = parseMentions(body);
   if (fragments.length === 0) return [];
 
@@ -159,6 +170,22 @@ export async function resolveMentions(
       parentType,
       parentId,
       excerpt,
+    });
+    // Persist a bell-row alongside the SSE event so the recipient still
+    // sees the mention when they come back later. customerId is left null
+    // — we'd need to look up the parent's customer (task vs other) to
+    // resolve it, and the bell already deep-links via refType/refId.
+    await recordNotification({
+      userId: ev.mentionedUserId,
+      kind: "mention",
+      refType: parentType,
+      refId: parentId,
+      payload: {
+        excerpt,
+        byUserId,
+        byUserName: byUserName ?? null,
+        byUserEmail: byUserEmail ?? null,
+      },
     });
   }
 
@@ -230,6 +257,8 @@ const commentsRoute: FastifyPluginAsync = async (app) => {
       body,
       commentId: id,
       byUserId: user.id,
+      byUserName: user.name,
+      byUserEmail: user.email,
       parentType: before.parentType,
       parentId: before.parentId,
       existingMentionedUserIds: existingIds,

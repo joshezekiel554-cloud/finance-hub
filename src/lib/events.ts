@@ -42,6 +42,15 @@ export type DomainEventMap = {
     parentId: string;
     excerpt: string;
   };
+  // Bell-notification event. Fires after a notifications row is inserted
+  // (deliveredInApp already true). The SSE plugin subscribes and pushes
+  // user-scoped so the bell updates live; the payload is intentionally
+  // small — the bell re-fetches the list via the API.
+  "notification.created": {
+    notificationId: string;
+    userId: string;
+    kind: string;
+  };
 };
 
 class TypedEventBus {

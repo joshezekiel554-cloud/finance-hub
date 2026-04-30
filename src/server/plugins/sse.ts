@@ -61,6 +61,12 @@ export type SSEEvent =
       parentId: string;
       excerpt: string;
     }
+  | {
+      type: "notification.created";
+      notificationId: string;
+      userId: string;
+      kind: string;
+    }
   | { type: "ping"; ts: number };
 
 export type SSEBroker = {
@@ -202,6 +208,10 @@ export const ssePlugin = fp(async function ssePlugin(app: FastifyInstance) {
     // update; mentions are personal.
     broker.publish(e.mentionedUserId, { type: "mention", ...e });
   });
+  const offNotification = events.on("notification.created", (e) => {
+    // Per-user — the bell on the recipient's session re-fetches its list.
+    broker.publish(e.userId, { type: "notification.created", ...e });
+  });
 
   app.addHook("onClose", async () => {
     clearInterval(interval);
@@ -214,5 +224,6 @@ export const ssePlugin = fp(async function ssePlugin(app: FastifyInstance) {
     offCommentUpdated();
     offCommentDeleted();
     offMention();
+    offNotification();
   });
 });

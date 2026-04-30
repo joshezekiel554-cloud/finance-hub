@@ -3,10 +3,11 @@
 // enqueue ad-hoc jobs) and the consumer (the worker process) talk to the
 // same Redis client and don't fight over connection limits.
 //
-// Three queues, one per concern:
-//   - SYNC_QUEUE  — QuickBooks pulls (every 30 min, repeatable)
-//   - GMAIL_QUEUE — Gmail polls (every 15 min, repeatable)
-//   - CHASE_QUEUE — Daily chase digest (17:00 Europe/London)
+// Four queues, one per concern:
+//   - SYNC_QUEUE          — QuickBooks pulls (every 30 min, repeatable)
+//   - GMAIL_QUEUE         — Gmail polls (every 15 min, repeatable)
+//   - CHASE_QUEUE         — Daily chase digest (17:00 Europe/London)
+//   - NOTIFICATIONS_QUEUE — Daily task-overdue scan (08:00 Europe/London)
 //
 // Defaults are conservative: 3 attempts with exponential backoff, completed
 // jobs trimmed at 100 to keep Redis memory bounded; failed jobs trimmed at
@@ -22,10 +23,12 @@ const log = createLogger({ component: "jobs.queues" });
 export const SYNC_QUEUE = "sync";
 export const GMAIL_QUEUE = "gmail";
 export const CHASE_QUEUE = "chase";
+export const NOTIFICATIONS_QUEUE = "notifications";
 
 export const QB_SYNC_JOB = "qb-sync";
 export const GMAIL_POLL_JOB = "gmail-poll";
 export const CHASE_DIGEST_JOB = "chase-digest";
+export const TASK_OVERDUE_SCAN_JOB = "task-overdue-scan";
 
 let cachedConnection: Redis | undefined;
 
@@ -66,6 +69,7 @@ let cachedQueues:
       sync: Queue;
       gmail: Queue;
       chase: Queue;
+      notifications: Queue;
     }
   | undefined;
 
@@ -73,6 +77,7 @@ export type Queues = {
   sync: Queue;
   gmail: Queue;
   chase: Queue;
+  notifications: Queue;
 };
 
 export function getQueues(): Queues {
@@ -82,6 +87,10 @@ export function getQueues(): Queues {
     sync: new Queue(SYNC_QUEUE, { connection, defaultJobOptions }),
     gmail: new Queue(GMAIL_QUEUE, { connection, defaultJobOptions }),
     chase: new Queue(CHASE_QUEUE, { connection, defaultJobOptions }),
+    notifications: new Queue(NOTIFICATIONS_QUEUE, {
+      connection,
+      defaultJobOptions,
+    }),
   };
   return cachedQueues;
 }
@@ -94,6 +103,7 @@ export async function closeQueues(): Promise<void> {
       cachedQueues.sync.close(),
       cachedQueues.gmail.close(),
       cachedQueues.chase.close(),
+      cachedQueues.notifications.close(),
     ]);
     cachedQueues = undefined;
   }

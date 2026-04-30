@@ -16,9 +16,11 @@ import { Worker, type Job } from "bullmq";
 import { processChaseDigest } from "./definitions/chase-digest.js";
 import { processGmailPoll } from "./definitions/gmail-poll.js";
 import { processQbSync } from "./definitions/qb-sync.js";
+import { processTaskOverdueScan } from "./definitions/task-overdue-scan.js";
 import {
   CHASE_QUEUE,
   GMAIL_QUEUE,
+  NOTIFICATIONS_QUEUE,
   SYNC_QUEUE,
   closeQueues,
   connectionOptions,
@@ -36,6 +38,7 @@ const log = createLogger({ component: "worker" });
 const QB_CONCURRENCY = 1;
 const GMAIL_CONCURRENCY = 1;
 const CHASE_CONCURRENCY = 1;
+const NOTIFICATIONS_CONCURRENCY = 1;
 
 function buildWorkers(): Worker[] {
   const connection = connectionOptions();
@@ -58,7 +61,13 @@ function buildWorkers(): Worker[] {
     { connection, concurrency: CHASE_CONCURRENCY },
   );
 
-  for (const w of [qbWorker, gmailWorker, chaseWorker]) {
+  const notificationsWorker = new Worker(
+    NOTIFICATIONS_QUEUE,
+    async (job: Job) => processTaskOverdueScan(job),
+    { connection, concurrency: NOTIFICATIONS_CONCURRENCY },
+  );
+
+  for (const w of [qbWorker, gmailWorker, chaseWorker, notificationsWorker]) {
     w.on("failed", (job, err) => {
       log.error(
         {
@@ -82,7 +91,7 @@ function buildWorkers(): Worker[] {
     });
   }
 
-  return [qbWorker, gmailWorker, chaseWorker];
+  return [qbWorker, gmailWorker, chaseWorker, notificationsWorker];
 }
 
 async function shutdown(workers: Worker[], signal: string): Promise<void> {

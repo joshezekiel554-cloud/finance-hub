@@ -48,6 +48,12 @@ export type SSEEvent =
       parentId: string;
       excerpt: string;
     }
+  | {
+      type: "notification.created";
+      notificationId: string;
+      userId: string;
+      kind: string;
+    }
   | { type: "ping"; ts: number };
 
 export type SSEEventType = SSEEvent["type"];

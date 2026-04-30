@@ -30,6 +30,7 @@ import { requireAuth } from "../lib/auth.js";
 import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 import { resolveMentions } from "./comments.js";
+import { recordNotification } from "../../modules/notifications/index.js";
 
 const log = createLogger({ component: "routes.tasks" });
 
@@ -262,6 +263,27 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       customerId: inserted.customerId,
     });
 
+    // Bell notification for the assignee — but not when the operator
+    // assigned the task to themselves (no point pinging yourself).
+    if (
+      inserted.assigneeUserId &&
+      inserted.assigneeUserId !== user.id
+    ) {
+      await recordNotification({
+        userId: inserted.assigneeUserId,
+        kind: "task_assigned",
+        customerId: inserted.customerId,
+        refType: "task",
+        refId: id,
+        payload: {
+          taskTitle: inserted.title,
+          byUserId: user.id,
+          byUserName: user.name,
+          byUserEmail: user.email,
+        },
+      });
+    }
+
     log.info(
       { taskId: id, userId: user.id, customerId: inserted.customerId },
       "task created",
@@ -415,6 +437,29 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       events.emit("task.updated", {
         taskId: id,
         customerId: after.customerId,
+      });
+    }
+
+    // Reassignment ping — fires when the assignee changes to someone
+    // other than the editor. Self-reassignments and no-op writes don't
+    // notify; matches the create-flow rule.
+    const assigneeChanged =
+      after.assigneeUserId !== before.assigneeUserId &&
+      after.assigneeUserId !== null &&
+      after.assigneeUserId !== user.id;
+    if (assigneeChanged) {
+      await recordNotification({
+        userId: after.assigneeUserId!,
+        kind: "task_assigned",
+        customerId: after.customerId,
+        refType: "task",
+        refId: id,
+        payload: {
+          taskTitle: after.title,
+          byUserId: user.id,
+          byUserName: user.name,
+          byUserEmail: user.email,
+        },
       });
     }
 
@@ -582,6 +627,8 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       body,
       commentId,
       byUserId: user.id,
+      byUserName: user.name,
+      byUserEmail: user.email,
       parentType: "task",
       parentId: id,
       existingMentionedUserIds: [],

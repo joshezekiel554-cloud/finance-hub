@@ -4,9 +4,10 @@
 // worker boot is idempotent — the second registration is a no-op against
 // Redis. Cron strings:
 //
-//   qb-sync       */30 * * * *     every 30 minutes
-//   gmail-poll    */15 * * * *     every 15 minutes
-//   chase-digest  0 17 * * *       17:00 daily, Europe/London timezone
+//   qb-sync             */30 * * * *     every 30 minutes
+//   gmail-poll          */15 * * * *     every 15 minutes
+//   task-overdue-scan   0 8 * * *        08:00 daily, Europe/London
+//   chase-digest        0 17 * * *       17:00 daily, Europe/London
 //
 // Timezone handling: BullMQ's `repeat.tz` applies the cron in that zone, so
 // "0 17 * * *" with tz="Europe/London" fires at 17:00 BST in summer and
@@ -18,6 +19,7 @@ import {
   CHASE_DIGEST_JOB,
   GMAIL_POLL_JOB,
   QB_SYNC_JOB,
+  TASK_OVERDUE_SCAN_JOB,
 } from "./queues.js";
 import { createLogger } from "../lib/logger.js";
 
@@ -63,6 +65,23 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
   registered.push({
     name: CHASE_DIGEST_JOB,
     cron: "0 17 * * *",
+    tz: "Europe/London",
+  });
+
+  // Task-overdue scan — 08:00 Europe/London daily. Fires before the
+  // operator's day starts so the bell is populated by the time they
+  // open the app. Dedupe inside the job means stuck tasks don't spam.
+  await queues.notifications.add(
+    TASK_OVERDUE_SCAN_JOB,
+    { trigger: "scheduled" },
+    {
+      jobId: `repeat:${TASK_OVERDUE_SCAN_JOB}`,
+      repeat: { pattern: "0 8 * * *", tz: "Europe/London" },
+    },
+  );
+  registered.push({
+    name: TASK_OVERDUE_SCAN_JOB,
+    cron: "0 8 * * *",
     tz: "Europe/London",
   });
 

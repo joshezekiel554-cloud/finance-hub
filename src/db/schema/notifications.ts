@@ -14,6 +14,7 @@ export const NOTIFICATION_KINDS = [
   "customer_email_in",
   "task_assigned",
   "task_overdue",
+  "mention",
   "ai_proposal",
   "chase_due",
   "system",
