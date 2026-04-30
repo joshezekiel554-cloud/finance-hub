@@ -27,10 +27,10 @@ import { createLogger } from "../../lib/logger.js";
 import { ShopifyClient, ShopifyApiError } from "../../integrations/shopify/client.js";
 import {
   addTag,
-  findCustomerByEmail,
   parseTags,
   removeTag,
 } from "../../integrations/shopify/hold.js";
+import { findShopifyCustomer } from "../../modules/shopify-link/lookup.js";
 import { recordActivity } from "../../modules/crm/index.js";
 
 const log = createLogger({ component: "routes.holds" });
@@ -56,6 +56,8 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
       .select({
         id: customers.id,
         primaryEmail: customers.primaryEmail,
+        billingEmails: customers.billingEmails,
+        shopifyCustomerId: customers.shopifyCustomerId,
       })
       .from(customers)
       .where(eq(customers.id, id))
@@ -64,24 +66,37 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
     if (!customer) {
       return reply.code(404).send({ error: "customer not found" });
     }
-    if (!customer.primaryEmail) {
+    if (!customer.primaryEmail && !customer.shopifyCustomerId) {
       return reply.send({ matched: false, tags: [] });
     }
 
     let shopify;
     try {
       const client = new ShopifyClient();
-      shopify = await findCustomerByEmail(client, customer.primaryEmail);
+      const resolution = await findShopifyCustomer(
+        {
+          customerId: customer.id,
+          shopifyCustomerId: customer.shopifyCustomerId,
+          primaryEmail: customer.primaryEmail,
+          billingEmails: Array.isArray(customer.billingEmails)
+            ? (customer.billingEmails as string[])
+            : [],
+        },
+        client,
+      );
+      if (
+        resolution.kind === "none" ||
+        resolution.kind === "ambiguous"
+      ) {
+        return reply.send({ matched: false, tags: [] });
+      }
+      shopify = resolution.customer;
     } catch (err) {
       log.error(
-        { err, customerId: id, email: customer.primaryEmail },
+        { err, customerId: id },
         "shopify customer lookup failed",
       );
       return reply.code(502).send({ error: "shopify lookup failed" });
-    }
-
-    if (!shopify) {
-      return reply.send({ matched: false, tags: [] });
     }
 
     return reply.send({
@@ -114,10 +129,10 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
     const before = beforeRows[0];
     if (!before) return reply.code(404).send({ error: "customer not found" });
 
-    if (!before.primaryEmail) {
+    if (!before.primaryEmail && !before.shopifyCustomerId) {
       return reply
         .code(404)
-        .send({ error: "no shopify customer matched by email" });
+        .send({ error: "no shopify customer matched by id or email" });
     }
 
     let client: ShopifyClient;
@@ -130,18 +145,32 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
 
     let shopify;
     try {
-      shopify = await findCustomerByEmail(client, before.primaryEmail);
+      const resolution = await findShopifyCustomer(
+        {
+          customerId: before.id,
+          shopifyCustomerId: before.shopifyCustomerId,
+          primaryEmail: before.primaryEmail,
+          billingEmails: Array.isArray(before.billingEmails)
+            ? (before.billingEmails as string[])
+            : [],
+        },
+        client,
+      );
+      if (
+        resolution.kind === "none" ||
+        resolution.kind === "ambiguous"
+      ) {
+        return reply
+          .code(404)
+          .send({ error: "no shopify customer matched by id or email" });
+      }
+      shopify = resolution.customer;
     } catch (err) {
       log.error(
-        { err, customerId: id, email: before.primaryEmail },
+        { err, customerId: id },
         "shopify customer lookup failed",
       );
       return reply.code(502).send({ error: "shopify lookup failed" });
-    }
-    if (!shopify) {
-      return reply
-        .code(404)
-        .send({ error: "no shopify customer matched by email" });
     }
 
     let tagsAfter: string[];

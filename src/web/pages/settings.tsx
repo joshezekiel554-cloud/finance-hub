@@ -104,6 +104,24 @@ function ImportsSection() {
         <div className="flex items-center justify-between gap-3 border-t border-default pt-3">
           <div>
             <div className="text-sm font-medium">
+              Shopify — link customer ids
+            </div>
+            <div className="text-xs text-muted">
+              Match each B2B customer to their Shopify record once. Run
+              this BEFORE the b2b-tag audit so QBO/Shopify email
+              mismatches don't hold the wrong customers.
+            </div>
+          </div>
+          <Link to="/import/shopify-link">
+            <Button variant="secondary" size="sm">
+              <Download className="size-3.5" /> Open
+              <ArrowRight className="size-3.5" />
+            </Button>
+          </Link>
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t border-default pt-3">
+          <div>
+            <div className="text-sm font-medium">
               Shopify — B2B-tag audit
             </div>
             <div className="text-xs text-muted">

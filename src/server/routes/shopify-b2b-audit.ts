@@ -33,10 +33,8 @@ import {
   ShopifyClient,
   ShopifyApiError,
 } from "../../integrations/shopify/client.js";
-import {
-  findCustomerByEmail,
-  parseTags,
-} from "../../integrations/shopify/hold.js";
+import { parseTags } from "../../integrations/shopify/hold.js";
+import { findShopifyCustomer } from "../../modules/shopify-link/lookup.js";
 import { recordActivity } from "../../modules/crm/index.js";
 
 const log = createLogger({ component: "routes.shopify-b2b-audit" });
@@ -104,6 +102,8 @@ const shopifyB2bAuditRoute: FastifyPluginAsync = async (app) => {
         id: customers.id,
         displayName: customers.displayName,
         primaryEmail: customers.primaryEmail,
+        billingEmails: customers.billingEmails,
+        shopifyCustomerId: customers.shopifyCustomerId,
         holdStatus: customers.holdStatus,
       })
       .from(customers)
@@ -132,7 +132,10 @@ const shopifyB2bAuditRoute: FastifyPluginAsync = async (app) => {
               primaryEmail: t.primaryEmail,
               currentStatus: t.holdStatus as Status,
             };
-            if (!t.primaryEmail) {
+            const billingEmails = Array.isArray(t.billingEmails)
+              ? (t.billingEmails as string[])
+              : [];
+            if (!t.primaryEmail && billingEmails.length === 0) {
               rows.push({
                 ...base,
                 classification: "no_email",
@@ -144,11 +147,23 @@ const shopifyB2bAuditRoute: FastifyPluginAsync = async (app) => {
               continue;
             }
             try {
-              const shopify = await findCustomerByEmail(
+              // ID-first lookup. Persists newly-discovered ids on
+              // success so the next run is a single-GET.
+              const resolution = await findShopifyCustomer(
+                {
+                  customerId: t.id,
+                  shopifyCustomerId: t.shopifyCustomerId,
+                  primaryEmail: t.primaryEmail,
+                  billingEmails,
+                },
                 client,
-                t.primaryEmail,
               );
-              if (!shopify) {
+              if (
+                resolution.kind === "none" ||
+                resolution.kind === "ambiguous"
+              ) {
+                // Ambiguous = multiple emails resolved to different
+                // Shopify ids. Don't auto-act; surface for manual link.
                 rows.push({
                   ...base,
                   classification: "no_shopify_match",
@@ -159,6 +174,7 @@ const shopifyB2bAuditRoute: FastifyPluginAsync = async (app) => {
                 });
                 continue;
               }
+              const shopify = resolution.customer;
               const tags = parseTags(shopify.tags);
               const desiredStatus = statusFromTags(tags);
               const drift = desiredStatus !== base.currentStatus;

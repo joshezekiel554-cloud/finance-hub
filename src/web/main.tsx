@@ -19,6 +19,7 @@ import ChasePage from "./pages/chase";
 import StatementsPage from "./pages/statements";
 import MondayTermsImportPage from "./pages/monday-terms-import";
 import ShopifyB2bAuditPage from "./pages/shopify-b2b-audit";
+import ShopifyLinkPage from "./pages/shopify-link";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -98,6 +99,12 @@ const shopifyB2bAuditRoute = createRoute({
   component: ShopifyB2bAuditPage,
 });
 
+const shopifyLinkRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/import/shopify-link",
+  component: ShopifyLinkPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -109,6 +116,7 @@ const routeTree = rootRoute.addChildren([
   statementsRoute,
   mondayTermsImportRoute,
   shopifyB2bAuditRoute,
+  shopifyLinkRoute,
 ]);
 
 const router = createRouter({ routeTree });

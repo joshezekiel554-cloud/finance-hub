@@ -22,6 +22,7 @@ import notificationsRoute from "./notifications.js";
 import dashboardRoute from "./dashboard.js";
 import mondaySyncRoute from "./monday-sync.js";
 import shopifyB2bAuditRoute from "./shopify-b2b-audit.js";
+import shopifyLinkRoute from "./shopify-link.js";
 import logoUploadRoute from "./logo-upload.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -63,6 +64,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(shopifyB2bAuditRoute, {
     prefix: "/api/shopify-b2b-audit",
   });
+  await app.register(shopifyLinkRoute, { prefix: "/api/shopify-link" });
   await app.register(logoUploadRoute, { prefix: "/api" });
 
   // Per-module API routes mount here as their owning agents land:
