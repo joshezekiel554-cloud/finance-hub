@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Eye, Plus, Save, Trash2, Variable } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import {
+  ArrowRight,
+  Download,
+  ExternalLink,
+  Eye,
+  Plus,
+  Save,
+  Trash2,
+  Variable,
+} from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -64,7 +74,35 @@ export default function SettingsPage() {
       </div>
       <EmailTemplatesSection />
       <StatementPdfSection />
+      <ImportsSection />
     </div>
+  );
+}
+
+function ImportsSection() {
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-sm font-medium">One-off imports</h2>
+      </CardHeader>
+      <CardBody className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium">Monday — payment terms</div>
+            <div className="text-xs text-muted">
+              Backfill payment terms from the USA Stores Information board.
+              Preview before any writes.
+            </div>
+          </div>
+          <Link to="/import/monday-terms">
+            <Button variant="secondary" size="sm">
+              <Download className="size-3.5" /> Open
+              <ArrowRight className="size-3.5" />
+            </Button>
+          </Link>
+        </div>
+      </CardBody>
+    </Card>
   );
 }
 

@@ -17,6 +17,7 @@ import TasksPage from "./pages/tasks";
 import SettingsPage from "./pages/settings";
 import ChasePage from "./pages/chase";
 import StatementsPage from "./pages/statements";
+import MondayTermsImportPage from "./pages/monday-terms-import";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -84,6 +85,12 @@ const statementsRoute = createRoute({
   component: StatementsPage,
 });
 
+const mondayTermsImportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/import/monday-terms",
+  component: MondayTermsImportPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -93,6 +100,7 @@ const routeTree = rootRoute.addChildren([
   settingsRoute,
   chaseRoute,
   statementsRoute,
+  mondayTermsImportRoute,
 ]);
 
 const router = createRouter({ routeTree });

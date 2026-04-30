@@ -52,6 +52,10 @@ const schema = z.object({
 
   MONDAY_API_TOKEN: z.string().optional().default(""),
   MONDAY_ENABLED: boolish.default(false),
+  // Board id for the USA Stores Information board — source of truth for
+  // a one-off terms backfill. After the sync the operator manages terms
+  // inside this app, so this id is only used by the sync routes.
+  MONDAY_TERMS_BOARD_ID: z.string().optional().default(""),
 
   SENTRY_DSN: z.string().optional().default(""),
   LOG_LEVEL: z

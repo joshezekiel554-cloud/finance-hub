@@ -20,6 +20,7 @@ import statementPdfPreviewRoute from "./statement-pdf-preview.js";
 import statementSendsRoute from "./statement-sends.js";
 import notificationsRoute from "./notifications.js";
 import dashboardRoute from "./dashboard.js";
+import mondaySyncRoute from "./monday-sync.js";
 import logoUploadRoute from "./logo-upload.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -57,6 +58,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(statementSendsRoute, { prefix: "/api/statement-sends" });
   await app.register(notificationsRoute, { prefix: "/api/notifications" });
   await app.register(dashboardRoute, { prefix: "/api/dashboard" });
+  await app.register(mondaySyncRoute, { prefix: "/api/monday-sync" });
   await app.register(logoUploadRoute, { prefix: "/api" });
 
   // Per-module API routes mount here as their owning agents land:
