@@ -78,7 +78,11 @@ export class ShopifyClient {
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  // Single request. Retries once on 429.
+  // Single request. Retries up to 3 times on 429 with the server's
+  // Retry-After hint (or exponential backoff if absent). Shopify uses a
+  // leaky-bucket rate limit at 2 calls/sec; under bursty workloads a
+  // single retry is often not enough, so the loop here keeps trying
+  // until either success or the cap.
   async request(path: string, init: RequestInit = {}): Promise<Response> {
     const url = path.startsWith("http") ? path : `${this.baseUrl}${path}`;
     const headers = new Headers(init.headers);
@@ -88,17 +92,23 @@ export class ShopifyClient {
       headers.set("Content-Type", "application/json");
     }
 
-    const doFetch = () =>
-      this.fetcher()(url, { ...init, headers });
+    const doFetch = () => this.fetcher()(url, { ...init, headers });
 
+    const MAX_RETRIES = 3;
     let res = await doFetch();
-    if (res.status === 429) {
-      const retryAfter = parseRetryAfterMs(res.headers.get("Retry-After"));
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      if (res.status !== 429) break;
+      const headerHint = parseRetryAfterMs(res.headers.get("Retry-After"));
+      // Exponential fallback when the server didn't send Retry-After:
+      // 500ms / 1s / 2s on attempts 1..3. Plenty for the 2 req/sec
+      // bucket to refill.
+      const backoff =
+        headerHint || Math.min(2_000, 500 * Math.pow(2, attempt - 1));
       log.warn(
-        { url, retryAfter },
-        "shopify 429 — sleeping then retrying once",
+        { url, attempt, backoff },
+        "shopify 429 — sleeping then retrying",
       );
-      await this.sleeper(retryAfter);
+      await this.sleeper(backoff);
       res = await doFetch();
     }
     return res;

@@ -148,7 +148,12 @@ describe("ShopifyClient.request — auth + retry", () => {
     expect(sleep).toHaveBeenCalledWith(1000);
   });
 
-  it("does not retry a second time if 429 persists", async () => {
+  it("retries up to 3 times on persistent 429 then surfaces the error", async () => {
+    // Shopify's leaky bucket sometimes stays full longer than a single
+    // Retry-After window under sustained load (e.g. the b2b-tag audit
+    // sweep), so we keep retrying — capped at 3 retries past the
+    // initial call so a true outage doesn't loop forever. Initial +
+    // 3 retries = 4 fetches.
     const sleep = vi.fn(async () => {});
     const fetchImpl = vi.fn(
       async () =>
@@ -160,7 +165,7 @@ describe("ShopifyClient.request — auth + retry", () => {
     const client = makeClient(fetchImpl as typeof fetch, sleep);
     const res = await client.request("/shop.json");
     expect(res.status).toBe(429);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 });
 

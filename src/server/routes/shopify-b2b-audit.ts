@@ -43,10 +43,12 @@ const log = createLogger({ component: "routes.shopify-b2b-audit" });
 
 const B2B_TAG = "b2b";
 const UPFRONT_TAG = "b2b-b2b-upfront";
-// Shopify standard plan rate-limits at 4 req/sec; bound the fanout
-// safely below that. A 243-customer scan at concurrency=4 takes ~60s
-// worst case, fine for an operator-triggered sweep.
-const SCAN_CONCURRENCY = 4;
+// Shopify's leaky-bucket caps this account at 2 calls/sec sustained.
+// Concurrency=2 stays at the budget; the client also retries with
+// backoff on 429 so a brief burst above the limit recovers cleanly.
+// 243 customers at ~2/sec = ~120s end-to-end. Fine for an operator-
+// triggered sweep.
+const SCAN_CONCURRENCY = 2;
 
 const STATUS_VALUES = ["active", "hold", "payment_upfront"] as const;
 type Status = (typeof STATUS_VALUES)[number];
