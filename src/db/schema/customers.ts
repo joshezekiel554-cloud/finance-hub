@@ -17,6 +17,20 @@ export const customers = mysqlTable(
     displayName: varchar("display_name", { length: 255 }).notNull(),
     primaryEmail: varchar("primary_email", { length: 255 }),
     billingEmails: json("billing_emails").$type<string[]>(),
+    // Per-channel email recipient overrides. When non-null, the
+    // statement-send / chase-email / invoicing-send flows use these
+    // instead of falling back to primaryEmail + billingEmails. Lets
+    // us point invoice copies at receiving staff while keeping
+    // statements + chase on the bookkeeper. Null = use the defaults.
+    invoiceToEmail: varchar("invoice_to_email", { length: 255 }),
+    invoiceCcEmails: json("invoice_cc_emails").$type<string[]>(),
+    statementToEmail: varchar("statement_to_email", { length: 255 }),
+    statementCcEmails: json("statement_cc_emails").$type<string[]>(),
+    // Free-form tag list. Drives email_routing_rules — e.g. tag
+    // "yiddy" auto-BCCs sales@feldart.com on every invoice (synced
+    // through to QBO's BillEmailBcc so even QBO auto-sends pick it
+    // up). Lower-cased + trimmed before persisting.
+    tags: json("tags").$type<string[]>(),
     // Primary phone — synced from QBO Customer.PrimaryPhone.FreeFormNumber
     // at sync time. Free-form (no normalization) since QBO accepts any
     // string; we render it verbatim. Null when QBO has nothing.

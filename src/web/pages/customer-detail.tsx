@@ -39,6 +39,11 @@ type Customer = {
   displayName: string;
   primaryEmail: string | null;
   billingEmails: string[] | null;
+  invoiceToEmail: string | null;
+  invoiceCcEmails: string[] | null;
+  statementToEmail: string | null;
+  statementCcEmails: string[] | null;
+  tags: string[] | null;
   phone: string | null;
   paymentTerms: string | null;
   holdStatus: "active" | "hold" | "payment_upfront";
@@ -357,6 +362,8 @@ export default function CustomerDetailPage() {
           currentTerms={customer.paymentTerms}
         />
       </div>
+
+      <RecipientsAndTagsSection customer={customer} />
 
       <div className="border-b border-default">
         <nav className="flex gap-1">
@@ -825,5 +832,387 @@ function StatusActions({
         </Button>
       ) : null}
     </>
+  );
+}
+
+// "Recipients & tags" section. Two stacked cards — one for invoice
+// recipients, one for statement recipients — each editable. Plus a
+// tags chip input with auto-BCC hints when a tag matches an
+// email_routing_rules row. All edits hit PATCH /api/customers/:id;
+// the route handles the QBO push for invoice-side fields.
+function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <ChannelEmailsCard
+        customerId={customer.id}
+        title="Invoice recipients"
+        helper="Where invoice emails (incl. QBO auto-sends) are sent."
+        toEmail={customer.invoiceToEmail}
+        ccEmails={customer.invoiceCcEmails}
+        primaryEmail={customer.primaryEmail}
+        billingEmails={customer.billingEmails}
+        toField="invoiceToEmail"
+        ccField="invoiceCcEmails"
+      />
+      <ChannelEmailsCard
+        customerId={customer.id}
+        title="Statement & chase recipients"
+        helper="Where Statement.pdf and chase emails are sent."
+        toEmail={customer.statementToEmail}
+        ccEmails={customer.statementCcEmails}
+        primaryEmail={customer.primaryEmail}
+        billingEmails={customer.billingEmails}
+        toField="statementToEmail"
+        ccField="statementCcEmails"
+      />
+      <TagsCard
+        customerId={customer.id}
+        currentTags={customer.tags ?? []}
+      />
+    </div>
+  );
+}
+
+// One per channel (invoice / statement). Renders the override TO + CC,
+// plus a "currently using" hint when the override is empty (showing
+// the primary + billing fallback). Writes via PATCH /api/customers/:id.
+function ChannelEmailsCard({
+  customerId,
+  title,
+  helper,
+  toEmail,
+  ccEmails,
+  primaryEmail,
+  billingEmails,
+  toField,
+  ccField,
+}: {
+  customerId: string;
+  title: string;
+  helper: string;
+  toEmail: string | null;
+  ccEmails: string[] | null;
+  primaryEmail: string | null;
+  billingEmails: string[] | null;
+  toField: "invoiceToEmail" | "statementToEmail";
+  ccField: "invoiceCcEmails" | "statementCcEmails";
+}) {
+  const queryClient = useQueryClient();
+  // Local edit buffer: `null` means "fallback to primary/billing",
+  // a string means "use this override". Empty string is treated as
+  // the user clearing the override (back to fallback) on Save.
+  const [toDraft, setToDraft] = useState<string>(toEmail ?? "");
+  const [ccDraft, setCcDraft] = useState<string[]>(ccEmails ?? []);
+  const [ccInput, setCcInput] = useState<string>("");
+
+  // Sync from props when the parent refetches after a mutation —
+  // otherwise the local draft would shadow the new server state.
+  useEffect(() => {
+    setToDraft(toEmail ?? "");
+  }, [toEmail]);
+  useEffect(() => {
+    setCcDraft(ccEmails ?? []);
+  }, [ccEmails]);
+
+  const usingFallback = toEmail === null && (ccEmails ?? []).length === 0;
+
+  const mutation = useMutation({
+    mutationFn: async (input: {
+      to?: string | null;
+      cc?: string[] | null;
+    }) => {
+      const body: Record<string, unknown> = {};
+      if ("to" in input) body[toField] = input.to;
+      if ("cc" in input) body[ccField] = input.cc;
+      const res = await fetch(`/api/customers/${encodeURIComponent(customerId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    },
+  });
+
+  function saveTo() {
+    const next = toDraft.trim();
+    // Treat empty as null (clear override, fall back to primary).
+    const payload = next.length > 0 ? next : null;
+    if (payload === toEmail) return;
+    mutation.mutate({ to: payload });
+  }
+  function addCc() {
+    const v = ccInput.trim();
+    if (!v) return;
+    if (ccDraft.some((e) => e.toLowerCase() === v.toLowerCase())) {
+      setCcInput("");
+      return;
+    }
+    const next = [...ccDraft, v];
+    setCcDraft(next);
+    setCcInput("");
+    mutation.mutate({ cc: next });
+  }
+  function removeCc(addr: string) {
+    const next = ccDraft.filter(
+      (e) => e.toLowerCase() !== addr.toLowerCase(),
+    );
+    setCcDraft(next);
+    // Empty array → null so the fallback re-engages instead of "no CCs".
+    mutation.mutate({ cc: next.length > 0 ? next : null });
+  }
+
+  return (
+    <Card>
+      <CardBody className="space-y-2 py-3">
+        <div className="text-xs uppercase tracking-wide text-muted">
+          {title}
+        </div>
+        <div className="text-[11px] text-muted">{helper}</div>
+        {usingFallback ? (
+          <div className="rounded-md border border-default bg-subtle px-2 py-1 text-[11px] text-secondary">
+            Currently using primary email
+            {primaryEmail ? ` (${primaryEmail})` : ""}
+            {billingEmails && billingEmails.length > 0
+              ? ` + ${billingEmails.length} billing CC${billingEmails.length === 1 ? "" : "s"}`
+              : ""}
+          </div>
+        ) : null}
+        <label className="block">
+          <span className="mb-0.5 block text-[11px] text-muted">TO override</span>
+          <div className="flex gap-1">
+            <input
+              type="email"
+              value={toDraft}
+              onChange={(e) => setToDraft(e.target.value)}
+              onBlur={saveTo}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              placeholder={primaryEmail ?? "primary email…"}
+              className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
+            />
+          </div>
+        </label>
+        <div>
+          <span className="mb-0.5 block text-[11px] text-muted">
+            CC override
+          </span>
+          {ccDraft.length > 0 ? (
+            <div className="mb-1 flex flex-wrap gap-1">
+              {ccDraft.map((addr) => (
+                <span
+                  key={addr}
+                  className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]"
+                >
+                  {addr}
+                  <button
+                    type="button"
+                    onClick={() => removeCc(addr)}
+                    className="text-muted hover:text-accent-danger"
+                    aria-label={`Remove ${addr}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <div className="flex gap-1">
+            <input
+              type="email"
+              value={ccInput}
+              onChange={(e) => setCcInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === ",") {
+                  e.preventDefault();
+                  addCc();
+                }
+              }}
+              placeholder="add CC email and press enter"
+              className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={addCc}
+              disabled={!ccInput.trim()}
+            >
+              Add
+            </Button>
+          </div>
+        </div>
+        {mutation.isError ? (
+          <div className="text-[11px] text-accent-danger">
+            {(mutation.error as Error)?.message ?? "save failed"}
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+// Tags chip input. Lower-cases on save (server normalises again
+// defensively). Each tag carries a small auto-BCC hint when an
+// email_routing_rules row matches — populated by a side query.
+function TagsCard({
+  customerId,
+  currentTags,
+}: {
+  customerId: string;
+  currentTags: string[];
+}) {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<string[]>(currentTags);
+  const [input, setInput] = useState<string>("");
+
+  useEffect(() => {
+    setDraft(currentTags);
+  }, [currentTags]);
+
+  const rulesQuery = useQuery<{ rules: Array<{ tag: string; action: string; value: string }> }>({
+    queryKey: ["email-routing-rules"],
+    queryFn: async () => {
+      const res = await fetch("/api/email-routing-rules");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60_000,
+  });
+  const rules = rulesQuery.data?.rules ?? [];
+
+  const mutation = useMutation({
+    mutationFn: async (tags: string[]) => {
+      const res = await fetch(`/api/customers/${encodeURIComponent(customerId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tags }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    },
+  });
+
+  function addTag() {
+    const v = input.trim().toLowerCase();
+    if (!v) return;
+    if (draft.includes(v)) {
+      setInput("");
+      return;
+    }
+    const next = [...draft, v];
+    setDraft(next);
+    setInput("");
+    mutation.mutate(next);
+  }
+  function removeTag(tag: string) {
+    const next = draft.filter((t) => t !== tag);
+    setDraft(next);
+    mutation.mutate(next);
+  }
+
+  function describeRule(action: string, value: string): string {
+    switch (action) {
+      case "bcc_invoice":
+        return `auto-BCC ${value} on invoices`;
+      case "bcc_statement":
+        return `auto-BCC ${value} on statements`;
+      case "cc_invoice":
+        return `auto-CC ${value} on invoices`;
+      case "cc_statement":
+        return `auto-CC ${value} on statements`;
+      default:
+        return `${action}: ${value}`;
+    }
+  }
+
+  // Surface effects per tag — for any tag the user types that has
+  // a matching rule, render a tiny caption.
+  function effectsForTag(tag: string): string[] {
+    return rules
+      .filter((r) => r.tag.toLowerCase() === tag.toLowerCase())
+      .map((r) => describeRule(r.action, r.value));
+  }
+
+  return (
+    <Card>
+      <CardBody className="space-y-2 py-3">
+        <div className="text-xs uppercase tracking-wide text-muted">Tags</div>
+        <div className="text-[11px] text-muted">
+          Drives auto-routing rules. Match against Settings → Email
+          routing rules.
+        </div>
+        {draft.length > 0 ? (
+          <ul className="space-y-1">
+            {draft.map((tag) => {
+              const effects = effectsForTag(tag);
+              return (
+                <li key={tag} className="text-xs">
+                  <span className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]">
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeTag(tag)}
+                      className="text-muted hover:text-accent-danger"
+                      aria-label={`Remove tag ${tag}`}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                  {effects.length > 0 ? (
+                    <ul className="ml-2 mt-0.5 list-disc text-[10px] text-accent-info">
+                      {effects.map((e, i) => (
+                        <li key={i} className="ml-2">
+                          {e}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+        <div className="flex gap-1">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                addTag();
+              }
+            }}
+            placeholder="add tag (e.g. yiddy)"
+            className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={addTag}
+            disabled={!input.trim()}
+          >
+            Add
+          </Button>
+        </div>
+        {mutation.isError ? (
+          <div className="text-[11px] text-accent-danger">
+            {(mutation.error as Error)?.message ?? "save failed"}
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }

@@ -38,6 +38,7 @@ import { createLogger } from "../../lib/logger.js";
 import { env } from "../../lib/env.js";
 import { ShopifyClient } from "../../integrations/shopify/client.js";
 import { pushCustomerTermsToQbo } from "../../modules/customer-terms/push-to-qbo.js";
+import { pushCustomerInvoiceEmailsToQbo } from "../../modules/customer-emails/push-to-qbo.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
@@ -86,9 +87,31 @@ const bulkTagBodySchema = z.object({
   customerType: z.enum(["b2b", "b2c"]).nullable(),
 });
 
+// Email address validator — bare RFC-flavoured shape, not exhaustive.
+// Accepts foo@bar.com, foo+plus@sub.bar.uk; rejects anything without
+// an @ or with whitespace.
+const emailString = z
+  .string()
+  .min(3)
+  .max(255)
+  .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "must be a valid email");
+
 const patchBodySchema = z.object({
   customerType: z.enum(["b2b", "b2c"]).nullable().optional(),
   holdStatus: z.enum(["active", "hold", "payment_upfront"]).optional(),
+  primaryEmail: emailString.nullable().optional(),
+  billingEmails: z.array(emailString).max(20).nullable().optional(),
+  invoiceToEmail: emailString.nullable().optional(),
+  invoiceCcEmails: z.array(emailString).max(20).nullable().optional(),
+  statementToEmail: emailString.nullable().optional(),
+  statementCcEmails: z.array(emailString).max(20).nullable().optional(),
+  // Tags drive email_routing_rules. Lower-cased + trimmed before
+  // persisting so matching against rules.tag is case-insensitive.
+  tags: z
+    .array(z.string().min(1).max(64))
+    .max(20)
+    .nullable()
+    .optional(),
   // Free-form display string ("Net 30", "Net 60", "Due on Receipt"…).
   // Not constrained to an enum — operators can write whatever the
   // customer agreement actually says, and the chase/statement flows
@@ -626,7 +649,27 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     const before = beforeRows[0];
     if (!before) return reply.code(404).send({ error: "customer not found" });
 
-    await db.update(customers).set(updates).where(eq(customers.id, id));
+    // Tags are lower-cased + trimmed + de-duped before persist so the
+    // email_routing_rules match (also lower-case) is reliable. Done
+    // here rather than in the schema's preprocess because Zod runs
+    // before the body is fed to drizzle.
+    const tagsNormalized =
+      updates.tags === undefined
+        ? undefined
+        : updates.tags === null
+          ? null
+          : Array.from(
+              new Set(
+                updates.tags
+                  .map((t) => t.trim().toLowerCase())
+                  .filter(Boolean),
+              ),
+            );
+    const writeSet =
+      tagsNormalized === undefined
+        ? updates
+        : { ...updates, tags: tagsNormalized };
+    await db.update(customers).set(writeSet).where(eq(customers.id, id));
 
     const afterRows = await db
       .select()
@@ -661,6 +704,37 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         log.warn(
           { err, customerId: id, qbCustomerId: after.qbCustomerId },
           "qbo terms push failed (local write succeeded)",
+        );
+      });
+    }
+
+    // If anything affecting QBO's invoice TO/CC/BCC changed (the
+    // invoice override fields, primary email, billing emails, or
+    // tags), push the resolved set to QBO. So both /invoicing/today
+    // sends AND QBO's own auto-sends from the Shopify pipeline pick
+    // up the right recipients including any tag-derived BCC.
+    const invoiceEmailsChanged =
+      updates.invoiceToEmail !== undefined ||
+      updates.invoiceCcEmails !== undefined ||
+      updates.primaryEmail !== undefined ||
+      updates.billingEmails !== undefined ||
+      updates.tags !== undefined;
+    if (invoiceEmailsChanged && after.qbCustomerId) {
+      void pushCustomerInvoiceEmailsToQbo({
+        qbCustomerId: after.qbCustomerId,
+        customer: {
+          primaryEmail: after.primaryEmail,
+          billingEmails: after.billingEmails,
+          invoiceToEmail: after.invoiceToEmail,
+          invoiceCcEmails: after.invoiceCcEmails,
+          statementToEmail: after.statementToEmail,
+          statementCcEmails: after.statementCcEmails,
+          tags: after.tags,
+        },
+      }).catch((err) => {
+        log.warn(
+          { err, customerId: id, qbCustomerId: after.qbCustomerId },
+          "qbo email push failed (local write succeeded)",
         );
       });
     }

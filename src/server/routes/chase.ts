@@ -50,6 +50,7 @@ import {
 import { sendEmail } from "../../integrations/gmail/send.js";
 import { recordActivity } from "../../modules/crm/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
+import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
 import { users } from "../../db/schema/auth.js";
 
 const log = createLogger({ component: "routes.chase" });
@@ -436,25 +437,34 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     const renderedSubject = renderTemplate(template.subject, vars);
     const renderedBody = renderTemplate(template.body, vars);
 
-    // Recipient construction matches the statement-send pattern: TO =
-    // primary, CC = billing emails minus primary (case-insensitive),
-    // BCC from settings.statement_bcc_email when non-empty.
-    const primaryLower = customer.primaryEmail.toLowerCase();
-    const billing = Array.isArray(customer.billingEmails)
-      ? (customer.billingEmails as string[])
-      : [];
-    const ccList = billing.filter(
-      (e) => e && e.toLowerCase() !== primaryLower,
-    );
-    const cc = ccList.length > 0 ? ccList.join(", ") : undefined;
+    // Recipients via the per-channel resolver — chase emails reuse
+    // the statement TO/CC overrides (per the customer-profile design,
+    // chase + statement go to the same audience). BCC = global
+    // statement_bcc_email setting + any tag-driven bcc_statement
+    // rules. Tag-driven bcc_invoice rules don't apply to this channel.
+    const resolved = await resolveRecipients("statement", {
+      primaryEmail: customer.primaryEmail,
+      billingEmails: customer.billingEmails,
+      invoiceToEmail: customer.invoiceToEmail,
+      invoiceCcEmails: customer.invoiceCcEmails,
+      statementToEmail: customer.statementToEmail,
+      statementCcEmails: customer.statementCcEmails,
+      tags: customer.tags,
+    });
+    const toAddress = resolved.to ?? customer.primaryEmail;
+    const cc = resolved.cc.length > 0 ? resolved.cc.join(", ") : undefined;
     const settings = await loadAppSettings();
     const bccConfigured = settings.statement_bcc_email?.trim() ?? "";
-    const bcc = bccConfigured.length > 0 ? bccConfigured : undefined;
+    const allBccs = [
+      ...(bccConfigured ? [bccConfigured] : []),
+      ...resolved.bcc,
+    ];
+    const bcc = allBccs.length > 0 ? allBccs.join(", ") : undefined;
 
     let result;
     try {
       result = await sendEmail({
-        to: customer.primaryEmail,
+        to: toAddress,
         cc,
         bcc,
         subject: renderedSubject,
@@ -480,7 +490,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
           err,
           customerId,
           slug,
-          to: customer.primaryEmail,
+          to: toAddress,
         },
         "chase email send failed",
       );
@@ -500,7 +510,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       after: {
         slug,
         level,
-        to: customer.primaryEmail,
+        to: toAddress,
         cc: cc ?? null,
         bcc: bcc ?? null,
         subject: renderedSubject,
@@ -520,7 +530,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       meta: {
         slug,
         level,
-        to: customer.primaryEmail,
+        to: toAddress,
         cc: cc ?? null,
         bcc: bcc ?? null,
         messageId: result.messageId,

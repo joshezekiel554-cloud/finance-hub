@@ -74,8 +74,207 @@ export default function SettingsPage() {
       </div>
       <EmailTemplatesSection />
       <StatementPdfSection />
+      <RoutingRulesSection />
       <ImportsSection />
     </div>
+  );
+}
+
+// CRUD for email_routing_rules. Each row maps a customer tag → an
+// email-routing action (auto-CC/BCC on invoices or statements). Today
+// the seeded rule is `yiddy → bcc_invoice → sales@feldart.com`; the
+// table is plural so the operator can add per-team rules without
+// touching code.
+type RoutingRule = {
+  id: string;
+  tag: string;
+  action:
+    | "bcc_invoice"
+    | "bcc_statement"
+    | "cc_invoice"
+    | "cc_statement";
+  value: string;
+  createdAt: string;
+};
+
+const RULE_ACTION_LABEL: Record<RoutingRule["action"], string> = {
+  bcc_invoice: "BCC on invoices",
+  bcc_statement: "BCC on statements",
+  cc_invoice: "CC on invoices",
+  cc_statement: "CC on statements",
+};
+
+function RoutingRulesSection() {
+  const queryClient = useQueryClient();
+  const { data, isPending } = useQuery<{ rules: RoutingRule[] }>({
+    queryKey: ["email-routing-rules"],
+    queryFn: async () => {
+      const res = await fetch("/api/email-routing-rules");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const [tag, setTag] = useState("");
+  const [action, setAction] = useState<RoutingRule["action"]>("bcc_invoice");
+  const [value, setValue] = useState("");
+
+  const createMutation = useMutation({
+    mutationFn: async (input: {
+      tag: string;
+      action: RoutingRule["action"];
+      value: string;
+    }) => {
+      const res = await fetch("/api/email-routing-rules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-routing-rules"] });
+      setTag("");
+      setValue("");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(
+        `/api/email-routing-rules/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-routing-rules"] });
+    },
+  });
+
+  const rules = data?.rules ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-sm font-medium">Email routing rules</h2>
+      </CardHeader>
+      <CardBody className="space-y-3">
+        <p className="text-xs text-muted">
+          When a customer has a matching tag, the rule's address is
+          auto-added to the recipient list on every send. Used for
+          per-salesperson invoice copies and similar — the seeded
+          example is <code>yiddy</code> →{" "}
+          <code>BCC sales@feldart.com on invoices</code>.
+        </p>
+        {isPending ? (
+          <div className="text-xs text-muted">Loading…</div>
+        ) : rules.length === 0 ? (
+          <div className="text-xs text-muted">No rules yet.</div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="border-b border-default text-[10px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-2 py-1 text-left">Tag</th>
+                <th className="px-2 py-1 text-left">Action</th>
+                <th className="px-2 py-1 text-left">Address</th>
+                <th className="px-2 py-1"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((r) => (
+                <tr key={r.id} className="border-b border-default">
+                  <td className="px-2 py-1 font-mono">{r.tag}</td>
+                  <td className="px-2 py-1">{RULE_ACTION_LABEL[r.action]}</td>
+                  <td className="px-2 py-1">{r.value}</td>
+                  <td className="px-2 py-1 text-right">
+                    <button
+                      type="button"
+                      disabled={deleteMutation.isPending}
+                      onClick={() => {
+                        if (confirm(`Delete rule "${r.tag} → ${RULE_ACTION_LABEL[r.action]} → ${r.value}"?`)) {
+                          deleteMutation.mutate(r.id);
+                        }
+                      }}
+                      className="text-muted hover:text-accent-danger"
+                      aria-label="Delete rule"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div className="flex flex-wrap items-end gap-2 border-t border-default pt-3">
+          <label className="block text-xs">
+            <span className="mb-0.5 block text-muted">Tag</span>
+            <Input
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              placeholder="yiddy"
+              className="w-32 text-xs"
+            />
+          </label>
+          <label className="block text-xs">
+            <span className="mb-0.5 block text-muted">Action</span>
+            <select
+              value={action}
+              onChange={(e) =>
+                setAction(e.target.value as RoutingRule["action"])
+              }
+              className="rounded-md border border-default bg-base px-2 py-1 text-xs"
+            >
+              {Object.entries(RULE_ACTION_LABEL).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs flex-1">
+            <span className="mb-0.5 block text-muted">Address</span>
+            <Input
+              type="email"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="sales@feldart.com"
+              className="text-xs"
+            />
+          </label>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            disabled={
+              !tag.trim() ||
+              !value.trim() ||
+              createMutation.isPending
+            }
+            onClick={() =>
+              createMutation.mutate({
+                tag: tag.trim().toLowerCase(),
+                action,
+                value: value.trim(),
+              })
+            }
+          >
+            <Plus className="size-3.5" /> Add rule
+          </Button>
+        </div>
+        {createMutation.isError ? (
+          <div className="text-xs text-accent-danger">
+            {(createMutation.error as Error)?.message ?? "create failed"}
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }
 

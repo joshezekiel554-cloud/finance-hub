@@ -4,6 +4,7 @@ export * from "./catalog";
 export * from "./invoices";
 export * from "./crm";
 export * from "./email-templates";
+export * from "./email-routing-rules";
 export * from "./app-settings";
 export * from "./notifications";
 export * from "./audit";

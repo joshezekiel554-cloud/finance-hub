@@ -174,18 +174,19 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     return "created";
   }
 
-  // paymentTerms is intentionally excluded from drift + the UPDATE set:
-  // finance-hub is the source of truth for terms (operator edits in
-  // /customers/:id, plus the one-off Monday backfill). QBO often has
-  // SalesTermRef blank, so re-syncing would silently wipe the local
-  // value every 30 min. We still seed paymentTerms from QBO on FIRST
-  // insert (above) — after that, the local value is authoritative.
+  // The following fields are excluded from drift + the UPDATE set:
+  // finance-hub is the source of truth for them. Operator edits flow
+  // back to QBO via the per-customer push helpers; the 30-min sync
+  // would otherwise stomp manual edits.
+  //   - paymentTerms (Monday import + per-customer pencil)
+  //   - primaryEmail + billingEmails (per-channel email overrides on
+  //     the customer profile push to QBO; QBO sync no longer wins)
+  // We still seed all three on the first INSERT above so a brand-
+  // new customer picks up whatever QBO had at sync time.
   const drift =
     before.displayName !== desired.displayName ||
-    before.primaryEmail !== desired.primaryEmail ||
     before.balance !== desired.balance ||
     before.phone !== desired.phone ||
-    !arraysEqual(before.billingEmails ?? null, desired.billingEmails) ||
     before.billingAddressLine1 !== desired.billingAddressLine1 ||
     before.billingAddressLine2 !== desired.billingAddressLine2 ||
     before.billingAddressCity !== desired.billingAddressCity ||
@@ -206,8 +207,6 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     .update(customers)
     .set({
       displayName: desired.displayName,
-      primaryEmail: desired.primaryEmail,
-      billingEmails: desired.billingEmails,
       phone: desired.phone,
       balance: desired.balance,
       billingAddressLine1: desired.billingAddressLine1,
@@ -229,8 +228,6 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     after: {
       ...serializableCustomer(before),
       displayName: desired.displayName,
-      primaryEmail: desired.primaryEmail,
-      billingEmails: desired.billingEmails,
       balance: desired.balance,
     },
   });

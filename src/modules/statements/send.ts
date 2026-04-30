@@ -61,6 +61,7 @@ import {
   type StatementInvoiceInput,
 } from "./pdf.js";
 import { loadAppSettings, type AppSettingsMap } from "./settings.js";
+import { resolveRecipients } from "../customer-emails/recipients.js";
 
 const log = createLogger({ module: "statements.send" });
 
@@ -502,18 +503,29 @@ export async function sendStatement(
     );
   }
 
-  // CC excludes the primary address (case-insensitive) so the customer
-  // never gets two copies. BCC reads from app_settings so the operator
-  // can change the alias or disable it entirely from the Settings page;
-  // empty string → no BCC header on the outgoing message.
-  const primaryEmailLower = customer.primaryEmail.toLowerCase();
-  const ccList = (customer.billingEmails ?? []).filter(
-    (e) => e && e.toLowerCase() !== primaryEmailLower,
-  );
-  const to = customer.primaryEmail;
-  const cc = joinAddresses(ccList);
+  // Recipients resolved through the per-channel helper so a customer
+  // with a statement_to/cc override (set on the customer profile)
+  // gets routed there instead of the default primary + billing list.
+  // BCC layers on top: tag-driven cc/bcc rules (rare on the statement
+  // channel today) plus the global statement_bcc_email setting.
+  const resolved = await resolveRecipients("statement", {
+    primaryEmail: customer.primaryEmail,
+    billingEmails: customer.billingEmails,
+    invoiceToEmail: customer.invoiceToEmail,
+    invoiceCcEmails: customer.invoiceCcEmails,
+    statementToEmail: customer.statementToEmail,
+    statementCcEmails: customer.statementCcEmails,
+    tags: customer.tags,
+  });
+  const to = resolved.to ?? customer.primaryEmail;
+  const cc = resolved.cc.length > 0 ? resolved.cc.join(", ") : null;
   const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
-  const bcc = configuredBcc.length > 0 ? configuredBcc : null;
+  const tagBcc = resolved.bcc;
+  const allBcc = [
+    ...(configuredBcc ? [configuredBcc] : []),
+    ...tagBcc,
+  ];
+  const bcc = allBcc.length > 0 ? allBcc.join(", ") : null;
 
   const filename = `Statement_${sanitizeFilenameSegment(customer.displayName)}_${statementNumber}.pdf`;
   const attachments = [
