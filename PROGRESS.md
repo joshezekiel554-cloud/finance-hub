@@ -13,6 +13,17 @@ If you're new to this file:
 
 ## Current phase
 
+**Statement PDF rebuild. 🟢 SHIPPED** (commits `a43a15b` → `024fe42`).
+Replaced the HTML-body-with-N-invoice-PDFs pattern from Week 7 with a
+proper QBO-style Statement.pdf — single document, customer-facing
+billing address, sequential statement number, per-invoice rows with
+clickable Pay-now hyperlinks (resolved from QBO's InvoiceLink), red
+overdue due dates, inline credit memos, footer with 5-line summary
++ payment methods, logo top-right + company info top-left. Fully
+customizable via /settings → Statement PDF section: company info,
+payment methods text, logo upload, next statement number. Atomic
+counter starts at 6013 to clear the existing QBO range.
+
 **Week 7 — Statements + Hold + Compose. 🟢 SHIPPED.** Multi-agent
 parallel build across 3 waves (commits `72d93b9` → `af80bfd`).
 Settings + email templates · Shopify hold (tag-based with prominent UI
@@ -103,13 +114,14 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-04-29 (late — week 7 closed)
-**Commit on `main`**: `af80bfd` (wave 3 integration: chase route + page + nav)
+**Date**: 2026-04-30 (Statement PDF rebuild closing)
+**Commit on `main`**: `024fe42` (Statement PDF Phase 2 integration)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (in sync)
 **Local repo**: `C:\Users\user\Documents\finance-hub`
 **Status**: typecheck silent · **181/181 tests pass** · server + web + worker running via `npm run dev`
-**Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · 4,842 activities · 509 emails · 6 email templates seeded
+**Data populated**: 2,407 customers (2,374 with billing address — backfilled via re-sync) · 3,119 invoices · 19,184 invoice_lines · 4,842 activities · 509 emails · 6 email templates · 9 app_settings rows seeded
 **Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy
+**Smoke test**: GET /api/customers/{abraham}/statement-pdf-preview → 200, `application/pdf`, 4133 bytes, valid %PDF-1.3 in 2s
 
 ## Active work
 
