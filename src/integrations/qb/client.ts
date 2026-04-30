@@ -516,6 +516,40 @@ export class QboClient {
     }
   }
 
+  // Sparse update of a QBO Customer. Same shape as updateInvoice — POST
+  // to /v3/company/.../customer with Id + SyncToken + sparse:true and
+  // whatever fields you want to mutate. Returns the refreshed Customer
+  // (new SyncToken). Used today for SalesTermRef pushes; the same path
+  // covers BillEmail, BillAddr, etc. when those needs come up.
+  async updateCustomer(payload: object): Promise<QboCustomer> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/customer`;
+    const accessToken = await this.getAccessToken();
+
+    const doRequest = async (token: string) => {
+      return this.http.post<{ Customer: QboCustomer }>(url, payload, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.Customer;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.Customer;
+      }
+      throw err;
+    }
+  }
+
   // Fuzzy item search for the UI's add-line picker. Matches against Sku
   // (prefix) OR Name (substring) — QBO's LIKE is case-sensitive so we
   // search both ALL-CAPS and the user's literal text. Caller-side dedupe.

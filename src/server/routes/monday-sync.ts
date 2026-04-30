@@ -28,6 +28,11 @@ import {
   fetchTermsBoardRows,
   type MondayStoreRow,
 } from "../../integrations/monday/client.js";
+import {
+  pushCustomerTermsToQbo,
+  clearTermsCache,
+} from "../../modules/customer-terms/push-to-qbo.js";
+import { QboClient } from "../../integrations/qb/client.js";
 
 const log = createLogger({ component: "routes.monday-sync" });
 
@@ -230,12 +235,20 @@ const monthSyncRoute: FastifyPluginAsync = async (app) => {
     let updated = 0;
     let skipped = 0;
     const failures: Array<{ customerId: string; reason: string }> = [];
+    // Customers whose local row actually changed — fed to the QBO push
+    // pass below. Empty if every apply was a no-op.
+    const toPushToQbo: Array<{
+      customerId: string;
+      qbCustomerId: string;
+      term: string;
+    }> = [];
 
     for (const a of applies) {
       try {
         const before = await db
           .select({
             id: customers.id,
+            qbCustomerId: customers.qbCustomerId,
             paymentTerms: customers.paymentTerms,
           })
           .from(customers)
@@ -267,6 +280,13 @@ const monthSyncRoute: FastifyPluginAsync = async (app) => {
           after: { paymentTerms: a.term } as Record<string, unknown>,
         });
         updated++;
+        if (before[0]!.qbCustomerId) {
+          toPushToQbo.push({
+            customerId: a.customerId,
+            qbCustomerId: before[0]!.qbCustomerId,
+            term: a.term,
+          });
+        }
       } catch (err) {
         log.error(
           { err, customerId: a.customerId, term: a.term },
@@ -279,12 +299,81 @@ const monthSyncRoute: FastifyPluginAsync = async (app) => {
       }
     }
 
+    // QBO push pass — best-effort, bounded concurrency. Local writes
+    // are already committed; a QBO failure here doesn't roll anything
+    // back, it just shows up in qboPushed/qboSkipped/qboFailed in the
+    // response so the operator knows what made it across.
+    let qboPushed = 0;
+    let qboSkipped = 0;
+    const qboFailures: Array<{ customerId: string; reason: string }> = [];
+    if (toPushToQbo.length > 0) {
+      // Reuse one QboClient instance across the batch so the cached
+      // term list inside push-to-qbo isn't re-fetched per call.
+      // clearTermsCache() before the run so a freshly-edited QBO
+      // term list (rare but possible) is picked up.
+      clearTermsCache();
+      const qbClient = new QboClient();
+      const PUSH_CONCURRENCY = 5;
+      const queue = [...toPushToQbo];
+      const workers: Promise<void>[] = [];
+      for (let i = 0; i < PUSH_CONCURRENCY; i++) {
+        workers.push(
+          (async () => {
+            while (queue.length > 0) {
+              const item = queue.shift();
+              if (!item) return;
+              try {
+                const result = await pushCustomerTermsToQbo({
+                  qbCustomerId: item.qbCustomerId,
+                  paymentTerms: item.term,
+                  qbClient,
+                });
+                if (result.status === "skipped") qboSkipped++;
+                else qboPushed++;
+              } catch (err) {
+                log.warn(
+                  {
+                    err,
+                    customerId: item.customerId,
+                    qbCustomerId: item.qbCustomerId,
+                  },
+                  "qbo terms push failed in monday batch",
+                );
+                qboFailures.push({
+                  customerId: item.customerId,
+                  reason: (err as Error).message ?? "unknown",
+                });
+              }
+            }
+          })(),
+        );
+      }
+      await Promise.all(workers);
+    }
+
     log.info(
-      { updated, skipped, failures: failures.length, by: user.id },
+      {
+        updated,
+        skipped,
+        failures: failures.length,
+        qboPushed,
+        qboSkipped,
+        qboFailures: qboFailures.length,
+        by: user.id,
+      },
       "monday terms apply complete",
     );
 
-    return reply.send({ updated, skipped, failures });
+    return reply.send({
+      updated,
+      skipped,
+      failures,
+      qbo: {
+        pushed: qboPushed,
+        skipped: qboSkipped,
+        failures: qboFailures,
+      },
+    });
   });
 };
 

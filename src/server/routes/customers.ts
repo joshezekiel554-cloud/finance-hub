@@ -33,6 +33,7 @@ import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
 import { env } from "../../lib/env.js";
 import { ShopifyClient } from "../../integrations/shopify/client.js";
+import { pushCustomerTermsToQbo } from "../../modules/customer-terms/push-to-qbo.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
@@ -558,6 +559,26 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       before,
       after,
     });
+
+    // If paymentTerms changed and the customer is wired to a QBO row,
+    // push the new value to QBO. Fire-and-forget — local write is
+    // already committed, and a QBO failure shouldn't block the
+    // operator. Logged inside the helper.
+    if (
+      updates.paymentTerms !== undefined &&
+      updates.paymentTerms !== before.paymentTerms &&
+      after.qbCustomerId
+    ) {
+      void pushCustomerTermsToQbo({
+        qbCustomerId: after.qbCustomerId,
+        paymentTerms: after.paymentTerms,
+      }).catch((err) => {
+        log.warn(
+          { err, customerId: id, qbCustomerId: after.qbCustomerId },
+          "qbo terms push failed (local write succeeded)",
+        );
+      });
+    }
 
     return reply.send({ customer: after });
   });

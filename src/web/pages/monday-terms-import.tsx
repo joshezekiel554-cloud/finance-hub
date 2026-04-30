@@ -61,6 +61,11 @@ type ApplyResponse = {
   updated: number;
   skipped: number;
   failures: Array<{ customerId: string; reason: string }>;
+  qbo: {
+    pushed: number;
+    skipped: number;
+    failures: Array<{ customerId: string; reason: string }>;
+  };
 };
 
 const VIA_LABELS: Record<Via, { label: string; tone: "info" | "success" | "high" | "neutral" }> = {
@@ -203,25 +208,42 @@ export default function MondayTermsImportPage() {
 
           {applyResult ? (
             <Card className="border-accent-success/40 bg-accent-success/5">
-              <CardBody>
+              <CardBody className="space-y-1">
                 <div className="flex items-center gap-2 text-sm">
                   <CheckCircle2 className="size-4 text-accent-success" />
                   <span className="font-medium">
-                    Applied: {applyResult.updated} updated
+                    Local: {applyResult.updated} updated
                     {applyResult.skipped > 0
                       ? `, ${applyResult.skipped} skipped (already set)`
                       : ""}
                     {applyResult.failures.length > 0
                       ? `, ${applyResult.failures.length} failed`
                       : ""}
-                    .
                   </span>
                 </div>
+                <div className="text-xs text-secondary">
+                  QBO push: {applyResult.qbo.pushed} pushed
+                  {applyResult.qbo.skipped > 0
+                    ? `, ${applyResult.qbo.skipped} skipped (no match in QBO terms list)`
+                    : ""}
+                  {applyResult.qbo.failures.length > 0
+                    ? `, ${applyResult.qbo.failures.length} failed`
+                    : ""}
+                </div>
                 {applyResult.failures.length > 0 ? (
-                  <ul className="mt-2 text-xs text-secondary">
+                  <ul className="text-xs text-secondary">
                     {applyResult.failures.slice(0, 5).map((f, i) => (
                       <li key={i}>
                         {f.customerId}: {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {applyResult.qbo.failures.length > 0 ? (
+                  <ul className="text-xs text-accent-warning">
+                    {applyResult.qbo.failures.slice(0, 5).map((f, i) => (
+                      <li key={i}>
+                        QBO {f.customerId}: {f.reason}
                       </li>
                     ))}
                   </ul>
