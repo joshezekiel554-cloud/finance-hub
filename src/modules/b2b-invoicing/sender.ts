@@ -53,6 +53,12 @@ export type QboInvoicePayload = {
   TrackingNum?: string;
   ShipDate?: string;
   ShipMethodRef?: { value: string; name: string };
+  // Optional recomputed due date in YYYY-MM-DD form. Set when the caller
+  // changes SalesTermRef AND supplies the new term's DueDays — QBO does
+  // NOT auto-recompute DueDate on a sparse update when SalesTermRef
+  // changes (terms only set the default at creation), so we have to
+  // compute TxnDate + DueDays ourselves and emit it alongside.
+  DueDate?: string;
   // Optional override of the human-readable invoice number. Set when the
   // caller passed a docNumberSuffix and the current DocNumber didn't
   // already end with it. Omitted otherwise — sparse update leaves it.
@@ -88,6 +94,12 @@ export type BuildPayloadOptions = {
   // QBO sparse updates leave omitted fields untouched.
   salesTermId?: string;
   salesTermName?: string;
+  // Optional DueDays for the new term (Standard-type terms only). Required
+  // alongside salesTermId to update DueDate; without it the SalesTermRef
+  // changes but DueDate keeps its old value (QBO doesn't auto-recompute on
+  // sparse update). Date-driven terms (DayOfMonthDue/etc) have no DueDays
+  // — skip the recompute for those and let DueDate ride.
+  salesTermDueDays?: number;
   // Optional customer-facing memo. When undefined or empty, CustomerMemo is
   // blanked (default — clears the auto-sync boilerplate). When non-empty,
   // becomes the visible message on the invoice + statement.
@@ -240,6 +252,18 @@ export function buildPayload(
       value: options.salesTermId,
       ...(options.salesTermName ? { name: options.salesTermName } : {}),
     };
+    // Recompute DueDate from TxnDate + DueDays. Skipped if the caller
+    // didn't supply DueDays (date-driven terms) or the invoice has no
+    // TxnDate (defensive — QBO always populates it on real invoices).
+    if (
+      typeof options.salesTermDueDays === "number" &&
+      Number.isFinite(options.salesTermDueDays) &&
+      options.salesTermDueDays >= 0 &&
+      invoice.TxnDate
+    ) {
+      const newDueDate = addDaysIso(invoice.TxnDate, options.salesTermDueDays);
+      if (newDueDate) payload.DueDate = newDueDate;
+    }
   }
   if (
     options.docNumberSuffix &&
@@ -274,6 +298,7 @@ export type SendOptions = {
   discountPercent?: number;
   salesTermId?: string;
   salesTermName?: string;
+  salesTermDueDays?: number;
   customerMemo?: string;
   docNumberSuffix?: string;
   billEmailTo?: string;
@@ -293,6 +318,7 @@ export async function sendInvoiceUpdate(
     discountPercent: opts.discountPercent,
     salesTermId: opts.salesTermId,
     salesTermName: opts.salesTermName,
+    salesTermDueDays: opts.salesTermDueDays,
     customerMemo: opts.customerMemo,
     docNumberSuffix: opts.docNumberSuffix,
     billEmailTo: opts.billEmailTo,
@@ -396,4 +422,21 @@ function buildAddLine(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// Adds `days` to a YYYY-MM-DD string and returns the same shape. UTC math
+// so we don't drift across DST boundaries — QBO TxnDate/DueDate are bare
+// calendar dates with no zone, so a date-only round-trip is what we want.
+// Returns null when the input doesn't match YYYY-MM-DD; callers fall back
+// to leaving DueDate untouched.
+function addDaysIso(yyyymmdd: string, days: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(yyyymmdd);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + days);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }

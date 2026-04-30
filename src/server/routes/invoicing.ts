@@ -367,6 +367,27 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    // Look up DueDays for the chosen term so the sender can recompute
+    // DueDate. Without this QBO leaves the old DueDate in place when
+    // SalesTermRef changes (sparse update doesn't cascade). Best-effort:
+    // a terms-fetch failure logs + falls back to no DueDate update so the
+    // rest of the send still proceeds.
+    let salesTermDueDays: number | undefined;
+    if (salesTermId) {
+      try {
+        const terms = await qbClient.getTerms();
+        const t = terms.find((x) => x.Id === salesTermId);
+        if (t && typeof t.DueDays === "number") {
+          salesTermDueDays = t.DueDays;
+        }
+      } catch (err) {
+        log.warn(
+          { err, invoiceId, salesTermId },
+          "qbo terms lookup failed; DueDate will not be recomputed",
+        );
+      }
+    }
+
     try {
       const outcome = await sendInvoiceUpdate(
         invoice,
@@ -376,6 +397,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           discountPercent,
           salesTermId,
           salesTermName,
+          salesTermDueDays,
           customerMemo,
           docNumberSuffix,
           billEmailTo,

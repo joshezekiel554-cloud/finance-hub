@@ -402,6 +402,52 @@ describe("buildPayload — customer memo + terms", () => {
     });
     expect(payload.SalesTermRef).toEqual({ value: "5" });
   });
+
+  it("recomputes DueDate from TxnDate + DueDays when term changes", () => {
+    // Net 60 from 2026-04-20 → 2026-06-19. QBO doesn't auto-recompute on
+    // sparse update so the sender has to emit DueDate explicitly.
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      salesTermId: "5",
+      salesTermName: "Net 60",
+      salesTermDueDays: 60,
+    });
+    expect(payload.DueDate).toBe("2026-06-19");
+  });
+
+  it("handles month rollover correctly (Net 30 across April/May)", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      salesTermId: "3",
+      salesTermDueDays: 30,
+    });
+    expect(payload.DueDate).toBe("2026-05-20");
+  });
+
+  it("omits DueDate when salesTermDueDays is missing (date-driven term)", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      salesTermId: "7",
+      salesTermName: "Due 15th of next month",
+    });
+    expect(payload.SalesTermRef).toEqual({
+      value: "7",
+      name: "Due 15th of next month",
+    });
+    expect(payload.DueDate).toBeUndefined();
+  });
+
+  it("omits DueDate when salesTermId is not provided", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      salesTermDueDays: 60,
+    });
+    expect(payload.DueDate).toBeUndefined();
+  });
+
+  it("uses Net 0 = same-day due date", () => {
+    const payload = buildPayload(makeInvoice(), [SET_METADATA], {
+      salesTermId: "1",
+      salesTermDueDays: 0,
+    });
+    expect(payload.DueDate).toBe("2026-04-20");
+  });
 });
 
 describe("buildPayload — invoice-level discount", () => {
