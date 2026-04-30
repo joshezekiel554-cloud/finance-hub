@@ -172,10 +172,15 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     return "created";
   }
 
+  // paymentTerms is intentionally excluded from drift + the UPDATE set:
+  // finance-hub is the source of truth for terms (operator edits in
+  // /customers/:id, plus the one-off Monday backfill). QBO often has
+  // SalesTermRef blank, so re-syncing would silently wipe the local
+  // value every 30 min. We still seed paymentTerms from QBO on FIRST
+  // insert (above) — after that, the local value is authoritative.
   const drift =
     before.displayName !== desired.displayName ||
     before.primaryEmail !== desired.primaryEmail ||
-    before.paymentTerms !== desired.paymentTerms ||
     before.balance !== desired.balance ||
     !arraysEqual(before.billingEmails ?? null, desired.billingEmails) ||
     before.billingAddressLine1 !== desired.billingAddressLine1 ||
@@ -200,7 +205,6 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       displayName: desired.displayName,
       primaryEmail: desired.primaryEmail,
       billingEmails: desired.billingEmails,
-      paymentTerms: desired.paymentTerms,
       balance: desired.balance,
       billingAddressLine1: desired.billingAddressLine1,
       billingAddressLine2: desired.billingAddressLine2,
@@ -223,7 +227,6 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       displayName: desired.displayName,
       primaryEmail: desired.primaryEmail,
       billingEmails: desired.billingEmails,
-      paymentTerms: desired.paymentTerms,
       balance: desired.balance,
     },
   });
