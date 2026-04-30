@@ -273,6 +273,7 @@ export function formatMessage(msg: gmail_v1.Schema$Message): ParsedEmail {
     return {
       id: msg?.id ?? "",
       threadId: msg?.threadId ?? "",
+      messageIdHeader: "",
       from: "",
       to: "",
       fromEmail: "",
@@ -293,6 +294,13 @@ export function formatMessage(msg: gmail_v1.Schema$Message): ParsedEmail {
     "Subject",
     "Date",
   ]);
+  // Message-ID lookup is case-insensitive — RFC 5322 §1.2.2 says header
+  // names are case-insensitive and senders ship "Message-ID" / "Message-Id"
+  // / "message-id" interchangeably. Stored verbatim with angle brackets.
+  const messageIdHeader =
+    (msg.payload.headers ?? []).find(
+      (h) => h.name?.toLowerCase() === "message-id",
+    )?.value ?? "";
   let body = "";
   if (msg.payload.body && msg.payload.body.data) {
     body = decodeBody(msg.payload.body);
@@ -324,6 +332,7 @@ export function formatMessage(msg: gmail_v1.Schema$Message): ParsedEmail {
   return {
     id: msg.id ?? "",
     threadId: msg.threadId ?? "",
+    messageIdHeader,
     from: headers["From"] ?? "",
     to: headers["To"] ?? "",
     fromEmail: parseEmailAddress(headers["From"]),

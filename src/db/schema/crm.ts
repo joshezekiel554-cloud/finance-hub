@@ -241,6 +241,14 @@ export const emailLog = mysqlTable(
     id: varchar("id", { length: 24 }).primaryKey(),
     gmailMessageId: varchar("gmail_message_id", { length: 128 }).notNull().unique(),
     threadId: varchar("thread_id", { length: 128 }),
+    // RFC 5322 Message-ID header captured from inbound + sent messages
+    // (e.g. "<CABc...@mail.example.com>"). Distinct from gmailMessageId,
+    // which is Gmail's internal API id. Used as the In-Reply-To value on
+    // outbound replies so non-Gmail recipients render the thread
+    // correctly (Gmail recipients also work via threadId, which the API
+    // call site sets independently). Nullable for old rows pre-capture
+    // and for the rare message that arrives without the header set.
+    messageIdHeader: varchar("message_id_header", { length: 998 }),
     customerId: varchar("customer_id", { length: 24 }).references(() => customers.id, {
       onDelete: "set null",
     }),

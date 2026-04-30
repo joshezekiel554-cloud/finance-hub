@@ -85,6 +85,13 @@
       "when": 1777508039599,
       "tag": "0011_unusual_shadow_king",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1777550163028,
+      "tag": "0012_yellow_crusher_hogan",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,11 @@
 export type ParsedEmail = {
   id: string;
   threadId: string;
+  // RFC 5322 Message-ID header value, including angle brackets. Empty
+  // string when the header is missing — separate from `id` (the Gmail
+  // API's internal message id). Used as the In-Reply-To value on
+  // outbound replies so non-Gmail recipients thread correctly.
+  messageIdHeader: string;
   from: string;
   to: string;
   fromEmail: string;

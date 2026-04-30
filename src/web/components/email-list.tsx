@@ -22,6 +22,7 @@ export type EmailLogRow = {
   id: string;
   gmailMessageId: string;
   threadId: string | null;
+  messageIdHeader: string | null;
   customerId: string | null;
   userId: string | null;
   direction: "inbound" | "outbound";
@@ -385,7 +386,14 @@ export function EmailList({
                                 customerName,
                                 customerEmail: customerEmail ?? undefined,
                                 inReplyTo: {
-                                  messageId: email.gmailMessageId,
+                                  // Prefer the RFC 5322 Message-ID header
+                                  // so non-Gmail recipients see a proper
+                                  // In-Reply-To. Fall back to the Gmail
+                                  // API messageId for legacy rows that
+                                  // pre-date header capture (still
+                                  // threads via Gmail's threadId).
+                                  messageId:
+                                    email.messageIdHeader ?? email.gmailMessageId,
                                   threadId: email.threadId ?? "",
                                   subject: email.subject ?? "",
                                   from:
