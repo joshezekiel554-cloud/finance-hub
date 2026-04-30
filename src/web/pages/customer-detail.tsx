@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Pause, Play, Mail, FileText, CheckCircle2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Pause,
+  Play,
+  Mail,
+  FileText,
+  CheckCircle2,
+  Pencil,
+  X,
+} from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -310,9 +319,9 @@ export default function CustomerDetailPage() {
               : "Untagged"
           }
         />
-        <StatCard
-          label="Terms"
-          value={customer.paymentTerms ?? "—"}
+        <TermsCard
+          customerId={customer.id}
+          currentTerms={customer.paymentTerms}
         />
       </div>
 
@@ -386,6 +395,152 @@ function StatCard({
         >
           {value}
         </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// Editable terms card. Click the pencil to open inline editor: presets
+// for the common Net X values + "Due on Receipt" + a custom text input
+// + clear. Save fires PATCH /api/customers/:id { paymentTerms } and
+// invalidates the detail query so the parent page picks up the new
+// value. Optimistic update would be nicer but the round trip is fast
+// enough that the small "saving…" pause is fine.
+const TERMS_PRESETS = [
+  "Net 15",
+  "Net 30",
+  "Net 45",
+  "Net 60",
+  "Net 90",
+  "Due on Receipt",
+];
+
+function TermsCard({
+  customerId,
+  currentTerms,
+}: {
+  customerId: string;
+  currentTerms: string | null;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [custom, setCustom] = useState("");
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation<unknown, Error, string | null>({
+    mutationFn: async (next) => {
+      const res = await fetch(`/api/customers/${encodeURIComponent(customerId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ paymentTerms: next }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      setEditing(false);
+      setCustom("");
+    },
+  });
+
+  function pick(v: string | null) {
+    if (mutation.isPending) return;
+    if (v === currentTerms) {
+      setEditing(false);
+      return;
+    }
+    mutation.mutate(v);
+  }
+
+  return (
+    <Card>
+      <CardBody className="py-3">
+        <div className="flex items-center justify-between">
+          <div className="text-xs uppercase tracking-wide text-muted">Terms</div>
+          {!editing ? (
+            <button
+              type="button"
+              aria-label="Edit terms"
+              onClick={() => setEditing(true)}
+              className="rounded p-1 text-muted hover:bg-elevated hover:text-primary"
+            >
+              <Pencil className="size-3.5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              aria-label="Cancel"
+              onClick={() => {
+                setEditing(false);
+                setCustom("");
+              }}
+              className="rounded p-1 text-muted hover:bg-elevated hover:text-primary"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+        </div>
+        {!editing ? (
+          <div className="mt-0.5 text-lg font-semibold tabular-nums">
+            {currentTerms ?? "—"}
+          </div>
+        ) : (
+          <div className="mt-2 space-y-2">
+            <div className="flex flex-wrap gap-1">
+              {TERMS_PRESETS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={mutation.isPending}
+                  onClick={() => pick(p)}
+                  className={cn(
+                    "rounded-md border border-default px-2 py-1 text-xs",
+                    p === currentTerms
+                      ? "bg-elevated font-medium"
+                      : "text-secondary hover:bg-elevated",
+                  )}
+                >
+                  {p}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={mutation.isPending || currentTerms === null}
+                onClick={() => pick(null)}
+                className="rounded-md border border-default px-2 py-1 text-xs text-secondary hover:bg-elevated disabled:opacity-50"
+              >
+                Clear
+              </button>
+            </div>
+            <div className="flex gap-1">
+              <input
+                type="text"
+                placeholder="Custom (e.g., Net 7)"
+                value={custom}
+                onChange={(e) => setCustom(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && custom.trim()) {
+                    pick(custom.trim());
+                  }
+                }}
+                className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!custom.trim() || mutation.isPending}
+                onClick={() => pick(custom.trim())}
+              >
+                Save
+              </Button>
+            </div>
+            {mutation.isError ? (
+              <div className="text-xs text-accent-danger">
+                {String(mutation.error?.message ?? "save failed")}
+              </div>
+            ) : null}
+          </div>
+        )}
       </CardBody>
     </Card>
   );

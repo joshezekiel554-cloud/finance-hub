@@ -69,6 +69,11 @@ const bulkTagBodySchema = z.object({
 const patchBodySchema = z.object({
   customerType: z.enum(["b2b", "b2c"]).nullable().optional(),
   holdStatus: z.enum(["active", "hold"]).optional(),
+  // Free-form display string ("Net 30", "Net 60", "Due on Receipt"…).
+  // Not constrained to an enum — operators can write whatever the
+  // customer agreement actually says, and the chase/statement flows
+  // render it verbatim.
+  paymentTerms: z.string().max(64).nullable().optional(),
   internalNotes: z.string().max(10_000).optional(),
 });
 
