@@ -1,0 +1,52 @@
+// Regression test: customer paymentTerms stays out of the QB sync's
+// UPDATE set. Backstory: the 30-minute sync used to overwrite
+// customers.paymentTerms with QBO's SalesTermRef.name on every update,
+// which silently wiped operator-managed terms (and the Monday
+// backfill) every half-hour because most customers in QBO don't have
+// SalesTermRef set. The fix was to drop paymentTerms from the UPDATE
+// set + audit override, making the field locally authoritative.
+//
+// This test asserts that invariant against the source file directly —
+// a string scan rather than a runtime test because the surrounding
+// function is heavily DB-coupled. If anyone re-adds paymentTerms to
+// the UPDATE set object, this fails fast.
+
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const source = readFileSync(resolve(here, "sync.ts"), "utf8");
+
+describe("syncCustomers UPDATE invariants", () => {
+  it("the .set({…}) block on the drift-update path excludes paymentTerms", () => {
+    // Locate the *drift* UPDATE — the one with displayName + several
+    // address fields. The other update() in this file is the noop
+    // lastSyncedAt-only bump (no .set call worth scanning), so this
+    // anchor is unique.
+    const startMarker = ".update(customers)\n    .set({\n      displayName";
+    const startIdx = source.indexOf(startMarker);
+    expect(startIdx).toBeGreaterThan(-1);
+    // Read until the closing }) of the .set object.
+    const closeIdx = source.indexOf("})", startIdx);
+    expect(closeIdx).toBeGreaterThan(startIdx);
+    const block = source.slice(startIdx, closeIdx);
+    expect(block).not.toMatch(/paymentTerms/);
+  });
+
+  it("the audit-after override block excludes paymentTerms", () => {
+    // The audit insert's `after` field spreads serializableCustomer
+    // (which DOES include paymentTerms — that's the source of truth
+    // for the BEFORE snapshot) and overrides specific keys. The
+    // override block must NOT mention paymentTerms, otherwise the
+    // audit would lie about a transition the UPDATE never performed.
+    const startMarker = "after: {\n      ...serializableCustomer(before),";
+    const startIdx = source.indexOf(startMarker);
+    expect(startIdx).toBeGreaterThan(-1);
+    const closeIdx = source.indexOf("},\n  });", startIdx);
+    expect(closeIdx).toBeGreaterThan(startIdx);
+    const block = source.slice(startIdx, closeIdx);
+    expect(block).not.toMatch(/paymentTerms:/);
+  });
+});
