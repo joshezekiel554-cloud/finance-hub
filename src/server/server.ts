@@ -55,8 +55,13 @@ async function buildServer(): Promise<FastifyInstance> {
   // entirely so uptime monitors aren't blocked.
   // The keyGenerator partitions counts by (ip, path-family) so /api/auth
   // pressure can't use up the budget for /api/* and vice versa.
+  // Rate limit. /api/auth is the brute-force surface — kept tight at 10/min.
+  // Everything else gets 300/min: comfortable headroom for interactive
+  // workflows like bulk-marking emails actioned (each click = PATCH + a
+  // React-Query refetch = 2 requests, so 30 quick clicks already burned
+  // the old 60-cap). 300 still trips on runaway loops or scripted abuse.
   await app.register(rateLimit, {
-    max: (req) => (req.url.startsWith("/api/auth/") ? 10 : 60),
+    max: (req) => (req.url.startsWith("/api/auth/") ? 10 : 300),
     timeWindow: "1 minute",
     allowList: (req) => req.url === "/health",
     keyGenerator: (req) => {
