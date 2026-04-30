@@ -33,6 +33,7 @@ import {
 } from "../../db/schema/dismissed-shipments.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
+import { requireAuth } from "../lib/auth.js";
 
 const log = createLogger({ component: "invoicing-route" });
 
@@ -139,6 +140,7 @@ const sendBodySchema = z.object({
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
   // Item search for the add-line picker. Returns up to 20 matches.
   app.get("/items/search", async (req, reply) => {
+    await requireAuth(req);
     const q = (req.query as { q?: string }).q ?? "";
     if (q.trim().length < 2) {
       return reply.send({ items: [] });
@@ -163,7 +165,8 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
 
   // Fetch active QBO Term entities for the UI dropdown. Cached client-side via
   // TanStack Query; the underlying QBO query is fast (<10 terms typical).
-  app.get("/terms", async (_req, reply) => {
+  app.get("/terms", async (req, reply) => {
+    await requireAuth(req);
     try {
       const qb = new QboClient();
       const terms = await qb.getTerms();
@@ -182,6 +185,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/today", async (req, reply) => {
+    await requireAuth(req);
     const lookbackDays = DEFAULT_LOOKBACK_DAYS;
     const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
     const sinceQuery = `from:${SENDER} subject:"${SUBJECT}" after:${Math.floor(sinceMs / 1000)}`;
@@ -259,6 +263,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
 
   // Batch dismiss for the "Dismiss all visible" page-level button.
   app.post("/dismiss-bulk", async (req, reply) => {
+    await requireAuth(req);
     const schema = z.object({
       gmailIds: z.array(z.string().min(1).max(64)).min(1).max(200),
       reason: z.enum(DISMISS_REASONS),
@@ -291,6 +296,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/dismiss", async (req, reply) => {
+    await requireAuth(req);
     const schema = z.object({
       gmailId: z.string().min(1).max(64),
       reason: z.enum(DISMISS_REASONS),
@@ -321,6 +327,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/restore", async (req, reply) => {
+    await requireAuth(req);
     const schema = z.object({ gmailId: z.string().min(1).max(64) });
     const parse = schema.safeParse(req.body);
     if (!parse.success) {
@@ -333,6 +340,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/send", async (req, reply) => {
+    await requireAuth(req);
     const parse = sendBodySchema.safeParse(req.body);
     if (!parse.success) {
       return reply.code(400).send({ error: "invalid body", details: parse.error.flatten() });
