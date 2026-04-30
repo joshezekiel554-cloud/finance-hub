@@ -1,0 +1,1 @@
+ALTER TABLE `customers` MODIFY COLUMN `hold_status` enum('active','hold','payment_upfront') NOT NULL DEFAULT 'active';

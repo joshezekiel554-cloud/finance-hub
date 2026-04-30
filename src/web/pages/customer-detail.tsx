@@ -37,7 +37,7 @@ type Customer = {
   primaryEmail: string | null;
   billingEmails: string[] | null;
   paymentTerms: string | null;
-  holdStatus: "active" | "hold";
+  holdStatus: "active" | "hold" | "payment_upfront";
   shopifyCustomerId: string | null;
   customerType: "b2b" | "b2c" | null;
   balance: string;
@@ -123,7 +123,7 @@ export default function CustomerDetailPage() {
         throw new Error(text || `HTTP ${res.status}`);
       }
       return res.json() as Promise<{
-        holdStatus: "active" | "hold";
+        holdStatus: "active" | "hold" | "payment_upfront";
         tagsAfter: string[];
       }>;
     },
@@ -191,6 +191,8 @@ export default function CustomerDetailPage() {
                 <Pause className="mr-1 size-3" />
                 On hold
               </Badge>
+            ) : customer.holdStatus === "payment_upfront" ? (
+              <Badge tone="high">Payment upfront</Badge>
             ) : (
               <Badge tone="success">Active</Badge>
             )}

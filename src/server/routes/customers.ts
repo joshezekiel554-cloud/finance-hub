@@ -56,7 +56,12 @@ const boolish = z
 const listQuerySchema = z.object({
   q: z.string().max(100).optional(),
   customerType: z.enum(["b2b", "b2c", "uncategorized", "all"]).default("b2b"),
-  holdStatus: z.enum(["active", "hold", "all"]).default("all"),
+  // "active" filter widens to include payment_upfront — operationally
+  // those customers are still B2B, just on prepay terms; only the
+  // explicit "hold" filter narrows to the hold-only set.
+  holdStatus: z
+    .enum(["active", "hold", "payment_upfront", "all"])
+    .default("all"),
   withBalance: boolish,
   // New filter chips (all default false → no filtering applied):
   hideZeroBalance: boolish,
@@ -82,7 +87,7 @@ const bulkTagBodySchema = z.object({
 
 const patchBodySchema = z.object({
   customerType: z.enum(["b2b", "b2c"]).nullable().optional(),
-  holdStatus: z.enum(["active", "hold"]).optional(),
+  holdStatus: z.enum(["active", "hold", "payment_upfront"]).optional(),
   // Free-form display string ("Net 30", "Net 60", "Due on Receipt"…).
   // Not constrained to an enum — operators can write whatever the
   // customer agreement actually says, and the chase/statement flows
@@ -128,7 +133,11 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     else if (customerType === "uncategorized") filters.push(isNull(customers.customerType));
     // "all" → no filter
 
-    if (holdStatus !== "all") {
+    if (holdStatus === "active") {
+      // "Active" view = anyone the operator can transact with normally
+      // (active OR payment_upfront). Excludes only true holds.
+      filters.push(inArray(customers.holdStatus, ["active", "payment_upfront"]));
+    } else if (holdStatus !== "all") {
       filters.push(eq(customers.holdStatus, holdStatus));
     }
     if (withBalance || hideZeroBalance) {

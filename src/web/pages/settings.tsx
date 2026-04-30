@@ -85,7 +85,7 @@ function ImportsSection() {
       <CardHeader>
         <h2 className="text-sm font-medium">One-off imports</h2>
       </CardHeader>
-      <CardBody className="space-y-2">
+      <CardBody className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium">Monday — payment terms</div>
@@ -95,6 +95,23 @@ function ImportsSection() {
             </div>
           </div>
           <Link to="/import/monday-terms">
+            <Button variant="secondary" size="sm">
+              <Download className="size-3.5" /> Open
+              <ArrowRight className="size-3.5" />
+            </Button>
+          </Link>
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t border-default pt-3">
+          <div>
+            <div className="text-sm font-medium">
+              Shopify — B2B-tag audit
+            </div>
+            <div className="text-xs text-muted">
+              Bring customer status (active / hold / payment upfront) into
+              sync with the b2b and b2b-b2b-upfront tags in Shopify.
+            </div>
+          </div>
+          <Link to="/import/shopify-b2b-audit">
             <Button variant="secondary" size="sm">
               <Download className="size-3.5" /> Open
               <ArrowRight className="size-3.5" />

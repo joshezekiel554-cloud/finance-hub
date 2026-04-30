@@ -29,7 +29,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
@@ -50,7 +50,11 @@ const BATCH_MAX_CUSTOMERS = 100;
 
 const listQuerySchema = z.object({
   customerType: z.enum(["b2b", "b2c", "all"]).default("b2b"),
-  holdStatus: z.enum(["active", "hold", "all"]).default("all"),
+  // "Active" widens to include payment_upfront — those customers can
+  // still be chased; only true hold customers are excluded by it.
+  holdStatus: z
+    .enum(["active", "hold", "payment_upfront", "all"])
+    .default("all"),
   sort: z
     .enum(["overdueBalance", "daysOverdue", "displayName", "lastActivityAt"])
     .default("overdueBalance"),
@@ -108,7 +112,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     // through too. The UI default is b2b so this is mostly a power-user
     // escape hatch.
 
-    if (holdStatus !== "all") {
+    if (holdStatus === "active") {
+      filters.push(inArray(customers.holdStatus, ["active", "payment_upfront"]));
+    } else if (holdStatus !== "all") {
       filters.push(eq(customers.holdStatus, holdStatus));
     }
 

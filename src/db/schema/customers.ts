@@ -18,7 +18,19 @@ export const customers = mysqlTable(
     primaryEmail: varchar("primary_email", { length: 255 }),
     billingEmails: json("billing_emails").$type<string[]>(),
     paymentTerms: varchar("payment_terms", { length: 64 }),
-    holdStatus: mysqlEnum("hold_status", ["active", "hold"]).notNull().default("active"),
+    // hold_status carries the customer's current account state. Despite
+    // the historical name, it has three values:
+    //   active           — normal B2B operation
+    //   hold             — blocked from B2B (b2b tag absent in Shopify)
+    //   payment_upfront  — must prepay each order (b2b-b2b-upfront tag
+    //                      in Shopify); not on hold, but not on terms
+    holdStatus: mysqlEnum("hold_status", [
+      "active",
+      "hold",
+      "payment_upfront",
+    ])
+      .notNull()
+      .default("active"),
     shopifyCustomerId: varchar("shopify_customer_id", { length: 64 }),
     mondayItemId: varchar("monday_item_id", { length: 64 }),
     // Billing address — synced from QBO Customer.BillAddr at sync time.

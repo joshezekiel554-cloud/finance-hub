@@ -15,13 +15,15 @@ import { cn } from "../lib/cn";
 
 type CustomerType = "b2b" | "b2c" | null;
 
+type HoldStatus = "active" | "hold" | "payment_upfront";
+
 type CustomerRow = {
   id: string;
   displayName: string;
   primaryEmail: string | null;
   balance: string;
   overdueBalance: string;
-  holdStatus: "active" | "hold";
+  holdStatus: HoldStatus;
   customerType: CustomerType;
   paymentTerms: string | null;
   lastSyncedAt: string | null;
@@ -589,14 +591,7 @@ export default function CustomersPage() {
                       {row.paymentTerms ?? "—"}
                     </td>
                     <td className="px-3 py-2">
-                      {onHold ? (
-                        <Badge tone="critical">
-                          <Pause className="mr-1 size-3" />
-                          Hold
-                        </Badge>
-                      ) : (
-                        <Badge tone="success">Active</Badge>
-                      )}
+                      <StatusBadge status={row.holdStatus} />
                     </td>
                   </tr>
                 );
@@ -623,6 +618,24 @@ function CustomerTypeBadge({ type }: { type: CustomerType }) {
   if (type === "b2b") return <Badge tone="info">B2B</Badge>;
   if (type === "b2c") return <Badge tone="neutral">B2C</Badge>;
   return <Badge tone="medium">Untagged</Badge>;
+}
+
+// Three-state status pill. Mirrors the row.holdStatus enum so any new
+// status value forces a TS error here — the only place every customer
+// row reads its account state from.
+function StatusBadge({ status }: { status: HoldStatus }) {
+  if (status === "hold") {
+    return (
+      <Badge tone="critical">
+        <Pause className="mr-1 size-3" />
+        Hold
+      </Badge>
+    );
+  }
+  if (status === "payment_upfront") {
+    return <Badge tone="high">Payment upfront</Badge>;
+  }
+  return <Badge tone="success">Active</Badge>;
 }
 
 function FilterChip({

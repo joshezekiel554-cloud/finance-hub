@@ -52,7 +52,7 @@ type ChaseRow = {
   primaryEmail: string | null;
   balance: string;
   overdueBalance: string;
-  holdStatus: "active" | "hold";
+  holdStatus: "active" | "hold" | "payment_upfront";
   customerType: "b2b" | "b2c" | null;
   paymentTerms: string | null;
   daysSinceOldestUnpaid: number | null;
@@ -459,11 +459,13 @@ export default function ChasePage() {
                       {row.paymentTerms ?? "—"}
                     </td>
                     <td className="px-3 py-2">
-                      {onHold ? (
+                      {row.holdStatus === "hold" ? (
                         <Badge tone="critical">
                           <Pause className="mr-1 size-3" />
                           Hold
                         </Badge>
+                      ) : row.holdStatus === "payment_upfront" ? (
+                        <Badge tone="high">Payment upfront</Badge>
                       ) : (
                         <Badge tone="success">Active</Badge>
                       )}

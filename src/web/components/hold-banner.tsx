@@ -25,7 +25,10 @@ import {
 type HoldBannerProps = {
   customerId: string;
   customerName: string;
-  holdStatus: "active" | "hold";
+  // payment_upfront is also a valid status now, but doesn't trigger
+  // this banner — only true holds do. Accept it in the type so the
+  // caller can pass it through without narrowing.
+  holdStatus: "active" | "hold" | "payment_upfront";
 };
 
 export function HoldBanner({
@@ -48,7 +51,7 @@ export function HoldBanner({
         throw new Error(text || `HTTP ${res.status}`);
       }
       return res.json() as Promise<{
-        holdStatus: "active" | "hold";
+        holdStatus: "active" | "hold" | "payment_upfront";
         tagsAfter: string[];
       }>;
     },
