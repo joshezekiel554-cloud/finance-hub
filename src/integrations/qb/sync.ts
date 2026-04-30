@@ -120,6 +120,7 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     // Multiple emails is rare but supported (1.0 stored comma-separated strings).
     billingEmails: billingEmails.length > 1 ? billingEmails : null,
     paymentTerms: qboCustomer.SalesTermRef?.name ?? null,
+    phone: qboCustomer.PrimaryPhone?.FreeFormNumber ?? null,
     balance: formatMoney(qboCustomer.Balance ?? 0),
     // Billing address — surfaced on customer detail page + Statement PDF.
     // QBO returns each segment as an optional string; nullify empties so
@@ -150,6 +151,7 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       primaryEmail: desired.primaryEmail,
       billingEmails: desired.billingEmails,
       paymentTerms: desired.paymentTerms,
+      phone: desired.phone,
       balance: desired.balance,
       billingAddressLine1: desired.billingAddressLine1,
       billingAddressLine2: desired.billingAddressLine2,
@@ -182,6 +184,7 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     before.displayName !== desired.displayName ||
     before.primaryEmail !== desired.primaryEmail ||
     before.balance !== desired.balance ||
+    before.phone !== desired.phone ||
     !arraysEqual(before.billingEmails ?? null, desired.billingEmails) ||
     before.billingAddressLine1 !== desired.billingAddressLine1 ||
     before.billingAddressLine2 !== desired.billingAddressLine2 ||
@@ -205,6 +208,7 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       displayName: desired.displayName,
       primaryEmail: desired.primaryEmail,
       billingEmails: desired.billingEmails,
+      phone: desired.phone,
       balance: desired.balance,
       billingAddressLine1: desired.billingAddressLine1,
       billingAddressLine2: desired.billingAddressLine2,

@@ -10,6 +10,9 @@ import {
   CheckCircle2,
   Pencil,
   X,
+  ShoppingBag,
+  CreditCard,
+  ExternalLink,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -36,6 +39,7 @@ type Customer = {
   displayName: string;
   primaryEmail: string | null;
   billingEmails: string[] | null;
+  phone: string | null;
   paymentTerms: string | null;
   holdStatus: "active" | "hold" | "payment_upfront";
   shopifyCustomerId: string | null;
@@ -111,8 +115,14 @@ export default function CustomerDetailPage() {
     },
   });
 
+  // Generic 3-way status mutation. The dialog confirms which target the
+  // operator picked; the route writes the right tag set + local mirror.
+  type StatusTarget = "active" | "hold" | "payment_upfront";
+  const [pendingTarget, setPendingTarget] = useState<StatusTarget | null>(
+    null,
+  );
   const holdToggleMutation = useMutation({
-    mutationFn: async (targetState: "hold" | "active") => {
+    mutationFn: async (targetState: StatusTarget) => {
       const res = await fetch(`/api/customers/${customerId}/hold-toggle`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -123,7 +133,7 @@ export default function CustomerDetailPage() {
         throw new Error(text || `HTTP ${res.status}`);
       }
       return res.json() as Promise<{
-        holdStatus: "active" | "hold" | "payment_upfront";
+        holdStatus: StatusTarget;
         tagsAfter: string[];
       }>;
     },
@@ -132,6 +142,7 @@ export default function CustomerDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["shopify-tags", customerId] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       setHoldDialogOpen(false);
+      setPendingTarget(null);
     },
   });
 
@@ -151,9 +162,6 @@ export default function CustomerDetailPage() {
   const balance = Number(customer.balance);
   const overdue = Number(customer.overdueBalance);
 
-  const targetHoldState: "hold" | "active" =
-    customer.holdStatus === "hold" ? "active" : "hold";
-
   return (
     <div className="space-y-4">
       <Link
@@ -171,7 +179,7 @@ export default function CustomerDetailPage() {
       />
 
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight">
             {customer.displayName}
           </h1>
@@ -197,6 +205,12 @@ export default function CustomerDetailPage() {
               <Badge tone="success">Active</Badge>
             )}
           </div>
+          <CustomerRecipientsRow
+            primaryEmail={customer.primaryEmail}
+            billingEmails={customer.billingEmails ?? []}
+            phone={customer.phone}
+            shopifyCustomerId={customer.shopifyCustomerId}
+          />
           <ShopifyTagsRow tagsQuery={tagsQuery} />
         </div>
 
@@ -220,24 +234,14 @@ export default function CustomerDetailPage() {
             <FileText className="size-3.5" />
             Send statement
           </Button>
-          <Button
-            variant={customer.holdStatus === "hold" ? "secondary" : "danger"}
-            size="sm"
-            onClick={() => setHoldDialogOpen(true)}
+          <StatusActions
+            holdStatus={customer.holdStatus}
             disabled={holdToggleMutation.isPending}
-          >
-            {customer.holdStatus === "hold" ? (
-              <>
-                <Play className="size-3.5" />
-                Release hold
-              </>
-            ) : (
-              <>
-                <Pause className="size-3.5" />
-                Put on hold
-              </>
-            )}
-          </Button>
+            onRequest={(target) => {
+              setPendingTarget(target);
+              setHoldDialogOpen(true);
+            }}
+          />
         </div>
       </div>
 
@@ -267,16 +271,28 @@ export default function CustomerDetailPage() {
         onSent={(result) => setStatementSuccess(result)}
       />
 
-      <Dialog open={holdDialogOpen} onOpenChange={setHoldDialogOpen}>
+      <Dialog
+        open={holdDialogOpen}
+        onOpenChange={(next) => {
+          setHoldDialogOpen(next);
+          if (!next) setPendingTarget(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {targetHoldState === "hold" ? "Put on hold?" : "Release hold?"}
+              {pendingTarget === "hold"
+                ? "Put on hold?"
+                : pendingTarget === "payment_upfront"
+                  ? "Set to payment upfront?"
+                  : "Set to active?"}
             </DialogTitle>
             <DialogDescription>
-              {targetHoldState === "hold"
-                ? `This will remove ${customer.displayName} from the B2B program by removing the 'b2b' Shopify tag. Continue?`
-                : `This will restore ${customer.displayName} to the B2B program by re-adding the 'b2b' Shopify tag. Continue?`}
+              {pendingTarget === "hold"
+                ? `This will remove ${customer.displayName} from the B2B program by removing the 'b2b' Shopify tag.`
+                : pendingTarget === "payment_upfront"
+                  ? `This will keep ${customer.displayName} in the B2B program but flag every order as prepay-only. The 'b2b-b2b-upfront' tag is added on Shopify (and 'b2b' ensured present).`
+                  : `This will restore ${customer.displayName} to standard B2B terms. The 'b2b-b2b-upfront' tag is removed and 'b2b' ensured present.`}
             </DialogDescription>
           </DialogHeader>
           {holdToggleMutation.isError && (
@@ -288,19 +304,34 @@ export default function CustomerDetailPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setHoldDialogOpen(false)}
+              onClick={() => {
+                setHoldDialogOpen(false);
+                setPendingTarget(null);
+              }}
               disabled={holdToggleMutation.isPending}
             >
               Cancel
             </Button>
             <Button
-              variant={targetHoldState === "hold" ? "danger" : "primary"}
+              variant={
+                pendingTarget === "hold"
+                  ? "danger"
+                  : pendingTarget === "payment_upfront"
+                    ? "primary"
+                    : "primary"
+              }
               size="sm"
-              onClick={() => holdToggleMutation.mutate(targetHoldState)}
-              disabled={holdToggleMutation.isPending}
+              onClick={() =>
+                pendingTarget && holdToggleMutation.mutate(pendingTarget)
+              }
+              disabled={holdToggleMutation.isPending || !pendingTarget}
               loading={holdToggleMutation.isPending}
             >
-              {targetHoldState === "hold" ? "Put on hold" : "Release hold"}
+              {pendingTarget === "hold"
+                ? "Put on hold"
+                : pendingTarget === "payment_upfront"
+                  ? "Set payment upfront"
+                  : "Set active"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -646,5 +677,153 @@ function NotesPanel({
         ))}
       </CardBody>
     </Card>
+  );
+}
+
+// Surfaces every recipient + system link finance-hub knows for this
+// customer: primary email (TO), billing emails (CC list on statements +
+// chase), phone (read-only for now), and the linked Shopify customer
+// id (with a deep link to the Shopify admin if the env tells us the
+// store domain). Kept compact — the heading row above is dense already.
+function CustomerRecipientsRow({
+  primaryEmail,
+  billingEmails,
+  phone,
+  shopifyCustomerId,
+}: {
+  primaryEmail: string | null;
+  billingEmails: string[];
+  phone: string | null;
+  shopifyCustomerId: string | null;
+}) {
+  // Drop the primary from the billing list — it's already shown above
+  // as the canonical TO. Lower-case dedup defends against QBO drift
+  // (some customers have the same address in both fields, just cased
+  // differently).
+  const ccEmails = billingEmails.filter(
+    (e) =>
+      e &&
+      (!primaryEmail ||
+        e.trim().toLowerCase() !== primaryEmail.trim().toLowerCase()),
+  );
+  const shopDomain =
+    typeof window !== "undefined"
+      ? // The dev server doesn't know about the Shopify store domain on
+        // the client side; fall back to a search URL that resolves on
+        // the operator's logged-in admin tab.
+        "admin.shopify.com"
+      : null;
+  const shopifyHref =
+    shopifyCustomerId && shopDomain
+      ? `https://${shopDomain}/store/feldart/customers/${encodeURIComponent(shopifyCustomerId)}`
+      : null;
+
+  if (
+    ccEmails.length === 0 &&
+    !phone &&
+    !shopifyCustomerId
+  ) {
+    return null;
+  }
+
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+      {ccEmails.length > 0 ? (
+        <span className="inline-flex items-center gap-1">
+          <Mail className="size-3" />
+          Also sent to:{" "}
+          <span className="text-secondary">
+            {ccEmails.map((e, i) => (
+              <span key={e}>
+                {i > 0 ? ", " : ""}
+                <span title={e}>{e}</span>
+              </span>
+            ))}
+          </span>
+        </span>
+      ) : null}
+      {phone ? (
+        <span className="inline-flex items-center gap-1 text-secondary">
+          <CreditCard className="size-3 text-muted" />
+          {phone}
+        </span>
+      ) : null}
+      {shopifyCustomerId ? (
+        <span className="inline-flex items-center gap-1">
+          <ShoppingBag className="size-3" />
+          Shopify:{" "}
+          {shopifyHref ? (
+            <a
+              href={shopifyHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-accent-primary hover:underline"
+            >
+              {shopifyCustomerId}
+              <ExternalLink className="ml-0.5 inline size-3" />
+            </a>
+          ) : (
+            <span className="font-mono text-secondary">
+              {shopifyCustomerId}
+            </span>
+          )}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+// Three-way status action buttons. The current state's button is
+// hidden; the other two are shown — Hold = danger styling, others =
+// secondary. Click → fires onRequest with the target which the parent
+// pipes into the confirm dialog.
+function StatusActions({
+  holdStatus,
+  disabled,
+  onRequest,
+}: {
+  holdStatus: "active" | "hold" | "payment_upfront";
+  disabled: boolean;
+  onRequest: (target: "active" | "hold" | "payment_upfront") => void;
+}) {
+  const showActiveButton = holdStatus !== "active";
+  const showUpfrontButton = holdStatus !== "payment_upfront";
+  const showHoldButton = holdStatus !== "hold";
+  return (
+    <>
+      {showActiveButton ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onRequest("active")}
+          disabled={disabled}
+        >
+          <Play className="size-3.5" />
+          Set active
+        </Button>
+      ) : null}
+      {showUpfrontButton ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onRequest("payment_upfront")}
+          disabled={disabled}
+        >
+          <CreditCard className="size-3.5" />
+          Payment upfront
+        </Button>
+      ) : null}
+      {showHoldButton ? (
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={() => onRequest("hold")}
+          disabled={disabled}
+        >
+          <Pause className="size-3.5" />
+          Put on hold
+        </Button>
+      ) : null}
+    </>
   );
 }

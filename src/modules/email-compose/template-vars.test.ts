@@ -17,6 +17,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     displayName: "Acme Ltd",
     primaryEmail: "billing@acme.test",
     billingEmails: null,
+    phone: null,
     paymentTerms: "Net 30",
     holdStatus: "active",
     shopifyCustomerId: null,

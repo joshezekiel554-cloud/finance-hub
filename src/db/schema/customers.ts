@@ -17,6 +17,10 @@ export const customers = mysqlTable(
     displayName: varchar("display_name", { length: 255 }).notNull(),
     primaryEmail: varchar("primary_email", { length: 255 }),
     billingEmails: json("billing_emails").$type<string[]>(),
+    // Primary phone — synced from QBO Customer.PrimaryPhone.FreeFormNumber
+    // at sync time. Free-form (no normalization) since QBO accepts any
+    // string; we render it verbatim. Null when QBO has nothing.
+    phone: varchar("phone", { length: 64 }),
     paymentTerms: varchar("payment_terms", { length: 64 }),
     // hold_status carries the customer's current account state. Despite
     // the historical name, it has three values:

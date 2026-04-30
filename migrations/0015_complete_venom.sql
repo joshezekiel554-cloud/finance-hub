@@ -1,0 +1,1 @@
+ALTER TABLE `customers` ADD `phone` varchar(64);

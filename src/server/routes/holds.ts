@@ -26,9 +26,8 @@ import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
 import { ShopifyClient, ShopifyApiError } from "../../integrations/shopify/client.js";
 import {
-  addTag,
   parseTags,
-  removeTag,
+  setCustomerTags,
 } from "../../integrations/shopify/hold.js";
 import { findShopifyCustomer } from "../../modules/shopify-link/lookup.js";
 import { recordActivity } from "../../modules/crm/index.js";
@@ -36,10 +35,47 @@ import { recordActivity } from "../../modules/crm/index.js";
 const log = createLogger({ component: "routes.holds" });
 
 const B2B_TAG = "b2b";
+const UPFRONT_TAG = "b2b-b2b-upfront";
 
 const toggleBodySchema = z.object({
-  targetState: z.enum(["hold", "active"]),
+  targetState: z.enum(["hold", "active", "payment_upfront"]),
 });
+
+// Compute the canonical Shopify tag set for a target account status,
+// preserving any other tags the customer has. The output is the FULL
+// list (caller writes it via setCustomerTags). Mirrors the inverse of
+// statusFromTags() in the b2b-audit route — same rules, same order:
+//
+//   active           → has b2b, no upfront
+//   payment_upfront  → has b2b AND upfront
+//   hold             → no b2b, no upfront
+function tagsForStatus(
+  current: string[],
+  target: "active" | "hold" | "payment_upfront",
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of current) {
+    const lower = t.trim().toLowerCase();
+    if (!lower || seen.has(lower)) continue;
+    if (target === "hold" && (lower === B2B_TAG || lower === UPFRONT_TAG)) {
+      continue;
+    }
+    if (target === "active" && lower === UPFRONT_TAG) {
+      // active strips upfront but keeps b2b (added below if missing).
+      continue;
+    }
+    seen.add(lower);
+    out.push(t.trim());
+  }
+  if (target === "active" || target === "payment_upfront") {
+    if (!seen.has(B2B_TAG)) out.push(B2B_TAG);
+  }
+  if (target === "payment_upfront" && !seen.has(UPFRONT_TAG)) {
+    out.push(UPFRONT_TAG);
+  }
+  return out;
+}
 
 const holdsRoute: FastifyPluginAsync = async (app) => {
   // GET /api/customers/:id/shopify-tags — read the customer's current
@@ -173,14 +209,18 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
       return reply.code(502).send({ error: "shopify lookup failed" });
     }
 
-    let tagsAfter: string[];
     const tagsBefore = parseTags(shopify.tags);
+    const tagsAfter = tagsForStatus(tagsBefore, targetState);
+    // No-op short-circuit: if the desired tag set is identical to what
+    // Shopify already has, skip the PUT entirely. Saves a request and
+    // avoids tripping rate limits on rapid double-clicks.
+    const sameTags =
+      tagsBefore.length === tagsAfter.length &&
+      tagsBefore.every((t, i) => t === tagsAfter[i]);
     try {
-      const result =
-        targetState === "hold"
-          ? await removeTag(client, shopify.id, B2B_TAG)
-          : await addTag(client, shopify.id, B2B_TAG);
-      tagsAfter = result.tagsAfter;
+      if (!sameTags) {
+        await setCustomerTags(client, shopify.id, tagsAfter);
+      }
     } catch (err) {
       // 403 → likely missing write_customers scope. Bubble up a
       // distinct status so the UI can suggest a re-OAuth.
@@ -221,31 +261,44 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
     await db.insert(auditLog).values({
       id: nanoid(24),
       userId: user.id,
-      action:
-        targetState === "hold"
-          ? "shopify.tag_remove"
-          : "shopify.tag_add",
+      action: "shopify.tag_set",
       entityType: "shopify_customer",
       entityId: String(shopify.id),
       before: { tags: tagsBefore },
-      after: { tags: tagsAfter, tag: B2B_TAG },
+      after: { tags: tagsAfter, targetState },
     });
 
-    // Activity row so the customer timeline shows the hold flip.
+    // Activity row so the customer timeline shows the status flip.
+    // hold_on/hold_off only fire when crossing the hold boundary; flips
+    // between active and payment_upfront log a manual_note so the
+    // timeline still records what happened without misclassifying the
+    // hold-state change.
+    const wasHold = before.holdStatus === "hold";
+    const isHold = targetState === "hold";
+    const activityKind = isHold
+      ? "hold_on"
+      : wasHold
+        ? "hold_off"
+        : "manual_note";
+    const subject =
+      targetState === "hold"
+        ? `Put on hold — Shopify b2b tag removed`
+        : targetState === "payment_upfront"
+          ? `Status: ${before.holdStatus} → payment upfront — Shopify b2b-b2b-upfront tag added`
+          : wasHold
+            ? `Hold released — Shopify b2b tag re-added`
+            : `Status: ${before.holdStatus} → active — Shopify b2b-b2b-upfront tag removed`;
     await recordActivity({
       customerId: id,
-      kind: targetState === "hold" ? "hold_on" : "hold_off",
+      kind: activityKind,
       source: "user_action",
       userId: user.id,
-      subject:
-        targetState === "hold"
-          ? `Put on hold — removed Shopify tag '${B2B_TAG}'`
-          : `Hold released — re-added Shopify tag '${B2B_TAG}'`,
+      subject,
       refType: "shopify_customer",
       refId: String(shopify.id),
       meta: {
         shopifyCustomerId: String(shopify.id),
-        tag: B2B_TAG,
+        targetState,
         tagsBefore,
         tagsAfter,
       },
