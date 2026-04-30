@@ -221,12 +221,14 @@ function serializeAxiosError(err: AxiosError): Record<string, unknown> {
   };
 }
 
-// Look up InvoiceLink for a batch of QBO invoice IDs. QBO IQL doesn't
-// support `?include=invoiceLink` on individual GETs of /invoice/{id};
-// only the /query endpoint surfaces the field, and only when the
-// `include=invoiceLink` query param is present. We chunk into groups of
-// 200 to stay under the QBO query length cap (same chunk size used by
-// getInvoicesByDocNumbers in the QBO client).
+// Look up InvoiceLink for a batch of QBO invoice IDs. QBO IQL rejects
+// `SELECT Id, InvoiceLink` with "QueryValidationError: Property
+// InvoiceLink not found for Entity Invoice" — InvoiceLink is a system-
+// generated field exposed only via `?include=invoiceLink` and only on
+// full-row selects (SELECT *). Verified empirically against the prod
+// realm; the per-row payload overhead vs. SELECT Id is negligible at our
+// statement sizes. We chunk into groups of 200 to stay under the QBO
+// query length cap (same chunk size used by getInvoicesByDocNumbers).
 async function fetchInvoiceLinks(
   qbInvoiceIds: string[],
 ): Promise<Map<string, string>> {
@@ -241,7 +243,7 @@ async function fetchInvoiceLinks(
     const data = await qboQuery<{
       QueryResponse: { Invoice?: QboInvoiceWithLink[] };
     }>({
-      query: `SELECT Id, InvoiceLink FROM Invoice WHERE Id IN (${inClause})`,
+      query: `SELECT * FROM Invoice WHERE Id IN (${inClause})`,
       include: ["invoiceLink"],
     });
     for (const inv of data.QueryResponse.Invoice ?? []) {

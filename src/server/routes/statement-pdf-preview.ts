@@ -186,8 +186,14 @@ async function fetchInvoiceLinks(
     const inClause = chunk
       .map((id) => `'${id.replace(/'/g, "''")}'`)
       .join(",");
+    // QBO QL rejects `SELECT Id, InvoiceLink` with
+    // "QueryValidationError: Property InvoiceLink not found for Entity
+    // Invoice" — InvoiceLink is a system-generated field exposed only via
+    // ?include=invoiceLink and only on full-row selects. SELECT * returns
+    // every invoice column plus the link. Verified empirically; the
+    // overhead vs. SELECT Id is negligible for our row counts.
     const params: Record<string, string | number> = {
-      query: `SELECT Id, InvoiceLink FROM Invoice WHERE Id IN (${inClause})`,
+      query: `SELECT * FROM Invoice WHERE Id IN (${inClause})`,
       minorversion: QBO_MINOR_VERSION,
       include: "invoiceLink",
     };

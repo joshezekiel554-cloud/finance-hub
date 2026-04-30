@@ -317,17 +317,21 @@ const styles = StyleSheet.create({
   },
 });
 
-// Column widths for the 5-column invoice/credit-memo table. Spec calls
-// for INVOICE DATE 14% / DESCRIPTION 38% / DUE DATE 14% / AMOUNT 14% /
-// OPEN AMOUNT 12% / PAYMENT 8% — six headers, totaling 100%. The "5
-// columns" label in the brief was off-by-one; we render all six.
+// Column widths for the six-column invoice/credit-memo table. Tuned so
+// every header renders on a single line at Helvetica-Bold 8.5pt with
+// the 0.3 letter-spacing applied to the header row: at the spec's
+// original 12% / 8% the "OPEN AMOUNT" + "PAYMENT" headers wrapped
+// (PAYMENT broke as "PAY-MENT", OPEN AMOUNT to two lines), so we trim
+// DESCRIPTION (which has slack — invoice/credit-memo descriptions are
+// short) and feed it to the two right-side columns. Brief originally
+// labelled this "5 columns"; we render six.
 const COL_WIDTHS = {
-  invoiceDate: "14%",
-  description: "38%",
-  dueDate: "14%",
-  amount: "14%",
-  openAmount: "12%",
-  payment: "8%",
+  invoiceDate: "13%",
+  description: "32%",
+  dueDate: "13%",
+  amount: "13%",
+  openAmount: "16%",
+  payment: "13%",
 } as const;
 
 const MAX_LOGO_BYTES = 5 * 1024 * 1024; // 5 MB sanity cap
