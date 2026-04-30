@@ -219,8 +219,9 @@ export default function StatementSendDialog({
         <DialogHeader>
           <DialogTitle>Send statement to {customerName}</DialogTitle>
           <DialogDescription>
-            Statement of open items will be emailed with each invoice
-            attached as a PDF. The customer is BCC'd on accounts@.
+            A single Statement.pdf is generated and attached to the
+            email. Each open invoice in the statement has a Pay-now
+            link straight to QuickBooks. accounts@feldart.com is BCC'd.
           </DialogDescription>
         </DialogHeader>
 
@@ -259,6 +260,21 @@ export default function StatementSendDialog({
             disabled={sendMutation.isPending}
           >
             Cancel
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() =>
+              window.open(
+                `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview`,
+                "_blank",
+                "noopener,noreferrer",
+              )
+            }
+            disabled={!canSend}
+            title="Open the rendered Statement.pdf in a new tab — same content the customer will receive"
+          >
+            Preview PDF
           </Button>
           <Button
             variant="primary"
@@ -305,9 +321,7 @@ function PreviewBody({ data }: { data: StatementPreviewResponse }) {
         />
         <SummaryStat
           label="Attaches"
-          value={`${cappedInvoices.length} PDF${
-            cappedInvoices.length === 1 ? "" : "s"
-          }`}
+          value="1 Statement.pdf"
         />
       </div>
 
@@ -426,8 +440,8 @@ function InvoiceList({
       {truncated && (
         <div className="border-t border-default bg-elevated px-3 py-2 text-xs text-muted">
           More than {PREVIEW_DISPLAY_CAP} open invoices — only the first{" "}
-          {PREVIEW_DISPLAY_CAP} will be attached. The send route will
-          reject this batch.
+          {PREVIEW_DISPLAY_CAP} are listed in this preview. The full set
+          renders in the Statement.pdf.
         </div>
       )}
     </div>
