@@ -1541,14 +1541,31 @@ function QboRecipientsBody({
         <div className="text-xs uppercase tracking-wide text-muted">
           Customer record (Customer.PrimaryEmailAddr)
         </div>
-        <div className="mt-1">
+        <div className="mt-1 space-y-0.5">
           <RecipientLine
             label="Email"
             value={data.customerLevel.primaryEmailAddr}
           />
+          <div className="flex items-baseline gap-2">
+            <span className="w-10 shrink-0 text-[11px] uppercase tracking-wide text-muted">
+              CC
+            </span>
+            <span className="text-xs italic text-muted">
+              n/a — no field on Customer
+            </span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="w-10 shrink-0 text-[11px] uppercase tracking-wide text-muted">
+              BCC
+            </span>
+            <span className="text-xs italic text-muted">
+              n/a — no field on Customer
+            </span>
+          </div>
         </div>
         <p className="mt-1 text-[11px] text-muted">
-          QBO copies this onto the BillEmail of any invoice it auto-creates.
+          QBO copies the email onto the BillEmail of any invoice it
+          auto-creates. CC/BCC live on the invoice or in company defaults.
         </p>
       </div>
       <div>
