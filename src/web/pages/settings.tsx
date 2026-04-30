@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Save, Trash2, Variable } from "lucide-react";
+import { ExternalLink, Eye, Plus, Save, Trash2, Variable } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { LogoUploader } from "../components/logo-uploader";
 import { cn } from "../lib/cn";
 
 type EmailTemplateContext =
@@ -62,6 +63,7 @@ export default function SettingsPage() {
         </p>
       </div>
       <EmailTemplatesSection />
+      <StatementPdfSection />
     </div>
   );
 }
@@ -354,4 +356,310 @@ function TemplateEditor({
       </div>
     </div>
   );
+}
+
+// ───────────────────────── Statement PDF section ─────────────────────────
+
+type AppSettingsResponse = { settings: Record<string, string> };
+
+// Order matters — drives both the form layout and the diff comparison.
+// company_logo_path is omitted from the textual form (handled by the
+// LogoUploader, which writes it server-side via /api/logo-upload).
+const STATEMENT_PDF_KEYS = [
+  "company_name",
+  "company_address",
+  "company_phone",
+  "company_email",
+  "company_website",
+  "payment_methods",
+  "footer_note",
+  "statement_number_next",
+] as const;
+
+type StatementPdfKey = (typeof STATEMENT_PDF_KEYS)[number];
+
+function StatementPdfSection() {
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const initial = useMemo(
+    () => settingsQuery.data?.settings ?? {},
+    [settingsQuery.data],
+  );
+
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [savedAgoLabel, setSavedAgoLabel] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  // Snap the draft to the latest server values on (re)load. We compare
+  // by reference equality on `initial` — the memo above only changes
+  // when the underlying query data changes, so this is cheap.
+  useEffect(() => {
+    if (settingsQuery.data) {
+      setDraft({ ...initial });
+    }
+  }, [settingsQuery.data, initial]);
+
+  // Tick the "Saved Ns ago" label every 5s so it stays vaguely fresh
+  // without burning re-renders.
+  useEffect(() => {
+    if (!savedAt) {
+      setSavedAgoLabel(null);
+      return;
+    }
+    const recompute = () => {
+      const ago = Math.max(0, Math.floor((Date.now() - savedAt) / 1000));
+      setSavedAgoLabel(formatSecondsAgo(ago));
+    };
+    recompute();
+    const t = setInterval(recompute, 5000);
+    return () => clearInterval(t);
+  }, [savedAt]);
+
+  const value = (key: StatementPdfKey) => draft[key] ?? "";
+  const set = (key: StatementPdfKey, v: string) =>
+    setDraft((d) => ({ ...d, [key]: v }));
+
+  // Compute the diff between draft and the server-loaded initial state.
+  // We only PATCH keys whose value actually changed — keeps audit-log
+  // chatter tight and avoids gratuitous updated_at bumps.
+  const diff = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const key of STATEMENT_PDF_KEYS) {
+      const current = draft[key] ?? "";
+      const original = initial[key] ?? "";
+      if (current !== original) out[key] = current;
+    }
+    return out;
+  }, [draft, initial]);
+  const dirtyCount = Object.keys(diff).length;
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(diff),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as AppSettingsResponse;
+    },
+    onSuccess: () => {
+      setSavedAt(Date.now());
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    },
+  });
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/customers?customerType=b2b&limit=1");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as {
+        rows?: { id: string }[];
+      };
+      const id = json.rows?.[0]?.id;
+      if (!id) throw new Error("No B2B customer to preview against");
+      return id;
+    },
+    onSuccess: (id) => {
+      setPreviewError(null);
+      window.open(
+        `/api/customers/${id}/statement-pdf-preview`,
+        "_blank",
+        "noopener",
+      );
+    },
+    onError: (err: Error) => {
+      setPreviewError(err.message);
+    },
+  });
+
+  const isLoading = settingsQuery.isPending;
+  const logoPath = initial["company_logo_path"] ?? "";
+  const dirty = dirtyCount > 0;
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-sm font-medium">Statement PDF</h2>
+        <p className="mt-0.5 text-xs text-muted">
+          Configure how your statement document looks. Edits apply to
+          every statement going forward.
+        </p>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        {isLoading ? (
+          <div className="text-sm text-muted">Loading…</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium text-secondary">
+                  Company name
+                </span>
+                <Input
+                  value={value("company_name")}
+                  onChange={(e) => set("company_name", e.target.value)}
+                />
+              </label>
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium text-secondary">
+                  Company phone
+                </span>
+                <Input
+                  value={value("company_phone")}
+                  onChange={(e) => set("company_phone", e.target.value)}
+                />
+              </label>
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium text-secondary">
+                  Company email
+                </span>
+                <Input
+                  type="email"
+                  value={value("company_email")}
+                  onChange={(e) => set("company_email", e.target.value)}
+                />
+              </label>
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium text-secondary">
+                  Company website
+                </span>
+                <Input
+                  type="url"
+                  value={value("company_website")}
+                  onChange={(e) => set("company_website", e.target.value)}
+                />
+              </label>
+            </div>
+            <label className="block text-xs">
+              <span className="mb-1 block font-medium text-secondary">
+                Company address
+              </span>
+              <textarea
+                value={value("company_address")}
+                onChange={(e) => set("company_address", e.target.value)}
+                rows={4}
+                className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm"
+              />
+            </label>
+            <div className="block text-xs">
+              <span className="mb-1 block font-medium text-secondary">
+                Logo
+              </span>
+              <LogoUploader
+                logoPath={logoPath}
+                onUploaded={() =>
+                  queryClient.invalidateQueries({
+                    queryKey: ["app-settings"],
+                  })
+                }
+              />
+            </div>
+            <label className="block text-xs">
+              <span className="mb-1 block font-medium text-secondary">
+                Payment methods
+              </span>
+              <textarea
+                value={value("payment_methods")}
+                onChange={(e) => set("payment_methods", e.target.value)}
+                rows={6}
+                className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="mb-1 block font-medium text-secondary">
+                Footer note (optional)
+              </span>
+              <Input
+                value={value("footer_note")}
+                onChange={(e) => set("footer_note", e.target.value)}
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="mb-1 block font-medium text-secondary">
+                Next statement number
+              </span>
+              <Input
+                type="number"
+                value={value("statement_number_next")}
+                onChange={(e) =>
+                  set("statement_number_next", e.target.value)
+                }
+                helperText="Auto-increments after each send. Set high enough to clear your existing QBO range."
+              />
+            </label>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-default pt-3">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => previewMutation.mutate()}
+                  disabled={previewMutation.isPending}
+                >
+                  <Eye className="size-3.5" />
+                  {previewMutation.isPending
+                    ? "Loading preview…"
+                    : "Preview statement"}
+                  <ExternalLink className="size-3" />
+                </Button>
+                {previewError && (
+                  <span className="text-xs text-accent-danger">
+                    {previewError}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {saveMutation.isError && (
+                  <span className="text-xs text-accent-danger">
+                    {(saveMutation.error as Error)?.message ?? "Save failed"}
+                  </span>
+                )}
+                {!saveMutation.isError &&
+                  !saveMutation.isPending &&
+                  savedAgoLabel && (
+                    <span className="text-xs text-muted">
+                      Saved {savedAgoLabel}
+                    </span>
+                  )}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => saveMutation.mutate()}
+                  disabled={saveMutation.isPending || !dirty}
+                >
+                  <Save className="size-3.5" />
+                  {saveMutation.isPending ? "Saving…" : "Save"}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function formatSecondsAgo(secs: number): string {
+  if (secs < 5) return "just now";
+  if (secs < 60) return `${secs} seconds ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(mins / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
 }
