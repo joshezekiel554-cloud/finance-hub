@@ -119,6 +119,12 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     // 1:1 with customers — no risk of duplicating rows or accidental
     // SUM behaviour if a future join lands on this query.
     //
+    // The customers.id reference is hand-qualified rather than using
+    // ${customers.id}: Drizzle's column serializer drops the table
+    // prefix inside an sql template, which makes MySQL resolve `id`
+    // against the inner table (invoices/activities) and the WHERE
+    // clause silently always-false. Spelled out, it works.
+    //
     // DATEDIFF returns a signed integer (positive = past due, negative
     // = future due). We render past-due only on the UI but surface the
     // raw integer so the client can decide. NULL when there's no
@@ -126,7 +132,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     const daysOverdueExpr = sql<number | null>`(
       SELECT DATEDIFF(CURRENT_DATE, MIN(${invoices.dueDate}))
       FROM ${invoices}
-      WHERE ${invoices.customerId} = ${customers.id}
+      WHERE ${invoices.customerId} = \`customers\`.\`id\`
         AND ${invoices.balance} > 0
         AND ${invoices.dueDate} IS NOT NULL
     )`;
@@ -134,7 +140,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     const lastActivityExpr = sql<Date | null>`(
       SELECT MAX(${activities.occurredAt})
       FROM ${activities}
-      WHERE ${activities.customerId} = ${customers.id}
+      WHERE ${activities.customerId} = \`customers\`.\`id\`
     )`;
 
     // Sort column resolution.
@@ -192,10 +198,20 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         r.daysSinceOldestUnpaid === null || r.daysSinceOldestUnpaid === undefined
           ? null
           : Number(r.daysSinceOldestUnpaid),
-      lastActivityAt:
-        r.lastActivityAt instanceof Date
-          ? r.lastActivityAt.toISOString()
-          : r.lastActivityAt ?? null,
+      lastActivityAt: (() => {
+        // mysql2 returns a TIMESTAMP correlated-subquery as a "YYYY-MM-DD
+        // HH:MM:SS" string rather than a Date (the typed column path
+        // does hydrate to Date, but raw sql<Date> in a subquery
+        // doesn't). Normalize both shapes to ISO so the frontend's
+        // relativeTime() doesn't have to guess. Cast through unknown
+        // because the sql<Date | null> generic narrows the runtime to
+        // Date only — but in practice it's `Date | string | null`.
+        const v = r.lastActivityAt as Date | string | null;
+        if (!v) return null;
+        if (v instanceof Date) return v.toISOString();
+        const d = new Date(v.replace(" ", "T") + "Z");
+        return Number.isNaN(d.getTime()) ? null : d.toISOString();
+      })(),
     }));
 
     return reply.send({ rows: out, total: out.length });

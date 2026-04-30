@@ -1,25 +1,39 @@
+// Home dashboard. At-a-glance state of the things the operator acts on:
+// open balance, overdue, customers needing chase, today's email volume,
+// my open tasks. Plus the past-11am-London nag if any of today's
+// shipment emails haven't been sent yet.
+//
+// Stats come from /api/dashboard/stats — single round-trip aggregate.
+// The unsent-invoices alert reuses the /api/invoicing/today query so
+// the cache is shared with the /invoicing page (opening one warms the
+// other).
+
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
   ArrowRight,
-  FileText,
-  Users,
+  AlertCircle,
   CheckSquare,
+  DollarSign,
+  Mail,
+  Users,
 } from "lucide-react";
-import { Card, CardBody, CardHeader } from "../components/ui/card";
+import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { Badge } from "../components/ui/badge";
 
-// Cutoff for the "today's invoices unsent" warning. Matches the operating
-// rhythm: shipment emails arrive overnight + through the morning, the
-// operator processes them during the morning, and by 11am London anything
-// still in Open is overdue. Before 11am we don't nag.
 const INVOICING_CUTOFF_HOUR_LONDON = 11;
 
-// Subset of /api/invoicing/today response — we only need fields that drive
-// the alert. The full response shape lives on the /invoicing page.
+type DashboardStats = {
+  openBalance: number;
+  overdueBalance: number;
+  customersOverdue: number;
+  myOpenTasks: number;
+  emailsInToday: number;
+  emailsOutToday: number;
+};
+
 type TodayRow = {
   gmailId: string;
   receivedAt: string | null;
@@ -30,8 +44,6 @@ type TodayResponse = {
   dismissed: Record<string, unknown>;
 };
 
-// Date in Europe/London formatted as YYYY-MM-DD. en-CA gives ISO-style
-// numeric output without locale surprises.
 const LONDON_DATE_FMT = new Intl.DateTimeFormat("en-CA", {
   year: "numeric",
   month: "2-digit",
@@ -50,17 +62,30 @@ function londonDateFor(d: Date): string {
 }
 
 function londonHourNow(): number {
-  // The formatter emits "0".."23" for hour12:false. parseInt handles the
-  // single-digit case ("0", "9") and rejects empty.
   const v = LONDON_HOUR_FMT.format(new Date());
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : 0;
 }
 
+function formatMoney(n: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
+}
+
 export default function HomePage() {
-  // Reuse the /invoicing page's cache key so opening Home pre-warms /invoicing
-  // and vice versa. 2-minute stale tolerance is fine — the alert is a nudge,
-  // not a real-time signal.
+  const { data: stats, isPending: statsPending } = useQuery<DashboardStats>({
+    queryKey: ["dashboard", "stats"],
+    queryFn: async () => {
+      const res = await fetch("/api/dashboard/stats");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
   const { data: todayData } = useQuery<TodayResponse>({
     queryKey: ["invoicing", "today"],
     queryFn: async () => {
@@ -95,7 +120,7 @@ export default function HomePage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
         <p className="mt-1 text-sm text-secondary">
-          Finance hub scaffold — UI primitives wired, schema and modules land in subsequent phases.
+          What needs your attention right now.
         </p>
       </div>
 
@@ -125,71 +150,142 @@ export default function HomePage() {
         </Card>
       ) : null}
 
+      {/* Money tiles — what's outstanding + how bad. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-secondary">Open invoices</span>
-              <FileText className="size-4 text-muted" />
-            </div>
-          </CardHeader>
-          <CardBody>
-            <div className="text-2xl font-semibold">--</div>
-            <Badge tone="info" className="mt-2">
-              awaiting sync
-            </Badge>
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-secondary">Active customers</span>
-              <Users className="size-4 text-muted" />
-            </div>
-          </CardHeader>
-          <CardBody>
-            <div className="text-2xl font-semibold">--</div>
-            <Badge tone="neutral" className="mt-2">
-              awaiting sync
-            </Badge>
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-secondary">Tasks due today</span>
-              <CheckSquare className="size-4 text-muted" />
-            </div>
-          </CardHeader>
-          <CardBody>
-            <div className="text-2xl font-semibold">--</div>
-            <Badge tone="neutral" className="mt-2">
-              not configured
-            </Badge>
-          </CardBody>
-        </Card>
+        <StatTile
+          label="Open balance"
+          icon={DollarSign}
+          tone="neutral"
+          value={
+            statsPending ? "…" : stats ? formatMoney(stats.openBalance) : "—"
+          }
+          sublabel="across all customers"
+          to="/customers"
+        />
+        <StatTile
+          label="Overdue"
+          icon={AlertCircle}
+          tone={stats && stats.overdueBalance > 0 ? "danger" : "neutral"}
+          value={
+            statsPending
+              ? "…"
+              : stats
+                ? formatMoney(stats.overdueBalance)
+                : "—"
+          }
+          sublabel={
+            stats
+              ? `${stats.customersOverdue} ${
+                  stats.customersOverdue === 1 ? "customer" : "customers"
+                }`
+              : ""
+          }
+          to="/chase"
+        />
+        <StatTile
+          label="My open tasks"
+          icon={CheckSquare}
+          tone={stats && stats.myOpenTasks > 0 ? "info" : "neutral"}
+          value={statsPending ? "…" : String(stats?.myOpenTasks ?? "—")}
+          sublabel={
+            stats && stats.myOpenTasks > 0
+              ? "needs attention"
+              : "all clear"
+          }
+          to="/tasks"
+        />
       </div>
 
+      {/* Email volume tiles — how busy today is */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <StatTile
+          label="Emails in today"
+          icon={Mail}
+          tone="neutral"
+          value={statsPending ? "…" : String(stats?.emailsInToday ?? "—")}
+          sublabel="customer correspondence"
+          to="/customers"
+        />
+        <StatTile
+          label="Emails sent today"
+          icon={Mail}
+          tone="neutral"
+          value={statsPending ? "…" : String(stats?.emailsOutToday ?? "—")}
+          sublabel="from any alias"
+          to="/customers"
+        />
+      </div>
+
+      {/* Quick links — most-used pages, one click away. */}
       <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Next steps</h2>
-        </CardHeader>
         <CardBody>
-          <ul className="space-y-2 text-sm text-secondary">
-            <li>1. Drizzle schema + migrations land via the schema task</li>
-            <li>2. Auth (sessions + Arctic OAuth) lands via the auth task</li>
-            <li>3. Pino logging + readiness probe via the observability task</li>
-            <li>4. Module routes mount under /api as feature agents complete their work</li>
-          </ul>
-          <div className="mt-4">
-            <Button variant="primary" size="sm">
-              Read the docs <ArrowRight className="size-3.5" />
-            </Button>
+          <div className="text-sm font-medium mb-3">Jump to</div>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/invoicing">
+              <Button variant="secondary" size="sm">Today's invoicing</Button>
+            </Link>
+            <Link to="/chase">
+              <Button variant="secondary" size="sm">Chase list</Button>
+            </Link>
+            <Link to="/customers">
+              <Button variant="secondary" size="sm">Customers</Button>
+            </Link>
+            <Link to="/statements">
+              <Button variant="secondary" size="sm">Statements log</Button>
+            </Link>
+            <Link to="/tasks">
+              <Button variant="secondary" size="sm">Tasks</Button>
+            </Link>
           </div>
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+function StatTile({
+  label,
+  icon: Icon,
+  value,
+  sublabel,
+  to,
+  tone,
+}: {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  value: string;
+  sublabel?: string;
+  to: string;
+  tone: "neutral" | "danger" | "info";
+}) {
+  const valueClass =
+    tone === "danger"
+      ? "text-accent-danger"
+      : tone === "info"
+        ? "text-accent-primary"
+        : "text-primary";
+  return (
+    <Link to={to} className="block">
+      <Card className="transition-colors hover:border-accent-primary/40">
+        <CardBody>
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-muted">
+                {label}
+              </div>
+              <div
+                className={`mt-1 text-2xl font-semibold tabular-nums ${valueClass}`}
+              >
+                {value}
+              </div>
+              {sublabel ? (
+                <div className="mt-0.5 text-xs text-secondary">{sublabel}</div>
+              ) : null}
+            </div>
+            <Icon className="size-4 text-muted" />
+          </div>
+        </CardBody>
+      </Card>
+    </Link>
   );
 }

@@ -354,9 +354,18 @@ function formatTime(iso: string): string {
   if (diffHr < 24) return `${diffHr}h ago`;
   const diffDay = Math.floor(diffHr / 24);
   if (diffDay < 7) return `${diffDay}d ago`;
-  return d.toLocaleDateString(undefined, {
+  // Older than a week: include time so multiple same-day emails render
+  // in a readable order. Year only when older than a year ago — keeps
+  // recent rows tight ("25 Nov, 14:32" vs "25 Nov 2025, 14:32").
+  const datePart = d.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: diffDay > 365 ? "numeric" : undefined,
   });
+  const timePart = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${datePart}, ${timePart}`;
 }

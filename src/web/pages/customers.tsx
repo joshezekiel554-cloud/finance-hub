@@ -45,8 +45,11 @@ const TAB_LABELS: Record<FilterTab, string> = {
 export default function CustomersPage() {
   const [tab, setTab] = useState<FilterTab>("b2b");
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<SortKey>("displayName");
-  const [dir, setDir] = useState<"asc" | "desc">("asc");
+  // Default sort surfaces customers with money on the line first — most
+  // operator visits to this page are about action, not the alphabet.
+  // Click the Customer column header once to flip back to A→Z.
+  const [sort, setSort] = useState<SortKey>("balance");
+  const [dir, setDir] = useState<"asc" | "desc">("desc");
   const [sweepMode, setSweepMode] = useState(false);
   // Selected gmailIds in sweep mode. When the user toggles "Select all
   // (balance > 0)" we pre-fill with the matching ids; individual checkbox

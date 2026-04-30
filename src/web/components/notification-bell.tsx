@@ -219,7 +219,7 @@ export function NotificationBell() {
       {open ? (
         <div
           ref={popoverRef}
-          className="absolute right-0 z-30 mt-2 w-96 max-w-[calc(100vw-2rem)] rounded-lg border border-default bg-base shadow-lg"
+          className="absolute right-0 z-50 mt-2 w-96 max-w-[calc(100vw-2rem)] rounded-lg border border-default bg-base shadow-2xl ring-1 ring-black/5"
         >
           <div className="flex items-center justify-between border-b border-default px-3 py-2">
             <span className="text-sm font-medium">Notifications</span>
