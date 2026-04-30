@@ -397,8 +397,9 @@ function ShopifySearchPicker({
               go();
             }
           }}
-          placeholder="Search Shopify by company name…"
+          placeholder="Shopify ID, email, or company / contact name…"
           className="text-xs"
+          title="Numeric → looked up by Shopify id directly. Anything with @ → email exact-match. Else → company / first / last name search."
         />
         <Button
           variant="secondary"

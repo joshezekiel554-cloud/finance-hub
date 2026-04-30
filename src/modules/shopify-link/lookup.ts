@@ -191,20 +191,59 @@ export async function findShopifyCustomer(
   return { kind: "none" };
 }
 
-// Convenience: find a Shopify customer by company-name fuzzy search.
-// Used by the manual link UI to suggest candidates for ambiguous /
-// no-match rows. Returns up to `limit` results. Shopify's `query`
-// param supports `company:X` against the default address. Quoting
-// preserves multi-word names like "Eichlers Judaica BP".
+// Generic Shopify customer search for the manual link UI. Picks the
+// right strategy based on what the operator typed:
+//
+//   pure digits → GET /customers/{id} directly. Fastest path; lets the
+//                 operator paste a Shopify customer id straight from the
+//                 admin URL without us guessing what to search for.
+//   contains @  → email:"foo" exact match. Same shape as the standard
+//                 lookup elsewhere.
+//   anything    → search across company:, first_name:, last_name:.
+//                 OR-joined so "Eichlers" matches both a company name
+//                 and a person's surname.
+//
+// Returns up to `limit` results in every case. Errors propagate.
 export async function searchShopifyByCompany(
   client: ShopifyClient,
-  companyName: string,
+  rawQuery: string,
   limit = 10,
 ): Promise<ShopifyCustomer[]> {
-  const trimmed = companyName.trim();
+  const trimmed = rawQuery.trim();
   if (!trimmed) return [];
-  const query = `company:"${trimmed}"`;
-  const path = `/customers/search.json?query=${encodeURIComponent(query)}&fields=id,email,first_name,last_name,tags,state,default_address,created_at,updated_at&limit=${limit}`;
+
+  const fieldList =
+    "id,email,first_name,last_name,tags,state,default_address,created_at,updated_at";
+
+  // 1. Pure-numeric → direct GET by id.
+  if (/^\d+$/.test(trimmed)) {
+    try {
+      const { data } = await client.getJson<{ customer?: ShopifyCustomer }>(
+        `/customers/${encodeURIComponent(trimmed)}.json?fields=${fieldList}`,
+      );
+      return data.customer ? [data.customer] : [];
+    } catch (err) {
+      if (err instanceof ShopifyApiError && err.status === 404) return [];
+      throw err;
+    }
+  }
+
+  // 2. Looks like an email → exact-match email search.
+  if (trimmed.includes("@")) {
+    const query = `email:"${trimmed.toLowerCase()}"`;
+    const path = `/customers/search.json?query=${encodeURIComponent(query)}&fields=${fieldList}&limit=${limit}`;
+    const { data } = await client.getJson<{ customers?: ShopifyCustomer[] }>(
+      path,
+    );
+    return data.customers ?? [];
+  }
+
+  // 3. Free-form text → multi-field OR search. company: matches the
+  // default address's company; first_name/last_name catch contact
+  // names. Quoting handles multi-word values like "Eichlers Judaica".
+  const q = `"${trimmed}"`;
+  const query = `company:${q} OR first_name:${q} OR last_name:${q}`;
+  const path = `/customers/search.json?query=${encodeURIComponent(query)}&fields=${fieldList}&limit=${limit}`;
   const { data } = await client.getJson<{ customers?: ShopifyCustomer[] }>(
     path,
   );
