@@ -1,15 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownLeft,
   ArrowUpRight,
   Check,
+  CheckSquare,
   Mail,
   CheckCircle2,
   ListChecks,
   ChevronRight,
   ChevronDown,
   Reply,
+  X,
 } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -55,6 +57,10 @@ export function EmailList({
   const [direction, setDirection] = useState<DirectionFilter>("all");
   const [actioned, setActioned] = useState<ActionedFilter>("open");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Bulk-action selection. Independent of the per-row "actioned" toggle
+  // — selection is which rows the next bulk action applies to. Cleared
+  // when filters change (since rows might leave the visible set).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Single modal instance reused across rows. Keying by the email row's
   // identity (rather than mounting one modal per row) keeps state clean
   // when the user bounces between replies without closing the drawer.
@@ -99,6 +105,26 @@ export function EmailList({
       return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+  });
+
+  const bulkActionMutation = useMutation<
+    { updated: number; missing: number },
+    Error,
+    { ids: string[]; actioned: boolean }
+  >({
+    mutationFn: async (input) => {
+      const res = await fetch(`/api/email-log/mark-actioned-bulk`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      setSelectedIds(new Set());
+    },
   });
 
   const toTaskMutation = useMutation({
@@ -148,7 +174,51 @@ export function EmailList({
     setExpanded(next);
   }
 
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   const rows = data?.rows ?? [];
+
+  // When the visible set of rows changes (filter flipped, refetch
+  // brought new ids), drop selections that aren't visible anymore so
+  // the toolbar count stays honest.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(rows.map((r) => r.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (visible.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [rows]);
+
+  const allVisibleSelected =
+    rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
+  const someVisibleSelected = rows.some((r) => selectedIds.has(r.id));
+
+  function selectAllVisible() {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(rows.map((r) => r.id)));
+    }
+  }
+
+  function bulkMarkActioned(actioned: boolean) {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    bulkActionMutation.mutate({ ids, actioned });
+  }
 
   return (
     <div className="space-y-3">
@@ -236,6 +306,67 @@ export function EmailList({
         context={composeContext ?? undefined}
       />
 
+      {!isPending && rows.length > 0 ? (
+        <Card>
+          <CardBody className="flex flex-wrap items-center gap-2 py-2 text-xs">
+            <label className="inline-flex cursor-pointer select-none items-center gap-2">
+              <input
+                type="checkbox"
+                aria-label="Select all visible"
+                checked={allVisibleSelected}
+                ref={(el) => {
+                  if (el)
+                    el.indeterminate =
+                      someVisibleSelected && !allVisibleSelected;
+                }}
+                onChange={selectAllVisible}
+                className="size-3.5 rounded border-default"
+              />
+              <span className="text-secondary">
+                {selectedIds.size > 0
+                  ? `${selectedIds.size} selected`
+                  : `Select all (${rows.length})`}
+              </span>
+            </label>
+            {selectedIds.size > 0 ? (
+              <>
+                <span className="text-muted">·</span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => bulkMarkActioned(true)}
+                  disabled={bulkActionMutation.isPending}
+                >
+                  <CheckSquare className="size-3.5" />
+                  Mark actioned
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => bulkMarkActioned(false)}
+                  disabled={bulkActionMutation.isPending}
+                >
+                  <Mail className="size-3.5" />
+                  Mark unactioned
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  className="inline-flex items-center gap-1 text-muted hover:text-primary"
+                >
+                  <X className="size-3" /> Clear
+                </button>
+              </>
+            ) : null}
+            {bulkActionMutation.isError ? (
+              <span className="text-accent-danger">
+                {(bulkActionMutation.error as Error)?.message ?? "Bulk update failed"}
+              </span>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : null}
+
       <Card>
         <CardBody className="p-0">
           <ul className="divide-y divide-default">
@@ -249,9 +380,17 @@ export function EmailList({
                   className={cn(
                     "px-4 py-3 text-sm",
                     isActioned && "opacity-60",
+                    selectedIds.has(email.id) && "bg-accent-primary/5",
                   )}
                 >
                   <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select email "${email.subject ?? "(no subject)"}"`}
+                      checked={selectedIds.has(email.id)}
+                      onChange={() => toggleSelect(email.id)}
+                      className="mt-2 size-3.5 shrink-0 rounded border-default"
+                    />
                     <label
                       className={cn(
                         "mt-0.5 inline-flex shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors",

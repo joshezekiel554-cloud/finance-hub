@@ -14,7 +14,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { activities, emailLog, tasks, TASK_PRIORITIES } from "../../db/schema/crm.js";
@@ -26,6 +26,16 @@ import { createLogger } from "../../lib/logger.js";
 const log = createLogger({ component: "routes.email-log" });
 
 const patchBodySchema = z.object({
+  actioned: z.boolean(),
+});
+
+// Cap matches the largest realistic per-customer email list — Feldart
+// hits ~500 historical messages on the most-active customer. Beyond
+// that the audit-row insert turns into a problem; if a real workflow
+// ever needs more, paginate from the client.
+const BULK_ACTION_MAX = 500;
+const bulkPatchBodySchema = z.object({
+  ids: z.array(z.string().min(1).max(64)).min(1).max(BULK_ACTION_MAX),
   actioned: z.boolean(),
 });
 
@@ -84,6 +94,74 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
       .where(eq(emailLog.id, id))
       .limit(1);
     return reply.send({ email: afterRows[0]! });
+  });
+
+  // POST /api/email-log/mark-actioned-bulk — same semantics as the
+  // single PATCH above, but for a list of ids in one round-trip. Built
+  // for the customer-detail Email tab's multi-select toolbar; without
+  // this, sweeping 30 emails to actioned hammers the rate limiter
+  // (PATCH + invalidate refetch per click).
+  //
+  // Idempotent: setting actioned=true on already-actioned rows is a
+  // no-op against the data (UPDATE finds nothing to change because of
+  // the WHERE IN + the already-set value), but we still emit one
+  // audit row per id so the trail captures every operator intent.
+  app.post("/mark-actioned-bulk", async (req, reply) => {
+    const user = await requireAuth(req);
+    const parse = bulkPatchBodySchema.safeParse(req.body);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const { ids, actioned } = parse.data;
+
+    const beforeRows = await db
+      .select({ id: emailLog.id, actionedAt: emailLog.actionedAt })
+      .from(emailLog)
+      .where(inArray(emailLog.id, ids));
+    const beforeMap = new Map(
+      beforeRows.map((r) => [r.id, r.actionedAt ?? null]),
+    );
+
+    const update = actioned
+      ? { actionedAt: new Date(), actionedByUserId: user.id }
+      : { actionedAt: null, actionedByUserId: null };
+
+    await db
+      .update(emailLog)
+      .set(update)
+      .where(inArray(emailLog.id, ids));
+
+    // One audit row per id covered by the request — including ones that
+    // weren't found in beforeRows, since the operator's INTENT was to
+    // act on every id they passed. Missing ids get an explicit
+    // "before: not_found" so the trail explains the no-op write.
+    const afterIso = update.actionedAt?.toISOString() ?? null;
+    const auditValues = ids.map((id) => ({
+      id: nanoid(24),
+      userId: user.id,
+      action: "email_log.action_bulk",
+      entityType: "email_log",
+      entityId: id,
+      before: beforeMap.has(id)
+        ? { actionedAt: beforeMap.get(id)?.toISOString() ?? null }
+        : { actionedAt: null, missing: true },
+      after: { actionedAt: afterIso },
+    }));
+    if (auditValues.length > 0) {
+      await db.insert(auditLog).values(auditValues);
+    }
+
+    log.info(
+      { count: ids.length, actioned, userId: user.id },
+      "email_log mark-actioned-bulk applied",
+    );
+
+    return reply.send({
+      updated: beforeRows.length,
+      missing: ids.length - beforeRows.length,
+    });
   });
 
   // POST /api/email-log/:id/to-task — promote an email into a task.
