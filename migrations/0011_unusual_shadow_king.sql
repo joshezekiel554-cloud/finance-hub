@@ -1,0 +1,1 @@
+ALTER TABLE `statement_sends` ADD `statement_number` int;

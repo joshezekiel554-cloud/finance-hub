@@ -1,6 +1,7 @@
 import {
   boolean,
   index,
+  int,
   json,
   mediumtext,
   mysqlEnum,
@@ -296,6 +297,13 @@ export const statementSends = mysqlTable(
       { onDelete: "set null" },
     ),
     sentToEmail: varchar("sent_to_email", { length: 255 }),
+    // Sequential statement number assigned by the send routine.
+    // Allocated atomically from the `statement_number_next` row in
+    // app_settings, then written here so the audit trail and the
+    // attached PDF agree on the same number for a given send. Nullable
+    // for backfill compatibility — old rows pre-PDF-rewrite have no
+    // assigned number.
+    statementNumber: int("statement_number"),
     qboResponse: json("qbo_response").$type<Record<string, unknown>>(),
     statementType: mysqlEnum("statement_type", ["open_items", "balance_forward"])
       .notNull()

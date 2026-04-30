@@ -78,6 +78,13 @@
       "when": 1777507520363,
       "tag": "0010_last_king_cobra",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1777508039599,
+      "tag": "0011_unusual_shadow_king",
+      "breakpoints": true
     }
   ]
 }
