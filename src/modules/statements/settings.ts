@@ -30,6 +30,7 @@ export type AppSettingsMap = {
   payment_methods: string;
   footer_note: string;
   statement_number_next: string;
+  statement_bcc_email: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -42,6 +43,9 @@ const DEFAULTS: AppSettingsMap = {
   payment_methods: "",
   footer_note: "",
   statement_number_next: "1",
+  // Preserves the historical hardcoded BCC. Operator can clear via
+  // the Settings page → "Statement BCC" field to disable.
+  statement_bcc_email: "accounts@feldart.com",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

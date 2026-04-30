@@ -503,14 +503,17 @@ export async function sendStatement(
   }
 
   // CC excludes the primary address (case-insensitive) so the customer
-  // never gets two copies. BCC = accounts@ so the user has a record.
+  // never gets two copies. BCC reads from app_settings so the operator
+  // can change the alias or disable it entirely from the Settings page;
+  // empty string → no BCC header on the outgoing message.
   const primaryEmailLower = customer.primaryEmail.toLowerCase();
   const ccList = (customer.billingEmails ?? []).filter(
     (e) => e && e.toLowerCase() !== primaryEmailLower,
   );
   const to = customer.primaryEmail;
   const cc = joinAddresses(ccList);
-  const bcc = STATEMENT_ALIAS;
+  const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
+  const bcc = configuredBcc.length > 0 ? configuredBcc : null;
 
   const filename = `Statement_${sanitizeFilenameSegment(customer.displayName)}_${statementNumber}.pdf`;
   const attachments = [
@@ -526,7 +529,7 @@ export async function sendStatement(
     sendResult = await sendEmail({
       to,
       cc: cc ?? undefined,
-      bcc,
+      bcc: bcc ?? undefined,
       subject: renderedSubject,
       html: renderedBody,
       text: "(plain text fallback — see HTML)",

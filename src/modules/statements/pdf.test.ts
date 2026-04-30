@@ -73,6 +73,7 @@ const SETTINGS: AppSettingsMap = {
   payment_methods: "Wire transfer to:\nABC Bank\nAcct #12345",
   footer_note: "Thank you for your business.",
   statement_number_next: "101",
+  statement_bcc_email: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -158,6 +159,7 @@ describe("renderStatementPdf", () => {
         payment_methods: "",
         footer_note: "",
         statement_number_next: "1",
+        statement_bcc_email: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

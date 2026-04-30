@@ -58,7 +58,10 @@ type StatementPreviewResponse = {
   recipients: {
     to: string;
     cc: string[];
-    bcc: string;
+    // null when the operator has disabled the statement BCC in
+    // Settings (statement_bcc_email is blank). The dialog hides the
+    // BCC row in that case.
+    bcc: string | null;
   };
   truncated: boolean;
   invoiceLinkLookupOk: boolean;
@@ -221,7 +224,9 @@ export default function StatementSendDialog({
           <DialogDescription>
             A single Statement.pdf is generated and attached to the
             email. Each open invoice in the statement has a Pay-now
-            link straight to QuickBooks. accounts@feldart.com is BCC'd.
+            link straight to QuickBooks. The recipient list below
+            shows the BCC (if any) — change it in Settings → Statement
+            PDF.
           </DialogDescription>
         </DialogHeader>
 
@@ -389,10 +394,12 @@ function RecipientsRow({
             <span className="break-all">{recipients.cc.join(", ")}</span>
           </li>
         )}
-        <li className="flex flex-wrap items-center gap-2">
-          <Badge tone="neutral">BCC</Badge>
-          <span className="break-all">{recipients.bcc}</span>
-        </li>
+        {recipients.bcc ? (
+          <li className="flex flex-wrap items-center gap-2">
+            <Badge tone="neutral">BCC</Badge>
+            <span className="break-all">{recipients.bcc}</span>
+          </li>
+        ) : null}
       </ul>
     </div>
   );

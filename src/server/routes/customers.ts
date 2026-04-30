@@ -38,6 +38,7 @@ import { createLogger } from "../../lib/logger.js";
 import { env } from "../../lib/env.js";
 import { ShopifyClient } from "../../integrations/shopify/client.js";
 import { pushCustomerTermsToQbo } from "../../modules/customer-terms/push-to-qbo.js";
+import { loadAppSettings } from "../../modules/statements/settings.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
@@ -557,6 +558,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       cc.push(trimmed);
     }
 
+    // BCC sourced from app_settings — empty string disables the
+    // header on the actual send, so the preview reflects that too.
+    const settings = await loadAppSettings();
+    const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
     return reply.send({
       openInvoices: previewRows,
       totalOpenBalance: round2(totalOpenBalance),
@@ -564,7 +569,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       recipients: {
         to: customer.primaryEmail,
         cc,
-        bcc: STATEMENT_BCC_ALIAS,
+        bcc: configuredBcc.length > 0 ? configuredBcc : null,
       },
       truncated: tooMany,
       invoiceLinkLookupOk: invoiceLinks !== null,
@@ -669,7 +674,6 @@ const customersRoute: FastifyPluginAsync = async (app) => {
 // Mirror the cap in modules/statements/send.ts so the preview never
 // shows more rows than the send route would actually accept.
 const STATEMENT_PREVIEW_INVOICE_CAP = 50;
-const STATEMENT_BCC_ALIAS = "accounts@feldart.com";
 const QBO_PROD = "https://quickbooks.api.intuit.com";
 const QBO_MINOR_VERSION = 65;
 

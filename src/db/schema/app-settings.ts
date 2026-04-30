@@ -44,5 +44,9 @@ export const APP_SETTING_KEYS = [
   "payment_methods",
   "footer_note",
   "statement_number_next",
+  // Email address that gets BCC'd on every statement send. Empty
+  // string = no BCC. Defaults to accounts@feldart.com so existing
+  // behaviour is preserved on a fresh install.
+  "statement_bcc_email",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

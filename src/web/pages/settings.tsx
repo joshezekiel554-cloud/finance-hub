@@ -447,6 +447,7 @@ const STATEMENT_PDF_KEYS = [
   "payment_methods",
   "footer_note",
   "statement_number_next",
+  "statement_bcc_email",
 ] as const;
 
 type StatementPdfKey = (typeof STATEMENT_PDF_KEYS)[number];
@@ -674,6 +675,20 @@ function StatementPdfSection() {
                   set("statement_number_next", e.target.value)
                 }
                 helperText="Auto-increments after each send. Set high enough to clear your existing QBO range."
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="mb-1 block font-medium text-secondary">
+                BCC every statement to
+              </span>
+              <Input
+                type="email"
+                value={value("statement_bcc_email")}
+                onChange={(e) =>
+                  set("statement_bcc_email", e.target.value)
+                }
+                placeholder="leave empty to disable"
+                helperText="Address that receives a silent copy of every Statement.pdf send. Empty disables the BCC."
               />
             </label>
 
