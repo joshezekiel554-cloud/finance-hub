@@ -65,7 +65,14 @@ export function buildRawMessage(input: {
   ];
   if (cc) headerLines.push(`Cc: ${cc}`);
   if (bcc) headerLines.push(`Bcc: ${bcc}`);
-  headerLines.push(`Subject: ${subject}`, "MIME-Version: 1.0");
+  // Subject must be RFC 2047 encoded when it contains non-ASCII —
+  // recipient clients otherwise interpret the raw UTF-8 bytes as
+  // Latin-1 and the em dash / curly quote / accented chars render
+  // as mojibake (e.g. "Feldart Ã¢Â€Â\" Statement of Account").
+  headerLines.push(
+    `Subject: ${encodeMimeHeaderValue(subject)}`,
+    "MIME-Version: 1.0",
+  );
   if (replyTo) headerLines.push(`Reply-To: ${replyTo}`);
   if (inReplyTo) {
     // RFC 5322: angle-bracketed Message-ID. We accept either a bare id
@@ -131,6 +138,26 @@ export function buildRawMessage(input: {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+}
+
+// RFC 2047 encoded-word for header values that contain non-ASCII. Pure-
+// ASCII inputs round-trip verbatim. Non-ASCII inputs are base64-encoded
+// in UTF-8 and wrapped in `=?UTF-8?B?...?=`. This is the only safe way
+// to put characters like — (em dash), curly quotes, or accented letters
+// in a Subject / From-display-name without breaking recipient clients
+// that fall back to Latin-1 when no charset is declared.
+//
+// Note: the spec also allows quoted-printable ("Q") encoding which is
+// more readable in raw MIME, but base64 ("B") is unambiguous and safe
+// for any byte sequence — and recipient clients decode both equally
+// well, so there's no end-user-visible difference.
+function encodeMimeHeaderValue(value: string): string {
+  // The non-ASCII test: any code point outside 0x20-0x7E (printable
+  // ASCII) needs encoding. Tabs / newlines aren't allowed in header
+  // values either, so this catches both.
+  if (/^[\x20-\x7E]*$/.test(value)) return value;
+  const b64 = Buffer.from(value, "utf-8").toString("base64");
+  return `=?UTF-8?B?${b64}?=`;
 }
 
 // If `alias` is provided, validate it against the live sendAs list before
