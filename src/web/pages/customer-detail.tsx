@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   CreditCard,
   ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -365,6 +366,8 @@ export default function CustomerDetailPage() {
       </div>
 
       <RecipientsAndTagsSection customer={customer} />
+
+      <QboRecipientsCard customerId={customer.id} />
 
       <div className="border-b border-default">
         <nav className="flex gap-1">
@@ -1428,5 +1431,195 @@ function PhonesCard({
         ) : null}
       </CardBody>
     </Card>
+  );
+}
+
+// Read-only window into the recipient state QBO will actually use.
+// Surfaces three things: the customer-level PrimaryEmailAddr (TO QBO
+// uses on auto-creation), the company-wide SalesEmailCc/Bcc (default
+// fallback when an Invoice doesn't carry its own), and the most
+// recent invoice's BillEmail/Cc/Bcc (forensics — what was actually
+// used last time). Cached for 5 min so flipping between tabs doesn't
+// hammer QBO.
+type QboRecipientsResponse =
+  | { status: "no_qb_link"; qbCustomerId: null }
+  | {
+      status: "ok";
+      qbCustomerId: string;
+      customerLevel: { primaryEmailAddr: string | null };
+      companyDefault: {
+        cc: string | null;
+        bcc: string | null;
+        bccCompany: boolean;
+      };
+      lastInvoice: {
+        docNumber: string | null;
+        txnDate: string | null;
+        billEmail: string | null;
+        billEmailCc: string | null;
+        billEmailBcc: string | null;
+      } | null;
+    };
+
+function QboRecipientsCard({ customerId }: { customerId: string }) {
+  const queryClient = useQueryClient();
+  const queryKey = ["qbo-recipients", customerId];
+  const { data, isPending, isError, error, isFetching } =
+    useQuery<QboRecipientsResponse>({
+      queryKey,
+      queryFn: async () => {
+        const res = await fetch(
+          `/api/customers/${encodeURIComponent(customerId)}/qbo-recipients`,
+        );
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error(body || `HTTP ${res.status}`);
+        }
+        return res.json();
+      },
+      staleTime: 5 * 60_000,
+      gcTime: 10 * 60_000,
+    });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-medium">QuickBooks recipient state</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Read-only view of what QBO has on file. CC/BCC live on each
+              invoice (and on a single company-wide default), not on the
+              customer record — finance-hub's per-customer CC/BCC apply only
+              to invoices we send.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              queryClient.invalidateQueries({ queryKey })
+            }
+            disabled={isFetching}
+            title="Re-fetch from QuickBooks"
+          >
+            <RefreshCw
+              className={cn("size-3.5", isFetching && "animate-spin")}
+            />
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardBody className="text-sm">
+        {isPending ? (
+          <div className="text-muted">Loading from QuickBooks…</div>
+        ) : isError ? (
+          <div className="text-accent-danger">
+            {(error as Error)?.message ?? "Failed to load QBO state"}
+          </div>
+        ) : data?.status === "no_qb_link" ? (
+          <div className="text-muted">
+            Customer is not linked to a QuickBooks record.
+          </div>
+        ) : data?.status === "ok" ? (
+          <QboRecipientsBody data={data} />
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+function QboRecipientsBody({
+  data,
+}: {
+  data: Extract<QboRecipientsResponse, { status: "ok" }>;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div>
+        <div className="text-xs uppercase tracking-wide text-muted">
+          Customer record (Customer.PrimaryEmailAddr)
+        </div>
+        <div className="mt-1">
+          <RecipientLine
+            label="Email"
+            value={data.customerLevel.primaryEmailAddr}
+          />
+        </div>
+        <p className="mt-1 text-[11px] text-muted">
+          QBO copies this onto the BillEmail of any invoice it auto-creates.
+        </p>
+      </div>
+      <div>
+        <div className="text-xs uppercase tracking-wide text-muted">
+          Company default (Preferences.SalesFormsPrefs)
+        </div>
+        <div className="mt-1 space-y-0.5">
+          <RecipientLine label="CC" value={data.companyDefault.cc} />
+          <RecipientLine label="BCC" value={data.companyDefault.bcc} />
+          {data.companyDefault.bccCompany ? (
+            <div className="text-[11px] text-muted">
+              + EmailCopyToCompany is on (BCC company email)
+            </div>
+          ) : null}
+        </div>
+        <p className="mt-1 text-[11px] text-muted">
+          Used as a fallback when an invoice doesn't carry its own
+          BillEmailCc/Bcc.
+        </p>
+      </div>
+      <div>
+        <div className="text-xs uppercase tracking-wide text-muted">
+          Most recent invoice
+        </div>
+        {data.lastInvoice ? (
+          <>
+            <div className="mt-1 text-xs text-muted">
+              {data.lastInvoice.docNumber ?? "(no doc #)"}
+              {data.lastInvoice.txnDate ? ` · ${data.lastInvoice.txnDate}` : ""}
+            </div>
+            <div className="mt-1 space-y-0.5">
+              <RecipientLine
+                label="TO"
+                value={data.lastInvoice.billEmail}
+              />
+              <RecipientLine
+                label="CC"
+                value={data.lastInvoice.billEmailCc}
+              />
+              <RecipientLine
+                label="BCC"
+                value={data.lastInvoice.billEmailBcc}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="mt-1 text-muted">No invoices on file.</div>
+        )}
+        <p className="mt-1 text-[11px] text-muted">
+          What QBO actually used the last time it sent.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RecipientLine({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | null;
+}) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="w-10 shrink-0 text-[11px] uppercase tracking-wide text-muted">
+        {label}
+      </span>
+      <span className={cn("text-sm", value ? "text-primary" : "text-muted")}>
+        {value ?? "—"}
+      </span>
+    </div>
   );
 }

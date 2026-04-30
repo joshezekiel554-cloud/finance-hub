@@ -1,17 +1,27 @@
-// Pushes a customer's resolved invoice recipients to QBO so that
-// invoices QBO generates and sends on its own (e.g. the Shopify→QBO
-// pipeline) carry the right TO / CC / BCC. The same fields are used
-// by /invoicing/today's Send button when going through QboClient.
+// Pushes a customer's invoice TO to QBO so that invoices QBO sends
+// on its own (e.g. the Shopify→QBO pipeline) reach the address the
+// operator picked in finance-hub.
 //
-// Best-effort by design: a failure here logs a warning but doesn't
-// roll back the local edit. Mirrors push-to-qbo for terms.
+// IMPORTANT — what QBO actually accepts on the Customer entity:
+//   - PrimaryEmailAddr: ✅ valid, single email; this is the only
+//     customer-level email field QBO has.
+//   - BillEmail / BillEmailCc / BillEmailBcc: ❌ NOT valid on
+//     Customer. Those are per-Invoice fields. Sending them on a
+//     Customer.update is silently dropped by QBO.
 //
-// QBO field map:
-//   BillEmail    ← invoice TO
-//   BillEmailCc  ← invoice CC, comma-joined
-//   BillEmailBcc ← invoice BCC (tag-derived), comma-joined
-// QBO accepts comma- or semicolon-separated multi-address strings on
-// BillEmailCc / BillEmailBcc, so we render with ", ".
+// Implication: per-customer CC/BCC do NOT round-trip to QBO. They
+// apply only to invoices finance-hub itself sends. For QBO-auto-sent
+// invoices (Shopify pipeline), CC/BCC fall back to QBO's company-
+// level Preferences.SalesFormsPrefs.SalesEmailCc/Bcc — which is a
+// single global setting, not per-customer or per-tag.
+//
+// We push `recipients.to` (invoice override → primary fallback) as
+// PrimaryEmailAddr so the QBO customer record reflects where invoices
+// should go. The CC/BCC computed by resolveRecipients are deliberately
+// dropped here; they live in finance-hub's send paths instead.
+//
+// Best-effort by design: a failure logs a warning but doesn't roll
+// back the local edit.
 
 import { QboClient } from "../../integrations/qb/client.js";
 import { createLogger } from "../../lib/logger.js";
@@ -80,30 +90,15 @@ export async function pushCustomerInvoiceEmailsToQbo(args: {
     };
   }
 
-  // Compose the sparse-update payload. QBO expects PrimaryEmailAddr
-  // for the TO field; BillEmailCc / BillEmailBcc are the CC + BCC
-  // strings respectively. Sending null clears each ref.
+  // Sparse update: only PrimaryEmailAddr. The CC/BCC from
+  // recipients.cc / .bcc are intentionally dropped — they're not
+  // settable on the Customer entity.
   const payload: Record<string, unknown> = {
     Id: qbCustomerId,
     SyncToken: qboCustomer.SyncToken,
     sparse: true,
-    PrimaryEmailAddr: recipients.to
-      ? { Address: recipients.to }
-      : null,
+    PrimaryEmailAddr: recipients.to ? { Address: recipients.to } : null,
   };
-  // QBO docs: BillEmail is the TO too on invoices. PrimaryEmailAddr
-  // is the customer-level "main" email. Setting both keeps QBO's UI
-  // self-consistent — older accounts surface BillEmail, newer ones
-  // PrimaryEmailAddr; setting both is harmless either way.
-  if (recipients.to) {
-    payload.BillEmail = { Address: recipients.to };
-  } else {
-    payload.BillEmail = null;
-  }
-  payload.BillEmailCc =
-    recipients.cc.length > 0 ? { Address: recipients.cc.join(", ") } : null;
-  payload.BillEmailBcc =
-    recipients.bcc.length > 0 ? { Address: recipients.bcc.join(", ") } : null;
 
   await qb.updateCustomer(payload);
   return { status: "pushed", qbCustomerId };

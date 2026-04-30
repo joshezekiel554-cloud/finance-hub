@@ -1,11 +1,13 @@
 // Tag-driven email routing rules.
 //
 // Each row says "if a customer carries `tag`, take `action` with `value`".
-// Today the only action we honor is `bcc_invoice` (push the value to
-// QBO's customer.BillEmailBcc and include it on finance-hub's own
-// invoice sends). The action column is an enum so future rules
-// (bcc_statement, cc_invoice, etc.) can be added without migrating
-// each rule individually.
+// Actions like `bcc_invoice` apply ONLY to invoices finance-hub sends
+// itself — QBO's Customer entity has no per-customer BillEmailBcc/Cc
+// field, so the rules can't propagate to QBO-auto-sent invoices (the
+// Shopify pipeline). Those fall back to QBO's company-wide
+// Preferences.SalesFormsPrefs.SalesEmailBcc. The action column is an
+// enum so future rules (bcc_statement, cc_invoice, etc.) can be added
+// without migrating each rule individually.
 //
 // Tag matching is case-insensitive (we normalise customers.tags to
 // lowercase on write). Multiple rules can match the same tag —

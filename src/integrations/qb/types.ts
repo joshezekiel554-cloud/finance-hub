@@ -78,9 +78,30 @@ export type QboInvoice = {
   PrivateNote?: string;
   CustomerMemo?: { value?: string };
   CustomField?: Array<{ DefinitionId: string; Name?: string; StringValue?: string }>;
+  // Per-invoice email addresses. These ARE settable on the Invoice
+  // entity (unlike on Customer where only PrimaryEmailAddr exists).
+  // BillEmail = TO, BillEmailCc / BillEmailBcc are comma-separated
+  // multi-address strings.
+  BillEmail?: QboEmailAddr;
+  BillEmailCc?: QboEmailAddr;
+  BillEmailBcc?: QboEmailAddr;
   MetaData?: {
     CreateTime?: string;
     LastUpdatedTime?: string;
+  };
+};
+
+// Company-level preferences. We only model the SalesFormsPrefs slice
+// because that's where the global default CC/BCC for QBO-sent
+// invoices lives (used as the fallback when an invoice doesn't have
+// its own BillEmailCc/Bcc set).
+export type QboPreferences = {
+  Id: string;
+  SyncToken?: string;
+  SalesFormsPrefs?: {
+    SalesEmailCc?: QboEmailAddr;
+    SalesEmailBcc?: QboEmailAddr;
+    EmailCopyToCompany?: boolean;
   };
 };
 
@@ -133,6 +154,7 @@ export type QboQueryResponse<T> = {
     CreditMemo?: T[];
     Term?: T[];
     Item?: T[];
+    Preferences?: T[];
     startPosition?: number;
     maxResults?: number;
     totalCount?: number;

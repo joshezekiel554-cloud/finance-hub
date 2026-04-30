@@ -27,9 +27,11 @@ export const customers = mysqlTable(
     statementToEmail: varchar("statement_to_email", { length: 255 }),
     statementCcEmails: json("statement_cc_emails").$type<string[]>(),
     // Free-form tag list. Drives email_routing_rules — e.g. tag
-    // "yiddy" auto-BCCs sales@feldart.com on every invoice (synced
-    // through to QBO's BillEmailBcc so even QBO auto-sends pick it
-    // up). Lower-cased + trimmed before persisting.
+    // "yiddy" auto-BCCs sales@feldart.com on invoices that finance-hub
+    // sends. (QBO-auto-sent invoices, e.g. via Shopify pipeline, fall
+    // back to QBO's company-wide SalesEmailBcc preference because the
+    // QBO Customer entity has no per-customer BCC field.) Lower-cased
+    // + trimmed before persisting.
     tags: json("tags").$type<string[]>(),
     // Main phone — seeded from QBO Customer.PrimaryPhone.FreeFormNumber
     // on first INSERT, then locally authoritative (operator edits in

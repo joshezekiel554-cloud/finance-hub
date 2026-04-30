@@ -646,6 +646,84 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     });
   });
 
+  // GET /api/customers/:id/qbo-recipients — read-only window into what
+  // QBO actually has for this customer. Three lookups:
+  //   1. Customer.PrimaryEmailAddr — the customer-level TO QBO uses
+  //      when auto-creating invoices.
+  //   2. Preferences.SalesFormsPrefs.SalesEmailCc / SalesEmailBcc —
+  //      the COMPANY-WIDE default CC/BCC QBO falls back to when an
+  //      Invoice doesn't carry its own. (No per-customer CC/BCC slot
+  //      exists in QBO's data model.)
+  //   3. The most recent Invoice's BillEmail / BillEmailCc /
+  //      BillEmailBcc — what QBO actually sent on last time, useful
+  //      forensics when CC/BCC behaviour looks "wrong".
+  //
+  // Best-effort: any failure on the QBO side returns a 502 so the
+  // client can render an error pill rather than poison the page.
+  app.get("/:id/qbo-recipients", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const rows = await db
+      .select({ qbCustomerId: customers.qbCustomerId })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return reply.code(404).send({ error: "customer not found" });
+    if (!row.qbCustomerId) {
+      return reply.send({
+        status: "no_qb_link",
+        qbCustomerId: null,
+      });
+    }
+
+    const qbTokens = await loadQbTokens(env.QB_REALM_ID);
+    if (!qbTokens) {
+      return reply.code(503).send({
+        error: "QuickBooks is not connected",
+      });
+    }
+
+    const qb = new QboClient();
+    try {
+      const [qboCustomer, prefs, lastInvoice] = await Promise.all([
+        qb.getCustomerById(row.qbCustomerId),
+        qb.getPreferences(),
+        qb.getMostRecentInvoiceForCustomer(row.qbCustomerId),
+      ]);
+
+      return reply.send({
+        status: "ok",
+        qbCustomerId: row.qbCustomerId,
+        customerLevel: {
+          primaryEmailAddr: qboCustomer?.PrimaryEmailAddr?.Address ?? null,
+        },
+        companyDefault: {
+          cc: prefs?.SalesFormsPrefs?.SalesEmailCc?.Address ?? null,
+          bcc: prefs?.SalesFormsPrefs?.SalesEmailBcc?.Address ?? null,
+          bccCompany: prefs?.SalesFormsPrefs?.EmailCopyToCompany ?? false,
+        },
+        lastInvoice: lastInvoice
+          ? {
+              docNumber: lastInvoice.DocNumber ?? null,
+              txnDate: lastInvoice.TxnDate ?? null,
+              billEmail: lastInvoice.BillEmail?.Address ?? null,
+              billEmailCc: lastInvoice.BillEmailCc?.Address ?? null,
+              billEmailBcc: lastInvoice.BillEmailBcc?.Address ?? null,
+            }
+          : null,
+      });
+    } catch (err) {
+      log.warn(
+        { err, customerId: id, qbCustomerId: row.qbCustomerId },
+        "qbo recipient lookup failed",
+      );
+      return reply.code(502).send({
+        error: "Failed to read QuickBooks recipient state",
+      });
+    }
+  });
+
   // GET /api/customers/:id — full record for the detail page. Returns
   // the customer plus a few related rollups: recent activities, open
   // invoice summary, open task count. Detail page can request more via
@@ -774,18 +852,19 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       });
     }
 
-    // If anything affecting QBO's invoice TO/CC/BCC changed (the
-    // invoice override fields, primary email, billing emails, or
-    // tags), push the resolved set to QBO. So both /invoicing/today
-    // sends AND QBO's own auto-sends from the Shopify pipeline pick
-    // up the right recipients including any tag-derived BCC.
-    const invoiceEmailsChanged =
+    // If anything affecting the invoice TO changed (the invoice
+    // override field, primary email, or billing emails), push the
+    // resolved TO to QBO as PrimaryEmailAddr so QBO-auto-sent
+    // invoices (Shopify pipeline) reach the right address. CC/BCC
+    // can't propagate — QBO's Customer entity has no field for
+    // them — so changes to invoiceCcEmails / tags don't trigger a
+    // push (they only matter for finance-hub-sent invoices, which
+    // resolve recipients at send time).
+    const invoiceToChanged =
       updates.invoiceToEmail !== undefined ||
-      updates.invoiceCcEmails !== undefined ||
       updates.primaryEmail !== undefined ||
-      updates.billingEmails !== undefined ||
-      updates.tags !== undefined;
-    if (invoiceEmailsChanged && after.qbCustomerId) {
+      updates.billingEmails !== undefined;
+    if (invoiceToChanged && after.qbCustomerId) {
       void pushCustomerInvoiceEmailsToQbo({
         qbCustomerId: after.qbCustomerId,
         customer: {

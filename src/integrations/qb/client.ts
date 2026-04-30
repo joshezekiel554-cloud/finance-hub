@@ -24,6 +24,7 @@ import type {
   QboInvoice,
   QboItem,
   QboPayment,
+  QboPreferences,
   QboQueryResponse,
   QboTerm,
 } from "./types.js";
@@ -371,6 +372,28 @@ export class QboClient {
       "SELECT * FROM Term",
       (r) => r.QueryResponse.Term,
     );
+  }
+
+  // Single-row Preferences entity per realm. Used to read company-level
+  // SalesEmailCc/Bcc, which is what QBO falls back to when an Invoice
+  // doesn't carry its own BillEmailCc/Bcc.
+  async getPreferences(): Promise<QboPreferences | null> {
+    const data = await this.query<QboPreferences>(
+      "SELECT * FROM Preferences",
+    );
+    return data.QueryResponse.Preferences?.[0] ?? null;
+  }
+
+  // Most recent invoice for a customer, ordered by TxnDate DESC. Used
+  // by /qbo-recipients to surface the BillEmail/Cc/Bcc QBO actually
+  // used last time. Returns null for customers with no invoices.
+  async getMostRecentInvoiceForCustomer(
+    qbCustomerId: string,
+  ): Promise<QboInvoice | null> {
+    const data = await this.query<QboInvoice>(
+      `SELECT * FROM Invoice WHERE CustomerRef = '${escapeQboLiteral(qbCustomerId)}' ORDERBY TxnDate DESC MAXRESULTS 1`,
+    );
+    return data.QueryResponse.Invoice?.[0] ?? null;
   }
 
   async getInvoiceByDocNumber(docNumber: string): Promise<QboInvoice | null> {
