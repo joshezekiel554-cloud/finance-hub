@@ -98,20 +98,18 @@ Thanks,
     name: "Statement — Open Items",
     context: "statement",
     description:
-      "Wraps the auto-generated statement table. The {{statement_table}} variable is replaced server-side with the per-invoice HTML rendering.",
+      "Cover-note email body for the Statement.pdf attachment. The actual statement table is inside the PDF — this is just the wrapping email.",
     subject:
       "{{company_name}} — Statement of Account ({{open_balance}} open)",
     body: `<p>Hi {{customer_name}},</p>
 
-<p>Please find your current Statement of Account below. Total open \
-balance is <strong>{{open_balance}}</strong>; of that, \
+<p>Please find your statement of account attached. Total open balance \
+is <strong>{{open_balance}}</strong>; of that, \
 <strong>{{overdue_balance}}</strong> is past due.</p>
 
-{{statement_table}}
-
-<p>Each invoice above includes a Pay-now link, and PDFs are attached to \
-this email for your records. Please let me know if anything looks \
-incorrect.</p>
+<p>The attached PDF lists every open invoice with a Pay-now link \
+straight to QuickBooks for online payment. Please let me know if \
+anything looks incorrect.</p>
 
 <p>Thanks,<br>
 {{user_name}}<br>
