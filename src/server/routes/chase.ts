@@ -33,7 +33,7 @@ import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
-import { activities } from "../../db/schema/crm.js";
+import { activities, statementSends } from "../../db/schema/crm.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
@@ -42,6 +42,15 @@ import {
   sendStatement,
   SendStatementError,
 } from "../../modules/statements/index.js";
+import { emailTemplates } from "../../db/schema/email-templates.js";
+import {
+  buildTemplateVars,
+  renderTemplate,
+} from "../../modules/email-compose/template-vars.js";
+import { sendEmail } from "../../integrations/gmail/send.js";
+import { recordActivity } from "../../modules/crm/index.js";
+import { loadAppSettings } from "../../modules/statements/settings.js";
+import { users } from "../../db/schema/auth.js";
 
 const log = createLogger({ component: "routes.chase" });
 
@@ -148,6 +157,25 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       FROM ${activities}
       WHERE ${activities.customerId} = \`customers\`.\`id\`
     )`;
+    // Last QBO payment occurredAt — drawn from the activities ingester
+    // which writes one qbo_payment row per Payment received. Same hand-
+    // qualified customers.id as above to side-step Drizzle's serialiser
+    // dropping the table prefix.
+    const lastPaymentExpr = sql<Date | null>`(
+      SELECT MAX(${activities.occurredAt})
+      FROM ${activities}
+      WHERE ${activities.customerId} = \`customers\`.\`id\`
+        AND ${activities.kind} = 'qbo_payment'
+    )`;
+    // Last statement send (any operator, any kind). statement_sends is
+    // populated by the actual send route — preview/PDF-only opens
+    // don't touch it, so this value reflects what the customer
+    // actually received.
+    const lastStatementSentExpr = sql<Date | null>`(
+      SELECT MAX(${statementSends.sentAt})
+      FROM ${statementSends}
+      WHERE ${statementSends.customerId} = \`customers\`.\`id\`
+    )`;
 
     // Sort column resolution.
     const orderFn = dir === "asc" ? asc : desc;
@@ -182,6 +210,8 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         paymentTerms: customers.paymentTerms,
         daysSinceOldestUnpaid: daysOverdueExpr,
         lastActivityAt: lastActivityExpr,
+        lastPaymentAt: lastPaymentExpr,
+        lastStatementSentAt: lastStatementSentExpr,
       })
       .from(customers)
       .where(where)
@@ -204,20 +234,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         r.daysSinceOldestUnpaid === null || r.daysSinceOldestUnpaid === undefined
           ? null
           : Number(r.daysSinceOldestUnpaid),
-      lastActivityAt: (() => {
-        // mysql2 returns a TIMESTAMP correlated-subquery as a "YYYY-MM-DD
-        // HH:MM:SS" string rather than a Date (the typed column path
-        // does hydrate to Date, but raw sql<Date> in a subquery
-        // doesn't). Normalize both shapes to ISO so the frontend's
-        // relativeTime() doesn't have to guess. Cast through unknown
-        // because the sql<Date | null> generic narrows the runtime to
-        // Date only — but in practice it's `Date | string | null`.
-        const v = r.lastActivityAt as Date | string | null;
-        if (!v) return null;
-        if (v instanceof Date) return v.toISOString();
-        const d = new Date(v.replace(" ", "T") + "Z");
-        return Number.isNaN(d.getTime()) ? null : d.toISOString();
-      })(),
+      lastActivityAt: normalizeSubqueryDate(r.lastActivityAt),
+      lastPaymentAt: normalizeSubqueryDate(r.lastPaymentAt),
+      lastStatementSentAt: normalizeSubqueryDate(r.lastStatementSentAt),
     }));
 
     return reply.send({ rows: out, total: out.length });
@@ -341,7 +360,198 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
 
     return reply.send({ results });
   });
+
+  // POST /api/chase/send-chase-email
+  // Body: { customerId, level: 1|2|3 }
+  // Picks the chase_l<level> email template, renders it with the
+  // customer's open-invoice context, sends via Gmail (CC = billing
+  // emails minus primary, BCC from app_settings.statement_bcc_email),
+  // and records an email_out activity. Per-row use case from the
+  // chase page; mirrors the shape of the existing batch-statement
+  // route (single customer, no fan-out).
+  app.post("/send-chase-email", async (req, reply) => {
+    const user = await requireAuth(req);
+    const parse = sendChaseEmailBodySchema.safeParse(req.body);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const { customerId, level } = parse.data;
+    const slug = `chase_l${level}`;
+
+    const customerRows = await db
+      .select()
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .limit(1);
+    const customer = customerRows[0];
+    if (!customer) {
+      return reply
+        .code(404)
+        .send({ error: "customer not found", code: "customer_not_found" });
+    }
+    if (!customer.primaryEmail) {
+      return reply
+        .code(400)
+        .send({
+          error: "customer has no primary email",
+          code: "no_primary_email",
+        });
+    }
+
+    const templateRows = await db
+      .select()
+      .from(emailTemplates)
+      .where(eq(emailTemplates.slug, slug))
+      .limit(1);
+    const template = templateRows[0];
+    if (!template) {
+      return reply
+        .code(404)
+        .send({ error: `template '${slug}' not found`, code: "no_template" });
+    }
+
+    const openInvoices = await db
+      .select()
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), gt(invoices.balance, "0")),
+      )
+      .orderBy(asc(invoices.dueDate));
+
+    // Operator's display name for the {{user_name}} merge variable.
+    const userRows = await db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1);
+    const userName = userRows[0]?.name ?? user.email ?? "";
+
+    const vars = buildTemplateVars({
+      customer,
+      openInvoices,
+      user: { name: userName },
+    });
+    const renderedSubject = renderTemplate(template.subject, vars);
+    const renderedBody = renderTemplate(template.body, vars);
+
+    // Recipient construction matches the statement-send pattern: TO =
+    // primary, CC = billing emails minus primary (case-insensitive),
+    // BCC from settings.statement_bcc_email when non-empty.
+    const primaryLower = customer.primaryEmail.toLowerCase();
+    const billing = Array.isArray(customer.billingEmails)
+      ? (customer.billingEmails as string[])
+      : [];
+    const ccList = billing.filter(
+      (e) => e && e.toLowerCase() !== primaryLower,
+    );
+    const cc = ccList.length > 0 ? ccList.join(", ") : undefined;
+    const settings = await loadAppSettings();
+    const bccConfigured = settings.statement_bcc_email?.trim() ?? "";
+    const bcc = bccConfigured.length > 0 ? bccConfigured : undefined;
+
+    let result;
+    try {
+      result = await sendEmail({
+        to: customer.primaryEmail,
+        cc,
+        bcc,
+        subject: renderedSubject,
+        // Chase templates are plain text. Convert to lightweight HTML
+        // (paragraph-per-blank-line) so the email renders with sensible
+        // spacing in clients that prefer the text/html part.
+        html: renderedBody
+          .split(/\n{2,}/)
+          .map(
+            (p) =>
+              `<p>${p
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/\n/g, "<br/>")}</p>`,
+          )
+          .join("\n"),
+        text: renderedBody,
+      });
+    } catch (err) {
+      log.error(
+        {
+          err,
+          customerId,
+          slug,
+          to: customer.primaryEmail,
+        },
+        "chase email send failed",
+      );
+      return reply.code(502).send({
+        error: err instanceof Error ? err.message : "send failed",
+        code: "send_failed",
+      });
+    }
+
+    await db.insert(auditLog).values({
+      id: nanoid(24),
+      userId: user.id,
+      action: "chase.email_send",
+      entityType: "customer",
+      entityId: customerId,
+      before: null,
+      after: {
+        slug,
+        level,
+        to: customer.primaryEmail,
+        cc: cc ?? null,
+        bcc: bcc ?? null,
+        subject: renderedSubject,
+        messageId: result.messageId,
+        threadId: result.threadId,
+      },
+    });
+    await recordActivity({
+      customerId,
+      kind: "email_out",
+      source: "user_action",
+      userId: user.id,
+      subject: renderedSubject,
+      body: renderedBody,
+      refType: "chase_email",
+      refId: result.messageId,
+      meta: {
+        slug,
+        level,
+        to: customer.primaryEmail,
+        cc: cc ?? null,
+        bcc: bcc ?? null,
+        messageId: result.messageId,
+        threadId: result.threadId,
+      },
+    });
+
+    log.info(
+      {
+        customerId,
+        userId: user.id,
+        slug,
+        level,
+        messageId: result.messageId,
+      },
+      "chase email sent",
+    );
+
+    return reply.send({
+      messageId: result.messageId,
+      threadId: result.threadId,
+      slug,
+      level,
+    });
+  });
 };
+
+const sendChaseEmailBodySchema = z.object({
+  customerId: z.string().min(1).max(64),
+  level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+});
 
 // Bounded-concurrency map. Same shape as the helper inside
 // modules/statements/send.ts — replicated here rather than imported
@@ -363,6 +573,25 @@ async function mapWithLimit<T, R>(
     Array.from({ length: Math.min(limit, items.length) }, () => worker()),
   );
   return results;
+}
+
+// mysql2 returns TIMESTAMP from a correlated subquery as a
+// "YYYY-MM-DD HH:MM:SS" string rather than a Date (the typed column
+// path does hydrate to Date, but raw sql<Date> in a subquery doesn't).
+// Normalize both shapes to ISO so the frontend's relativeTime() doesn't
+// have to guess. Cast through unknown because the sql<Date | null>
+// generic narrows the runtime to Date only — but in practice it's
+// `Date | string | null`.
+function normalizeSubqueryDate(v: unknown): string | null {
+  if (!v) return null;
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? null : v.toISOString();
+  }
+  if (typeof v === "string") {
+    const d = new Date(v.replace(" ", "T") + "Z");
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  return null;
 }
 
 export default chaseRoute;

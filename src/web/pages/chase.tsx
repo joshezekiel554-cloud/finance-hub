@@ -23,7 +23,7 @@
 //     Tested to be smooth without virtualization. Sorting is server-
 //     driven so the table stays snappy.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useMutation,
   useQuery,
@@ -57,6 +57,8 @@ type ChaseRow = {
   paymentTerms: string | null;
   daysSinceOldestUnpaid: number | null;
   lastActivityAt: string | null;
+  lastPaymentAt: string | null;
+  lastStatementSentAt: string | null;
 };
 
 type ListResponse = {
@@ -267,6 +269,54 @@ export default function ChasePage() {
     }
   }
 
+  // Per-row chase email send. Mirrors sendOneRow's error/result handling
+  // so the row's status pill works the same way regardless of which
+  // action the operator picked.
+  async function sendChaseEmail(customerId: string, level: 1 | 2 | 3) {
+    setRowSendingIds((prev) => {
+      const next = new Set(prev);
+      next.add(customerId);
+      return next;
+    });
+    try {
+      const res = await fetch("/api/chase/send-chase-email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ customerId, level }),
+      });
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`;
+        try {
+          const body = (await res.json()) as { error?: string; code?: string };
+          if (body.error)
+            errMsg = body.code ? `${body.code}: ${body.error}` : body.error;
+        } catch {
+          // ignore
+        }
+        setResultsById((prev) => ({
+          ...prev,
+          [customerId]: {
+            customerId,
+            status: "failed",
+            error: errMsg,
+          },
+        }));
+      } else {
+        setResultsById((prev) => ({
+          ...prev,
+          [customerId]: { customerId, status: "sent" },
+        }));
+        queryClient.invalidateQueries({ queryKey: ["chase", "customers"] });
+      }
+    } finally {
+      setRowSendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(customerId);
+        return next;
+      });
+    }
+  }
+
   const resultSummary = useMemo(() => {
     const values = Object.values(resultsById);
     return {
@@ -380,6 +430,8 @@ export default function ChasePage() {
                     toggleSort("lastActivityAt", sort, setSort, dir, setDir)
                   }
                 />
+                <th className="px-3 py-2">Last payment</th>
+                <th className="px-3 py-2">Last statement</th>
                 <th className="px-3 py-2">Terms</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2 text-right">Actions</th>
@@ -456,6 +508,20 @@ export default function ChasePage() {
                       )}
                     </td>
                     <td className="px-3 py-2 text-secondary">
+                      {row.lastPaymentAt ? (
+                        relativeTime(row.lastPaymentAt)
+                      ) : (
+                        <span className="text-muted">never</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
+                      {row.lastStatementSentAt ? (
+                        relativeTime(row.lastStatementSentAt)
+                      ) : (
+                        <span className="text-muted">never</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
                       {row.paymentTerms ?? "—"}
                     </td>
                     <td className="px-3 py-2">
@@ -474,25 +540,20 @@ export default function ChasePage() {
                       {result ? (
                         <ResultPill result={result} />
                       ) : (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => sendOneRow(row.id)}
+                        <RowActionMenu
+                          customerId={row.id}
                           disabled={
                             sending ||
                             batchMutation.isPending ||
                             !row.primaryEmail
                           }
-                          loading={sending}
-                          title={
-                            !row.primaryEmail
-                              ? "Customer has no primary email"
-                              : "Send statement now"
+                          sending={sending}
+                          noEmail={!row.primaryEmail}
+                          onSendStatement={() => sendOneRow(row.id)}
+                          onSendChase={(level) =>
+                            sendChaseEmail(row.id, level)
                           }
-                        >
-                          <Mail className="size-3.5" />
-                          Send
-                        </Button>
+                        />
                       )}
                     </td>
                   </tr>
@@ -682,6 +743,111 @@ function ResultBanner({
         </Button>
       </CardBody>
     </Card>
+  );
+}
+
+// Per-row action menu used in the chase table. A single button with a
+// dropdown of four send actions (statement + chase L1/L2/L3). The
+// dropdown is a simple <details>-based popover so we don't need to
+// pull in a new component library — accessible by default, closes on
+// blur via inline state. The menu is intentionally tight on width to
+// fit inside the actions column without forcing a wrap.
+function RowActionMenu({
+  customerId,
+  disabled,
+  sending,
+  noEmail,
+  onSendStatement,
+  onSendChase,
+}: {
+  customerId: string;
+  disabled: boolean;
+  sending: boolean;
+  noEmail: boolean;
+  onSendStatement: () => void;
+  onSendChase: (level: 1 | 2 | 3) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  // Close on outside click / Esc.
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    window.addEventListener("mousedown", onClick);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onClick);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const items: Array<{
+    key: string;
+    label: string;
+    onClick: () => void;
+  }> = [
+    { key: "stmt", label: "Send statement", onClick: onSendStatement },
+    {
+      key: "l1",
+      label: "Chase email — gentle (L1)",
+      onClick: () => onSendChase(1),
+    },
+    {
+      key: "l2",
+      label: "Chase email — firmer (L2)",
+      onClick: () => onSendChase(2),
+    },
+    {
+      key: "l3",
+      label: "Chase email — escalation (L3)",
+      onClick: () => onSendChase(3),
+    },
+  ];
+
+  return (
+    <div ref={ref} className="relative inline-block text-left">
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        loading={sending}
+        title={
+          noEmail
+            ? "Customer has no primary email"
+            : "Send statement or chase email"
+        }
+        // Anchor the chevron-down feel via the trailing icon. Keeps
+        // the click target obvious without dropdown libraries.
+      >
+        <Mail className="size-3.5" />
+        Send
+        <span className="ml-0.5 text-xs">▾</span>
+      </Button>
+      {open && !disabled ? (
+        <div className="absolute right-0 z-30 mt-1 w-56 rounded-md border border-default bg-base shadow-2xl ring-1 ring-black/5">
+          {items.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                it.onClick();
+              }}
+              className="block w-full px-3 py-2 text-left text-xs text-secondary hover:bg-elevated hover:text-primary"
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
