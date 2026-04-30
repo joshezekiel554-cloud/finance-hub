@@ -13,6 +13,37 @@ If you're new to this file:
 
 ## Current phase
 
+**Loose ends + Statement PDF polish. 🟢 SHIPPED** (commits `7146c24` →
+`aa7da53`, 2026-04-30). Tightened the rebuild and closed a batch of
+carried-over loose ends in one pass:
+
+- **Statement PDF polish** — Preview PDF button on the send dialog
+  (`f2bd94e`), fixed QBO `SELECT Id, InvoiceLink` query that was 400'ing
+  → switched to `SELECT *` with `?include=invoiceLink` (`e31ea82`),
+  widened column widths so OPEN AMOUNT + PAYMENT headers stop wrapping
+  (`e31ea82`), seeded statement_open_items copy for the new PDF-as-
+  attachment flow (`95793c9`), smoke tests for the renderer (`7146c24`).
+- **Terms → DueDate recompute** (`76f1c85`) — editing payment terms
+  (e.g. Net 30 → Net 60) now actually moves the due date instead of
+  silently leaving it. QBO sparse update doesn't auto-cascade DueDate
+  on SalesTermRef change; the route looks up the new term's `DueDays`
+  and `buildPayload` computes `TxnDate + DueDays` in the same payload.
+- **`requireAuth` on `/api/invoicing/*`** (`fb18d54`) — silent W4 gap.
+- **RFC 5322 Message-ID threading** (`4a61a1a`, migration `0012`) —
+  poller now captures the Message-ID header from inbound mail and Reply
+  uses it as `In-Reply-To` instead of the Gmail-API messageId, so
+  non-Gmail recipients thread correctly. New `email_log.message_id_header`
+  column (varchar 998); legacy rows fall back to the API id.
+- **Statements log page** at `/statements` (`43472d4`) — cross-customer
+  audit list of every `statement_sends` row, joined to customer + sender,
+  date-range + sender filters, load-more pagination. Read-only — the
+  Gmail thread is the source of truth for what was actually sent.
+- **Home alert for unsent invoices** (`aa7da53`) — replaced the planned
+  11am invoicing cron with a frontend check on `/home`: past 11am London,
+  if today's shipment emails aren't all sent yet, surface a red warning
+  card with a CTA to `/invoicing`. No cron / no extra infra; piggybacks
+  on the existing `/api/invoicing/today` query (shared cache key).
+
 **Statement PDF rebuild. 🟢 SHIPPED** (commits `a43a15b` → `024fe42`).
 Replaced the HTML-body-with-N-invoice-PDFs pattern from Week 7 with a
 proper QBO-style Statement.pdf — single document, customer-facing
@@ -114,32 +145,35 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-04-30 (Statement PDF rebuild closing)
-**Commit on `main`**: `024fe42` (Statement PDF Phase 2 integration)
+**Date**: 2026-04-30 (loose-ends pass closed)
+**Commit on `main`**: `aa7da53` (home alert for unsent invoices past 11am London)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (in sync)
 **Local repo**: `C:\Users\user\Documents\finance-hub`
-**Status**: typecheck silent · **181/181 tests pass** · server + web + worker running via `npm run dev`
+**Status**: typecheck silent · **192/192 tests pass** · server + web + worker running via `npm run dev`
 **Data populated**: 2,407 customers (2,374 with billing address — backfilled via re-sync) · 3,119 invoices · 19,184 invoice_lines · 4,842 activities · 509 emails · 6 email templates · 9 app_settings rows seeded
+**Migrations**: `0012_yellow_crusher_hogan` applied (adds `email_log.message_id_header` for RFC 5322 reply threading)
 **Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy
 **Smoke test**: GET /api/customers/{abraham}/statement-pdf-preview → 200, `application/pdf`, 4133 bytes, valid %PDF-1.3 in 2s
 
 ## Active work
 
-**None — ready for week 8 (Notifications) or v2.0 polish pass.** Loose
-ends carrying over from earlier weeks:
-1. Invoicing 11am cron not yet registered (code exists, not in `schedule.ts`)
-2. `src/server/routes/invoicing.ts` has no `requireAuth` gate
-3. 180-day Gmail backfill still partial (~6 days populated; per-customer
-   button covers on-demand)
-4. `In-Reply-To` header uses Gmail API messageId not RFC 5322 Message-Id
-   (threading still works for Gmail recipients via threadId; non-Gmail
-   recipients render as new threads). Fix: extract Message-Id header in
-   gmail poller and store on email_log rows.
-5. `customer-detail.tsx` doesn't have a ToastProvider (only `/tasks`
-   does); statement-send shows an inline pill instead. If we want toasts
-   globally, lift ToastProvider into App.tsx.
-6. The `relatedTaskId` field on `email_log` was never added to schema;
-   the linkage is via `tasks.relatedActivityId` instead. Acceptable.
+**None — ready for Week 8 (Notifications).** Carry-overs that are still
+open but non-blocking:
+
+1. 180-day Gmail backfill still partial (~6 days populated; per-customer
+   "Pull email history" button covers on-demand backfill from any
+   customer's detail page).
+2. `customer-detail.tsx` doesn't have a ToastProvider (only `/tasks`
+   does); statement-send shows an inline pill instead. Lift
+   ToastProvider into App.tsx if we want toasts globally.
+3. `relatedTaskId` field on `email_log` was never added to schema; the
+   linkage is via `tasks.relatedActivityId` instead. Acceptable.
+
+Closed during the 2026-04-30 loose-ends pass (see Current phase):
+- ~~Invoicing 11am cron~~ — replaced with frontend home-page alert (`aa7da53`)
+- ~~`requireAuth` gap on `/api/invoicing/*`~~ — closed in `fb18d54`
+- ~~`In-Reply-To` uses Gmail API messageId~~ — closed in `4a61a1a` + migration `0012`
+- ~~Cross-customer statements log page~~ — shipped at `/statements` (`43472d4`)
 
 ## What just shipped (last 24h, 25 commits)
 
@@ -380,9 +414,9 @@ commits `72d93b9` → `af80bfd`):
 
 ## What's next
 
-**Week 4 leftovers (~1 hour, deferred from earlier):**
-1. Register the 11am invoicing cron in `src/jobs/schedule.ts`
-2. Real-invoice parity check vs 1.0
+**Week 4 leftovers (~30 min, deferred from earlier):**
+1. Real-invoice parity check vs 1.0 (the planned 11am cron was
+   superseded by the home-page alert — `aa7da53`)
 
 **Week 8 — Notifications:**
 - Email digest BullMQ job (7am daily)
@@ -410,7 +444,7 @@ These don't block current work but block specific later phases:
 
 | Item | Needed by | Status |
 |---|---|---|
-| Create DNS A record `finance.feldart.com → 187.77.100.23` | Week 9 (deploy) | Pending — user can do anytime |
+| ~~Create DNS A record `finance.feldart.com → 187.77.100.23`~~ | ~~Week 9 (deploy)~~ | ✅ Added 2026-04-30 |
 | Verify VPS RAM headroom (KVM1 vs KVM2) | Week 9 | User offered to upgrade if needed |
 | ~~QBO custom field IDs (tracking_number, ship_via, ship_date)~~ | ~~Week 5~~ | ✅ Resolved during week 4 — IDs known + wired in `sender.ts` |
 | ~~Feldart shipment email format consistency check~~ | ~~Week 4~~ | ✅ Resolved — parser handles real-world variants; bulk-dismiss covers WMS noise |
@@ -502,6 +536,17 @@ These don't block current work but block specific later phases:
 - `dec1e53` — `tasks-ui` agent: Kanban + list + detail drawer + comments + @mentions
 - `4641b1f` — Bug-check pass: regex tightening, LIKE escape, missing SSE events, N+1
 - `28f4e28` — PROGRESS catch-up
+
+**Statement PDF polish + loose-ends pass** (2026-04-30, commits `7146c24` → `aa7da53`):
+- `7146c24` — Statement PDF renderer smoke tests
+- `95793c9` — Reseed `statement_open_items` body for the new PDF-as-attachment flow
+- `f2bd94e` — Preview PDF button on the send dialog + post-rebuild copy fixes
+- `e31ea82` — InvoiceLink query fix (`SELECT *` not `SELECT Id, InvoiceLink`) + widen PDF column widths
+- `76f1c85` — Recompute `DueDate` when payment terms change (Net 30 → Net 60 actually moves the date)
+- `fb18d54` — `requireAuth` on every `/api/invoicing/*` handler
+- `4a61a1a` — Capture RFC 5322 `Message-ID` for proper non-Gmail reply threading + migration `0012`
+- `43472d4` — Cross-customer statements audit page at `/statements`
+- `aa7da53` — Home-page alert for unsent invoices past 11am London (replaces the planned 11am cron)
 
 **Post-week-6 polish** (commits `a58f71e` → `18a9294`):
 - `a58f71e` — Dev-only auth bypass (DEV_USER_EMAIL)
