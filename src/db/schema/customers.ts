@@ -21,6 +21,17 @@ export const customers = mysqlTable(
     holdStatus: mysqlEnum("hold_status", ["active", "hold"]).notNull().default("active"),
     shopifyCustomerId: varchar("shopify_customer_id", { length: 64 }),
     mondayItemId: varchar("monday_item_id", { length: 64 }),
+    // Billing address — synced from QBO Customer.BillAddr at sync time.
+    // Surfaces on the customer detail page header and on the rendered
+    // Statement PDF (where the customer's address appears under "TO").
+    // Stored as columns rather than JSON so future queries can filter by
+    // region / postal without JSON_EXTRACT gymnastics.
+    billingAddressLine1: varchar("billing_address_line1", { length: 255 }),
+    billingAddressLine2: varchar("billing_address_line2", { length: 255 }),
+    billingAddressCity: varchar("billing_address_city", { length: 128 }),
+    billingAddressRegion: varchar("billing_address_region", { length: 64 }),
+    billingAddressPostal: varchar("billing_address_postal", { length: 32 }),
+    billingAddressCountry: varchar("billing_address_country", { length: 64 }),
     // B2B vs B2C classification. NULL until manually tagged via the
     // customers list bulk-sweep UI; new customers from QB sync land NULL
     // and surface in a "needs classification" banner. Customer list

@@ -111,6 +111,7 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
 
   const billingEmails = parseBillingEmails(qboCustomer.PrimaryEmailAddr?.Address);
   const primaryEmail = billingEmails[0] ?? null;
+  const billAddr = qboCustomer.BillAddr;
 
   const desired = {
     qbCustomerId: qboCustomer.Id,
@@ -120,6 +121,15 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     billingEmails: billingEmails.length > 1 ? billingEmails : null,
     paymentTerms: qboCustomer.SalesTermRef?.name ?? null,
     balance: formatMoney(qboCustomer.Balance ?? 0),
+    // Billing address — surfaced on customer detail page + Statement PDF.
+    // QBO returns each segment as an optional string; nullify empties so
+    // downstream code (e.g. PDF render) can `.filter(Boolean)` cleanly.
+    billingAddressLine1: billAddr?.Line1 ?? null,
+    billingAddressLine2: billAddr?.Line2 ?? null,
+    billingAddressCity: billAddr?.City ?? null,
+    billingAddressRegion: billAddr?.CountrySubDivisionCode ?? null,
+    billingAddressPostal: billAddr?.PostalCode ?? null,
+    billingAddressCountry: billAddr?.Country ?? null,
     lastSyncedAt: new Date(),
   };
 
@@ -141,6 +151,12 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       billingEmails: desired.billingEmails,
       paymentTerms: desired.paymentTerms,
       balance: desired.balance,
+      billingAddressLine1: desired.billingAddressLine1,
+      billingAddressLine2: desired.billingAddressLine2,
+      billingAddressCity: desired.billingAddressCity,
+      billingAddressRegion: desired.billingAddressRegion,
+      billingAddressPostal: desired.billingAddressPostal,
+      billingAddressCountry: desired.billingAddressCountry,
       lastSyncedAt: desired.lastSyncedAt,
     };
     await db.insert(customers).values(inserted);
@@ -161,7 +177,13 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     before.primaryEmail !== desired.primaryEmail ||
     before.paymentTerms !== desired.paymentTerms ||
     before.balance !== desired.balance ||
-    !arraysEqual(before.billingEmails ?? null, desired.billingEmails);
+    !arraysEqual(before.billingEmails ?? null, desired.billingEmails) ||
+    before.billingAddressLine1 !== desired.billingAddressLine1 ||
+    before.billingAddressLine2 !== desired.billingAddressLine2 ||
+    before.billingAddressCity !== desired.billingAddressCity ||
+    before.billingAddressRegion !== desired.billingAddressRegion ||
+    before.billingAddressPostal !== desired.billingAddressPostal ||
+    before.billingAddressCountry !== desired.billingAddressCountry;
 
   if (!drift) {
     // Bump lastSyncedAt only — a no-audit touch.
@@ -180,6 +202,12 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       billingEmails: desired.billingEmails,
       paymentTerms: desired.paymentTerms,
       balance: desired.balance,
+      billingAddressLine1: desired.billingAddressLine1,
+      billingAddressLine2: desired.billingAddressLine2,
+      billingAddressCity: desired.billingAddressCity,
+      billingAddressRegion: desired.billingAddressRegion,
+      billingAddressPostal: desired.billingAddressPostal,
+      billingAddressCountry: desired.billingAddressCountry,
       lastSyncedAt: desired.lastSyncedAt,
     })
     .where(eq(customers.id, before.id));
@@ -646,5 +674,11 @@ function serializableCustomer(c: Customer): Record<string, unknown> {
     paymentTerms: c.paymentTerms,
     balance: c.balance,
     holdStatus: c.holdStatus,
+    billingAddressLine1: c.billingAddressLine1,
+    billingAddressLine2: c.billingAddressLine2,
+    billingAddressCity: c.billingAddressCity,
+    billingAddressRegion: c.billingAddressRegion,
+    billingAddressPostal: c.billingAddressPostal,
+    billingAddressCountry: c.billingAddressCountry,
   };
 }
