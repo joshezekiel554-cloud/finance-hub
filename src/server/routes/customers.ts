@@ -25,7 +25,11 @@ import {
 } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
-import { activities, emailLog } from "../../db/schema/crm.js";
+import {
+  activities,
+  emailLog,
+  statementSends,
+} from "../../db/schema/crm.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { nanoid } from "nanoid";
@@ -41,14 +45,23 @@ import { QboClient } from "../../integrations/qb/client.js";
 
 const log = createLogger({ component: "routes.customers" });
 
+// Boolean-ish coerce — accepts true/false (boolean) or "true"/"false"
+// (query string). Returns false for everything else, so missing/blank
+// chips are no-ops rather than 400-erroring the request.
+const boolish = z
+  .union([z.boolean(), z.literal("true"), z.literal("false")])
+  .optional()
+  .transform((v) => v === true || v === "true");
+
 const listQuerySchema = z.object({
   q: z.string().max(100).optional(),
   customerType: z.enum(["b2b", "b2c", "uncategorized", "all"]).default("b2b"),
   holdStatus: z.enum(["active", "hold", "all"]).default("all"),
-  withBalance: z
-    .union([z.boolean(), z.literal("true"), z.literal("false")])
-    .optional()
-    .transform((v) => v === true || v === "true"),
+  withBalance: boolish,
+  // New filter chips (all default false → no filtering applied):
+  hideZeroBalance: boolish,
+  hasOverdue: boolish,
+  missingTerms: boolish,
   sort: z
     .enum(["displayName", "balance", "overdueBalance", "lastSyncedAt"])
     .default("displayName"),
@@ -89,8 +102,19 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     if (!parse.success) {
       return reply.code(400).send({ error: "invalid query", details: parse.error.flatten() });
     }
-    const { q, customerType, holdStatus, withBalance, sort, dir, limit, offset } =
-      parse.data;
+    const {
+      q,
+      customerType,
+      holdStatus,
+      withBalance,
+      hideZeroBalance,
+      hasOverdue,
+      missingTerms,
+      sort,
+      dir,
+      limit,
+      offset,
+    } = parse.data;
 
     const filters = [];
     if (q && q.trim()) {
@@ -107,8 +131,16 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     if (holdStatus !== "all") {
       filters.push(eq(customers.holdStatus, holdStatus));
     }
-    if (withBalance) {
+    if (withBalance || hideZeroBalance) {
+      // hideZeroBalance is the new chip; withBalance is the legacy param
+      // kept for backward-compat. Either trips the same WHERE.
       filters.push(gt(customers.balance, "0"));
+    }
+    if (hasOverdue) {
+      filters.push(gt(customers.overdueBalance, "0"));
+    }
+    if (missingTerms) {
+      filters.push(isNull(customers.paymentTerms));
     }
     const where = filters.length > 0 ? and(...filters) : undefined;
 
@@ -119,6 +151,29 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       lastSyncedAt: customers.lastSyncedAt,
     }[sort];
     const orderFn = dir === "asc" ? asc : desc;
+
+    // Correlated subqueries — same shape as the chase route.
+    // customers.id is hand-qualified inside the sql template because
+    // Drizzle's column serializer drops the table prefix in this
+    // context, which silently makes the WHERE always-false.
+    const daysOverdueExpr = sql<number | null>`(
+      SELECT DATEDIFF(CURRENT_DATE, MIN(${invoices.dueDate}))
+      FROM ${invoices}
+      WHERE ${invoices.customerId} = \`customers\`.\`id\`
+        AND ${invoices.balance} > 0
+        AND ${invoices.dueDate} IS NOT NULL
+    )`;
+    const lastPaymentExpr = sql<Date | string | null>`(
+      SELECT MAX(${activities.occurredAt})
+      FROM ${activities}
+      WHERE ${activities.customerId} = \`customers\`.\`id\`
+        AND ${activities.kind} = 'qbo_payment'
+    )`;
+    const lastStatementSentExpr = sql<Date | string | null>`(
+      SELECT MAX(${statementSends.sentAt})
+      FROM ${statementSends}
+      WHERE ${statementSends.customerId} = \`customers\`.\`id\`
+    )`;
 
     const rowsPromise = db
       .select({
@@ -131,6 +186,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerType: customers.customerType,
         paymentTerms: customers.paymentTerms,
         lastSyncedAt: customers.lastSyncedAt,
+        daysOverdue: daysOverdueExpr,
+        lastPaymentAt: lastPaymentExpr,
+        lastStatementSentAt: lastStatementSentExpr,
       })
       .from(customers)
       .where(where)
@@ -149,7 +207,20 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       .from(customers);
 
     const [rowsRaw, totalsRaw] = await Promise.all([rowsPromise, totalsPromise]);
-    const rows = rowsRaw.slice(0, limit);
+    const rows = rowsRaw.slice(0, limit).map((r) => ({
+      ...r,
+      // mysql2 returns TIMESTAMP from a correlated subquery as a
+      // "YYYY-MM-DD HH:MM:SS" string rather than a Date. Normalise to
+      // ISO so the frontend reads them like every other timestamp.
+      // DATEDIFF comes back as a string|number depending on driver
+      // mode — coerce to number|null.
+      daysOverdue:
+        r.daysOverdue === null || r.daysOverdue === undefined
+          ? null
+          : Number(r.daysOverdue),
+      lastPaymentAt: normalizeDateValue(r.lastPaymentAt),
+      lastStatementSentAt: normalizeDateValue(r.lastStatementSentAt),
+    }));
     const hasMore = rowsRaw.length > limit;
     const totals = totalsRaw[0] ?? { b2b: 0, b2c: 0, uncategorized: 0, all: 0 };
 
@@ -608,6 +679,22 @@ function isoDateString(d: Date | string | null | undefined): string | null {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// Subquery TIMESTAMPs come back as strings from mysql2; column-typed
+// TIMESTAMPs come back as Date. Normalise both to ISO so the wire
+// format is consistent.
+function normalizeDateValue(
+  v: Date | string | null | undefined,
+): string | null {
+  if (!v) return null;
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? null : v.toISOString();
+  }
+  // "YYYY-MM-DD HH:MM:SS" → ISO. Treated as UTC to match how mysql2
+  // hydrates Date columns elsewhere.
+  const d = new Date(v.replace(" ", "T") + "Z");
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 // Best-effort batch lookup of QBO Pay-now InvoiceLink for a list of

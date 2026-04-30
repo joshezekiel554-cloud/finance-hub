@@ -6,6 +6,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Search, AlertCircle, Pause } from "lucide-react";
+import { useEffect } from "react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -24,6 +25,9 @@ type CustomerRow = {
   customerType: CustomerType;
   paymentTerms: string | null;
   lastSyncedAt: string | null;
+  daysOverdue: number | null;
+  lastPaymentAt: string | null;
+  lastStatementSentAt: string | null;
 };
 
 type ListResponse = {
@@ -51,6 +55,16 @@ export default function CustomersPage() {
   const [sort, setSort] = useState<SortKey>("balance");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
   const [sweepMode, setSweepMode] = useState(false);
+  // Filter chips. hideZero defaults ON for B2B (most chase-relevant view)
+  // and OFF for everything else (Uncategorized has many $0 rows that ARE
+  // the workflow). The effect below flips it on tab switches.
+  const [hideZero, setHideZero] = useState(true);
+  const [hasOverdueFilter, setHasOverdueFilter] = useState(false);
+  const [onHoldFilter, setOnHoldFilter] = useState(false);
+  const [missingTermsFilter, setMissingTermsFilter] = useState(false);
+  useEffect(() => {
+    setHideZero(tab === "b2b");
+  }, [tab]);
   // Selected gmailIds in sweep mode. When the user toggles "Select all
   // (balance > 0)" we pre-fill with the matching ids; individual checkbox
   // clicks add/remove from this set.
@@ -58,7 +72,19 @@ export default function CustomersPage() {
 
   const queryClient = useQueryClient();
 
-  const queryKey = ["customers", { tab, search, sort, dir }] as const;
+  const queryKey = [
+    "customers",
+    {
+      tab,
+      search,
+      sort,
+      dir,
+      hideZero,
+      hasOverdueFilter,
+      onHoldFilter,
+      missingTermsFilter,
+    },
+  ] as const;
   const { data, isPending, isError, error } = useQuery<ListResponse>({
     queryKey,
     queryFn: async () => {
@@ -72,6 +98,10 @@ export default function CustomersPage() {
         limit: "5000",
       });
       if (search.trim()) params.set("q", search.trim());
+      if (hideZero) params.set("hideZeroBalance", "true");
+      if (hasOverdueFilter) params.set("hasOverdue", "true");
+      if (onHoldFilter) params.set("holdStatus", "hold");
+      if (missingTermsFilter) params.set("missingTerms", "true");
       const res = await fetch(`/api/customers?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -336,6 +366,44 @@ export default function CustomersPage() {
         )}
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-muted">Filters:</span>
+        <FilterChip
+          label="Hide $0"
+          active={hideZero}
+          onClick={() => setHideZero((v) => !v)}
+        />
+        <FilterChip
+          label="Has overdue"
+          active={hasOverdueFilter}
+          onClick={() => setHasOverdueFilter((v) => !v)}
+        />
+        <FilterChip
+          label="On hold"
+          active={onHoldFilter}
+          onClick={() => setOnHoldFilter((v) => !v)}
+        />
+        <FilterChip
+          label="No terms set"
+          active={missingTermsFilter}
+          onClick={() => setMissingTermsFilter((v) => !v)}
+        />
+        {(hideZero || hasOverdueFilter || onHoldFilter || missingTermsFilter) ? (
+          <button
+            type="button"
+            onClick={() => {
+              setHideZero(false);
+              setHasOverdueFilter(false);
+              setOnHoldFilter(false);
+              setMissingTermsFilter(false);
+            }}
+            className="ml-1 text-muted hover:text-primary"
+          >
+            Clear filters
+          </button>
+        ) : null}
+      </div>
+
       {sweepMode && (
         <Card>
           <CardBody className="flex flex-wrap items-center gap-3 py-3 text-sm">
@@ -437,8 +505,10 @@ export default function CustomersPage() {
                   }
                   align="right"
                 />
+                <th className="px-3 py-2 text-right">Days</th>
+                <th className="px-3 py-2">Last payment</th>
+                <th className="px-3 py-2">Last statement</th>
                 <th className="px-3 py-2">Terms</th>
-                <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">Status</th>
               </tr>
             </thead>
@@ -478,8 +548,11 @@ export default function CustomersPage() {
                         {row.displayName}
                       </Link>
                     </td>
-                    <td className="px-3 py-2 text-secondary">
-                      {row.primaryEmail ?? "—"}
+                    <td
+                      className="px-3 py-2 text-secondary"
+                      title={row.primaryEmail ?? undefined}
+                    >
+                      {emailLocalPart(row.primaryEmail)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {balance > 0 ? (
@@ -497,11 +570,23 @@ export default function CustomersPage() {
                         <span className="text-muted">—</span>
                       )}
                     </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {row.daysOverdue !== null && row.daysOverdue > 0 ? (
+                        <span className="text-accent-warning">
+                          {row.daysOverdue}d
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
+                      {relativeShortDate(row.lastPaymentAt)}
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
+                      {relativeShortDate(row.lastStatementSentAt)}
+                    </td>
                     <td className="px-3 py-2 text-secondary">
                       {row.paymentTerms ?? "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <CustomerTypeBadge type={row.customerType} />
                     </td>
                     <td className="px-3 py-2">
                       {onHold ? (
@@ -520,7 +605,7 @@ export default function CustomersPage() {
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={sweepMode ? 8 : 7}
+                    colSpan={sweepMode ? 10 : 9}
                   >
                     No customers match.
                   </td>
@@ -538,6 +623,63 @@ function CustomerTypeBadge({ type }: { type: CustomerType }) {
   if (type === "b2b") return <Badge tone="info">B2B</Badge>;
   if (type === "b2c") return <Badge tone="neutral">B2C</Badge>;
   return <Badge tone="medium">Untagged</Badge>;
+}
+
+function FilterChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-2.5 py-1 transition-colors",
+        active
+          ? "border-accent-primary/40 bg-accent-primary/10 text-accent-primary"
+          : "border-default text-secondary hover:bg-elevated hover:text-primary",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+// First chunk before "@" (or full address if there's no @). Used so the
+// table stays scannable; full email available on hover via title.
+function emailLocalPart(email: string | null): string {
+  if (!email) return "—";
+  const at = email.indexOf("@");
+  return at < 0 ? email : email.slice(0, at);
+}
+
+// "3d ago" / "2w ago" / "1 May" — short by design. Anything within 24h
+// shows hours; up to 14 days shows days; up to ~6 weeks shows weeks;
+// beyond that, "DD Mon" with year added when older than this year.
+function relativeShortDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const diffMs = Date.now() - d.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes < 1 ? "now" : `${minutes}m`}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks <= 6) return `${weeks}w ago`;
+  const sameYear = d.getUTCFullYear() === new Date().getUTCFullYear();
+  return d.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: sameYear ? undefined : "numeric",
+  });
 }
 
 function SortableTh({
