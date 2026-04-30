@@ -17,6 +17,7 @@ import emailSendRoute from "./email-send.js";
 import chaseRoute from "./chase.js";
 import appSettingsRoute from "./app-settings.js";
 import statementPdfPreviewRoute from "./statement-pdf-preview.js";
+import statementSendsRoute from "./statement-sends.js";
 import logoUploadRoute from "./logo-upload.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -51,6 +52,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(chaseRoute, { prefix: "/api/chase" });
   await app.register(appSettingsRoute, { prefix: "/api/app-settings" });
   await app.register(statementPdfPreviewRoute, { prefix: "/api/customers" });
+  await app.register(statementSendsRoute, { prefix: "/api/statement-sends" });
   await app.register(logoUploadRoute, { prefix: "/api" });
 
   // Per-module API routes mount here as their owning agents land:
