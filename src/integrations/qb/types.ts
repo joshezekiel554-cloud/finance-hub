@@ -91,6 +91,36 @@ export type QboInvoice = {
   };
 };
 
+// SalesReceipt — Shopify-pipeline orders that are paid upfront land
+// in QBO as SalesReceipts (not Invoices) since there's no AR balance
+// to track. Same per-document email fields, same Line array, same
+// /send endpoint. Distinguishing field on the wire is the entity
+// name in the query response (Invoice vs SalesReceipt).
+export type QboSalesReceipt = {
+  Id: string;
+  DocNumber?: string;
+  TxnDate?: string;
+  TotalAmt?: number;
+  // SalesReceipts have no AR balance — paid at creation. Field is
+  // documented but typically 0; we keep the slot for shape parity
+  // with Invoice in the UI layer.
+  Balance?: number;
+  CustomerRef: QboReference;
+  CurrencyRef?: QboReference;
+  Line?: QboInvoiceLine[];
+  EmailStatus?: string;
+  PrintStatus?: string;
+  SyncToken?: string;
+  PrivateNote?: string;
+  CustomerMemo?: { value?: string };
+  BillEmail?: QboEmailAddr;
+  BillEmailCc?: QboEmailAddr;
+  BillEmailBcc?: QboEmailAddr;
+  MetaData?: {
+    CreateTime?: string;
+    LastUpdatedTime?: string;
+  };
+};
 
 export type QboPayment = {
   Id: string;
@@ -137,6 +167,7 @@ export type QboQueryResponse<T> = {
   QueryResponse: {
     Customer?: T[];
     Invoice?: T[];
+    SalesReceipt?: T[];
     Payment?: T[];
     CreditMemo?: T[];
     Term?: T[];

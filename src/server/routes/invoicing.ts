@@ -25,7 +25,10 @@ import {
   type ShipmentForReconcile,
   type ShopifyOrderLineForReconcile,
 } from "../../modules/b2b-invoicing/index.js";
-import type { QboInvoice } from "../../integrations/qb/types.js";
+import type {
+  QboInvoice,
+  QboSalesReceipt,
+} from "../../integrations/qb/types.js";
 import { db } from "../../db/index.js";
 import {
   dismissedShipments,
@@ -67,6 +70,12 @@ export type InvoicingTodayRow = {
     lineItems: Array<{ sku: string; quantity: string }>;
   };
   qbInvoice: {
+    // Keeps the field name "qbInvoice" for back-compat; the docType
+    // discriminator tells the UI whether the matched QBO record is
+    // an Invoice (editable, the default) or a SalesReceipt (paid
+    // upfront via Shopify; advisory-only — no doc mutation, just
+    // shortage warnings to drive an external refund).
+    docType: "invoice" | "salesreceipt";
     id: string;
     docNumber: string;
     syncToken: string;
@@ -121,6 +130,12 @@ export type InvoicingTodayRow = {
 
 const sendBodySchema = z.object({
   invoiceId: z.string().min(1),
+  // Whether the matched QBO doc is an Invoice (default — full
+  // reconcile + send) or a SalesReceipt (advisory-only — server
+  // ignores `actions`, only PATCHes BillEmail/Cc/Bcc and calls
+  // /salesreceipt/{id}/send). Defaults to "invoice" so unupgraded
+  // clients keep working.
+  docType: z.enum(["invoice", "salesreceipt"]).default("invoice"),
   // Pass actions through verbatim so the UI can edit qty / unitPrice before
   // confirming. Server doesn't trust the client's reconciler output blindly:
   // we re-fetch the invoice and verify SyncToken matches before sending.
@@ -229,25 +244,41 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       .map((p) => p.parseResult.shipment.shopifyOrderNumber)
       .filter((d): d is string => Boolean(d));
     let qbInvoiceMap = new Map<string, QboInvoice>();
+    let qbSalesReceiptMap = new Map<string, QboSalesReceipt>();
     let qbBatchError: string | null = null;
     try {
-      qbInvoiceMap = await qbClient.getInvoicesByDocNumbers(docNumbers);
+      // Run both lookups in parallel — the two entity types share QBO's
+      // rate limit, but each lookup is one query per CHUNK so paral-
+      // lelizing two requests is fine for the leaky bucket.
+      const [invoices, salesReceipts] = await Promise.all([
+        qbClient.getInvoicesByDocNumbers(docNumbers),
+        qbClient.getSalesReceiptsByDocNumbers(docNumbers),
+      ]);
+      qbInvoiceMap = invoices;
+      qbSalesReceiptMap = salesReceipts;
     } catch (err) {
       qbBatchError = (err as Error).message;
-      log.error({ err }, "batched qbo invoice lookup failed");
+      log.error({ err }, "batched qbo invoice/salesreceipt lookup failed");
     }
 
     // Phase 2.5: batch-load finance-hub customer records for the
-    // invoices we just fetched, plus all email routing rules in one
-    // shot. The buildRow helper needs both to resolve TO/CC/BCC for
-    // each invoice's pre-fill (per-channel arrays + tag-driven adds).
-    // Doing this once at the top means buildRow stays synchronous on
-    // the recipient-resolution path — no per-row DB query.
+    // docs we just fetched, plus all email routing rules in one shot.
+    // The buildRow helper needs both to resolve TO/CC/BCC for each
+    // doc's pre-fill (per-channel arrays + tag-driven adds), AND it
+    // needs the customerType to decide whether to surface a matching
+    // SalesReceipt (B2B-only). Doing this once at the top means
+    // buildRow stays synchronous on the recipient-resolution path —
+    // no per-row DB query.
     const qbCustomerIds = Array.from(
       new Set(
-        Array.from(qbInvoiceMap.values())
-          .map((inv) => inv.CustomerRef?.value)
-          .filter((v): v is string => Boolean(v)),
+        [
+          ...Array.from(qbInvoiceMap.values()).map(
+            (inv) => inv.CustomerRef?.value,
+          ),
+          ...Array.from(qbSalesReceiptMap.values()).map(
+            (sr) => sr.CustomerRef?.value,
+          ),
+        ].filter((v): v is string => Boolean(v)),
       ),
     );
     const customerByQbId = new Map<string, Customer>();
@@ -281,6 +312,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           p.receivedAt,
           p.parseResult,
           qbInvoiceMap,
+          qbSalesReceiptMap,
           qbBatchError,
           shopifyClient,
           customerByQbId,
@@ -394,6 +426,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     }
     const {
       invoiceId,
+      docType,
       expectedSyncToken,
       actions,
       discountPercent,
@@ -407,6 +440,106 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     } = parse.data;
 
     const qbClient = new QboClient();
+
+    // SalesReceipt branch — paid upfront on Shopify, line items are
+    // settled, no doc mutation. Just PATCH the email recipients onto
+    // the receipt and POST /salesreceipt/{id}/send. Shortage actions
+    // (if any) are advisory and surface in the UI as "refund needed"
+    // hints; they don't change the QBO record. The operator handles
+    // the refund externally via Shopify.
+    if (docType === "salesreceipt") {
+      let receipt;
+      try {
+        receipt = await qbClient.getSalesReceiptById(invoiceId);
+      } catch (err) {
+        log.error(
+          { err, invoiceId },
+          "qbo salesreceipt refetch before send failed",
+        );
+        return reply.code(502).send({ error: "qbo refetch failed" });
+      }
+      if (!receipt)
+        return reply.code(404).send({ error: "sales receipt not found" });
+      if (receipt.SyncToken !== expectedSyncToken) {
+        return reply.code(409).send({
+          error:
+            "sync token mismatch — sales receipt changed since preview",
+          currentSyncToken: receipt.SyncToken,
+        });
+      }
+
+      if (env.SHADOW_MODE) {
+        log.info(
+          {
+            salesReceiptId: receipt.Id,
+            docNumber: receipt.DocNumber,
+            billEmailTo,
+            billEmailCc,
+            billEmailBcc,
+          },
+          "shadow mode: sales receipt PATCH + send prepared, NOT sent",
+        );
+        return reply.send({
+          outcome: {
+            status: "shadow",
+            payload: {
+              Id: receipt.Id,
+              SyncToken: receipt.SyncToken,
+              sparse: true,
+              BillEmail: billEmailTo ? { Address: billEmailTo } : undefined,
+              BillEmailCc: billEmailCc ? { Address: billEmailCc } : undefined,
+              BillEmailBcc: billEmailBcc
+                ? { Address: billEmailBcc }
+                : undefined,
+            },
+          },
+          shadowMode: true,
+        });
+      }
+
+      try {
+        // Sparse update: header email fields only. Line array NOT
+        // touched — the receipt is a settled record.
+        const patchPayload: Record<string, unknown> = {
+          Id: receipt.Id,
+          SyncToken: receipt.SyncToken,
+          sparse: true,
+        };
+        if (billEmailTo && billEmailTo.trim()) {
+          patchPayload.BillEmail = { Address: billEmailTo.trim() };
+        }
+        if (billEmailCc && billEmailCc.trim()) {
+          patchPayload.BillEmailCc = { Address: billEmailCc.trim() };
+        }
+        if (billEmailBcc && billEmailBcc.trim()) {
+          patchPayload.BillEmailBcc = { Address: billEmailBcc.trim() };
+        }
+        const updated = await qbClient.updateSalesReceipt(patchPayload);
+        const sent = await qbClient.sendSalesReceiptEmail(updated.Id);
+        log.info(
+          {
+            salesReceiptId: sent.Id,
+            docNumber: sent.DocNumber,
+          },
+          "sales receipt emailed",
+        );
+        return reply.send({
+          outcome: {
+            status: "sent",
+            email: {
+              sentTo: sent.BillEmail?.Address ?? null,
+              sentAt: new Date().toISOString(),
+            },
+          },
+          shadowMode: false,
+        });
+      } catch (err) {
+        log.error({ err, invoiceId }, "salesreceipt send failed");
+        return reply.code(500).send({ error: (err as Error).message });
+      }
+    }
+
+    // Default Invoice branch — the existing reconcile + send flow.
     let invoice: QboInvoice | null = null;
     try {
       invoice = await qbClient.getInvoiceById(invoiceId);
@@ -483,6 +616,7 @@ async function buildRow(
   receivedAt: Date | null,
   parseResult: ReturnType<typeof parseShipmentHtml>,
   qbInvoiceMap: Map<string, QboInvoice>,
+  qbSalesReceiptMap: Map<string, QboSalesReceipt>,
   qbBatchError: string | null,
   shopify: ShopifyClient,
   customerByQbId: Map<string, Customer>,
@@ -494,12 +628,24 @@ async function buildRow(
 ): Promise<InvoicingTodayRow> {
   const docNumber = parseResult.shipment.shopifyOrderNumber;
 
-  // Resolve QB invoice from the batched lookup map; Shopify still goes
-  // per-row but parallel-safe since QBO isn't competing.
-  const [qbInvoice, qbInvoiceError, shopifyOrder, shopifyOrderError] =
-    await resolveLookups(docNumber, qbInvoiceMap, qbBatchError, shopify);
+  // Resolve the matched QBO doc — Invoice first (the common case),
+  // SalesReceipt only if the matched customer is B2B (B2C upfront-
+  // paid orders are intentionally hidden — operator doesn't need to
+  // reconcile + send those). The resolved record is a discriminated
+  // union so downstream code can branch by docType.
+  const [resolved, qbInvoiceError, shopifyOrder, shopifyOrderError] =
+    await resolveLookups(
+      docNumber,
+      qbInvoiceMap,
+      qbSalesReceiptMap,
+      customerByQbId,
+      qbBatchError,
+      shopify,
+    );
+  const qbInvoice = resolved?.doc ?? null;
+  const docType = resolved?.docType ?? null;
 
-  // Run reconciler only when we have a QB invoice + complete shipment metadata.
+  // Run reconciler only when we have a QB doc + complete shipment metadata.
   let reconcileResult: InvoicingTodayRow["reconcileResult"] = null;
   if (
     qbInvoice &&
@@ -545,8 +691,9 @@ async function buildRow(
       shipDate: parseResult.shipment.shipDate,
       lineItems: parseResult.shipment.lineItems,
     },
-    qbInvoice: qbInvoice
+    qbInvoice: qbInvoice && docType
       ? {
+          docType,
           id: qbInvoice.Id,
           docNumber: qbInvoice.DocNumber ?? "",
           syncToken: qbInvoice.SyncToken ?? "0",
@@ -635,7 +782,7 @@ async function buildRow(
 // from finance-hub's local mirror — defensive against orphaned rows
 // while a fresh sync catches up.
 function buildResolvedRecipients(
-  qbInvoice: QboInvoice,
+  qbInvoice: QboInvoice | QboSalesReceipt,
   customerByQbId: Map<string, Customer>,
   routingRules: Array<{
     tag: string;
@@ -687,20 +834,58 @@ function buildResolvedRecipients(
   };
 }
 
+// Discriminated union — buildRow uses docType to branch behaviour
+// (advisory-only on receipts, no SalesTermRef on receipts, etc.).
+// QboSalesReceipt.Line has the same QboInvoiceLine shape as Invoice
+// so the reconciler input mapping works uniformly across both.
+type ResolvedQbDoc =
+  | { docType: "invoice"; doc: QboInvoice }
+  | { docType: "salesreceipt"; doc: QboSalesReceipt };
+
 async function resolveLookups(
   docNumber: string | null,
   qbInvoiceMap: Map<string, QboInvoice>,
+  qbSalesReceiptMap: Map<string, QboSalesReceipt>,
+  customerByQbId: Map<string, Customer>,
   qbBatchError: string | null,
   shopify: ShopifyClient,
-): Promise<[QboInvoice | null, string | null, Awaited<ReturnType<typeof getOrderByName>>, string | null]> {
+): Promise<
+  [
+    ResolvedQbDoc | null,
+    string | null,
+    Awaited<ReturnType<typeof getOrderByName>>,
+    string | null,
+  ]
+> {
   if (!docNumber) {
     return [null, "no shopify order number parsed", null, "no shopify order number parsed"];
   }
   const qbInvoice = qbInvoiceMap.get(docNumber) ?? null;
-  const qbErr =
-    qbInvoice === null
-      ? qbBatchError ?? `no QB invoice with DocNumber=${docNumber}`
-      : null;
+  const qbSalesReceipt = qbSalesReceiptMap.get(docNumber) ?? null;
+
+  let resolved: ResolvedQbDoc | null = null;
+  let qbErr: string | null = null;
+
+  if (qbInvoice) {
+    resolved = { docType: "invoice", doc: qbInvoice };
+  } else if (qbSalesReceipt) {
+    // Gate SalesReceipt surfacing on customerType=b2b. The 99% B2C
+    // case (paid upfront on the consumer Shopify storefront) silently
+    // drops out — those don't need an emailed doc; Shopify already
+    // sent the order confirmation. The 1% B2B-prepay case stays on
+    // the form so the operator can reconcile + send.
+    const cust = customerByQbId.get(
+      qbSalesReceipt.CustomerRef?.value ?? "",
+    );
+    if (cust?.customerType === "b2b") {
+      resolved = { docType: "salesreceipt", doc: qbSalesReceipt };
+    } else {
+      qbErr = `paid upfront sales receipt — customer is ${cust?.customerType ?? "unknown"}, hidden by default`;
+    }
+  } else {
+    qbErr =
+      qbBatchError ?? `no QB invoice/receipt with DocNumber=${docNumber}`;
+  }
 
   // Shopify per-row — fast and rarely the bottleneck.
   let shopifyOrder: Awaited<ReturnType<typeof getOrderByName>> = null;
@@ -714,14 +899,15 @@ async function resolveLookups(
     shopErr = (err as Error).message;
   }
 
-  return [qbInvoice, qbErr, shopifyOrder, shopErr];
+  return [resolved, qbErr, shopifyOrder, shopErr];
 }
 
-// Map a QboInvoice's SalesItemLineDetail rows into the reconciler's narrow
-// input shape. SKU lives in Description per the 3rd-party Shopify→QB sync
-// convention. Skip subtotal lines.
+// Map a QboInvoice or QboSalesReceipt's SalesItemLineDetail rows into the
+// reconciler's narrow input shape. Both entities share the QboInvoiceLine
+// shape, so this works uniformly. SKU lives in Description per the 3rd-
+// party Shopify→QB sync convention. Skip subtotal lines.
 export function invoiceLinesForReconcile(
-  invoice: QboInvoice,
+  invoice: QboInvoice | QboSalesReceipt,
 ): InvoiceLineForReconcile[] {
   const out: InvoiceLineForReconcile[] = [];
   for (const line of invoice.Line ?? []) {

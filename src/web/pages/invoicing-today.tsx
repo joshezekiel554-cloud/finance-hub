@@ -69,6 +69,7 @@ type Row = {
     lineItems: Array<{ sku: string; quantity: string }>;
   };
   qbInvoice: {
+    docType: "invoice" | "salesreceipt";
     id: string;
     docNumber: string;
     syncToken: string;
@@ -601,6 +602,7 @@ function ShipmentCard({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           invoiceId: row.qbInvoice.id,
+          docType: row.qbInvoice.docType,
           expectedSyncToken: row.qbInvoice.syncToken,
           actions: editedActions,
           discountPercent: discountPercent > 0 ? discountPercent : undefined,
@@ -843,7 +845,17 @@ function ShipmentCard({
           </div>
           {row.qbInvoice ? (
             <div className="text-right">
-              <div className="text-xs text-secondary">QB invoice</div>
+              <div className="flex items-center justify-end gap-2 text-xs text-secondary">
+                {row.qbInvoice.docType === "salesreceipt" ? (
+                  <Badge tone="info">Sales Receipt</Badge>
+                ) : null}
+                <span>
+                  QB{" "}
+                  {row.qbInvoice.docType === "salesreceipt"
+                    ? "receipt"
+                    : "invoice"}
+                </span>
+              </div>
               <div className="text-sm font-medium">
                 {row.qbInvoice.docNumber} · ${row.qbInvoice.totalAmt.toFixed(2)}{" "}
                 {row.qbInvoice.currency}
@@ -861,6 +873,14 @@ function ShipmentCard({
                   <span className="font-mono">{row.qbInvoice.existingTrackingNum}</span>
                 </div>
               )}
+              {row.qbInvoice.docType === "salesreceipt" &&
+              row.reconcileResult &&
+              hasRefundShortage(row.reconcileResult.actions) ? (
+                <div className="mt-2 rounded-md border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-[11px] text-accent-danger">
+                  Refund needed — customer paid for items not shipped.
+                  Refund externally via Shopify.
+                </div>
+              ) : null}
             </div>
           ) : (
             <Badge tone="critical">No QB invoice</Badge>
@@ -1771,4 +1791,15 @@ function ActionBadge({ action }: { action: ReconcileAction | null }) {
     );
   }
   return null;
+}
+
+// True when the actions include any "shortage" — line removed or qty
+// reduced. Used on SalesReceipt rows to decide whether to surface
+// the "Refund needed" pill (customer paid for items they didn't get).
+function hasRefundShortage(actions: ReconcileAction[]): boolean {
+  return actions.some(
+    (a) =>
+      a.type === "remove" ||
+      (a.type === "qty_change" && a.toQty < a.fromQty),
+  );
 }

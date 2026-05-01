@@ -25,6 +25,7 @@ import type {
   QboItem,
   QboPayment,
   QboQueryResponse,
+  QboSalesReceipt,
   QboTerm,
 } from "./types.js";
 
@@ -511,6 +512,113 @@ export class QboClient {
         const fresh = await this.forceRefresh();
         const response = await doRequest(fresh);
         return response.data.Invoice;
+      }
+      throw err;
+    }
+  }
+
+  // -------- SalesReceipt API ---------------------------------------------
+  // Shopify-pipeline orders that are paid upfront create a SalesReceipt
+  // (not Invoice) in QBO. Same /send endpoint shape and same per-document
+  // BillEmail/Cc/Bcc fields as Invoice — the API surface is symmetric.
+
+  async getSalesReceiptsByDocNumbers(
+    docNumbers: string[],
+  ): Promise<Map<string, QboSalesReceipt>> {
+    const result = new Map<string, QboSalesReceipt>();
+    const unique = Array.from(
+      new Set(docNumbers.filter((d) => d && d.length > 0)),
+    );
+    if (unique.length === 0) return result;
+    const CHUNK = 200;
+    for (let i = 0; i < unique.length; i += CHUNK) {
+      const chunk = unique.slice(i, i + CHUNK);
+      const inClause = chunk
+        .map((d) => `'${escapeQboLiteral(d)}'`)
+        .join(",");
+      const data = await this.query<QboSalesReceipt>(
+        `SELECT * FROM SalesReceipt WHERE DocNumber IN (${inClause})`,
+      );
+      for (const sr of data.QueryResponse.SalesReceipt ?? []) {
+        if (sr.DocNumber) result.set(sr.DocNumber, sr);
+      }
+    }
+    return result;
+  }
+
+  async getSalesReceiptById(
+    salesReceiptId: string,
+  ): Promise<QboSalesReceipt | null> {
+    const data = await this.query<QboSalesReceipt>(
+      `SELECT * FROM SalesReceipt WHERE Id = '${escapeQboLiteral(salesReceiptId)}'`,
+    );
+    return data.QueryResponse.SalesReceipt?.[0] ?? null;
+  }
+
+  // Sparse update on a SalesReceipt — same shape as updateInvoice. We
+  // use this to set BillEmail/Cc/Bcc before /send so the recipient
+  // resolution from finance-hub flows through. The Line array on a
+  // SalesReceipt should NOT be mutated (customer already paid; the
+  // doc is a settled record), so callers only pass header fields.
+  async updateSalesReceipt(payload: object): Promise<QboSalesReceipt> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/salesreceipt`;
+    const accessToken = await this.getAccessToken();
+
+    const doRequest = async (token: string) => {
+      return this.http.post<{ SalesReceipt: QboSalesReceipt }>(url, payload, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.SalesReceipt;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.SalesReceipt;
+      }
+      throw err;
+    }
+  }
+
+  async sendSalesReceiptEmail(
+    salesReceiptId: string,
+    sendToEmail?: string,
+  ): Promise<QboSalesReceipt> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/salesreceipt/${encodeURIComponent(salesReceiptId)}/send`;
+    const accessToken = await this.getAccessToken();
+
+    const doRequest = async (token: string) => {
+      return this.http.post<{ SalesReceipt: QboSalesReceipt }>(url, "", {
+        params: {
+          minorversion: QBO_MINOR_VERSION,
+          ...(sendToEmail ? { sendTo: sendToEmail } : {}),
+        },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/octet-stream",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.SalesReceipt;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.SalesReceipt;
       }
       throw err;
     }
