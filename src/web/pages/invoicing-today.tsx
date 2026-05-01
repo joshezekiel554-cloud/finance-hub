@@ -25,6 +25,16 @@ type ReconcileAction =
         | "price_change";
     }
   | {
+      // Drop the line entirely — default for "SKU on invoice but not
+      // in shipment". Operator can switch this to qty_change → 0 on
+      // the form for split-shipment audit (see "keep at qty 0" toggle).
+      type: "remove";
+      lineId: string;
+      sku: string;
+      qty: number;
+      reason: "not_shipped";
+    }
+  | {
       type: "add";
       sku: string;
       qty: number;
@@ -92,12 +102,18 @@ type Row = {
     customerEmail: string | null;
     lineCount: number;
     note: string | null;
-    lineItems: Array<{ sku: string; retailPrice: number }>;
+    lineItems: Array<{ sku: string; paidPrice: number }>;
   } | null;
   shopifyOrderError: string | null;
   reconcileResult: {
     actions: ReconcileAction[];
-    summary: { keep: number; qty_change: number; add: number; addsNeedingPrice: string[] };
+    summary: {
+      keep: number;
+      qty_change: number;
+      add: number;
+      remove: number;
+      addsNeedingPrice: string[];
+    };
   } | null;
 };
 
@@ -649,12 +665,17 @@ function ShipmentCard({
     [editedActions],
   );
 
-  // Edit the final qty for an existing invoice line. Handles all three
-  // transitions automatically:
-  //   keep        → keep         (newQty matches the original)
-  //   keep        → qty_change   (newQty differs; reason = user_override)
-  //   qty_change  → qty_change   (just updates toQty)
-  //   qty_change  → keep         (newQty matches the original fromQty)
+  // Edit the final qty for an existing invoice line. Handles every
+  // transition between keep / qty_change / remove based on what the
+  // operator types:
+  //   keep        + same qty            → keep
+  //   keep        + new qty             → qty_change (user_override)
+  //   qty_change  + matches original    → keep
+  //   qty_change  + new qty             → qty_change (toQty updated)
+  //   remove      + matches original    → keep (operator overruled the remove)
+  //   remove      + 0                   → qty_change → 0 (preserve at 0,
+  //                                       e.g. split-shipment audit)
+  //   remove      + any other qty       → qty_change to that qty
   function updateLineQty(lineId: string, newQty: number) {
     setEditedActions((prev) =>
       prev.map((a) => {
@@ -679,6 +700,24 @@ function ShipmentCard({
             };
           }
           return { ...a, toQty: newQty };
+        }
+        if (a.type === "remove" && a.lineId === lineId) {
+          if (newQty === a.qty) {
+            return {
+              type: "keep",
+              lineId: a.lineId,
+              sku: a.sku,
+              qty: a.qty,
+            };
+          }
+          return {
+            type: "qty_change",
+            lineId: a.lineId,
+            sku: a.sku,
+            fromQty: a.qty,
+            toQty: newQty,
+            reason: "user_override",
+          };
         }
         return a;
       }),
@@ -1465,11 +1504,12 @@ function ReconcileTable({
 }) {
   if (!row.qbInvoice || !row.reconcileResult) return null;
 
-  // Build SKU → Shopify retail price map for the read-only "Shopify price"
-  // column. Falls back to undefined when the order isn't matched.
+  // Build SKU → Shopify per-unit paid price map for the read-only
+  // "Shopify price" column (= the price the customer actually pays
+  // on this order, after line-level discounts, pre-tax).
   const shopifyPriceBySku = new Map<string, number>();
   for (const li of row.shopifyOrder?.lineItems ?? []) {
-    shopifyPriceBySku.set(li.sku.toUpperCase(), li.retailPrice);
+    shopifyPriceBySku.set(li.sku.toUpperCase(), li.paidPrice);
   }
 
   type DisplayRow = {
@@ -1561,13 +1601,16 @@ function ReconcileTable({
             const isQtyChange = action?.type === "qty_change";
             const isAdd = action?.type === "add";
             const isKeep = action?.type === "keep";
+            const isRemove = action?.type === "remove";
             const finalQty = isQtyChange
               ? action.toQty
               : isAdd
                 ? action.qty
                 : isKeep
                   ? action.qty
-                  : (r.currentQty ?? 0);
+                  : isRemove
+                    ? 0
+                    : (r.currentQty ?? 0);
             // QB price for display: add → action.unitPrice; qty_change with
             // override → that override; otherwise the original line price.
             const finalQbPrice = isAdd
@@ -1595,7 +1638,7 @@ function ReconcileTable({
                       onChange={(e) => onAddQtyChange(action.sku, Number(e.target.value))}
                       className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm tabular-nums"
                     />
-                  ) : (isKeep || isQtyChange) && lineId ? (
+                  ) : (isKeep || isQtyChange || isRemove) && lineId ? (
                     <input
                       type="number"
                       min={0}
@@ -1719,6 +1762,13 @@ function ActionBadge({ action }: { action: ReconcileAction | null }) {
       return <Badge tone="high">add (needs price)</Badge>;
     }
     return <Badge tone="info">add @ ${action.unitPrice.toFixed(2)}</Badge>;
+  }
+  if (action.type === "remove") {
+    return (
+      <Badge tone="critical">
+        remove (was qty {action.qty})
+      </Badge>
+    );
   }
   return null;
 }

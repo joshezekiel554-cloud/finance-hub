@@ -71,6 +71,7 @@ describe("reconcile — keep when shipped qty matches invoice qty", () => {
       keep: 2,
       qty_change: 0,
       add: 0,
+      remove: 0,
       addsNeedingPrice: [],
     });
     const keeps = findOnly(result.actions, "keep");
@@ -113,7 +114,7 @@ describe("reconcile — qty_change reasons", () => {
     expect(changes[0]?.toQty).toBe(30);
   });
 
-  it("classifies not_shipped when invoice has SKU but shipment does not list it at all", () => {
+  it("emits a remove action when invoice has SKU but shipment doesn't list it", () => {
     const result = reconcile({
       shipment: makeShipment([{ sku: "HCTOG01", qty: 23 }]),
       invoiceLines: [
@@ -121,12 +122,11 @@ describe("reconcile — qty_change reasons", () => {
         makeLine("MISSING-SKU", 5),
       ],
     });
-    const changes = findOnly(result.actions, "qty_change");
-    expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({
+    const removes = findOnly(result.actions, "remove");
+    expect(removes).toHaveLength(1);
+    expect(removes[0]).toMatchObject({
       sku: "MISSING-SKU",
-      fromQty: 5,
-      toQty: 0,
+      qty: 5,
       reason: "not_shipped",
     });
   });
@@ -271,6 +271,7 @@ describe("reconcile — live-fixture alignment (HCTOG01 / SHOP18301)", () => {
       keep: 1,
       qty_change: 0,
       add: 0,
+      remove: 0,
       addsNeedingPrice: [],
     });
     expect(result.actions.map((a) => a.type)).toEqual(["set_metadata", "keep"]);

@@ -145,7 +145,7 @@ describe("buildPayload — Line transformations", () => {
     expect(payload.Line[0]?.Amount).toBe(40);
   });
 
-  it("zeros Amount when qty_change drops qty to 0 (not_shipped)", () => {
+  it("zeros Amount when qty_change drops qty to 0 (split-shipment-style preservation)", () => {
     const invoice = makeInvoice();
     const payload = buildPayload(invoice, [
       SET_METADATA,
@@ -160,6 +160,29 @@ describe("buildPayload — Line transformations", () => {
     ]);
     expect(payload.Line[0]?.SalesItemLineDetail?.Qty).toBe(0);
     expect(payload.Line[0]?.Amount).toBe(0);
+  });
+
+  it("drops the line entirely on a remove action (default for not_shipped)", () => {
+    const invoice = makeInvoice({
+      Line: [
+        makeLine({ Id: "1", Description: "SKU1" }),
+        makeLine({ Id: "2", Description: "SKU2" }),
+      ],
+    });
+    const payload = buildPayload(invoice, [
+      SET_METADATA,
+      { type: "keep", lineId: "1", sku: "SKU1", qty: 10 },
+      {
+        type: "remove",
+        lineId: "2",
+        sku: "SKU2",
+        qty: 7,
+        reason: "not_shipped",
+      },
+    ]);
+    // Only the kept line survives; the removed one is gone from the
+    // Line array on the sparse update payload.
+    expect(payload.Line.map((l) => l.Id)).toEqual(["1"]);
   });
 
   it("appends an add action as a new SalesItemLineDetail row", () => {

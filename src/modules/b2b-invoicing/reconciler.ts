@@ -75,15 +75,17 @@ export function reconcile(input: ReconcileInput): ReconcileResult {
     const shippedQty = shippedBySku.get(key);
 
     if (shippedQty === undefined) {
-      // Invoice has this SKU but Feldart didn't ship it at all. Per the
-      // user's rule (the Transaction Report is authoritative), zero out the
-      // invoice line. Audit-friendly — line stays at qty 0 on the invoice.
+      // Invoice has this SKU but Feldart didn't ship it. Default to
+      // removing the line entirely so the customer's printed doc
+      // doesn't carry a phantom row for an item they never received.
+      // The operator can switch to qty=0 on the form (preserves the
+      // line for split-shipment audit) — the qty_change-to-0 variant
+      // is still a valid action shape for that case.
       actions.push({
-        type: "qty_change",
+        type: "remove",
         lineId: line.lineId,
         sku: line.sku!,
-        fromQty: line.qty,
-        toQty: 0,
+        qty: line.qty,
         reason: "not_shipped",
       });
       continue;
@@ -182,14 +184,16 @@ function summarize(actions: ReconcileAction[]): ReconcileResult["summary"] {
   let keep = 0;
   let qty_change = 0;
   let add = 0;
+  let remove = 0;
   const addsNeedingPrice: string[] = [];
   for (const a of actions) {
     if (a.type === "keep") keep++;
     else if (a.type === "qty_change") qty_change++;
+    else if (a.type === "remove") remove++;
     else if (a.type === "add") {
       add++;
       if (a.priceSource === "fallback") addsNeedingPrice.push(a.sku);
     }
   }
-  return { keep, qty_change, add, addsNeedingPrice };
+  return { keep, qty_change, add, remove, addsNeedingPrice };
 }

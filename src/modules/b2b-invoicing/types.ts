@@ -144,6 +144,22 @@ export type ReconcileAction =
       itemName?: string;
     }
   | {
+      // Drop the line from the QBO invoice's Line array on send.
+      // Default for "SKU on invoice but warehouse didn't ship it" —
+      // cleaner than qty=0 since the customer's printed doc no
+      // longer carries a phantom $0 row for an item they never
+      // received. The qty_change-to-0 variant remains in the action
+      // vocabulary for split-shipment scenarios where the operator
+      // wants the line preserved for audit.
+      type: "remove";
+      lineId: string;
+      sku: string;
+      // The original qty that was on the invoice, retained for the
+      // UI's "was X" copy + audit log without re-reading the doc.
+      qty: number;
+      reason: "not_shipped";
+    }
+  | {
       type: "set_metadata";
       trackingNumber: string;
       shipVia: string;
@@ -157,6 +173,7 @@ export type ReconcileResult = {
     keep: number;
     qty_change: number;
     add: number;
+    remove: number;
     // SKUs the reconciler couldn't price (priceSource=fallback). Surface in
     // UI as "needs price" warnings.
     addsNeedingPrice: string[];

@@ -101,8 +101,11 @@ export type InvoicingTodayRow = {
     customerEmail: string | null;
     lineCount: number;
     note: string | null;
-    // SKU → retail price for the UI's "Shopify price" column.
-    lineItems: Array<{ sku: string; retailPrice: number }>;
+    // SKU → per-unit price the customer is paying on this Shopify
+    // order (after line-level discounts, pre-tax). NOT the retail
+    // list price. The reconciler still uses li.price separately for
+    // its B2B 50%-of-retail calc on auto-added lines.
+    lineItems: Array<{ sku: string; paidPrice: number }>;
   } | null;
   shopifyOrderError: string | null;
   reconcileResult: {
@@ -603,10 +606,21 @@ async function buildRow(
           note: shopifyOrder.note,
           lineItems: shopifyOrder.line_items
             .filter((li) => li.sku !== null)
-            .map((li) => ({
-              sku: li.sku as string,
-              retailPrice: Number(li.price),
-            })),
+            .map((li) => {
+              // Per-unit paid price = (list × qty − total discount) ÷ qty.
+              // total_discount is the Shopify-allocated discount for the
+              // whole line, so dividing by qty gives the per-unit number
+              // we want to show on the form.
+              const list = Number(li.price);
+              const qty = li.quantity;
+              const discount = Number(li.total_discount ?? "0");
+              const paid =
+                qty > 0 ? (list * qty - discount) / qty : list;
+              return {
+                sku: li.sku as string,
+                paidPrice: Math.round(paid * 100) / 100,
+              };
+            }),
         }
       : null,
     shopifyOrderError,

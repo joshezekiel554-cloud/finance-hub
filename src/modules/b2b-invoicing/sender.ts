@@ -133,7 +133,11 @@ export function buildPayload(
   // as-is (covers SubTotalLineDetail and any other DetailType we don't touch).
   const editsByLineId = new Map<string, ReconcileAction>();
   for (const action of actions) {
-    if (action.type === "keep" || action.type === "qty_change") {
+    if (
+      action.type === "keep" ||
+      action.type === "qty_change" ||
+      action.type === "remove"
+    ) {
       editsByLineId.set(action.lineId, action);
     }
   }
@@ -162,6 +166,12 @@ export function buildPayload(
     }
     if (action.type === "keep") {
       updatedLines.push(line);
+      continue;
+    }
+    if (action.type === "remove") {
+      // Drop the line — don't push to updatedLines. QBO interprets a
+      // sparse update with a Line array as a full replacement of the
+      // line set, so omitting this entry deletes it.
       continue;
     }
     if (action.type === "qty_change") {
@@ -334,6 +344,7 @@ export async function sendInvoiceUpdate(
         actions: actions.length,
         addCount: actions.filter((a) => a.type === "add").length,
         qtyChangeCount: actions.filter((a) => a.type === "qty_change").length,
+        removeCount: actions.filter((a) => a.type === "remove").length,
         trackingNum: payload.TrackingNum,
         shipDate: payload.ShipDate,
         shipVia: payload.ShipMethodRef?.value,
