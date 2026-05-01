@@ -13,6 +13,86 @@ If you're new to this file:
 
 ## Current phase
 
+**Customer ops + B2B invoicing recipient overhaul. 🟢 SHIPPED**
+(commits `a6a69c6` → `fac9231`, 2026-04-30 → 2026-05-01, ~25
+commits). The single biggest substantive change since week 7:
+finance-hub is now the canonical source of truth for every
+customer's email recipients, and every send path was rebuilt to
+honour it. 207/207 tests green throughout.
+
+- **Per-channel email model** (commits `3add00c` + `a074693`,
+  migration `0018`) — each customer now carries six JSON arrays:
+  `invoice_to/cc/bcc_emails`, `statement_to/cc/bcc_emails`. The
+  override paradigm is gone — these arrays *are* the values used at
+  send time. Tag-driven routing rules (`yiddy` → BCC `sales@`)
+  layered on top via `resolveRecipientsWithRules`. Migration
+  backfilled every existing customer from the legacy `primary_email`
+  / `billing_emails` columns. 12 new resolver tests pin the
+  contract.
+- **QBO Customer-entity limit, mapped + memoised** (commits `b728e56`
+  + `54349bc`, then `a074693` removed the diagnostic card) — verified
+  via Intuit docs that QBO's Customer entity has only
+  `PrimaryEmailAddr` (no per-customer CC/BCC). Stripped the no-op
+  `BillEmail/Cc/Bcc` push from the customer-update path. Saved as a
+  reference memory so we don't relearn.
+- **Send invoice from customer profile** (commit `544f165`) —
+  customer detail's Invoices tab is real now (was placeholder).
+  Per-row Send button → `<InvoiceSendDialog>` with editable TO/CC/BCC
+  chip lists pre-filled from the resolver, tag-derived auto-BCC
+  reasons surfaced read-only. Backend `sendInvoiceViaQbo` module:
+  PATCH `BillEmail/Cc/Bcc` → POST `/send` → update local
+  `invoices.sent_at`/`sent_via` → write `qbo_invoice_sent` activity.
+  Single function used everywhere now.
+- **`/invoicing/today` pre-fill switched to the resolver** (commit
+  `ae253f5`) — was reading `BillEmail/Cc/Bcc` straight off the QBO
+  invoice (almost always empty for B2B); now pulls per-channel arrays
+  + tag rules. Yiddy-tagged customers get `sales@feldart.com` in BCC
+  automatically. Operator review preserved.
+- **`remove` action on the reconciler** (commit `b7266df`) — for the
+  "warehouse didn't ship it" case, drops the line entirely instead
+  of zeroing qty (cleaner billing — no phantom $0 row). qty=0 still
+  selectable for split-shipment audit. Plus Shopify price column
+  switched from retail (`li.price`) to per-unit paid
+  (`pre_tax_price ÷ qty`).
+- **SalesReceipt support on `/invoicing/today`** (commits `39f2696`
+  + `4b936df`) — Shopify-prepay orders now match alongside Invoices,
+  surfaced only when `customerType=b2b` (B2C upfront stays hidden,
+  Shopify already sends those). Read-only line table (receipts
+  settled), shortage actions emit a "Refund needed" pill +
+  **Create refund task** button (high-priority `tasks` row with
+  full paid-vs-shipped breakdown linked to the customer).
+- **Reassign customer** (commit `9105001`) — tiny "change" pill in
+  every `/invoicing/today` row header. Inline search-and-pick on
+  finance-hub's local customer mirror; on submit, sparse-PATCHes
+  CustomerRef on the QBO doc + invalidates the today list so the
+  recipient pre-fill re-resolves against the new customer's
+  arrays. Handles the OLD2-rename / split-account scenarios the
+  operator used to fix in QBO directly.
+- **Phones card** (commit `a6a69c6`, migration `0017`) — Main +
+  labelled extras (bookkeeper, owner, AR clerk). Main syncs to QBO
+  `Customer.PrimaryPhone`; extras are local-only.
+- **Customers list polish** — unactioned-email count badge per row +
+  filter chip (`a6a69c6`); email column → phone column; tiny
+  "yiddy" indicator beside the displayName for roster customers
+  (`c029f95`). Backend list projection now includes `qb_customer_id`
+  and `tags` so picker + indicators work (`4fd18d5`).
+- **Yiddy's roster end-to-end** — one-shot `scripts/tag-yiddy-roster.ts`
+  tagged 119 customers (commit `4f67a85`). Generalised into Settings
+  → Roster import (commit `fac9231`): tag input + paste-or-CSV +
+  preview (matched / already-tagged / ambiguous / not-found) +
+  apply. Reusable for any future tag-by-list workflow. Audit-log row
+  per write (`customer.tag.add.roster`).
+- **Smaller wins** in this wave:
+  - Chase page: last-payment + last-statement columns + per-row
+    chase-email actions (`1ae13ce`)
+  - Statement BCC operator-controllable via app_settings (`81f7617`)
+  - Non-ASCII subjects RFC 2047-encoded in `gmail/send` (`ed9e9c4`)
+  - Shopify ID-first customer linking (`020dcbc`, `ce63068`)
+  - Shopify rate-limit fix to stay under 2 req/sec (`1274b9a`)
+  - Regression test for the paymentTerms-overwrite bug (`1f40aa2`)
+  - Customer detail header: payment-upfront button + recipients/
+    Shopify-id row + phone display (`82615e5`)
+
 **Loose ends + Statement PDF polish. 🟢 SHIPPED** (commits `7146c24` →
 `aa7da53`, 2026-04-30). Tightened the rebuild and closed a batch of
 carried-over loose ends in one pass:
@@ -410,33 +490,52 @@ commits `72d93b9` → `af80bfd`):
 
 ## In progress
 
-**None.** Ready for week 8 (Notifications) or v2.0 polish pass.
+**None.** Recent wave (recipient overhaul + send paths) is shipped
+and stable. 207/207 tests green.
 
 ## What's next
 
-**Week 4 leftovers (~30 min, deferred from earlier):**
-1. Real-invoice parity check vs 1.0 (the planned 11am cron was
-   superseded by the home-page alert — `aa7da53`)
+**Week 9 — AI agent (recommended next).** This is now the natural
+biggest piece. Foundations are ready: every tool the agent will call
+already exists as a clean function — `resolveRecipients`,
+`sendInvoiceViaQbo`, `sendInvoiceEmail` (statements path),
+`sendChaseEmail`, `createTask`, `pushCustomerTermsToQbo`,
+`pushCustomerPhoneToQbo`, etc. — all auditable + idempotent. The
+remaining work is the chat surface + tool registry + confirmation
+gating + prompt caching:
+- `/agent` chat with `@customer-name` scoping syntax
+- Tool registry (read tools auto-execute; write tools require explicit
+  Approve click)
+- Prompt caching: customer context + recent timeline (~5-10K tokens)
+  cached as the prefix
+- Inline helpers: "Draft chase email" (customer page), "Summarize this
+  customer" (sidebar), "What should I do next?" (action suggestion),
+  "Enhance with AI" (compose modal)
 
-**Week 8 — Notifications:**
-- Email digest BullMQ job (7am daily)
-- In-app notifications panel (bell badge with unread count) — SSE
-  broker already in place from week 6
-
-**Week 9 — AI agent:**
-- `/agent` chat with `@customer-name` scoping
-- Tool registry (lookup_customer, draft_email, send_email, etc.) with
-  confirmation gating on writes
-- Prompt caching for customer context
+**Week 8 — Notifications (still open, unblocking):**
+- Email digest BullMQ job (7am daily) — feeds team summary of what's
+  due, what's overdue, what landed yesterday
+- In-app notifications panel (bell badge, unread count) — SSE broker
+  already in place from week 6, schema partially built
 
 **Week 10 — Cutover:**
-- Shadow-mode parity verification
+- Shadow-mode parity verification (`SHADOW_MODE` env still defaults
+  true in dev; flip to false in prod once confidence is there)
 - Switch 2.0 to live writes; freeze 1.0
 
-**Tasks system follow-ups (deferred from week 6 bug-check):**
-- Position rebalancing under heavy drag-drop (lazy threshold-based)
-- Inline-edit error toast on task drawer field PATCH failure
-- Drag-drop keyboard accessibility
+**Smaller follow-ups (each 30-90 min):**
+- Visible disabled state on the rest of the SalesReceipt form
+  (terms/discount/customer-memo) — server already ignores those for
+  receipts; UI honesty pass
+- Tasks: position rebalancing under heavy drag-drop, inline-edit error
+  toast on task drawer field PATCH failure, drag-drop keyboard
+  accessibility (deferred from week 6 bug-check)
+- Optional: a "Roster — sync from URL" mode in the Settings import
+  page, so the operator can authenticate to the localhost:8765/roster
+  service once and pull updates without manual CSV export
+
+**Week 4 leftover:** Real-invoice parity check vs 1.0 — the planned
+11am cron was superseded by the home-page alert (`aa7da53`).
 
 ## Open items (need human input)
 
@@ -536,6 +635,32 @@ These don't block current work but block specific later phases:
 - `dec1e53` — `tasks-ui` agent: Kanban + list + detail drawer + comments + @mentions
 - `4641b1f` — Bug-check pass: regex tightening, LIKE escape, missing SSE events, N+1
 - `28f4e28` — PROGRESS catch-up
+
+**Customer ops + B2B invoicing recipient overhaul** (2026-04-30 → 2026-05-01, commits `a6a69c6` → `fac9231`):
+- `a6a69c6` — Phones card (Main + labelled extras) + unactioned-email indicators
+- `3add00c` — Per-channel customer recipients + tag-driven routing rules
+- `1ae13ce` — Chase: last-payment + last-statement columns + per-row chase-email actions
+- `1f40aa2` — QB sync: regression test for paymentTerms-overwrite bug
+- `81f7617` — Statements: BCC is now operator-controllable
+- `ed9e9c4` — Gmail/send: RFC 2047 encode subject when non-ASCII
+- `82615e5` — Customer detail: payment-upfront button + recipients/Shopify-id row + phone
+- `ce63068` — Shopify-link: search accepts id / email / name
+- `020dcbc` — Shopify: ID-first customer linking
+- `1274b9a` — Shopify: stay under the 2 req/sec leaky-bucket cap
+- `b728e56` — QB sync: stop sending no-op BillEmail/Cc/Bcc + surface QBO state on profile
+- `54349bc` — QBO recipients card: spell out the customer-level CC/BCC limit
+- `a074693` — Customer emails: TO/CC/BCC arrays per channel, drop overrides + remove QBO state card
+- `544f165` — Invoices: send via QBO from customer profile
+- `ae253f5` — /invoicing/today: pre-fill BillEmail/Cc/Bcc from resolver, not QBO
+- `b7266df` — /invoicing/today: remove action + paid Shopify price column
+- `39f2696` — /invoicing/today: SalesReceipt support for B2B prepay orders
+- `4b936df` — Salesreceipt: read-only line table + create-refund-task button
+- `9105001` — /invoicing/today: reassign QBO doc to a different customer
+- `4fd18d5` — Customers list: include qb_customer_id in row projection
+- `4f67a85` — Scripts: tag-yiddy-roster — bulk-apply yiddy tag to 119 customers
+- `c8e5457` — Customer detail: tiny Yiddy badge on the header row
+- `bb99680` / `c029f95` — Customers list: tiny "yiddy" indicator next to roster customers
+- `fac9231` — Settings: roster-tag import — bulk-apply a tag from CSV / paste
 
 **Statement PDF polish + loose-ends pass** (2026-04-30, commits `7146c24` → `aa7da53`):
 - `7146c24` — Statement PDF renderer smoke tests
