@@ -40,6 +40,8 @@ import { ShopifyClient } from "../../integrations/shopify/client.js";
 import { pushCustomerTermsToQbo } from "../../modules/customer-terms/push-to-qbo.js";
 import { pushCustomerInvoiceEmailsToQbo } from "../../modules/customer-emails/push-to-qbo.js";
 import { pushCustomerPhoneToQbo } from "../../modules/customer-phone/push-to-qbo.js";
+import { sendInvoiceViaQbo } from "../../modules/invoice-send/send-via-qbo.js";
+import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
@@ -808,6 +810,160 @@ const customersRoute: FastifyPluginAsync = async (app) => {
 
     return reply.send({ customer: after });
   });
+
+  // GET /api/customers/:id/invoices — invoices for the detail-page
+  // Invoices tab. Reads from the local invoices table (which is
+  // synced every 30 min from QBO) so the page renders fast and
+  // doesn't burn QBO API calls. Newest-first; capped at 100 to
+  // keep payloads sane for high-volume customers.
+  app.get("/:id/invoices", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+
+    const customerExists = await db
+      .select({ id: customers.id })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    if (customerExists.length === 0) {
+      return reply.code(404).send({ error: "customer not found" });
+    }
+
+    const rows = await db
+      .select({
+        id: invoices.id,
+        qbInvoiceId: invoices.qbInvoiceId,
+        docNumber: invoices.docNumber,
+        issueDate: invoices.issueDate,
+        dueDate: invoices.dueDate,
+        total: invoices.total,
+        balance: invoices.balance,
+        status: invoices.status,
+        sentAt: invoices.sentAt,
+        sentVia: invoices.sentVia,
+      })
+      .from(invoices)
+      .where(eq(invoices.customerId, id))
+      .orderBy(desc(invoices.issueDate))
+      .limit(100);
+
+    return reply.send({ invoices: rows });
+  });
+
+  // GET /api/customers/:id/invoices/:qbInvoiceId/recipients — preview
+  // the resolved recipients for an invoice send. The dialog calls
+  // this when it opens so it can pre-fill the chip-list editors with
+  // what would be sent if the operator hits Send straight away.
+  app.get(
+    "/:id/invoices/:qbInvoiceId/recipients",
+    async (req, reply) => {
+      await requireAuth(req);
+      const { id } = req.params as { id: string };
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, id))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        return reply.code(404).send({ error: "customer not found" });
+      }
+
+      const resolved = await resolveRecipients("invoice", {
+        primaryEmail: customer.primaryEmail,
+        billingEmails: customer.billingEmails,
+        invoiceToEmails: customer.invoiceToEmails,
+        invoiceCcEmails: customer.invoiceCcEmails,
+        invoiceBccEmails: customer.invoiceBccEmails,
+        statementToEmails: customer.statementToEmails,
+        statementCcEmails: customer.statementCcEmails,
+        statementBccEmails: customer.statementBccEmails,
+        tags: customer.tags,
+      });
+
+      return reply.send({
+        to: resolved.to,
+        cc: resolved.cc,
+        bcc: resolved.bcc,
+        bccReasons: resolved.bccReasons,
+      });
+    },
+  );
+
+  // POST /api/customers/:id/invoices/:qbInvoiceId/send — send the
+  // invoice via QBO using the resolved (or operator-overridden)
+  // recipients. Pattern: PATCH BillEmail/Cc/Bcc on the QBO Invoice,
+  // POST /send, write activity row, update local mirror.
+  const sendInvoiceBodySchema = z.object({
+    to: z.array(z.string().email()).max(20).optional(),
+    cc: z.array(z.string().email()).max(20).optional(),
+    bcc: z.array(z.string().email()).max(20).optional(),
+  });
+
+  app.post(
+    "/:id/invoices/:qbInvoiceId/send",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const { id, qbInvoiceId } = req.params as {
+        id: string;
+        qbInvoiceId: string;
+      };
+      const parsed = sendInvoiceBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid body",
+          issues: parsed.error.issues,
+        });
+      }
+
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, id))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        return reply.code(404).send({ error: "customer not found" });
+      }
+
+      const invoiceRows = await db
+        .select()
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.customerId, id),
+            eq(invoices.qbInvoiceId, qbInvoiceId),
+          ),
+        )
+        .limit(1);
+      const invoice = invoiceRows[0];
+      if (!invoice) {
+        return reply.code(404).send({ error: "invoice not found" });
+      }
+
+      try {
+        const result = await sendInvoiceViaQbo({
+          customer,
+          invoice,
+          userId: user.id,
+          recipientOverrides: {
+            to: parsed.data.to,
+            cc: parsed.data.cc,
+            bcc: parsed.data.bcc,
+          },
+        });
+        return reply.send({ status: "ok", ...result });
+      } catch (err) {
+        log.warn(
+          { err, customerId: id, qbInvoiceId },
+          "invoice send via QBO failed",
+        );
+        const message =
+          err instanceof Error ? err.message : "send failed";
+        return reply.code(502).send({ error: message });
+      }
+    },
+  );
 };
 
 // --- statement-preview helpers ----------------------------------------

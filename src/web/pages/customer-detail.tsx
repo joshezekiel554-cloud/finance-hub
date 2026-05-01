@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   CreditCard,
   ExternalLink,
+  Send,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -31,6 +32,9 @@ import { HoldBanner } from "../components/hold-banner";
 import StatementSendDialog, {
   type StatementSendSuccess,
 } from "../components/statement-send-dialog";
+import InvoiceSendDialog, {
+  type InvoiceSendSuccess,
+} from "../components/invoice-send-dialog";
 import { cn } from "../lib/cn";
 
 type Customer = {
@@ -403,7 +407,12 @@ export default function CustomerDetailPage() {
             customerEmail={customer.primaryEmail}
           />
         )}
-        {tab === "invoices" && <PlaceholderPanel label="Invoices" />}
+        {tab === "invoices" && (
+          <InvoicesPanel
+            customerId={customer.id}
+            customerName={customer.displayName}
+          />
+        )}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
         {tab === "tasks" && <PlaceholderPanel label="Tasks" />}
         {tab === "notes" && (
@@ -1476,4 +1485,219 @@ function PhonesCard({
       </CardBody>
     </Card>
   );
+}
+
+// Invoices tab. Lists the customer's invoices newest-first (max 100)
+// from the local invoices table. Each row carries a Send button —
+// finance-hub PATCHes BillEmail/Cc/Bcc on the QBO Invoice with the
+// resolved recipients, then calls /send. Sent rows show a sent-at
+// pill instead of a button.
+type InvoiceRow = {
+  id: string;
+  qbInvoiceId: string;
+  docNumber: string | null;
+  issueDate: string | null;
+  dueDate: string | null;
+  total: string;
+  balance: string;
+  status:
+    | "draft"
+    | "sent"
+    | "partial"
+    | "paid"
+    | "void"
+    | "overdue"
+    | null;
+  sentAt: string | null;
+  sentVia: string | null;
+};
+
+function InvoicesPanel({
+  customerId,
+  customerName,
+}: {
+  customerId: string;
+  customerName: string;
+}) {
+  const { data, isPending, isError, error } = useQuery<{
+    invoices: InvoiceRow[];
+  }>({
+    queryKey: ["customer-invoices", customerId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/invoices`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const [sending, setSending] = useState<InvoiceRow | null>(null);
+  const [sentSuccess, setSentSuccess] =
+    useState<InvoiceSendSuccess | null>(null);
+
+  // Auto-dismiss the success pill ~6s. Same pattern as the statement
+  // send confirmation in the page header.
+  useEffect(() => {
+    if (!sentSuccess) return;
+    const t = setTimeout(() => setSentSuccess(null), 6000);
+    return () => clearTimeout(t);
+  }, [sentSuccess]);
+
+  if (isPending) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-muted">
+          Loading invoices…
+        </CardBody>
+      </Card>
+    );
+  }
+  if (isError) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-accent-danger">
+          {(error as Error)?.message ?? "Failed to load invoices"}
+        </CardBody>
+      </Card>
+    );
+  }
+
+  const rows = data?.invoices ?? [];
+
+  return (
+    <Card>
+      {sentSuccess ? (
+        <div
+          role="status"
+          className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+        >
+          <CheckCircle2 className="size-4" />
+          <span>
+            Sent invoice
+            {sentSuccess.docNumber ? ` ${sentSuccess.docNumber}` : ""} ·{" "}
+            TO {sentSuccess.to.join(", ")}
+            {sentSuccess.cc.length > 0
+              ? ` · CC ${sentSuccess.cc.length}`
+              : ""}
+            {sentSuccess.bcc.length > 0
+              ? ` · BCC ${sentSuccess.bcc.length}`
+              : ""}
+          </span>
+        </div>
+      ) : null}
+      <CardBody className="py-0">
+        {rows.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted">
+            No invoices on file.
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-default text-left text-[11px] uppercase tracking-wide text-muted">
+                <th className="py-2 pr-3 font-medium">Doc #</th>
+                <th className="py-2 pr-3 font-medium">Issued</th>
+                <th className="py-2 pr-3 font-medium">Due</th>
+                <th className="py-2 pr-3 font-medium text-right">Total</th>
+                <th className="py-2 pr-3 font-medium text-right">Balance</th>
+                <th className="py-2 pr-3 font-medium">Status</th>
+                <th className="py-2 font-medium" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <InvoiceTableRow
+                  key={row.id}
+                  row={row}
+                  onSend={() => setSending(row)}
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </CardBody>
+      {sending ? (
+        <InvoiceSendDialog
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setSending(null);
+          }}
+          customerId={customerId}
+          customerName={customerName}
+          invoice={sending}
+          onSent={(result) => {
+            setSentSuccess(result);
+            setSending(null);
+          }}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
+function InvoiceTableRow({
+  row,
+  onSend,
+}: {
+  row: InvoiceRow;
+  onSend: () => void;
+}) {
+  const total = Number(row.total);
+  const balance = Number(row.balance);
+  const isPaid = row.status === "paid" || balance <= 0;
+  return (
+    <tr className="border-b border-default last:border-b-0">
+      <td className="py-2 pr-3 font-mono text-xs">
+        {row.docNumber ?? "—"}
+      </td>
+      <td className="py-2 pr-3 text-xs text-secondary">
+        {row.issueDate ?? "—"}
+      </td>
+      <td className="py-2 pr-3 text-xs text-secondary">
+        {row.dueDate ?? "—"}
+      </td>
+      <td className="py-2 pr-3 text-right tabular-nums text-xs">
+        ${total.toFixed(2)}
+      </td>
+      <td className="py-2 pr-3 text-right tabular-nums text-xs">
+        {balance > 0 ? (
+          <span className="text-accent-warning">${balance.toFixed(2)}</span>
+        ) : (
+          <span className="text-muted">—</span>
+        )}
+      </td>
+      <td className="py-2 pr-3">
+        <InvoiceStatusBadge status={row.status} isPaid={isPaid} />
+      </td>
+      <td className="py-2 text-right">
+        {row.sentAt ? (
+          <span className="text-[11px] text-muted">
+            Sent {new Date(row.sentAt).toLocaleDateString()}
+            {row.sentVia ? ` · ${row.sentVia}` : ""}
+          </span>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={onSend}>
+            <Send className="size-3.5" />
+            Send
+          </Button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function InvoiceStatusBadge({
+  status,
+  isPaid,
+}: {
+  status: InvoiceRow["status"];
+  isPaid: boolean;
+}) {
+  if (isPaid) return <Badge tone="success">Paid</Badge>;
+  if (status === "overdue") return <Badge tone="critical">Overdue</Badge>;
+  if (status === "partial") return <Badge tone="high">Partial</Badge>;
+  if (status === "sent") return <Badge tone="info">Sent</Badge>;
+  if (status === "void") return <Badge tone="medium">Void</Badge>;
+  if (status === "draft") return <Badge tone="medium">Draft</Badge>;
+  return <Badge tone="medium">—</Badge>;
 }
