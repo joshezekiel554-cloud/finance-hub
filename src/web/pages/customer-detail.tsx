@@ -1929,6 +1929,20 @@ function InvoiceTableRow({
     balance <= 0;
   // /api/qb-pdf/{kind}/{qbId} — mounted in src/server/routes/qb-pdf.ts.
   const pdfHref = `/api/qb-pdf/${row.docType === "credit_memo" ? "creditmemo" : "invoice"}/${encodeURIComponent(row.qbId)}`;
+  // Has this doc been sent before? Drives the "sent" caption +
+  // Send→Re-send label flip. Three signals can flag it:
+  //   - finance-hub stamped sent_at after a local send
+  //   - the credit-memo path tagged sent_at = "(sent)" because QBO's
+  //     EmailStatus = "EmailSent"
+  //   - for invoices, any non-draft non-void status implies the doc
+  //     has been sent at least once (paid/partial/sent/overdue all
+  //     started life as a Send)
+  const wasSent =
+    row.sentAt !== null ||
+    row.status === "sent" ||
+    row.status === "partial" ||
+    row.status === "paid" ||
+    row.status === "overdue";
   return (
     <tr className="border-t border-default">
       <td className="px-3 py-2 font-mono text-xs">
@@ -1974,35 +1988,37 @@ function InvoiceTableRow({
         <InvoiceStatusBadge status={row.status} isPaid={isPaid} />
       </td>
       <td className="px-3 py-2 text-right">
-        <div className="flex items-center justify-end gap-2">
-          {row.sentAt ? (
+        <div className="inline-flex flex-col items-end gap-0.5">
+          <div className="flex items-center justify-end gap-2">
+            <a
+              href={pdfHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-default bg-base px-2 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
+              title={`Open ${row.docType === "credit_memo" ? "credit memo" : "invoice"} PDF`}
+            >
+              <FileText className="size-3.5" />
+              PDF
+            </a>
+            <Button size="sm" variant="secondary" onClick={onSend}>
+              <Send className="size-3.5" />
+              {wasSent ? "Re-send" : "Send"}
+            </Button>
+          </div>
+          {wasSent ? (
             <span
               className="text-[10px] text-muted"
               title={
                 row.sentVia
                   ? `Last sent via ${row.sentVia}`
-                  : "Last sent"
+                  : "Sent at some point"
               }
             >
-              {row.sentAt === "(sent)"
-                ? "sent"
-                : `sent ${new Date(row.sentAt).toLocaleDateString()}`}
+              {row.sentAt && row.sentAt !== "(sent)"
+                ? `sent ${new Date(row.sentAt).toLocaleDateString()}`
+                : "sent"}
             </span>
           ) : null}
-          <a
-            href={pdfHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-7 items-center gap-1 rounded-md border border-default bg-base px-2 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
-            title={`Open ${row.docType === "credit_memo" ? "credit memo" : "invoice"} PDF`}
-          >
-            <FileText className="size-3.5" />
-            PDF
-          </a>
-          <Button size="sm" variant="secondary" onClick={onSend}>
-            <Send className="size-3.5" />
-            {row.sentAt ? "Re-send" : "Send"}
-          </Button>
         </div>
       </td>
     </tr>
