@@ -1323,7 +1323,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
 // its own helper section and the cross-module dep is otherwise zero.
 function sanitizeFilenameSegment(s: string): string {
   return s
-    .replace(/[<>:"/\\|?* -]/g, "")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
     .replace(/\s+/g, "-")
     .slice(0, 80) || "customer";
 }
