@@ -4,7 +4,7 @@
 //
 // To bring a new default into existing installs, add the row here AND
 // bump its slug if the user has been editing the existing one (we don't
-// overwrite user edits — see UPSERT logic below).
+// overwrite user edits - see UPSERT logic below).
 
 import "dotenv/config";
 import { eq } from "drizzle-orm";
@@ -24,10 +24,10 @@ import {
 const DEFAULTS: Omit<NewEmailTemplate, "id" | "createdAt" | "updatedAt">[] = [
   {
     slug: "chase_l1",
-    name: "Chase — Level 1 (gentle reminder)",
+    name: "Chase - Level 1 (gentle reminder)",
     context: "chase",
     description: "First-touch reminder; tone is warm + helpful.",
-    subject: "{{company_name}} — friendly reminder, your account",
+    subject: "{{company_name}} - friendly reminder, your account",
     body: `Hi {{customer_name}},
 
 Hope you're well. Just a gentle reminder that your account currently has \
@@ -37,7 +37,7 @@ due.
 Your oldest open invoice is {{oldest_unpaid_invoice}} for \
 {{oldest_unpaid_amount}}, now {{days_overdue}} days past due.
 
-If a payment is already in flight, please ignore — and let me know the \
+If a payment is already in flight, please ignore - and let me know the \
 expected date so I can match it on this end. Otherwise, the easiest way \
 to clear it is the Pay-now button on each invoice; statements are \
 attached for reference.
@@ -48,15 +48,15 @@ Thanks,
   },
   {
     slug: "chase_l2",
-    name: "Chase — Level 2 (firmer follow-up)",
+    name: "Chase - Level 2 (firmer follow-up)",
     context: "chase",
     description:
       "Second touch when L1 didn't land. Still polite but more direct.",
     subject:
-      "{{company_name}} — follow-up on overdue balance ({{overdue_balance}})",
+      "{{company_name}} - follow-up on overdue balance ({{overdue_balance}})",
     body: `Hi {{customer_name}},
 
-Following up on my earlier note — your overdue balance with \
+Following up on my earlier note - your overdue balance with \
 {{company_name}} is now {{overdue_balance}} ({{days_overdue}} days past \
 due on {{oldest_unpaid_invoice}}).
 
@@ -72,11 +72,11 @@ Thanks,
   },
   {
     slug: "chase_l3",
-    name: "Chase — Level 3 (escalation)",
+    name: "Chase - Level 3 (escalation)",
     context: "chase",
     description: "Final stage before further action.",
     subject:
-      "URGENT — {{company_name}} account, overdue balance ({{overdue_balance}})",
+      "URGENT - {{company_name}} account, overdue balance ({{overdue_balance}})",
     body: `Hi {{customer_name}},
 
 Despite our previous reminders, the overdue balance on your account is \
@@ -95,12 +95,12 @@ Thanks,
   },
   {
     slug: "statement_open_items",
-    name: "Statement — Open Items",
+    name: "Statement - Open Items",
     context: "statement",
     description:
-      "Cover-note email body for the Statement.pdf attachment. The actual statement table is inside the PDF — this is just the wrapping email.",
+      "Cover-note email body for the Statement.pdf attachment. The actual statement table is inside the PDF - this is just the wrapping email.",
     subject:
-      "{{company_name}} — Statement of Account ({{open_balance}} open)",
+      "{{company_name}} - Statement of Account ({{open_balance}} open)",
     body: `<p>Hi {{customer_name}},</p>
 
 <p>Please find your statement of account attached. Total open balance \
@@ -117,13 +117,13 @@ anything looks incorrect.</p>
   },
   {
     slug: "payment_confirmation",
-    name: "Payment confirmation — Thanks",
+    name: "Payment confirmation - Thanks",
     context: "payment_confirmation",
     description: "Sent after a payment is received and applied.",
-    subject: "{{company_name}} — payment received, thank you",
+    subject: "{{company_name}} - payment received, thank you",
     body: `Hi {{customer_name}},
 
-Just confirming we've received your recent payment — thank you, much \
+Just confirming we've received your recent payment - thank you, much \
 appreciated.
 
 Your remaining open balance is now {{open_balance}}.
@@ -137,7 +137,7 @@ Best,
     name: "Generic reply",
     context: "reply",
     description:
-      "Empty starting point for replies — useful when threading off an inbound email.",
+      "Empty starting point for replies - useful when threading off an inbound email.",
     subject: "Re: {{thread_subject}}",
     body: `Hi {{customer_name}},
 
@@ -177,7 +177,7 @@ async function main() {
       .where(eq(emailTemplates.slug, tpl.slug))
       .limit(1);
     if (existing.length > 0) {
-      // Don't overwrite a user-edited template — only seed missing slugs.
+      // Don't overwrite a user-edited template - only seed missing slugs.
       skipped++;
       continue;
     }
