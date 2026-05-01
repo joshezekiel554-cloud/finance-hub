@@ -25,6 +25,7 @@ import shopifyB2bAuditRoute from "./shopify-b2b-audit.js";
 import shopifyLinkRoute from "./shopify-link.js";
 import emailRoutingRulesRoute from "./email-routing-rules.js";
 import logoUploadRoute from "./logo-upload.js";
+import rosterTagRoute from "./roster-tag.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -70,6 +71,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     prefix: "/api/email-routing-rules",
   });
   await app.register(logoUploadRoute, { prefix: "/api" });
+  await app.register(rosterTagRoute, { prefix: "/api/roster-tag" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });

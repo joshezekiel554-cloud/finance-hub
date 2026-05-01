@@ -335,6 +335,24 @@ function ImportsSection() {
             </Button>
           </Link>
         </div>
+        <div className="flex items-center justify-between gap-3 border-t border-default pt-3">
+          <div>
+            <div className="text-sm font-medium">
+              Roster — bulk-tag customers
+            </div>
+            <div className="text-xs text-muted">
+              Apply one tag to many customers at once (e.g. Yiddy's
+              commission roster). Paste names or upload a CSV; preview
+              before any writes.
+            </div>
+          </div>
+          <Link to="/import/roster-tag">
+            <Button variant="secondary" size="sm">
+              <Download className="size-3.5" /> Open
+              <ArrowRight className="size-3.5" />
+            </Button>
+          </Link>
+        </div>
       </CardBody>
     </Card>
   );
