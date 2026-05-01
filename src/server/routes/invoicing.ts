@@ -79,6 +79,10 @@ export type InvoicingTodayRow = {
     id: string;
     docNumber: string;
     syncToken: string;
+    // finance-hub's local customers.id, looked up via qbCustomerId.
+    // Null when there's no matching local mirror — UI uses this to
+    // link follow-up actions (refund tasks, etc.) to the customer.
+    customerId: string | null;
     customerName: string | null;
     totalAmt: number;
     balance: number;
@@ -697,6 +701,9 @@ async function buildRow(
           id: qbInvoice.Id,
           docNumber: qbInvoice.DocNumber ?? "",
           syncToken: qbInvoice.SyncToken ?? "0",
+          customerId:
+            customerByQbId.get(qbInvoice.CustomerRef?.value ?? "")?.id ??
+            null,
           customerName: qbInvoice.CustomerRef?.name ?? null,
           totalAmt: qbInvoice.TotalAmt ?? 0,
           balance: qbInvoice.Balance ?? 0,

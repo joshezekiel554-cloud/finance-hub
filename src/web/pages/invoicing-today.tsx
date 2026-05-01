@@ -73,6 +73,7 @@ type Row = {
     id: string;
     docNumber: string;
     syncToken: string;
+    customerId: string | null;
     customerName: string | null;
     totalAmt: number;
     balance: number;
@@ -876,9 +877,12 @@ function ShipmentCard({
               {row.qbInvoice.docType === "salesreceipt" &&
               row.reconcileResult &&
               hasRefundShortage(row.reconcileResult.actions) ? (
-                <div className="mt-2 rounded-md border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-[11px] text-accent-danger">
-                  Refund needed — customer paid for items not shipped.
-                  Refund externally via Shopify.
+                <div className="mt-2 space-y-1">
+                  <div className="rounded-md border border-accent-danger/30 bg-accent-danger/10 px-2 py-1 text-left text-[11px] text-accent-danger">
+                    Refund needed — customer paid for items not shipped.
+                    Refund via Shopify.
+                  </div>
+                  <RefundTaskButton row={row} />
                 </div>
               ) : null}
             </div>
@@ -1524,6 +1528,14 @@ function ReconcileTable({
 }) {
   if (!row.qbInvoice || !row.reconcileResult) return null;
 
+  // SalesReceipts are settled — customer paid for these lines, we
+  // can't change qty or unit price retroactively. The reconciler's
+  // shortage actions are advisory only (drive the "Refund needed"
+  // pill + a refund task), and the server ignores them on send. So
+  // the table renders read-only on receipts: numbers shown as plain
+  // text, not editable inputs.
+  const isReadOnly = row.qbInvoice.docType === "salesreceipt";
+
   // Build SKU → Shopify per-unit paid price map for the read-only
   // "Shopify price" column (= the price the customer actually pays
   // on this order, after line-level discounts, pre-tax).
@@ -1649,7 +1661,9 @@ function ReconcileTable({
                 <td className="px-3 py-2 text-right tabular-nums">{r.currentQty ?? "—"}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{r.shippedQty ?? "—"}</td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  {isAdd ? (
+                  {isReadOnly ? (
+                    <span className="tabular-nums text-muted">{finalQty}</span>
+                  ) : isAdd ? (
                     <input
                       type="number"
                       min={1}
@@ -1677,7 +1691,15 @@ function ReconcileTable({
                     : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  {isAdd ? (
+                  {isReadOnly ? (
+                    finalQbPrice !== null && finalQbPrice !== undefined ? (
+                      <span className="tabular-nums text-muted">
+                        ${finalQbPrice.toFixed(2)}
+                      </span>
+                    ) : (
+                      "—"
+                    )
+                  ) : isAdd ? (
                     <PriceInput
                       value={finalQbPrice}
                       onChange={(n) => onAddPriceChange(action.sku, n)}
@@ -1802,4 +1824,120 @@ function hasRefundShortage(actions: ReconcileAction[]): boolean {
       a.type === "remove" ||
       (a.type === "qty_change" && a.toQty < a.fromQty),
   );
+}
+
+// One-click "create a refund task" affordance for SalesReceipt rows
+// flagged as needing a refund. Opens a task in the operator's queue
+// with the customer linked, the receipt referenced, and a body
+// summarising what was paid vs shipped — so somebody actually
+// actions the Shopify refund instead of the warning pill being
+// noticed-then-forgotten.
+function RefundTaskButton({ row }: { row: Row }) {
+  const [created, setCreated] = useState<{ id: string } | null>(null);
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation<{ task: { id: string } }, Error>({
+    mutationFn: async () => {
+      if (!row.qbInvoice) throw new Error("no qb doc on row");
+      if (!row.qbInvoice.customerId) {
+        throw new Error("customer not linked in finance-hub");
+      }
+      const body = buildRefundTaskBody(row);
+      const title = buildRefundTaskTitle(row);
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customerId: row.qbInvoice.customerId,
+          title,
+          body,
+          priority: "high",
+          tags: ["refund"],
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setCreated({ id: data.task.id });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+
+  if (created) {
+    return (
+      <div className="text-[11px] text-accent-success">
+        Refund task created.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={() => mutation.mutate()}
+        disabled={
+          mutation.isPending || !row.qbInvoice?.customerId
+        }
+        loading={mutation.isPending}
+        title={
+          row.qbInvoice?.customerId
+            ? "Create a high-priority task to track the refund"
+            : "Customer not linked in finance-hub — sync first"
+        }
+      >
+        Create refund task
+      </Button>
+      {mutation.isError ? (
+        <div className="text-[11px] text-accent-danger">
+          {(mutation.error as Error).message}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function buildRefundTaskTitle(row: Row): string {
+  const docNumber = row.qbInvoice?.docNumber ?? "(no doc#)";
+  const customer =
+    row.qbInvoice?.customerName ??
+    row.shopifyOrder?.customerEmail ??
+    "(unknown customer)";
+  return `Refund ${customer} — SR ${docNumber}`;
+}
+
+function buildRefundTaskBody(row: Row): string {
+  const lines: string[] = [];
+  lines.push(
+    "Customer paid upfront on Shopify but warehouse shipment was short.",
+  );
+  if (row.qbInvoice?.docNumber) {
+    lines.push(`QBO Sales Receipt: ${row.qbInvoice.docNumber}`);
+  }
+  if (row.shopifyOrder?.name) {
+    lines.push(`Shopify order: ${row.shopifyOrder.name}`);
+  }
+  if (row.parsed.trackingNumber) {
+    lines.push(`Warehouse tracking: ${row.parsed.trackingNumber}`);
+  }
+  lines.push("");
+  lines.push("Short / missing items:");
+  const actions = row.reconcileResult?.actions ?? [];
+  for (const a of actions) {
+    if (a.type === "remove") {
+      lines.push(`  • ${a.sku} — ordered+paid ${a.qty}, shipped 0`);
+    } else if (a.type === "qty_change" && a.toQty < a.fromQty) {
+      lines.push(
+        `  • ${a.sku} — ordered+paid ${a.fromQty}, shipped ${a.toQty} (short ${a.fromQty - a.toQty})`,
+      );
+    }
+  }
+  lines.push("");
+  lines.push("Action: issue refund via Shopify for the short items.");
+  return lines.join("\n");
 }
