@@ -50,6 +50,7 @@ export default function InvoiceSendDialog({
   customerId,
   customerName,
   invoice,
+  docType = "invoice",
   onSent,
 }: {
   open: boolean;
@@ -64,6 +65,10 @@ export default function InvoiceSendDialog({
     issueDate: string | null;
     dueDate: string | null;
   };
+  // Whether the doc is an Invoice (default) or a Credit memo.
+  // Routed through to the server's send body so the right QBO
+  // /send endpoint fires.
+  docType?: "invoice" | "credit_memo";
   onSent: (result: InvoiceSendSuccess) => void;
 }) {
   const queryClient = useQueryClient();
@@ -120,6 +125,7 @@ export default function InvoiceSendDialog({
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
+            docType,
             to: toDraft,
             cc: ccDraft,
             bcc: bccDraft,
@@ -164,7 +170,7 @@ export default function InvoiceSendDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Send invoice
+            Send {docType === "credit_memo" ? "credit memo" : "invoice"}
             {invoice.docNumber ? ` ${invoice.docNumber}` : ""}
           </DialogTitle>
           <DialogDescription>

@@ -137,11 +137,19 @@ export type QboCreditMemo = {
   Id: string;
   TxnDate?: string;
   TotalAmt?: number;
+  // Unapplied amount — decreases as the credit memo is applied to
+  // invoices. 0 once fully consumed.
   Balance?: number;
   DocNumber?: string;
   CustomerRef: QboReference;
   CurrencyRef?: QboReference;
   SyncToken?: string;
+  EmailStatus?: string;
+  BillEmail?: QboEmailAddr;
+  BillEmailCc?: QboEmailAddr;
+  BillEmailBcc?: QboEmailAddr;
+  CustomerMemo?: { value?: string };
+  PrivateNote?: string;
 };
 
 export type QboTerm = {

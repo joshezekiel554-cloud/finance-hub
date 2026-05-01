@@ -624,6 +624,88 @@ export class QboClient {
     }
   }
 
+  // -------- CreditMemo API ----------------------------------------------
+  // Symmetric with Invoice: per-customer query, by-id fetch, sparse
+  // update on the header (BillEmail/Cc/Bcc) and /send. Credit memos are
+  // settled docs once issued — line edits aren't part of any flow we
+  // expose, so updateCreditMemo is for header fields only.
+
+  async getCreditMemosForCustomer(
+    qbCustomerId: string,
+  ): Promise<QboCreditMemo[]> {
+    return this.queryAll<QboCreditMemo>(
+      `SELECT * FROM CreditMemo WHERE CustomerRef = '${escapeQboLiteral(qbCustomerId)}'`,
+      (r) => r.QueryResponse.CreditMemo,
+    );
+  }
+
+  async getCreditMemoById(qbId: string): Promise<QboCreditMemo | null> {
+    const data = await this.query<QboCreditMemo>(
+      `SELECT * FROM CreditMemo WHERE Id = '${escapeQboLiteral(qbId)}'`,
+    );
+    return data.QueryResponse.CreditMemo?.[0] ?? null;
+  }
+
+  async updateCreditMemo(payload: object): Promise<QboCreditMemo> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/creditmemo`;
+    const accessToken = await this.getAccessToken();
+    const doRequest = async (token: string) => {
+      return this.http.post<{ CreditMemo: QboCreditMemo }>(url, payload, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+    };
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.CreditMemo;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.CreditMemo;
+      }
+      throw err;
+    }
+  }
+
+  async sendCreditMemoEmail(
+    qbId: string,
+    sendToEmail?: string,
+  ): Promise<QboCreditMemo> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/creditmemo/${encodeURIComponent(qbId)}/send`;
+    const accessToken = await this.getAccessToken();
+    const doRequest = async (token: string) => {
+      return this.http.post<{ CreditMemo: QboCreditMemo }>(url, "", {
+        params: {
+          minorversion: QBO_MINOR_VERSION,
+          ...(sendToEmail ? { sendTo: sendToEmail } : {}),
+        },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/octet-stream",
+        },
+      });
+    };
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.CreditMemo;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.CreditMemo;
+      }
+      throw err;
+    }
+  }
+
   // Sparse update of a QBO Customer. Same shape as updateInvoice — POST
   // to /v3/company/.../customer with Id + SyncToken + sparse:true and
   // whatever fields you want to mutate. Returns the refreshed Customer

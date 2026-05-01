@@ -813,25 +813,32 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     return reply.send({ customer: after });
   });
 
-  // GET /api/customers/:id/invoices — invoices for the detail-page
-  // Invoices tab. Reads from the local invoices table (which is
-  // synced every 30 min from QBO) so the page renders fast and
-  // doesn't burn QBO API calls. Newest-first; capped at 100 to
-  // keep payloads sane for high-volume customers.
+  // GET /api/customers/:id/invoices — unified document list for the
+  // detail-page Invoices tab. Returns invoices (from the local mirror,
+  // synced every 30 min) AND credit memos (live from QBO — no local
+  // table for those) in one array, each row tagged with a docType
+  // discriminator. The two sources are merged and sorted newest-first
+  // by issue date. Dates are normalised to YYYY-MM-DD on the wire so
+  // the UI doesn't have to chop ISO timestamps.
   app.get("/:id/invoices", async (req, reply) => {
     await requireAuth(req);
     const id = (req.params as { id: string }).id;
 
-    const customerExists = await db
-      .select({ id: customers.id })
+    const cust = await db
+      .select({
+        id: customers.id,
+        qbCustomerId: customers.qbCustomerId,
+      })
       .from(customers)
       .where(eq(customers.id, id))
       .limit(1);
-    if (customerExists.length === 0) {
+    if (cust.length === 0) {
       return reply.code(404).send({ error: "customer not found" });
     }
+    const qbCustomerId = cust[0]!.qbCustomerId;
 
-    const rows = await db
+    // Local invoices read.
+    const invoiceRowsP = db
       .select({
         id: invoices.id,
         qbInvoiceId: invoices.qbInvoiceId,
@@ -849,7 +856,103 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       .orderBy(desc(invoices.issueDate))
       .limit(100);
 
-    return reply.send({ invoices: rows });
+    // Credit memos live from QBO — only if the customer is linked.
+    // Best-effort: if QBO's down or token's stale we still render
+    // invoices (creditMemoError surfaces in the response).
+    let creditMemoRowsP: Promise<
+      Array<{
+        qbId: string;
+        docNumber: string | null;
+        txnDate: string | null;
+        total: number;
+        balance: number;
+        emailStatus: string | null;
+      }>
+    > = Promise.resolve([]);
+    let creditMemoError: string | null = null;
+    if (qbCustomerId) {
+      creditMemoRowsP = (async () => {
+        try {
+          const qb = new QboClient();
+          const memos = await qb.getCreditMemosForCustomer(qbCustomerId);
+          return memos.map((cm) => ({
+            qbId: cm.Id,
+            docNumber: cm.DocNumber ?? null,
+            txnDate: cm.TxnDate ?? null,
+            total: cm.TotalAmt ?? 0,
+            balance: cm.Balance ?? 0,
+            emailStatus: cm.EmailStatus ?? null,
+          }));
+        } catch (err) {
+          creditMemoError = (err as Error).message;
+          return [];
+        }
+      })();
+    }
+
+    const [invoiceRows, creditMemoRows] = await Promise.all([
+      invoiceRowsP,
+      creditMemoRowsP,
+    ]);
+
+    type DocRow = {
+      docType: "invoice" | "credit_memo";
+      // Local DB id for invoices; null for credit memos (no local row).
+      id: string | null;
+      qbId: string;
+      docNumber: string | null;
+      // ISO YYYY-MM-DD — pre-formatted so the UI doesn't need to
+      // care about Date/string round-tripping.
+      issueDate: string | null;
+      // null on credit memos (they don't have due dates).
+      dueDate: string | null;
+      total: string;
+      balance: string;
+      status: string | null;
+      sentAt: string | null;
+      sentVia: string | null;
+    };
+
+    const out: DocRow[] = [];
+    for (const inv of invoiceRows) {
+      out.push({
+        docType: "invoice",
+        id: inv.id,
+        qbId: inv.qbInvoiceId,
+        docNumber: inv.docNumber,
+        issueDate: toDateOnly(inv.issueDate),
+        dueDate: toDateOnly(inv.dueDate),
+        total: inv.total,
+        balance: inv.balance,
+        status: inv.status,
+        sentAt: inv.sentAt ? inv.sentAt.toISOString() : null,
+        sentVia: inv.sentVia,
+      });
+    }
+    for (const cm of creditMemoRows) {
+      out.push({
+        docType: "credit_memo",
+        id: null,
+        qbId: cm.qbId,
+        docNumber: cm.docNumber,
+        issueDate: cm.txnDate, // already YYYY-MM-DD from QBO
+        dueDate: null,
+        total: cm.total.toFixed(2),
+        balance: cm.balance.toFixed(2),
+        // No native "status" on credit memos in QBO. Derive from
+        // balance: 0 = fully applied, > 0 = open / unapplied.
+        status: cm.balance > 0 ? "open" : "applied",
+        sentAt: cm.emailStatus === "EmailSent" ? "(sent)" : null,
+        sentVia: cm.emailStatus === "EmailSent" ? "qbo" : null,
+      });
+    }
+
+    out.sort((a, b) => (b.issueDate ?? "").localeCompare(a.issueDate ?? ""));
+
+    return reply.send({
+      invoices: out,
+      creditMemoError,
+    });
   });
 
   // GET /api/customers/:id/invoices/:qbInvoiceId/recipients — preview
@@ -897,6 +1000,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
   // recipients. Pattern: PATCH BillEmail/Cc/Bcc on the QBO Invoice,
   // POST /send, write activity row, update local mirror.
   const sendInvoiceBodySchema = z.object({
+    // "invoice" (default) or "credit_memo" — the latter routes to the
+    // /creditmemo/{id}/send branch with a header-only sparse PATCH for
+    // BillEmail/Cc/Bcc (no Line mutation; CMs are settled docs).
+    docType: z.enum(["invoice", "credit_memo"]).default("invoice"),
     to: z.array(z.string().email()).max(20).optional(),
     cc: z.array(z.string().email()).max(20).optional(),
     bcc: z.array(z.string().email()).max(20).optional(),
@@ -926,6 +1033,101 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       const customer = customerRows[0];
       if (!customer) {
         return reply.code(404).send({ error: "customer not found" });
+      }
+
+      // Credit memo branch — no local row to update (no credit_memos
+      // table). Resolve recipients via the same channel resolver
+      // (CMs reuse the invoice channel since they're billing docs),
+      // PATCH BillEmail/Cc/Bcc onto the QBO record, POST /send, write
+      // an activity for the timeline.
+      if (parsed.data.docType === "credit_memo") {
+        try {
+          const qb = new QboClient();
+          const cm = await qb.getCreditMemoById(qbInvoiceId);
+          if (!cm) {
+            return reply
+              .code(404)
+              .send({ error: "credit memo not found in QBO" });
+          }
+          const resolved = await resolveRecipients("invoice", {
+            primaryEmail: customer.primaryEmail,
+            billingEmails: customer.billingEmails,
+            invoiceToEmails: customer.invoiceToEmails,
+            invoiceCcEmails: customer.invoiceCcEmails,
+            invoiceBccEmails: customer.invoiceBccEmails,
+            statementToEmails: customer.statementToEmails,
+            statementCcEmails: customer.statementCcEmails,
+            statementBccEmails: customer.statementBccEmails,
+            tags: customer.tags,
+          });
+          const to = parsed.data.to ?? resolved.to;
+          const cc = parsed.data.cc ?? resolved.cc;
+          const bcc = parsed.data.bcc ?? resolved.bcc;
+          if (to.length === 0) {
+            return reply.code(400).send({
+              error:
+                "no TO address — add an invoice TO email on the customer profile",
+            });
+          }
+          const patchPayload: Record<string, unknown> = {
+            Id: cm.Id,
+            SyncToken: cm.SyncToken,
+            sparse: true,
+            BillEmail: { Address: to.join(", ") },
+            BillEmailCc:
+              cc.length > 0 ? { Address: cc.join(", ") } : null,
+            BillEmailBcc:
+              bcc.length > 0 ? { Address: bcc.join(", ") } : null,
+          };
+          await qb.updateCreditMemo(patchPayload);
+          await qb.sendCreditMemoEmail(cm.Id);
+          await db.insert(activities).values({
+            id: nanoid(),
+            customerId: customer.id,
+            userId: user.id,
+            kind: "qbo_credit_memo",
+            source: "user_action",
+            occurredAt: new Date(),
+            subject: cm.DocNumber
+              ? `Credit memo ${cm.DocNumber} sent`
+              : "Credit memo sent",
+            body: [
+              `TO: ${to.join(", ")}`,
+              cc.length > 0 ? `CC: ${cc.join(", ")}` : null,
+              bcc.length > 0 ? `BCC: ${bcc.join(", ")}` : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            refType: "credit_memo",
+            refId: cm.Id,
+            meta: {
+              qbCreditMemoId: cm.Id,
+              docNumber: cm.DocNumber ?? null,
+              to,
+              cc,
+              bcc,
+              total: cm.TotalAmt ?? 0,
+              balance: cm.Balance ?? 0,
+            },
+          });
+          return reply.send({
+            status: "ok",
+            qbInvoiceId: cm.Id,
+            docNumber: cm.DocNumber ?? null,
+            to,
+            cc,
+            bcc,
+            sentAt: new Date(),
+          });
+        } catch (err) {
+          log.warn(
+            { err, customerId: id, qbCreditMemoId: qbInvoiceId },
+            "credit memo send via QBO failed",
+          );
+          const message =
+            err instanceof Error ? err.message : "send failed";
+          return reply.code(502).send({ error: message });
+        }
       }
 
       const invoiceRows = await db
@@ -967,6 +1169,18 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     },
   );
 };
+
+// Normalise a MySQL DATE column (mysql2 sometimes hands back a Date,
+// sometimes a "YYYY-MM-DD" string depending on driver config) to a
+// stable "YYYY-MM-DD" wire format so the UI doesn't have to chop ISO
+// timestamps. Returns null for null input.
+function toDateOnly(value: Date | string | null): string | null {
+  if (value === null) return null;
+  if (typeof value === "string") return value.slice(0, 10);
+  // Date — use UTC slice so a server in a non-UTC timezone doesn't
+  // shift the calendar day for invoices stamped at 00:00.
+  return value.toISOString().slice(0, 10);
+}
 
 // --- statement-preview helpers ----------------------------------------
 

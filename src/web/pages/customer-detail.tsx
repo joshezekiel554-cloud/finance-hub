@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1500,25 +1500,28 @@ function PhonesCard({
 // finance-hub PATCHes BillEmail/Cc/Bcc on the QBO Invoice with the
 // resolved recipients, then calls /send. Sent rows show a sent-at
 // pill instead of a button.
+// Unified row type — invoices + credit memos. The docType
+// discriminator drives the "type" pill, the Send dialog body
+// (different /send endpoint per type) and a couple of small
+// rendering branches (no due date on credit memos, etc).
 type InvoiceRow = {
-  id: string;
-  qbInvoiceId: string;
+  docType: "invoice" | "credit_memo";
+  id: string | null;
+  qbId: string;
   docNumber: string | null;
   issueDate: string | null;
   dueDate: string | null;
   total: string;
   balance: string;
-  status:
-    | "draft"
-    | "sent"
-    | "partial"
-    | "paid"
-    | "void"
-    | "overdue"
-    | null;
+  status: string | null;
   sentAt: string | null;
   sentVia: string | null;
 };
+
+type StatusFilter = "all" | "open" | "paid" | "overdue" | "sent" | "void";
+type TypeFilter = "all" | "invoice" | "credit_memo";
+type SortKey = "issueDate" | "docNumber" | "total" | "balance";
+type SortDir = "asc" | "desc";
 
 function InvoicesPanel({
   customerId,
@@ -1529,6 +1532,7 @@ function InvoicesPanel({
 }) {
   const { data, isPending, isError, error } = useQuery<{
     invoices: InvoiceRow[];
+    creditMemoError: string | null;
   }>({
     queryKey: ["customer-invoices", customerId],
     queryFn: async () => {
@@ -1543,20 +1547,72 @@ function InvoicesPanel({
   const [sending, setSending] = useState<InvoiceRow | null>(null);
   const [sentSuccess, setSentSuccess] =
     useState<InvoiceSendSuccess | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [search, setSearch] = useState<string>("");
+  const [sortKey, setSortKey] = useState<SortKey>("issueDate");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  // Auto-dismiss the success pill ~6s. Same pattern as the statement
-  // send confirmation in the page header.
   useEffect(() => {
     if (!sentSuccess) return;
     const t = setTimeout(() => setSentSuccess(null), 6000);
     return () => clearTimeout(t);
   }, [sentSuccess]);
 
+  const allRows = data?.invoices ?? [];
+
+  const filteredRows = useMemo<InvoiceRow[]>(() => {
+    const q = search.trim().toLowerCase();
+    return allRows
+      .filter((r: InvoiceRow) => typeFilter === "all" || r.docType === typeFilter)
+      .filter((r: InvoiceRow) => {
+        if (statusFilter === "all") return true;
+        const balance = Number(r.balance);
+        const isPaid =
+          r.status === "paid" ||
+          r.status === "applied" ||
+          balance <= 0;
+        if (statusFilter === "open") return balance > 0;
+        if (statusFilter === "paid") return isPaid;
+        if (statusFilter === "overdue") return r.status === "overdue";
+        if (statusFilter === "sent") return r.status === "sent";
+        if (statusFilter === "void") return r.status === "void";
+        return true;
+      })
+      .filter((r: InvoiceRow) => {
+        if (!q) return true;
+        return (r.docNumber ?? "").toLowerCase().includes(q);
+      })
+      .sort((a: InvoiceRow, b: InvoiceRow) => {
+        const cmp = compareRows(a, b, sortKey);
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+  }, [allRows, statusFilter, typeFilter, search, sortKey, sortDir]);
+
+  const totals = useMemo(() => {
+    let totalSum = 0;
+    let openSum = 0;
+    for (const r of filteredRows) {
+      totalSum += Number(r.total);
+      if (Number(r.balance) > 0) openSum += Number(r.balance);
+    }
+    return { totalSum, openSum };
+  }, [filteredRows]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  }
+
   if (isPending) {
     return (
       <Card>
         <CardBody className="py-8 text-center text-sm text-muted">
-          Loading invoices…
+          Loading documents…
         </CardBody>
       </Card>
     );
@@ -1565,13 +1621,11 @@ function InvoicesPanel({
     return (
       <Card>
         <CardBody className="py-8 text-center text-sm text-accent-danger">
-          {(error as Error)?.message ?? "Failed to load invoices"}
+          {(error as Error)?.message ?? "Failed to load documents"}
         </CardBody>
       </Card>
     );
   }
-
-  const rows = data?.invoices ?? [];
 
   return (
     <Card>
@@ -1582,7 +1636,7 @@ function InvoicesPanel({
         >
           <CheckCircle2 className="size-4" />
           <span>
-            Sent invoice
+            Sent
             {sentSuccess.docNumber ? ` ${sentSuccess.docNumber}` : ""} ·{" "}
             TO {sentSuccess.to.join(", ")}
             {sentSuccess.cc.length > 0
@@ -1594,36 +1648,163 @@ function InvoicesPanel({
           </span>
         </div>
       ) : null}
-      <CardBody className="py-0">
-        {rows.length === 0 ? (
+
+      <CardBody className="space-y-3 py-3">
+        {/* Filter + search row */}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <FilterChip
+            label="All"
+            active={statusFilter === "all"}
+            onClick={() => setStatusFilter("all")}
+          />
+          <FilterChip
+            label="Open"
+            active={statusFilter === "open"}
+            onClick={() => setStatusFilter("open")}
+          />
+          <FilterChip
+            label="Paid"
+            active={statusFilter === "paid"}
+            onClick={() => setStatusFilter("paid")}
+          />
+          <FilterChip
+            label="Overdue"
+            active={statusFilter === "overdue"}
+            onClick={() => setStatusFilter("overdue")}
+          />
+          <FilterChip
+            label="Sent"
+            active={statusFilter === "sent"}
+            onClick={() => setStatusFilter("sent")}
+          />
+          <FilterChip
+            label="Void"
+            active={statusFilter === "void"}
+            onClick={() => setStatusFilter("void")}
+          />
+          <span className="mx-1 h-4 w-px bg-default" />
+          <FilterChip
+            label="All types"
+            active={typeFilter === "all"}
+            onClick={() => setTypeFilter("all")}
+          />
+          <FilterChip
+            label="Invoices"
+            active={typeFilter === "invoice"}
+            onClick={() => setTypeFilter("invoice")}
+          />
+          <FilterChip
+            label="Credit memos"
+            active={typeFilter === "credit_memo"}
+            onClick={() => setTypeFilter("credit_memo")}
+          />
+          <div className="ml-auto">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="search doc#…"
+              className="w-40 rounded-md border border-default bg-base px-2 py-1 text-xs"
+            />
+          </div>
+        </div>
+
+        {data?.creditMemoError ? (
+          <div className="rounded-md border border-accent-warning/30 bg-accent-warning/10 px-3 py-2 text-xs text-accent-warning">
+            Couldn't load credit memos from QuickBooks:{" "}
+            {data.creditMemoError}. Showing invoices only.
+          </div>
+        ) : null}
+
+        {filteredRows.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted">
-            No invoices on file.
+            {allRows.length === 0
+              ? "No documents on file."
+              : "No documents match the current filters."}
           </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-default text-left text-[11px] uppercase tracking-wide text-muted">
-                <th className="py-2 pr-3 font-medium">Doc #</th>
-                <th className="py-2 pr-3 font-medium">Issued</th>
-                <th className="py-2 pr-3 font-medium">Due</th>
-                <th className="py-2 pr-3 font-medium text-right">Total</th>
-                <th className="py-2 pr-3 font-medium text-right">Balance</th>
-                <th className="py-2 pr-3 font-medium">Status</th>
-                <th className="py-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <InvoiceTableRow
-                  key={row.id}
-                  row={row}
-                  onSend={() => setSending(row)}
-                />
-              ))}
-            </tbody>
-          </table>
+          <div className="overflow-hidden rounded-md border border-default">
+            <table className="w-full text-sm">
+              <thead className="bg-elevated text-left text-[11px] uppercase tracking-wide text-muted">
+                <tr>
+                  <SortHeader
+                    label="Doc #"
+                    sortKey="docNumber"
+                    activeKey={sortKey}
+                    activeDir={sortDir}
+                    onClick={toggleSort}
+                  />
+                  <th className="px-3 py-2 font-medium">Type</th>
+                  <SortHeader
+                    label="Issued"
+                    sortKey="issueDate"
+                    activeKey={sortKey}
+                    activeDir={sortDir}
+                    onClick={toggleSort}
+                  />
+                  <th className="px-3 py-2 font-medium">Due</th>
+                  <SortHeader
+                    label="Total"
+                    sortKey="total"
+                    activeKey={sortKey}
+                    activeDir={sortDir}
+                    onClick={toggleSort}
+                    align="right"
+                  />
+                  <SortHeader
+                    label="Balance"
+                    sortKey="balance"
+                    activeKey={sortKey}
+                    activeDir={sortDir}
+                    onClick={toggleSort}
+                    align="right"
+                  />
+                  <th className="px-3 py-2 font-medium">Status</th>
+                  <th className="px-3 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((row) => (
+                  <InvoiceTableRow
+                    key={`${row.docType}:${row.qbId}`}
+                    row={row}
+                    onSend={() => setSending(row)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
+
+        {filteredRows.length > 0 ? (
+          <div className="flex items-center justify-between text-xs text-muted">
+            <div>
+              Showing {filteredRows.length} of {allRows.length}
+            </div>
+            <div className="flex items-center gap-3 tabular-nums">
+              <span>
+                Total{" "}
+                <span className="text-primary">
+                  ${totals.totalSum.toFixed(2)}
+                </span>
+              </span>
+              <span>
+                Open{" "}
+                <span
+                  className={
+                    totals.openSum > 0
+                      ? "text-accent-warning"
+                      : "text-muted"
+                  }
+                >
+                  ${totals.openSum.toFixed(2)}
+                </span>
+              </span>
+            </div>
+          </div>
+        ) : null}
       </CardBody>
+
       {sending ? (
         <InvoiceSendDialog
           open={true}
@@ -1632,7 +1813,15 @@ function InvoicesPanel({
           }}
           customerId={customerId}
           customerName={customerName}
-          invoice={sending}
+          invoice={{
+            qbInvoiceId: sending.qbId,
+            docNumber: sending.docNumber,
+            total: sending.total,
+            balance: sending.balance,
+            issueDate: sending.issueDate,
+            dueDate: sending.dueDate,
+          }}
+          docType={sending.docType}
           onSent={(result) => {
             setSentSuccess(result);
             setSending(null);
@@ -1640,6 +1829,88 @@ function InvoicesPanel({
         />
       ) : null}
     </Card>
+  );
+}
+
+function compareRows(a: InvoiceRow, b: InvoiceRow, key: SortKey): number {
+  switch (key) {
+    case "issueDate":
+      return (a.issueDate ?? "").localeCompare(b.issueDate ?? "");
+    case "docNumber":
+      return (a.docNumber ?? "").localeCompare(b.docNumber ?? "");
+    case "total":
+      return Number(a.total) - Number(b.total);
+    case "balance":
+      return Number(a.balance) - Number(b.balance);
+    default:
+      return 0;
+  }
+}
+
+function FilterChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-md border px-2 py-1 text-xs transition-colors",
+        active
+          ? "border-accent-primary bg-accent-primary/10 font-medium text-accent-primary"
+          : "border-default text-secondary hover:bg-elevated hover:text-primary",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  activeKey,
+  activeDir,
+  onClick,
+  align,
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey;
+  activeDir: SortDir;
+  onClick: (k: SortKey) => void;
+  align?: "right";
+}) {
+  const isActive = activeKey === sortKey;
+  return (
+    <th
+      className={cn(
+        "px-3 py-2 font-medium",
+        align === "right" ? "text-right" : "text-left",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onClick(sortKey)}
+        className={cn(
+          "inline-flex items-center gap-0.5 hover:text-primary",
+          isActive && "text-primary",
+        )}
+      >
+        {label}
+        {isActive ? (
+          <span className="text-[9px]">
+            {activeDir === "asc" ? "▲" : "▼"}
+          </span>
+        ) : null}
+      </button>
+    </th>
   );
 }
 
@@ -1652,43 +1923,80 @@ function InvoiceTableRow({
 }) {
   const total = Number(row.total);
   const balance = Number(row.balance);
-  const isPaid = row.status === "paid" || balance <= 0;
+  const isPaid =
+    row.status === "paid" ||
+    row.status === "applied" ||
+    balance <= 0;
+  // /api/qb-pdf/{kind}/{qbId} — mounted in src/server/routes/qb-pdf.ts.
+  const pdfHref = `/api/qb-pdf/${row.docType === "credit_memo" ? "creditmemo" : "invoice"}/${encodeURIComponent(row.qbId)}`;
   return (
-    <tr className="border-b border-default last:border-b-0">
-      <td className="py-2 pr-3 font-mono text-xs">
+    <tr className="border-t border-default">
+      <td className="px-3 py-2 font-mono text-xs">
         {row.docNumber ?? "—"}
       </td>
-      <td className="py-2 pr-3 text-xs text-secondary">
+      <td className="px-3 py-2">
+        {row.docType === "credit_memo" ? (
+          <Badge tone="info">Credit memo</Badge>
+        ) : (
+          <Badge tone="neutral">Invoice</Badge>
+        )}
+      </td>
+      <td className="px-3 py-2 text-xs text-secondary">
         {row.issueDate ?? "—"}
       </td>
-      <td className="py-2 pr-3 text-xs text-secondary">
+      <td className="px-3 py-2 text-xs text-secondary">
         {row.dueDate ?? "—"}
       </td>
-      <td className="py-2 pr-3 text-right tabular-nums text-xs">
+      <td className="px-3 py-2 text-right tabular-nums text-xs">
         ${total.toFixed(2)}
       </td>
-      <td className="py-2 pr-3 text-right tabular-nums text-xs">
+      <td className="px-3 py-2 text-right tabular-nums text-xs">
         {balance > 0 ? (
-          <span className="text-accent-warning">${balance.toFixed(2)}</span>
+          <span
+            className={
+              row.docType === "credit_memo"
+                ? "text-accent-info"
+                : "text-accent-warning"
+            }
+            title={
+              row.docType === "credit_memo"
+                ? "Unapplied credit memo balance — still available to apply against an invoice"
+                : "Open invoice balance"
+            }
+          >
+            ${balance.toFixed(2)}
+          </span>
         ) : (
           <span className="text-muted">—</span>
         )}
       </td>
-      <td className="py-2 pr-3">
+      <td className="px-3 py-2">
         <InvoiceStatusBadge status={row.status} isPaid={isPaid} />
       </td>
-      <td className="py-2 text-right">
-        {row.sentAt ? (
-          <span className="text-[11px] text-muted">
-            Sent {new Date(row.sentAt).toLocaleDateString()}
-            {row.sentVia ? ` · ${row.sentVia}` : ""}
-          </span>
-        ) : (
-          <Button size="sm" variant="secondary" onClick={onSend}>
-            <Send className="size-3.5" />
-            Send
-          </Button>
-        )}
+      <td className="px-3 py-2 text-right">
+        <div className="flex items-center justify-end gap-1">
+          <a
+            href={pdfHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center rounded-md border border-default bg-base px-1.5 py-1 text-xs text-secondary hover:bg-elevated hover:text-primary"
+            title={`Open ${row.docType === "credit_memo" ? "credit memo" : "invoice"} PDF`}
+          >
+            <FileText className="size-3.5" />
+          </a>
+          {row.sentAt ? (
+            <span className="text-[11px] text-muted">
+              {row.sentAt === "(sent)"
+                ? "Sent (qbo)"
+                : `Sent ${new Date(row.sentAt).toLocaleDateString()}${row.sentVia ? ` · ${row.sentVia}` : ""}`}
+            </span>
+          ) : (
+            <Button size="sm" variant="secondary" onClick={onSend}>
+              <Send className="size-3.5" />
+              Send
+            </Button>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -1698,7 +2006,7 @@ function InvoiceStatusBadge({
   status,
   isPaid,
 }: {
-  status: InvoiceRow["status"];
+  status: string | null;
   isPaid: boolean;
 }) {
   if (isPaid) return <Badge tone="success">Paid</Badge>;
@@ -1707,5 +2015,7 @@ function InvoiceStatusBadge({
   if (status === "sent") return <Badge tone="info">Sent</Badge>;
   if (status === "void") return <Badge tone="medium">Void</Badge>;
   if (status === "draft") return <Badge tone="medium">Draft</Badge>;
+  if (status === "open") return <Badge tone="info">Open</Badge>;
+  if (status === "applied") return <Badge tone="success">Applied</Badge>;
   return <Badge tone="medium">—</Badge>;
 }
