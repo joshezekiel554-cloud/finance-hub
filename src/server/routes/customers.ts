@@ -1176,7 +1176,163 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       }
     },
   );
+
+  // POST /api/customers/:id/invoices/bulk-pdf — fetch a set of QBO
+  // invoice + credit-memo PDFs in parallel, zip them up, and stream
+  // the archive back as application/zip. Used by the "Download N
+  // PDFs" affordance on the customer-profile Invoices tab.
+  //
+  // Body: { docs: [{ docType: "invoice"|"credit_memo", qbId: string }, ...] }
+  //
+  // The QBO PDF endpoint is rate-limited (~10 rps per realm), so we
+  // cap parallelism to 5 — comfortably under the limit and fast
+  // enough that 50-row downloads finish in a few seconds. Failures
+  // on individual docs surface in the ZIP as a `_failed.txt` entry
+  // rather than 500-ing the whole request, so a flaky doc doesn't
+  // ruin a 30-doc download.
+  const bulkPdfBodySchema = z.object({
+    docs: z
+      .array(
+        z.object({
+          docType: z.enum(["invoice", "credit_memo"]),
+          qbId: z.string().min(1).max(64),
+        }),
+      )
+      .min(1)
+      .max(100),
+  });
+
+  app.post("/:id/invoices/bulk-pdf", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const parsed = bulkPdfBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid body",
+        issues: parsed.error.issues,
+      });
+    }
+
+    const cust = await db
+      .select({
+        displayName: customers.displayName,
+      })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    if (cust.length === 0) {
+      return reply.code(404).send({ error: "customer not found" });
+    }
+    const customerName = cust[0]!.displayName;
+
+    // Look up doc-numbers locally so the ZIP entries get
+    // human-readable names. Best-effort — falls back to the qbId if
+    // the doc isn't in our local mirror (rare; credit memos
+    // aren't mirrored at all, so they always hit the qbId fallback).
+    const requestedInvoiceIds = parsed.data.docs
+      .filter((d) => d.docType === "invoice")
+      .map((d) => d.qbId);
+    const invoiceDocNumbers = new Map<string, string>();
+    if (requestedInvoiceIds.length > 0) {
+      const localInvs = await db
+        .select({
+          qbInvoiceId: invoices.qbInvoiceId,
+          docNumber: invoices.docNumber,
+        })
+        .from(invoices)
+        .where(inArray(invoices.qbInvoiceId, requestedInvoiceIds));
+      for (const inv of localInvs) {
+        if (inv.docNumber)
+          invoiceDocNumbers.set(inv.qbInvoiceId, inv.docNumber);
+      }
+    }
+
+    const qb = new QboClient();
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    const failures: Array<{ doc: { docType: string; qbId: string }; error: string }> = [];
+
+    // Bounded parallelism — QBO's PDF endpoint shares a leaky-bucket
+    // limit with the rest of the API. 5 in flight at once is well
+    // under their ~10 rps cap.
+    const CONCURRENCY = 5;
+    const queue = [...parsed.data.docs];
+    async function worker(): Promise<void> {
+      while (queue.length > 0) {
+        const doc = queue.shift();
+        if (!doc) return;
+        try {
+          const buf = await qb.getPdf(
+            doc.docType === "credit_memo" ? "creditmemo" : "invoice",
+            doc.qbId,
+          );
+          const baseName =
+            doc.docType === "credit_memo"
+              ? `CreditMemo-${doc.qbId}`
+              : `Invoice-${invoiceDocNumbers.get(doc.qbId) ?? doc.qbId}`;
+          zip.file(`${baseName}.pdf`, buf);
+        } catch (err) {
+          failures.push({
+            doc,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, parsed.data.docs.length) }, () => worker()),
+    );
+
+    if (failures.length > 0) {
+      // Note inside the ZIP so the operator sees what didn't make it
+      // without the whole thing failing.
+      zip.file(
+        "_failed.txt",
+        failures
+          .map(
+            (f) =>
+              `${f.doc.docType} ${f.doc.qbId} — ${f.error}`,
+          )
+          .join("\n"),
+      );
+      log.warn(
+        { customerId: id, failureCount: failures.length },
+        "bulk-pdf had per-doc failures",
+      );
+    }
+
+    const zipBuffer = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+      compressionOptions: { level: 6 },
+    });
+    const filename = `${sanitizeFilenameSegment(customerName)}-${todayDateStamp()}.zip`;
+    reply
+      .header("Content-Type", "application/zip")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      )
+      .send(zipBuffer);
+  });
 };
+
+// Filesystem-safe slug for ZIP filenames — strips characters that
+// upset Windows downloads + collapses whitespace. Same shape as the
+// statement-send helper but kept local since this file already has
+// its own helper section and the cross-module dep is otherwise zero.
+function sanitizeFilenameSegment(s: string): string {
+  return s
+    .replace(/[<>:"/\\|?* -]/g, "")
+    .replace(/\s+/g, "-")
+    .slice(0, 80) || "customer";
+}
+
+// "2026-05-01" — used in the ZIP filename so consecutive bulk
+// downloads for the same customer don't collide.
+function todayDateStamp(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 // Normalise a MySQL DATE column (mysql2 sometimes hands back a Date,
 // sometimes a "YYYY-MM-DD" string depending on driver config) to a

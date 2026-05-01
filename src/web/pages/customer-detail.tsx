@@ -1553,6 +1553,27 @@ function InvoicesPanel({
   const [search, setSearch] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("issueDate");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // Selection — keyed by docType:qbId so invoices and credit memos
+  // with overlapping QBO ids don't collide.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkPdfPending, setBulkPdfPending] = useState<boolean>(false);
+  const [bulkPdfError, setBulkPdfError] = useState<string | null>(null);
+
+  function rowKey(r: InvoiceRow): string {
+    return `${r.docType}:${r.qbId}`;
+  }
+  function toggleRow(r: InvoiceRow) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const key = rowKey(r);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelected(new Set());
+  }
 
   useEffect(() => {
     if (!sentSuccess) return;
@@ -1606,6 +1627,83 @@ function InvoicesPanel({
     } else {
       setSortKey(key);
       setSortDir("desc");
+    }
+  }
+
+  // True when every currently-visible (filtered) row is selected;
+  // drives the header checkbox's tri-state look.
+  const allVisibleSelected =
+    filteredRows.length > 0 &&
+    filteredRows.every((r) => selected.has(rowKey(r)));
+  const someVisibleSelected =
+    !allVisibleSelected &&
+    filteredRows.some((r) => selected.has(rowKey(r)));
+
+  function toggleSelectAllVisible() {
+    setSelected((prev) => {
+      if (allVisibleSelected) {
+        // Deselect just the visible ones (preserve any selection
+        // outside the current filter).
+        const next = new Set(prev);
+        for (const r of filteredRows) next.delete(rowKey(r));
+        return next;
+      }
+      const next = new Set(prev);
+      for (const r of filteredRows) next.add(rowKey(r));
+      return next;
+    });
+  }
+
+  // Selected rows materialised — used by the bulk-action bar's
+  // count + the bulk download payload.
+  const selectedRows = useMemo<InvoiceRow[]>(
+    () => allRows.filter((r) => selected.has(rowKey(r))),
+    [allRows, selected],
+  );
+
+  async function downloadSelectedPdfs(): Promise<void> {
+    if (selectedRows.length === 0) return;
+    setBulkPdfPending(true);
+    setBulkPdfError(null);
+    try {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/invoices/bulk-pdf`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            docs: selectedRows.map((r) => ({
+              docType: r.docType,
+              qbId: r.qbId,
+            })),
+          }),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      // Trigger a browser download of the streamed ZIP. Filename
+      // comes from the server's Content-Disposition header but
+      // browsers honour the <a download> attr too.
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") ?? "";
+      const m = /filename="([^"]+)"/.exec(cd);
+      const filename = m?.[1] ?? `documents-${customerId}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setBulkPdfError(
+        err instanceof Error ? err.message : "download failed",
+      );
+    } finally {
+      setBulkPdfPending(false);
     }
   }
 
@@ -1717,6 +1815,41 @@ function InvoicesPanel({
           </div>
         ) : null}
 
+        {selectedRows.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-primary/30 bg-accent-primary/10 px-3 py-2 text-sm">
+            <div>
+              <span className="font-medium text-accent-primary">
+                {selectedRows.length} selected
+              </span>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="ml-2 text-xs text-muted hover:text-accent-danger"
+              >
+                clear
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              {bulkPdfError ? (
+                <span className="text-[11px] text-accent-danger">
+                  {bulkPdfError}
+                </span>
+              ) : null}
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={downloadSelectedPdfs}
+                disabled={bulkPdfPending}
+                loading={bulkPdfPending}
+              >
+                <FileText className="size-3.5" />
+                Download {selectedRows.length} PDF
+                {selectedRows.length === 1 ? "" : "s"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
         {filteredRows.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted">
             {allRows.length === 0
@@ -1728,6 +1861,23 @@ function InvoicesPanel({
             <table className="w-full text-sm">
               <thead className="bg-elevated text-left text-[11px] uppercase tracking-wide text-muted">
                 <tr>
+                  <th className="w-8 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      ref={(el) => {
+                        // tri-state: indeterminate when partial.
+                        if (el) el.indeterminate = someVisibleSelected;
+                      }}
+                      onChange={toggleSelectAllVisible}
+                      aria-label={
+                        allVisibleSelected
+                          ? "Deselect all visible"
+                          : "Select all visible"
+                      }
+                      className="cursor-pointer"
+                    />
+                  </th>
                   <SortHeader
                     label="Doc #"
                     sortKey="docNumber"
@@ -1770,6 +1920,8 @@ function InvoicesPanel({
                   <InvoiceTableRow
                     key={`${row.docType}:${row.qbId}`}
                     row={row}
+                    selected={selected.has(rowKey(row))}
+                    onToggle={() => toggleRow(row)}
                     onSend={() => setSending(row)}
                   />
                 ))}
@@ -1918,9 +2070,13 @@ function SortHeader({
 
 function InvoiceTableRow({
   row,
+  selected,
+  onToggle,
   onSend,
 }: {
   row: InvoiceRow;
+  selected: boolean;
+  onToggle: () => void;
   onSend: () => void;
 }) {
   const total = Number(row.total);
@@ -1946,7 +2102,21 @@ function InvoiceTableRow({
     row.status === "paid" ||
     row.status === "overdue";
   return (
-    <tr className="border-t border-default">
+    <tr
+      className={cn(
+        "border-t border-default",
+        selected && "bg-accent-primary/5",
+      )}
+    >
+      <td className="w-8 px-3 py-2">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggle}
+          aria-label={`Select ${row.docNumber ?? row.qbId}`}
+          className="cursor-pointer"
+        />
+      </td>
       <td className="px-3 py-2 font-mono text-xs">
         {row.docNumber ?? "—"}
       </td>
