@@ -355,6 +355,7 @@ async function upsertInvoice(
     total: formatMoney(qboInvoice.TotalAmt ?? 0),
     balance: formatMoney(qboInvoice.Balance ?? 0),
     status,
+    customerMemo: qboInvoice.CustomerMemo?.value ?? null,
     syncToken: qboInvoice.SyncToken ?? null,
     lastSyncedAt: new Date(),
   };
@@ -412,6 +413,7 @@ async function upsertInvoice(
     before.total !== desired.total ||
     before.balance !== desired.balance ||
     before.status !== desired.status ||
+    before.customerMemo !== desired.customerMemo ||
     before.syncToken !== desired.syncToken;
 
   if (!drift) {

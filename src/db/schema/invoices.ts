@@ -37,6 +37,11 @@ export const invoices = mysqlTable(
     ]),
     sentAt: timestamp("sent_at"),
     sentVia: varchar("sent_via", { length: 32 }),
+    // QBO Invoice.CustomerMemo.value — the customer-facing memo
+    // printed on the invoice + statement. Synced from QBO every 30
+    // min. Surfaced as a read-only column on the customer profile's
+    // Invoices tab so the operator can see what the customer sees.
+    customerMemo: text("customer_memo"),
     syncToken: varchar("sync_token", { length: 32 }),
     lastSyncedAt: timestamp("last_synced_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

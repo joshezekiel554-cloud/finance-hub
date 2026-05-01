@@ -848,6 +848,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         total: invoices.total,
         balance: invoices.balance,
         status: invoices.status,
+        customerMemo: invoices.customerMemo,
         sentAt: invoices.sentAt,
         sentVia: invoices.sentVia,
       })
@@ -867,6 +868,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         total: number;
         balance: number;
         emailStatus: string | null;
+        customerMemo: string | null;
       }>
     > = Promise.resolve([]);
     let creditMemoError: string | null = null;
@@ -882,6 +884,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
             total: cm.TotalAmt ?? 0,
             balance: cm.Balance ?? 0,
             emailStatus: cm.EmailStatus ?? null,
+            customerMemo: cm.CustomerMemo?.value ?? null,
           }));
         } catch (err) {
           creditMemoError = (err as Error).message;
@@ -909,6 +912,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       total: string;
       balance: string;
       status: string | null;
+      // QBO Invoice/CreditMemo CustomerMemo.value — the customer-
+      // facing memo printed on the doc + statement.
+      customerMemo: string | null;
       sentAt: string | null;
       sentVia: string | null;
     };
@@ -925,6 +931,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         total: inv.total,
         balance: inv.balance,
         status: inv.status,
+        customerMemo: inv.customerMemo,
         sentAt: inv.sentAt ? inv.sentAt.toISOString() : null,
         sentVia: inv.sentVia,
       });
@@ -942,6 +949,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         // No native "status" on credit memos in QBO. Derive from
         // balance: 0 = fully applied, > 0 = open / unapplied.
         status: cm.balance > 0 ? "open" : "applied",
+        customerMemo: cm.customerMemo,
         sentAt: cm.emailStatus === "EmailSent" ? "(sent)" : null,
         sentVia: cm.emailStatus === "EmailSent" ? "qbo" : null,
       });

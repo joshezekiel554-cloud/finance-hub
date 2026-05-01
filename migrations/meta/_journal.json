@@ -134,6 +134,13 @@
       "when": 1777600000000,
       "tag": "0018_channel_email_arrays",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1777650000000,
+      "tag": "0019_invoice_customer_memo",
+      "breakpoints": true
     }
   ]
 }

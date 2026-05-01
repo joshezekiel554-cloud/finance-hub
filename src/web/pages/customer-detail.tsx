@@ -1514,6 +1514,7 @@ type InvoiceRow = {
   total: string;
   balance: string;
   status: string | null;
+  customerMemo: string | null;
   sentAt: string | null;
   sentVia: string | null;
 };
@@ -1743,6 +1744,7 @@ function InvoicesPanel({
                     onClick={toggleSort}
                   />
                   <th className="px-3 py-2 font-medium">Due</th>
+                  <th className="px-3 py-2 font-medium">Memo</th>
                   <SortHeader
                     label="Total"
                     sortKey="total"
@@ -1960,6 +1962,18 @@ function InvoiceTableRow({
       </td>
       <td className="px-3 py-2 text-xs text-secondary">
         {row.dueDate ?? "—"}
+      </td>
+      <td className="px-3 py-2 max-w-[220px] text-xs text-secondary">
+        {row.customerMemo ? (
+          <span
+            className="block truncate"
+            title={row.customerMemo}
+          >
+            {row.customerMemo}
+          </span>
+        ) : (
+          <span className="text-muted">—</span>
+        )}
       </td>
       <td className="px-3 py-2 text-right tabular-nums text-xs">
         ${total.toFixed(2)}

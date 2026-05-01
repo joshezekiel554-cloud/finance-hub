@@ -62,6 +62,7 @@ function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     status: "paid",
     sentAt: null,
     sentVia: null,
+    customerMemo: null,
     syncToken: "0",
     lastSyncedAt: now,
     createdAt: now,
