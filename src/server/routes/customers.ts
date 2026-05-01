@@ -42,6 +42,11 @@ import { pushCustomerInvoiceEmailsToQbo } from "../../modules/customer-emails/pu
 import { pushCustomerPhoneToQbo } from "../../modules/customer-phone/push-to-qbo.js";
 import { sendInvoiceViaQbo } from "../../modules/invoice-send/send-via-qbo.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
+import { emailTemplates } from "../../db/schema/email-templates.js";
+import {
+  buildTemplateVars,
+  renderTemplate,
+} from "../../modules/email-compose/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
@@ -638,6 +643,50 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     // header on the actual send, so the preview reflects that too.
     const settings = await loadAppSettings();
     const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
+
+    // Render the statement template so the dialog can pre-fill its
+    // subject + body editors. The send route accepts overrides; if
+    // the operator edits the strings, those win. Mirrors the
+    // {{statement_table}} → "" substitution that the live send uses
+    // (the table is in the attached PDF, not the email body).
+    const tplRows = await db
+      .select()
+      .from(emailTemplates)
+      .where(eq(emailTemplates.slug, "statement_open_items"))
+      .limit(1);
+    const tpl = tplRows[0] ?? null;
+    let renderedSubject: string | null = null;
+    let renderedBody: string | null = null;
+    if (tpl) {
+      // Need an Invoice[] for buildTemplateVars; reload them as
+      // full rows. The previewRows above are the trimmed UI shape.
+      const fullInvoices = await db
+        .select()
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.customerId, id),
+            gt(invoices.balance, "0"),
+          ),
+        )
+        .limit(STATEMENT_PREVIEW_INVOICE_CAP);
+      const baseVars = buildTemplateVars({
+        customer: {
+          displayName: customer.displayName,
+          primaryEmail: customer.primaryEmail,
+          balance: customer.balance,
+          overdueBalance: customer.overdueBalance,
+        },
+        openInvoices: fullInvoices,
+        user: { name: null },
+      });
+      renderedSubject = renderTemplate(tpl.subject, baseVars);
+      renderedBody = renderTemplate(tpl.body, {
+        ...baseVars,
+        statement_table: "",
+      });
+    }
+
     return reply.send({
       openInvoices: previewRows,
       totalOpenBalance: round2(totalOpenBalance),
@@ -646,6 +695,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         to: customer.primaryEmail,
         cc,
         bcc: configuredBcc.length > 0 ? configuredBcc : null,
+      },
+      template: {
+        subject: renderedSubject,
+        body: renderedBody,
       },
       truncated: tooMany,
       invoiceLinkLookupOk: invoiceLinks !== null,

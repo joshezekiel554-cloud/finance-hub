@@ -26,6 +26,19 @@ const paramsSchema = z.object({
   id: z.string().min(1).max(64),
 });
 
+// Optional overrides from the operator's edits in the send dialog.
+// When unset, the module falls back to the rendered template +
+// per-channel resolver (the original behaviour). When set, those
+// strings are used verbatim — gives the operator final say without
+// rebuilding the whole pipeline server-side.
+const sendBodySchema = z.object({
+  subject: z.string().min(1).max(998).optional(),
+  body: z.string().min(1).max(200_000).optional(),
+  to: z.string().max(2000).optional(),
+  cc: z.string().max(2000).optional(),
+  bcc: z.string().max(2000).optional(),
+});
+
 const statementsRoute: FastifyPluginAsync = async (app) => {
   app.post("/:id/statement-send", async (req, reply) => {
     const user = await requireAuth(req);
@@ -35,10 +48,24 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
         .code(400)
         .send({ error: "invalid params", details: parse.error.flatten() });
     }
+    const bodyParse = sendBodySchema.safeParse(req.body ?? {});
+    if (!bodyParse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: bodyParse.error.flatten() });
+    }
     const { id: customerId } = parse.data;
+    const overrides = bodyParse.data;
 
     try {
-      const result = await sendStatement({ customerId, userId: user.id });
+      const result = await sendStatement({
+        customerId,
+        userId: user.id,
+        overrides:
+          Object.values(overrides).some((v) => v !== undefined)
+            ? overrides
+            : undefined,
+      });
       return reply.code(200).send(result);
     } catch (err) {
       if (err instanceof SendStatementError) {

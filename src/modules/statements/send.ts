@@ -77,6 +77,17 @@ const MAX_INVOICES_PER_SEND = 50;
 export type ManagerInput = {
   customerId: string;
   userId: string;
+  // Optional operator overrides from the send dialog. When any of
+  // these are set, they replace the template-rendered defaults
+  // verbatim. Undefined fields fall through to the previous
+  // behaviour (resolver for recipients, template for subject/body).
+  overrides?: {
+    subject?: string;
+    body?: string;
+    to?: string;
+    cc?: string;
+    bcc?: string;
+  };
 };
 
 export type SendStatementResult = {
@@ -470,11 +481,23 @@ export async function sendStatement(
     user: { name: userName },
     now,
   });
-  const renderedSubject = renderTemplate(template.subject, baseVars);
-  const renderedBody = renderTemplate(template.body, {
-    ...baseVars,
-    statement_table: "",
-  });
+  // Defaults from the template; operator overrides win when provided.
+  const renderedSubject =
+    input.overrides?.subject ??
+    renderTemplate(template.subject, baseVars);
+  const rawBody =
+    input.overrides?.body ??
+    renderTemplate(template.body, {
+      ...baseVars,
+      statement_table: "",
+    });
+  // If the operator's edit ended up as plain text (no HTML tags),
+  // wrap newlines into <p> blocks so the email renders as
+  // paragraphs in the recipient's mail client. Already-HTML bodies
+  // are left alone — the template seed uses <p> tags.
+  const renderedBody = looksLikeHtml(rawBody)
+    ? rawBody
+    : plainTextToHtml(rawBody);
 
   // Render the single Statement.pdf — replaces the per-invoice PDF
   // attach loop in the previous flow. The renderer reads the logo from
@@ -522,16 +545,28 @@ export async function sendStatement(
   // array — sendEmail forwards it to Gmail which understands
   // comma-separated TO. Fall back to primary_email so a customer
   // with no statement_to_emails still gets a delivery (legacy path).
+  // Operator overrides win when provided (the dialog passes the
+  // current chip values as comma-joined strings).
   const to =
-    resolved.to.length > 0 ? resolved.to.join(", ") : customer.primaryEmail;
-  const cc = resolved.cc.length > 0 ? resolved.cc.join(", ") : null;
-  const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
-  const tagBcc = resolved.bcc;
-  const allBcc = [
-    ...(configuredBcc ? [configuredBcc] : []),
-    ...tagBcc,
-  ];
-  const bcc = allBcc.length > 0 ? allBcc.join(", ") : null;
+    input.overrides?.to ??
+    (resolved.to.length > 0
+      ? resolved.to.join(", ")
+      : customer.primaryEmail);
+  const cc =
+    input.overrides?.cc ??
+    (resolved.cc.length > 0 ? resolved.cc.join(", ") : null);
+  let bcc: string | null;
+  if (input.overrides?.bcc !== undefined) {
+    bcc = input.overrides.bcc.length > 0 ? input.overrides.bcc : null;
+  } else {
+    const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
+    const tagBcc = resolved.bcc;
+    const allBcc = [
+      ...(configuredBcc ? [configuredBcc] : []),
+      ...tagBcc,
+    ];
+    bcc = allBcc.length > 0 ? allBcc.join(", ") : null;
+  }
 
   const filename = `Statement_${sanitizeFilenameSegment(customer.displayName)}_${statementNumber}.pdf`;
   const attachments = [
@@ -687,6 +722,30 @@ function sanitizeFilenameSegment(s: string): string {
     .replace(/[^a-zA-Z0-9_-]+/g, "_")
     .replace(/^_+|_+$/g, "");
   return cleaned.slice(0, 80) || "customer";
+}
+
+// Loose detection — true when the string contains at least one
+// HTML-ish tag. Cheap heuristic, not a parse, because we only need
+// to decide between "wrap-as-paragraphs" vs "pass-through". An
+// operator who pastes a single tag into otherwise-plain text gets
+// the pass-through branch; that's deliberate.
+function looksLikeHtml(s: string): boolean {
+  return /<[a-z][\s\S]*>/i.test(s);
+}
+
+// Wrap plain text into paragraph-broken HTML. Blank-line-separated
+// chunks become <p>; line breaks within a chunk become <br/>. Mirrors
+// the email-send route's body wrapper so operator-edited statement
+// bodies render the same way as compose-modal sends.
+function plainTextToHtml(s: string): string {
+  const escaped = s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const paragraphs = escaped.split(/\n{2,}/);
+  return paragraphs
+    .map((p) => `<p>${p.replace(/\n/g, "<br/>")}</p>`)
+    .join("\n");
 }
 
 // Allocate the next statement number atomically. MySQL doesn't have

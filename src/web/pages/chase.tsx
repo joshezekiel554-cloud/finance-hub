@@ -30,6 +30,9 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Mail, Pause, Send, AlertCircle, CheckCircle2 } from "lucide-react";
+import ChaseEmailSendDialog, {
+  type ChaseSendSuccess,
+} from "../components/chase-email-send-dialog";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -117,6 +120,14 @@ export default function ChasePage() {
   // needs per-id state so we don't lock the whole table for a single
   // customer's send.
   const [rowSendingIds, setRowSendingIds] = useState<Set<string>>(new Set());
+  // Chase-send dialog state — opening a dialog instead of firing
+  // immediately so the operator can review + edit the templated
+  // email before it goes out.
+  const [chaseDialog, setChaseDialog] = useState<{
+    customerId: string;
+    customerName: string;
+    level: 1 | 2 | 3;
+  } | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -257,54 +268,6 @@ export default function ChasePage() {
             status: "sent",
             statementSendId: body.statementSendId,
           },
-        }));
-        queryClient.invalidateQueries({ queryKey: ["chase", "customers"] });
-      }
-    } finally {
-      setRowSendingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(customerId);
-        return next;
-      });
-    }
-  }
-
-  // Per-row chase email send. Mirrors sendOneRow's error/result handling
-  // so the row's status pill works the same way regardless of which
-  // action the operator picked.
-  async function sendChaseEmail(customerId: string, level: 1 | 2 | 3) {
-    setRowSendingIds((prev) => {
-      const next = new Set(prev);
-      next.add(customerId);
-      return next;
-    });
-    try {
-      const res = await fetch("/api/chase/send-chase-email", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ customerId, level }),
-      });
-      if (!res.ok) {
-        let errMsg = `HTTP ${res.status}`;
-        try {
-          const body = (await res.json()) as { error?: string; code?: string };
-          if (body.error)
-            errMsg = body.code ? `${body.code}: ${body.error}` : body.error;
-        } catch {
-          // ignore
-        }
-        setResultsById((prev) => ({
-          ...prev,
-          [customerId]: {
-            customerId,
-            status: "failed",
-            error: errMsg,
-          },
-        }));
-      } else {
-        setResultsById((prev) => ({
-          ...prev,
-          [customerId]: { customerId, status: "sent" },
         }));
         queryClient.invalidateQueries({ queryKey: ["chase", "customers"] });
       }
@@ -551,7 +514,11 @@ export default function ChasePage() {
                           noEmail={!row.primaryEmail}
                           onSendStatement={() => sendOneRow(row.id)}
                           onSendChase={(level) =>
-                            sendChaseEmail(row.id, level)
+                            setChaseDialog({
+                              customerId: row.id,
+                              customerName: row.displayName,
+                              level,
+                            })
                           }
                         />
                       )}
@@ -588,6 +555,28 @@ export default function ChasePage() {
         }
         onConfirm={() => batchMutation.mutate(Array.from(selectedIds))}
       />
+
+      {chaseDialog ? (
+        <ChaseEmailSendDialog
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setChaseDialog(null);
+          }}
+          customerId={chaseDialog.customerId}
+          customerName={chaseDialog.customerName}
+          level={chaseDialog.level}
+          onSent={(result: ChaseSendSuccess) => {
+            setResultsById((prev) => ({
+              ...prev,
+              [result.customerId]: {
+                customerId: result.customerId,
+                status: "sent",
+              },
+            }));
+            setChaseDialog(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

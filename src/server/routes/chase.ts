@@ -362,6 +362,100 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     return reply.send({ results });
   });
 
+  // GET /api/chase/preview-chase-email?customerId=...&level=...
+  // Returns the rendered subject + body + resolved recipients for
+  // the chase L1/L2/L3 send dialog, so the operator can review +
+  // edit before firing the send.
+  app.get("/preview-chase-email", async (req, reply) => {
+    await requireAuth(req);
+    const previewSchema = z.object({
+      customerId: z.string().min(1).max(64),
+      level: z.coerce.number().int().min(1).max(3),
+    });
+    const parse = previewSchema.safeParse(req.query);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid query", details: parse.error.flatten() });
+    }
+    const { customerId, level } = parse.data;
+    const slug = `chase_l${level}`;
+
+    const customerRows = await db
+      .select()
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .limit(1);
+    const customer = customerRows[0];
+    if (!customer) {
+      return reply
+        .code(404)
+        .send({ error: "customer not found", code: "customer_not_found" });
+    }
+    if (!customer.primaryEmail) {
+      return reply.code(400).send({
+        error: "customer has no primary email",
+        code: "no_primary_email",
+      });
+    }
+    const templateRows = await db
+      .select()
+      .from(emailTemplates)
+      .where(eq(emailTemplates.slug, slug))
+      .limit(1);
+    const template = templateRows[0];
+    if (!template) {
+      return reply
+        .code(404)
+        .send({ error: `template '${slug}' not found`, code: "no_template" });
+    }
+    const openInvoices = await db
+      .select()
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), gt(invoices.balance, "0")),
+      )
+      .orderBy(asc(invoices.dueDate));
+    const vars = buildTemplateVars({
+      customer,
+      openInvoices,
+      user: { name: null },
+    });
+    const renderedSubject = renderTemplate(template.subject, vars);
+    const renderedBody = renderTemplate(template.body, vars);
+
+    const resolved = await resolveRecipients("statement", {
+      primaryEmail: customer.primaryEmail,
+      billingEmails: customer.billingEmails,
+      invoiceToEmails: customer.invoiceToEmails,
+      invoiceCcEmails: customer.invoiceCcEmails,
+      invoiceBccEmails: customer.invoiceBccEmails,
+      statementToEmails: customer.statementToEmails,
+      statementCcEmails: customer.statementCcEmails,
+      statementBccEmails: customer.statementBccEmails,
+      tags: customer.tags,
+    });
+    const settings = await loadAppSettings();
+    const bccConfigured = settings.statement_bcc_email?.trim() ?? "";
+    const allBccs = [
+      ...(bccConfigured ? [bccConfigured] : []),
+      ...resolved.bcc,
+    ];
+    return reply.send({
+      subject: renderedSubject,
+      body: renderedBody,
+      recipients: {
+        to:
+          resolved.to.length > 0
+            ? resolved.to.join(", ")
+            : customer.primaryEmail,
+        cc: resolved.cc.length > 0 ? resolved.cc.join(", ") : "",
+        bcc: allBccs.length > 0 ? allBccs.join(", ") : "",
+      },
+      bccReasons: resolved.bccReasons,
+    });
+  });
+
   // POST /api/chase/send-chase-email
   // Body: { customerId, level: 1|2|3 }
   // Picks the chase_l<level> email template, renders it with the
@@ -378,7 +472,15 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .code(400)
         .send({ error: "invalid body", details: parse.error.flatten() });
     }
-    const { customerId, level } = parse.data;
+    const {
+      customerId,
+      level,
+      subject: subjectOverride,
+      body: bodyOverride,
+      to: toOverride,
+      cc: ccOverride,
+      bcc: bccOverride,
+    } = parse.data;
     const slug = `chase_l${level}`;
 
     const customerRows = await db
@@ -434,8 +536,10 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       openInvoices,
       user: { name: userName },
     });
-    const renderedSubject = renderTemplate(template.subject, vars);
-    const renderedBody = renderTemplate(template.body, vars);
+    const renderedSubject =
+      subjectOverride ?? renderTemplate(template.subject, vars);
+    const renderedBody =
+      bodyOverride ?? renderTemplate(template.body, vars);
 
     // Recipients via the per-channel resolver — chase emails reuse
     // the statement TO/CC overrides (per the customer-profile design,
@@ -454,17 +558,30 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       tags: customer.tags,
     });
     const toAddress =
-      resolved.to.length > 0
+      toOverride ??
+      (resolved.to.length > 0
         ? resolved.to.join(", ")
-        : customer.primaryEmail;
-    const cc = resolved.cc.length > 0 ? resolved.cc.join(", ") : undefined;
-    const settings = await loadAppSettings();
-    const bccConfigured = settings.statement_bcc_email?.trim() ?? "";
-    const allBccs = [
-      ...(bccConfigured ? [bccConfigured] : []),
-      ...resolved.bcc,
-    ];
-    const bcc = allBccs.length > 0 ? allBccs.join(", ") : undefined;
+        : customer.primaryEmail);
+    const cc =
+      ccOverride !== undefined
+        ? ccOverride.length > 0
+          ? ccOverride
+          : undefined
+        : resolved.cc.length > 0
+          ? resolved.cc.join(", ")
+          : undefined;
+    let bcc: string | undefined;
+    if (bccOverride !== undefined) {
+      bcc = bccOverride.length > 0 ? bccOverride : undefined;
+    } else {
+      const settings = await loadAppSettings();
+      const bccConfigured = settings.statement_bcc_email?.trim() ?? "";
+      const allBccs = [
+        ...(bccConfigured ? [bccConfigured] : []),
+        ...resolved.bcc,
+      ];
+      bcc = allBccs.length > 0 ? allBccs.join(", ") : undefined;
+    }
 
     let result;
     try {
@@ -566,6 +683,14 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
 const sendChaseEmailBodySchema = z.object({
   customerId: z.string().min(1).max(64),
   level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  // Optional operator overrides from the send dialog. When set,
+  // these replace the template-rendered defaults verbatim. Mirrors
+  // the statement-send overrides shape.
+  subject: z.string().min(1).max(998).optional(),
+  body: z.string().min(1).max(200_000).optional(),
+  to: z.string().max(2000).optional(),
+  cc: z.string().max(2000).optional(),
+  bcc: z.string().max(2000).optional(),
 });
 
 // Bounded-concurrency map. Same shape as the helper inside

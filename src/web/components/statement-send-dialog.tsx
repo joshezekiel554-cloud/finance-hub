@@ -27,7 +27,7 @@
 //   - The InvoiceLink dot is green (present), gray (missing), or muted
 //     (unknown — QBO lookup failed).
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Send, Mail, AlertCircle } from "lucide-react";
 import {
@@ -62,6 +62,13 @@ type StatementPreviewResponse = {
     // Settings (statement_bcc_email is blank). The dialog hides the
     // BCC row in that case.
     bcc: string | null;
+  };
+  // Pre-rendered subject + body from the statement_open_items
+  // template. The dialog seeds the editable fields from these when
+  // it opens; the operator can edit before send.
+  template: {
+    subject: string | null;
+    body: string | null;
   };
   truncated: boolean;
   invoiceLinkLookupOk: boolean;
@@ -173,15 +180,59 @@ export default function StatementSendDialog({
     staleTime: 30_000,
   });
 
+  // Editable subject + body buffers seeded from the preview's
+  // rendered template. The operator's edits, if any, are passed
+  // through as overrides on send.
+  const [subjectDraft, setSubjectDraft] = useState<string>("");
+  const [bodyDraft, setBodyDraft] = useState<string>("");
+  const [edited, setEdited] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (edited) return;
+    const t = previewQuery.data?.template;
+    if (!t) return;
+    if (t.subject !== null) setSubjectDraft(t.subject);
+    if (t.body !== null) setBodyDraft(t.body);
+  }, [previewQuery.data, edited]);
+
+  // Reset on close so reopen re-seeds from the next preview.
+  useEffect(() => {
+    if (!open) {
+      setSubjectDraft("");
+      setBodyDraft("");
+      setEdited(false);
+    }
+  }, [open]);
+
   const sendMutation = useMutation<
     StatementSendResponse,
     ApiError,
     void
   >({
     mutationFn: async () => {
+      // Pass the editable subject/body as overrides only if they
+      // diverge from the rendered template — keeps the wire payload
+      // small and the audit trail accurate when the operator didn't
+      // touch them.
+      const tpl = previewQuery.data?.template;
+      const subjectOverride =
+        tpl?.subject !== null && subjectDraft !== tpl?.subject
+          ? subjectDraft
+          : undefined;
+      const bodyOverride =
+        tpl?.body !== null && bodyDraft !== tpl?.body
+          ? bodyDraft
+          : undefined;
       const res = await fetch(
         `/api/customers/${encodeURIComponent(customerId)}/statement-send`,
-        { method: "POST" },
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            subject: subjectOverride,
+            body: bodyOverride,
+          }),
+        },
       );
       if (!res.ok) {
         const json: ApiError = await res.json().catch(() => ({}));
@@ -245,6 +296,40 @@ export default function StatementSendDialog({
         {previewQuery.data && (
           <PreviewBody data={previewQuery.data} />
         )}
+
+        {previewQuery.data?.template.subject !== null &&
+        previewQuery.data?.template.body !== null ? (
+          <div className="mt-3 space-y-2">
+            <label className="block">
+              <span className="mb-0.5 block text-[11px] uppercase tracking-wide text-muted">
+                Subject
+              </span>
+              <input
+                type="text"
+                value={subjectDraft}
+                onChange={(e) => {
+                  setSubjectDraft(e.target.value);
+                  setEdited(true);
+                }}
+                className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-0.5 block text-[11px] uppercase tracking-wide text-muted">
+                Body
+              </span>
+              <textarea
+                value={bodyDraft}
+                onChange={(e) => {
+                  setBodyDraft(e.target.value);
+                  setEdited(true);
+                }}
+                rows={8}
+                className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+              />
+            </label>
+          </div>
+        ) : null}
 
         {/* The send error wins over the preview error in the inline
             slot — but only render it once. PreviewError is shown above
