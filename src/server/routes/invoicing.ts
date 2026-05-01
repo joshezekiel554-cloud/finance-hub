@@ -15,7 +15,7 @@ import { z } from "zod";
 import { searchEmails } from "../../integrations/gmail/client.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import {
   parseShipmentHtml,
   reconcile,
@@ -31,9 +31,16 @@ import {
   dismissedShipments,
   DISMISS_REASONS,
 } from "../../db/schema/dismissed-shipments.js";
+import { customers } from "../../db/schema/customers.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 import { requireAuth } from "../lib/auth.js";
+import { resolveRecipientsWithRules } from "../../modules/customer-emails/recipients.js";
+import {
+  emailRoutingRules,
+  type RoutingRuleAction,
+} from "../../db/schema/email-routing-rules.js";
+import type { Customer } from "../../db/schema/customers.js";
 
 const log = createLogger({ component: "invoicing-route" });
 
@@ -227,6 +234,41 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       log.error({ err }, "batched qbo invoice lookup failed");
     }
 
+    // Phase 2.5: batch-load finance-hub customer records for the
+    // invoices we just fetched, plus all email routing rules in one
+    // shot. The buildRow helper needs both to resolve TO/CC/BCC for
+    // each invoice's pre-fill (per-channel arrays + tag-driven adds).
+    // Doing this once at the top means buildRow stays synchronous on
+    // the recipient-resolution path — no per-row DB query.
+    const qbCustomerIds = Array.from(
+      new Set(
+        Array.from(qbInvoiceMap.values())
+          .map((inv) => inv.CustomerRef?.value)
+          .filter((v): v is string => Boolean(v)),
+      ),
+    );
+    const customerByQbId = new Map<string, Customer>();
+    if (qbCustomerIds.length > 0) {
+      const rows = await db
+        .select()
+        .from(customers)
+        .where(inArray(customers.qbCustomerId, qbCustomerIds));
+      for (const c of rows) {
+        if (c.qbCustomerId) customerByQbId.set(c.qbCustomerId, c);
+      }
+    }
+    const allRoutingRules: Array<{
+      tag: string;
+      action: RoutingRuleAction;
+      value: string;
+    }> = await db
+      .select({
+        tag: emailRoutingRules.tag,
+        action: emailRoutingRules.action,
+        value: emailRoutingRules.value,
+      })
+      .from(emailRoutingRules);
+
     // Phase 3: Shopify lookups in parallel (their rate limits are looser),
     // then assemble. Keep parallelism since we no longer compete with QBO.
     const rows: InvoicingTodayRow[] = await Promise.all(
@@ -238,6 +280,8 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           qbInvoiceMap,
           qbBatchError,
           shopifyClient,
+          customerByQbId,
+          allRoutingRules,
         ),
       ),
     );
@@ -438,6 +482,12 @@ async function buildRow(
   qbInvoiceMap: Map<string, QboInvoice>,
   qbBatchError: string | null,
   shopify: ShopifyClient,
+  customerByQbId: Map<string, Customer>,
+  routingRules: Array<{
+    tag: string;
+    action: RoutingRuleAction;
+    value: string;
+  }>,
 ): Promise<InvoicingTodayRow> {
   const docNumber = parseResult.shipment.shopifyOrderNumber;
 
@@ -519,15 +569,20 @@ async function buildRow(
           lastSentAt:
             (qbInvoice as unknown as { DeliveryInfo?: { DeliveryTime?: string } })
               .DeliveryInfo?.DeliveryTime ?? null,
-          billEmail:
-            (qbInvoice as unknown as { BillEmail?: { Address?: string } }).BillEmail
-              ?.Address ?? null,
-          billEmailCc:
-            (qbInvoice as unknown as { BillEmailCc?: { Address?: string } }).BillEmailCc
-              ?.Address ?? null,
-          billEmailBcc:
-            (qbInvoice as unknown as { BillEmailBcc?: { Address?: string } }).BillEmailBcc
-              ?.Address ?? null,
+          // BillEmail/Cc/Bcc are pre-filled from finance-hub's
+          // per-channel arrays + tag rules (resolveRecipientsWithRules)
+          // — NOT from whatever's currently on the QBO invoice.
+          // QBO's customer entity has no per-customer CC/BCC slot, so
+          // those fields on the invoice are usually empty when QBO
+          // creates it. Pre-filling from our resolver means tag rules
+          // (e.g. yiddy → BCC sales@feldart.com) automatically appear
+          // on the form, and the operator's manual edits override on
+          // send.
+          ...buildResolvedRecipients(
+            qbInvoice,
+            customerByQbId,
+            routingRules,
+          ),
           lines: invoiceLinesForReconcile(qbInvoice).map((l) => ({
             lineId: l.lineId,
             sku: l.sku,
@@ -556,6 +611,65 @@ async function buildRow(
       : null,
     shopifyOrderError,
     reconcileResult,
+  };
+}
+
+// Pre-fill the form's BillEmail/Cc/Bcc fields from finance-hub's
+// per-channel arrays + tag rules. Returns the three fields (joined
+// strings since the form expects strings, not arrays). Falls back to
+// the values currently on the QBO invoice if the customer is missing
+// from finance-hub's local mirror — defensive against orphaned rows
+// while a fresh sync catches up.
+function buildResolvedRecipients(
+  qbInvoice: QboInvoice,
+  customerByQbId: Map<string, Customer>,
+  routingRules: Array<{
+    tag: string;
+    action: RoutingRuleAction;
+    value: string;
+  }>,
+): {
+  billEmail: string | null;
+  billEmailCc: string | null;
+  billEmailBcc: string | null;
+} {
+  const qbCustomerId = qbInvoice.CustomerRef?.value;
+  const customer = qbCustomerId
+    ? customerByQbId.get(qbCustomerId)
+    : undefined;
+  if (!customer) {
+    return {
+      billEmail:
+        (qbInvoice as unknown as { BillEmail?: { Address?: string } })
+          .BillEmail?.Address ?? null,
+      billEmailCc:
+        (qbInvoice as unknown as { BillEmailCc?: { Address?: string } })
+          .BillEmailCc?.Address ?? null,
+      billEmailBcc:
+        (qbInvoice as unknown as { BillEmailBcc?: { Address?: string } })
+          .BillEmailBcc?.Address ?? null,
+    };
+  }
+  const resolved = resolveRecipientsWithRules(
+    "invoice",
+    {
+      primaryEmail: customer.primaryEmail,
+      billingEmails: customer.billingEmails,
+      invoiceToEmails: customer.invoiceToEmails,
+      invoiceCcEmails: customer.invoiceCcEmails,
+      invoiceBccEmails: customer.invoiceBccEmails,
+      statementToEmails: customer.statementToEmails,
+      statementCcEmails: customer.statementCcEmails,
+      statementBccEmails: customer.statementBccEmails,
+      tags: customer.tags,
+    },
+    routingRules,
+  );
+  return {
+    billEmail: resolved.to.length > 0 ? resolved.to.join(", ") : null,
+    billEmailCc: resolved.cc.length > 0 ? resolved.cc.join(", ") : null,
+    billEmailBcc:
+      resolved.bcc.length > 0 ? resolved.bcc.join(", ") : null,
   };
 }
 
