@@ -924,7 +924,30 @@ function ShipmentCard({
             pending={dismissMutation.isPending}
           />
         ) : (
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* B2C-paid-upfront sales receipts are filtered server-side
+                (their row has no qbInvoice but qbInvoiceError flags
+                them). 99% of those want a one-click "B2C dismiss" —
+                surface the quick button so the operator doesn't have
+                to open the form + pick the reason every time. */}
+            {isHiddenSalesReceipt(row.qbInvoiceError) ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={dismissMutation.isPending}
+                loading={dismissMutation.isPending}
+                onClick={() => {
+                  setDismissReason("b2c_paid_upfront");
+                  setDismissNote("");
+                  // Use rAF so the state update lands before mutate
+                  // reads dismissReason via closure.
+                  requestAnimationFrame(() => dismissMutation.mutate());
+                }}
+                title="Dismiss as B2C / paid upfront on Shopify"
+              >
+                Dismiss (B2C paid upfront)
+              </Button>
+            ) : null}
             <button
               type="button"
               onClick={() => setShowDismissForm(true)}
@@ -1818,6 +1841,16 @@ function ActionBadge({ action }: { action: ReconcileAction | null }) {
     );
   }
   return null;
+}
+
+// Detect the "matched a SalesReceipt but the customer is B2C, so we
+// hid the doc" case from the qbInvoiceError string. Server-side
+// resolveLookups on /api/invoicing/today emits this exact phrase
+// when filtering — see src/server/routes/invoicing.ts. Stringly-
+// typed but stable; if the phrasing ever changes, both ends update
+// together via this helper.
+function isHiddenSalesReceipt(err: string | null): boolean {
+  return err !== null && /paid upfront sales receipt/i.test(err);
 }
 
 // True when the actions include any "shortage" — line removed or qty
