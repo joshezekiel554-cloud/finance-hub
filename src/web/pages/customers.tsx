@@ -32,6 +32,7 @@ type CustomerRow = {
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
   unactionedEmailCount: number;
+  tags: string[] | null;
 };
 
 type ListResponse = {
@@ -565,6 +566,15 @@ export default function CustomersPage() {
                         className="inline-flex items-center gap-2 hover:text-accent-primary hover:underline underline-offset-2"
                       >
                         {row.displayName}
+                        {row.tags?.some(
+                          (t) => t.toLowerCase() === "yiddy",
+                        ) ? (
+                          <span
+                            className="inline-block size-1.5 shrink-0 rounded-full bg-accent-info"
+                            title="Yiddy's roster"
+                            aria-label="Yiddy's roster"
+                          />
+                        ) : null}
                         {row.unactionedEmailCount > 0 ? (
                           <span
                             className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-accent-danger px-1 text-[10px] font-semibold leading-4 text-white"

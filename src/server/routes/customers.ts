@@ -267,6 +267,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         holdStatus: customers.holdStatus,
         customerType: customers.customerType,
         paymentTerms: customers.paymentTerms,
+        tags: customers.tags,
         lastSyncedAt: customers.lastSyncedAt,
         daysOverdue: daysOverdueExpr,
         lastPaymentAt: lastPaymentExpr,
