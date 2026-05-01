@@ -422,6 +422,99 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ ok: true });
   });
 
+  // Reassign a QBO Invoice/SalesReceipt to a different customer.
+  // The Shopify→QBO sync occasionally pins an order to the wrong
+  // QBO customer (duplicate names, OLD vs current account, etc.).
+  // Operator usually fixes this in QBO directly — this endpoint
+  // moves that one click into finance-hub. Sparse PATCH on the
+  // doc's CustomerRef is all QBO needs; SyncToken bump comes back
+  // and the next /today fetch reflects the new customer.
+  app.post("/reassign-customer", async (req, reply) => {
+    await requireAuth(req);
+    const schema = z.object({
+      invoiceId: z.string().min(1),
+      docType: z.enum(["invoice", "salesreceipt"]).default("invoice"),
+      expectedSyncToken: z.string().min(1),
+      newQbCustomerId: z.string().min(1),
+      newCustomerName: z.string().min(1).max(500).optional(),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      return reply.code(400).send({
+        error: "invalid body",
+        details: parse.error.flatten(),
+      });
+    }
+    const {
+      invoiceId,
+      docType,
+      expectedSyncToken,
+      newQbCustomerId,
+      newCustomerName,
+    } = parse.data;
+
+    const qbClient = new QboClient();
+    try {
+      if (docType === "salesreceipt") {
+        const receipt = await qbClient.getSalesReceiptById(invoiceId);
+        if (!receipt) {
+          return reply.code(404).send({ error: "sales receipt not found" });
+        }
+        if (receipt.SyncToken !== expectedSyncToken) {
+          return reply.code(409).send({
+            error: "sync token mismatch — receipt changed since preview",
+            currentSyncToken: receipt.SyncToken,
+          });
+        }
+        const updated = await qbClient.updateSalesReceipt({
+          Id: receipt.Id,
+          SyncToken: receipt.SyncToken,
+          sparse: true,
+          CustomerRef: {
+            value: newQbCustomerId,
+            ...(newCustomerName ? { name: newCustomerName } : {}),
+          },
+        });
+        return reply.send({
+          docType,
+          id: updated.Id,
+          newSyncToken: updated.SyncToken,
+        });
+      }
+
+      const invoice = await qbClient.getInvoiceById(invoiceId);
+      if (!invoice) {
+        return reply.code(404).send({ error: "invoice not found" });
+      }
+      if (invoice.SyncToken !== expectedSyncToken) {
+        return reply.code(409).send({
+          error: "sync token mismatch — invoice changed since preview",
+          currentSyncToken: invoice.SyncToken,
+        });
+      }
+      const updated = await qbClient.updateInvoice({
+        Id: invoice.Id,
+        SyncToken: invoice.SyncToken,
+        sparse: true,
+        CustomerRef: {
+          value: newQbCustomerId,
+          ...(newCustomerName ? { name: newCustomerName } : {}),
+        },
+      });
+      return reply.send({
+        docType,
+        id: updated.Id,
+        newSyncToken: updated.SyncToken,
+      });
+    } catch (err) {
+      log.error(
+        { err, invoiceId, newQbCustomerId },
+        "reassign-customer failed",
+      );
+      return reply.code(502).send({ error: (err as Error).message });
+    }
+  });
+
   app.post("/send", async (req, reply) => {
     await requireAuth(req);
     const parse = sendBodySchema.safeParse(req.body);

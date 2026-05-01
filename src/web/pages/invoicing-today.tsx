@@ -827,8 +827,13 @@ function ShipmentCard({
           <div className="flex items-center gap-3">
             <Truck className="size-4 text-muted" />
             <div>
-              <div className="text-sm font-semibold">
-                {po} → {customer}
+              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                <span>
+                  {po} → {customer}
+                </span>
+                {row.qbInvoice ? (
+                  <CustomerReassignControl row={row} />
+                ) : null}
               </div>
               <div className="text-xs text-secondary">
                 Feldart Tx #{row.parsed.transactionNumber} · {row.parsed.carrierShort} ·{" "}
@@ -1940,4 +1945,170 @@ function buildRefundTaskBody(row: Row): string {
   lines.push("");
   lines.push("Action: issue refund via Shopify for the short items.");
   return lines.join("\n");
+}
+
+// "Change customer" affordance for the row header. The Shopify→QBO
+// auto-create occasionally lands an order on a duplicate / OLD2 /
+// renamed customer in QBO, and the operator's old fix was to edit
+// in QBO directly. This control PATCHes Customer.Ref on the QBO
+// doc and invalidates /api/invoicing/today so the row re-renders
+// with the new customer's data — including the per-channel email
+// pre-fill from the new customer's invoice_to_emails / cc / bcc.
+function CustomerReassignControl({ row }: { row: Row }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const queryClient = useQueryClient();
+
+  // Debounce the typed query so we don't hammer /api/customers on every
+  // keystroke. 200 ms is the GA standard for type-ahead.
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query), 200);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  type CustomerHit = {
+    id: string;
+    qbCustomerId: string | null;
+    displayName: string;
+    customerType: "b2b" | "b2c" | null;
+  };
+  type CustomersResponse = { rows: CustomerHit[] };
+
+  const search = useQuery<CustomersResponse>({
+    enabled: open && debounced.trim().length >= 2,
+    queryKey: ["customers-search", debounced],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/customers?q=${encodeURIComponent(debounced.trim())}&customerType=all&limit=20`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const reassign = useMutation<
+    { docType: string; id: string; newSyncToken: string },
+    Error,
+    CustomerHit
+  >({
+    mutationFn: async (hit) => {
+      if (!row.qbInvoice) throw new Error("no qb doc on row");
+      if (!hit.qbCustomerId) {
+        throw new Error("picked customer has no qbCustomerId");
+      }
+      const res = await fetch("/api/invoicing/reassign-customer", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: row.qbInvoice.id,
+          docType: row.qbInvoice.docType,
+          expectedSyncToken: row.qbInvoice.syncToken,
+          newQbCustomerId: hit.qbCustomerId,
+          newCustomerName: hit.displayName,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let body: { error?: string } | null = null;
+        try {
+          body = JSON.parse(text) as { error?: string };
+        } catch {
+          /* not json */
+        }
+        throw new Error(body?.error ?? text ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      // Refetch the whole today list — this row plus everything else
+      // (the new customer's data needs to flow into the recipient
+      // pre-fill, etc.). Cheap; cache stale time keeps it brief.
+      queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+      setOpen(false);
+      setQuery("");
+    },
+  });
+
+  const currentName = row.qbInvoice?.customerName ?? "";
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="rounded-md border border-default bg-base px-1.5 py-0.5 text-[10px] font-medium text-secondary hover:bg-elevated hover:text-primary"
+        title="Reassign this doc to a different customer in QuickBooks"
+      >
+        change
+      </button>
+    );
+  }
+
+  const rows = search.data?.rows ?? [];
+
+  return (
+    <div className="relative inline-flex flex-col gap-1">
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={`search… (currently: ${currentName.slice(0, 30)})`}
+          className="w-72 rounded-md border border-default bg-base px-2 py-1 text-xs"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setOpen(false);
+              setQuery("");
+            }
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            setQuery("");
+          }}
+          className="rounded-md border border-default bg-base px-1.5 py-0.5 text-[10px] text-muted hover:bg-elevated hover:text-primary"
+        >
+          cancel
+        </button>
+      </div>
+      {open && debounced.trim().length >= 2 ? (
+        <div className="absolute left-0 top-full z-10 mt-1 max-h-72 w-96 overflow-y-auto rounded-md border border-default bg-base shadow-lg">
+          {search.isPending ? (
+            <div className="px-3 py-2 text-xs text-muted">Searching…</div>
+          ) : rows.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-muted">No matches.</div>
+          ) : (
+            <ul className="divide-y divide-default">
+              {rows.map((hit) => (
+                <li key={hit.id}>
+                  <button
+                    type="button"
+                    disabled={reassign.isPending || !hit.qbCustomerId}
+                    onClick={() => reassign.mutate(hit)}
+                    className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-elevated disabled:opacity-50"
+                  >
+                    <span className="truncate">{hit.displayName}</span>
+                    <span className="ml-2 shrink-0 text-[10px] text-muted">
+                      {hit.customerType ?? "?"}
+                      {!hit.qbCustomerId ? " · no QB id" : ""}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {reassign.isError ? (
+            <div className="border-t border-default px-3 py-2 text-[11px] text-accent-danger">
+              {(reassign.error as Error).message}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
