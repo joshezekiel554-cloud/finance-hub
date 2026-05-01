@@ -570,10 +570,11 @@ export default function CustomersPage() {
                           (t) => t.toLowerCase() === "yiddy",
                         ) ? (
                           <span
-                            className="inline-block size-1.5 shrink-0 rounded-full bg-accent-info"
+                            className="text-[8px] font-medium uppercase tracking-wide text-accent-info"
                             title="Yiddy's roster"
-                            aria-label="Yiddy's roster"
-                          />
+                          >
+                            yiddy
+                          </span>
                         ) : null}
                         {row.unactionedEmailCount > 0 ? (
                           <span
