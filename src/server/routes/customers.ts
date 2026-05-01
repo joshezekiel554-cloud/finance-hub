@@ -258,6 +258,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     const rowsPromise = db
       .select({
         id: customers.id,
+        qbCustomerId: customers.qbCustomerId,
         displayName: customers.displayName,
         primaryEmail: customers.primaryEmail,
         phone: customers.phone,
