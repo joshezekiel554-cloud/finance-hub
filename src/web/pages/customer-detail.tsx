@@ -216,6 +216,14 @@ export default function CustomerDetailPage() {
             ) : (
               <Badge tone="success">Active</Badge>
             )}
+            {customer.tags?.some((t) => t.toLowerCase() === "yiddy") ? (
+              <Badge
+                tone="info"
+                title="On Yiddy's commission roster — sales@feldart.com auto-BCC'd on invoices"
+              >
+                Yiddy
+              </Badge>
+            ) : null}
           </div>
           <CustomerRecipientsRow
             primaryEmail={customer.primaryEmail}
