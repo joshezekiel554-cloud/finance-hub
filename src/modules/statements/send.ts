@@ -503,21 +503,27 @@ export async function sendStatement(
     );
   }
 
-  // Recipients resolved through the per-channel helper so a customer
-  // with a statement_to/cc override (set on the customer profile)
-  // gets routed there instead of the default primary + billing list.
-  // BCC layers on top: tag-driven cc/bcc rules (rare on the statement
-  // channel today) plus the global statement_bcc_email setting.
+  // Recipients resolved through the per-channel helper. The
+  // statement_to_emails / cc / bcc arrays on the customer record are
+  // the source of truth; tag rules + the global statement_bcc_email
+  // setting layer on top.
   const resolved = await resolveRecipients("statement", {
     primaryEmail: customer.primaryEmail,
     billingEmails: customer.billingEmails,
-    invoiceToEmail: customer.invoiceToEmail,
+    invoiceToEmails: customer.invoiceToEmails,
     invoiceCcEmails: customer.invoiceCcEmails,
-    statementToEmail: customer.statementToEmail,
+    invoiceBccEmails: customer.invoiceBccEmails,
+    statementToEmails: customer.statementToEmails,
     statementCcEmails: customer.statementCcEmails,
+    statementBccEmails: customer.statementBccEmails,
     tags: customer.tags,
   });
-  const to = resolved.to ?? customer.primaryEmail;
+  // Statement send historically takes a single TO string. Join the
+  // array — sendEmail forwards it to Gmail which understands
+  // comma-separated TO. Fall back to primary_email so a customer
+  // with no statement_to_emails still gets a delivery (legacy path).
+  const to =
+    resolved.to.length > 0 ? resolved.to.join(", ") : customer.primaryEmail;
   const cc = resolved.cc.length > 0 ? resolved.cc.join(", ") : null;
   const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
   const tagBcc = resolved.bcc;

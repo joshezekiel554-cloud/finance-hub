@@ -92,12 +92,16 @@ export async function pushCustomerInvoiceEmailsToQbo(args: {
 
   // Sparse update: only PrimaryEmailAddr. The CC/BCC from
   // recipients.cc / .bcc are intentionally dropped — they're not
-  // settable on the Customer entity.
+  // settable on the Customer entity. Multiple TO addresses get
+  // comma-joined into the single PrimaryEmailAddr.Address string;
+  // QBO accepts that and renders them as a multi-recipient TO.
+  const primaryAddress =
+    recipients.to.length > 0 ? recipients.to.join(", ") : null;
   const payload: Record<string, unknown> = {
     Id: qbCustomerId,
     SyncToken: qboCustomer.SyncToken,
     sparse: true,
-    PrimaryEmailAddr: recipients.to ? { Address: recipients.to } : null,
+    PrimaryEmailAddr: primaryAddress ? { Address: primaryAddress } : null,
   };
 
   await qb.updateCustomer(payload);

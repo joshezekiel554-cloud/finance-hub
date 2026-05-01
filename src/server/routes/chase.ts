@@ -445,13 +445,18 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     const resolved = await resolveRecipients("statement", {
       primaryEmail: customer.primaryEmail,
       billingEmails: customer.billingEmails,
-      invoiceToEmail: customer.invoiceToEmail,
+      invoiceToEmails: customer.invoiceToEmails,
       invoiceCcEmails: customer.invoiceCcEmails,
-      statementToEmail: customer.statementToEmail,
+      invoiceBccEmails: customer.invoiceBccEmails,
+      statementToEmails: customer.statementToEmails,
       statementCcEmails: customer.statementCcEmails,
+      statementBccEmails: customer.statementBccEmails,
       tags: customer.tags,
     });
-    const toAddress = resolved.to ?? customer.primaryEmail;
+    const toAddress =
+      resolved.to.length > 0
+        ? resolved.to.join(", ")
+        : customer.primaryEmail;
     const cc = resolved.cc.length > 0 ? resolved.cc.join(", ") : undefined;
     const settings = await loadAppSettings();
     const bccConfigured = settings.statement_bcc_email?.trim() ?? "";

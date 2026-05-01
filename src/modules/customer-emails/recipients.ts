@@ -3,16 +3,18 @@
 // invoicing-send, and the QBO BillEmail* push all read from the same
 // rules. Three concerns:
 //
-//   1. Per-channel overrides:
-//      - statement → customers.statement_to_email / statement_cc_emails
-//      - invoice   → customers.invoice_to_email   / invoice_cc_emails
-//      Either falls back to primaryEmail + billingEmails when null.
+//   1. Per-channel arrays — these are the source of truth:
+//      - statement → statement_to_emails / statement_cc_emails / statement_bcc_emails
+//      - invoice   → invoice_to_emails   / invoice_cc_emails   / invoice_bcc_emails
 //      Chase emails reuse the statement set (same recipients, by spec).
+//      No fallback to primary_email / billing_emails — those are
+//      legacy display fields only; the migration backfilled the
+//      per-channel arrays from them on first run.
 //
 //   2. Tag-driven extras:
 //      - customers.tags is matched (case-insensitive) against rows in
 //        email_routing_rules. Each match yields an additional CC or
-//        BCC for one channel. Today only `bcc_invoice` is exercised.
+//        BCC for one channel.
 //      - Multiple matching rules are unioned + deduped.
 //
 //   3. Defensive normalisation: trim + lowercase + dedupe everywhere.
@@ -28,17 +30,26 @@ import {
 export type Channel = "invoice" | "statement";
 
 export type CustomerEmailInput = {
+  // Legacy display fields — kept for the customer-detail header but
+  // not consulted for actual recipient resolution any more.
   primaryEmail: string | null;
   billingEmails: string[] | null;
-  invoiceToEmail: string | null;
+  invoiceToEmails: string[] | null;
   invoiceCcEmails: string[] | null;
-  statementToEmail: string | null;
+  invoiceBccEmails: string[] | null;
+  statementToEmails: string[] | null;
   statementCcEmails: string[] | null;
+  statementBccEmails: string[] | null;
   tags: string[] | null;
 };
 
 export type ResolvedRecipients = {
-  to: string | null;
+  // TO is now an array — multiple TO addresses are valid (QBO's
+  // BillEmail accepts comma-joined; SMTP/Gmail allow multi-TO).
+  // First element is the "primary" recipient when something needs a
+  // single string (legacy callers expecting `to: string | null` use
+  // `to[0] ?? null` or join with commas).
+  to: string[];
   cc: string[];
   bcc: string[];
   // Per-channel reasoning surface so the customer-profile UI can show
@@ -59,13 +70,13 @@ function normaliseList(values: Array<string | null | undefined>): string[] {
   return out;
 }
 
-// CC list with primary stripped (case-insensitive). Statement + chase
-// flows already do this; centralising here means no caller has to
-// remember to filter.
-function ccMinusPrimary(cc: string[], to: string | null): string[] {
-  if (!to) return cc;
-  const primaryLower = to.trim().toLowerCase();
-  return cc.filter((e) => e.trim().toLowerCase() !== primaryLower);
+// Strip CC entries that are already in TO (case-insensitive). Same
+// recipient on both lines is a wire-format error in many SMTP relays
+// and a footgun in QBO BillEmail/Cc joins.
+function ccMinusTo(cc: string[], to: string[]): string[] {
+  if (to.length === 0) return cc;
+  const toLower = new Set(to.map((e) => e.trim().toLowerCase()));
+  return cc.filter((e) => !toLower.has(e.trim().toLowerCase()));
 }
 
 // Resolve recipients for a single channel, given the customer's data
@@ -76,26 +87,20 @@ export function resolveRecipientsWithRules(
   customer: CustomerEmailInput,
   rules: Array<{ tag: string; action: RoutingRuleAction; value: string }>,
 ): ResolvedRecipients {
-  const primaryFallback = customer.primaryEmail?.trim() || null;
-  const billingFallback = normaliseList(customer.billingEmails ?? []);
-
-  let to: string | null;
+  let to: string[];
   let cc: string[];
+  let bcc: string[];
   if (channel === "invoice") {
-    to = customer.invoiceToEmail?.trim() || primaryFallback;
-    cc =
-      customer.invoiceCcEmails && customer.invoiceCcEmails.length > 0
-        ? normaliseList(customer.invoiceCcEmails)
-        : billingFallback;
+    to = normaliseList(customer.invoiceToEmails ?? []);
+    cc = normaliseList(customer.invoiceCcEmails ?? []);
+    bcc = normaliseList(customer.invoiceBccEmails ?? []);
   } else {
-    to = customer.statementToEmail?.trim() || primaryFallback;
-    cc =
-      customer.statementCcEmails && customer.statementCcEmails.length > 0
-        ? normaliseList(customer.statementCcEmails)
-        : billingFallback;
+    to = normaliseList(customer.statementToEmails ?? []);
+    cc = normaliseList(customer.statementCcEmails ?? []);
+    bcc = normaliseList(customer.statementBccEmails ?? []);
   }
 
-  cc = ccMinusPrimary(cc, to);
+  cc = ccMinusTo(cc, to);
 
   // Tag-driven CC + BCC additions.
   const customerTags = (customer.tags ?? []).map((t) =>
@@ -119,8 +124,8 @@ export function resolveRecipientsWithRules(
     }
   }
 
-  const ccFinal = normaliseList([...cc, ...ccExtras]);
-  const bccFinal = normaliseList(bccExtras);
+  const ccFinal = ccMinusTo(normaliseList([...cc, ...ccExtras]), to);
+  const bccFinal = normaliseList([...bcc, ...bccExtras]);
 
   return {
     to,

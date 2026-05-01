@@ -17,15 +17,21 @@ export const customers = mysqlTable(
     displayName: varchar("display_name", { length: 255 }).notNull(),
     primaryEmail: varchar("primary_email", { length: 255 }),
     billingEmails: json("billing_emails").$type<string[]>(),
-    // Per-channel email recipient overrides. When non-null, the
-    // statement-send / chase-email / invoicing-send flows use these
-    // instead of falling back to primaryEmail + billingEmails. Lets
-    // us point invoice copies at receiving staff while keeping
-    // statements + chase on the bookkeeper. Null = use the defaults.
-    invoiceToEmail: varchar("invoice_to_email", { length: 255 }),
+    // Per-channel recipients. These are the source of truth for who
+    // gets emailed when finance-hub sends an invoice or statement —
+    // QBO's Customer entity has no CC/BCC slots, so the sending
+    // happens client-side here (PATCH BillEmail/Cc/Bcc on the QBO
+    // Invoice + POST /send for QBO-routed sends; or direct via
+    // Gmail). primary_email / billing_emails remain only as legacy
+    // display fields seeded from QBO. Tag rules in
+    // email_routing_rules add to CC/BCC at send time on top of
+    // these values.
+    invoiceToEmails: json("invoice_to_emails").$type<string[]>(),
     invoiceCcEmails: json("invoice_cc_emails").$type<string[]>(),
-    statementToEmail: varchar("statement_to_email", { length: 255 }),
+    invoiceBccEmails: json("invoice_bcc_emails").$type<string[]>(),
+    statementToEmails: json("statement_to_emails").$type<string[]>(),
     statementCcEmails: json("statement_cc_emails").$type<string[]>(),
+    statementBccEmails: json("statement_bcc_emails").$type<string[]>(),
     // Free-form tag list. Drives email_routing_rules — e.g. tag
     // "yiddy" auto-BCCs sales@feldart.com on invoices that finance-hub
     // sends. (QBO-auto-sent invoices, e.g. via Shopify pipeline, fall

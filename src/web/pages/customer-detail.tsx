@@ -13,7 +13,6 @@ import {
   ShoppingBag,
   CreditCard,
   ExternalLink,
-  RefreshCw,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -40,10 +39,12 @@ type Customer = {
   displayName: string;
   primaryEmail: string | null;
   billingEmails: string[] | null;
-  invoiceToEmail: string | null;
+  invoiceToEmails: string[] | null;
   invoiceCcEmails: string[] | null;
-  statementToEmail: string | null;
+  invoiceBccEmails: string[] | null;
+  statementToEmails: string[] | null;
   statementCcEmails: string[] | null;
+  statementBccEmails: string[] | null;
   tags: string[] | null;
   phone: string | null;
   additionalPhones: Array<{ label: string; number: string }> | null;
@@ -366,8 +367,6 @@ export default function CustomerDetailPage() {
       </div>
 
       <RecipientsAndTagsSection customer={customer} />
-
-      <QboRecipientsCard customerId={customer.id} />
 
       <div className="border-b border-default">
         <nav className="flex gap-1">
@@ -850,24 +849,28 @@ function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
       <ChannelEmailsCard
         customerId={customer.id}
         title="Invoice recipients"
-        helper="Where invoice emails (incl. QBO auto-sends) are sent."
-        toEmail={customer.invoiceToEmail}
+        helper="Where invoice emails are sent (when finance-hub sends)."
+        toEmails={customer.invoiceToEmails}
         ccEmails={customer.invoiceCcEmails}
-        primaryEmail={customer.primaryEmail}
-        billingEmails={customer.billingEmails}
-        toField="invoiceToEmail"
+        bccEmails={customer.invoiceBccEmails}
+        toField="invoiceToEmails"
         ccField="invoiceCcEmails"
+        bccField="invoiceBccEmails"
+        channel="invoice"
+        tags={customer.tags ?? []}
       />
       <ChannelEmailsCard
         customerId={customer.id}
         title="Statement & chase recipients"
         helper="Where Statement.pdf and chase emails are sent."
-        toEmail={customer.statementToEmail}
+        toEmails={customer.statementToEmails}
         ccEmails={customer.statementCcEmails}
-        primaryEmail={customer.primaryEmail}
-        billingEmails={customer.billingEmails}
-        toField="statementToEmail"
+        bccEmails={customer.statementBccEmails}
+        toField="statementToEmails"
         ccField="statementCcEmails"
+        bccField="statementBccEmails"
+        channel="statement"
+        tags={customer.tags ?? []}
       />
       <PhonesCard
         customerId={customer.id}
@@ -882,62 +885,72 @@ function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
   );
 }
 
-// One per channel (invoice / statement). Renders the override TO + CC,
-// plus a "currently using" hint when the override is empty (showing
-// the primary + billing fallback). Writes via PATCH /api/customers/:id.
+// One per channel (invoice / statement). Three identical chip-list
+// fields: TO, CC, BCC. The values stored are the values used — no
+// fallback to primary/billing magic. Tag-driven auto-BCC additions
+// (e.g. "yiddy" → sales@feldart.com) are surfaced as a small read-
+// only caption below the manual BCC chips so the operator sees the
+// full effective recipient set. Writes via PATCH /api/customers/:id.
 function ChannelEmailsCard({
   customerId,
   title,
   helper,
-  toEmail,
+  toEmails,
   ccEmails,
-  primaryEmail,
-  billingEmails,
+  bccEmails,
   toField,
   ccField,
+  bccField,
+  channel,
+  tags,
 }: {
   customerId: string;
   title: string;
   helper: string;
-  toEmail: string | null;
+  toEmails: string[] | null;
   ccEmails: string[] | null;
-  primaryEmail: string | null;
-  billingEmails: string[] | null;
-  toField: "invoiceToEmail" | "statementToEmail";
+  bccEmails: string[] | null;
+  toField: "invoiceToEmails" | "statementToEmails";
   ccField: "invoiceCcEmails" | "statementCcEmails";
+  bccField: "invoiceBccEmails" | "statementBccEmails";
+  channel: "invoice" | "statement";
+  tags: string[];
 }) {
   const queryClient = useQueryClient();
-  // Local edit buffer: `null` means "fallback to primary/billing",
-  // a string means "use this override". Empty string is treated as
-  // the user clearing the override (back to fallback) on Save.
-  const [toDraft, setToDraft] = useState<string>(toEmail ?? "");
-  const [ccDraft, setCcDraft] = useState<string[]>(ccEmails ?? []);
-  const [ccInput, setCcInput] = useState<string>("");
 
-  // Sync from props when the parent refetches after a mutation —
-  // otherwise the local draft would shadow the new server state.
-  useEffect(() => {
-    setToDraft(toEmail ?? "");
-  }, [toEmail]);
-  useEffect(() => {
-    setCcDraft(ccEmails ?? []);
-  }, [ccEmails]);
-
-  const usingFallback = toEmail === null && (ccEmails ?? []).length === 0;
+  // Pull the tag-driven routing rules once so we can show "auto-BCC:
+  // sales@ (yiddy)" hints under the BCC field. Cached for 5 min.
+  const rulesQuery = useQuery<{
+    rules: Array<{ tag: string; action: string; value: string }>;
+  }>({
+    queryKey: ["email-routing-rules"],
+    queryFn: async () => {
+      const res = await fetch("/api/email-routing-rules");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60_000,
+  });
+  const allRules = rulesQuery.data?.rules ?? [];
+  const tagsLower = tags.map((t) => t.toLowerCase());
+  const channelBccAction = channel === "invoice" ? "bcc_invoice" : "bcc_statement";
+  const tagDerivedBccs = allRules.filter(
+    (r) =>
+      tagsLower.includes(r.tag.toLowerCase()) && r.action === channelBccAction,
+  );
 
   const mutation = useMutation({
-    mutationFn: async (input: {
-      to?: string | null;
-      cc?: string[] | null;
-    }) => {
-      const body: Record<string, unknown> = {};
-      if ("to" in input) body[toField] = input.to;
-      if ("cc" in input) body[ccField] = input.cc;
-      const res = await fetch(`/api/customers/${encodeURIComponent(customerId)}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
+    mutationFn: async (
+      patch: Partial<Record<typeof toField | typeof ccField | typeof bccField, string[] | null>>,
+    ) => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(patch),
+        },
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -946,34 +959,6 @@ function ChannelEmailsCard({
     },
   });
 
-  function saveTo() {
-    const next = toDraft.trim();
-    // Treat empty as null (clear override, fall back to primary).
-    const payload = next.length > 0 ? next : null;
-    if (payload === toEmail) return;
-    mutation.mutate({ to: payload });
-  }
-  function addCc() {
-    const v = ccInput.trim();
-    if (!v) return;
-    if (ccDraft.some((e) => e.toLowerCase() === v.toLowerCase())) {
-      setCcInput("");
-      return;
-    }
-    const next = [...ccDraft, v];
-    setCcDraft(next);
-    setCcInput("");
-    mutation.mutate({ cc: next });
-  }
-  function removeCc(addr: string) {
-    const next = ccDraft.filter(
-      (e) => e.toLowerCase() !== addr.toLowerCase(),
-    );
-    setCcDraft(next);
-    // Empty array → null so the fallback re-engages instead of "no CCs".
-    mutation.mutate({ cc: next.length > 0 ? next : null });
-  }
-
   return (
     <Card>
       <CardBody className="space-y-2 py-3">
@@ -981,83 +966,51 @@ function ChannelEmailsCard({
           {title}
         </div>
         <div className="text-[11px] text-muted">{helper}</div>
-        {usingFallback ? (
+        <EmailChipList
+          label="TO"
+          values={toEmails ?? []}
+          onChange={(next) =>
+            mutation.mutate({
+              [toField]: next.length > 0 ? next : null,
+            } as never)
+          }
+          placeholder="add TO email and press enter"
+        />
+        <EmailChipList
+          label="CC"
+          values={ccEmails ?? []}
+          onChange={(next) =>
+            mutation.mutate({
+              [ccField]: next.length > 0 ? next : null,
+            } as never)
+          }
+          placeholder="add CC email and press enter"
+        />
+        <EmailChipList
+          label="BCC"
+          values={bccEmails ?? []}
+          onChange={(next) =>
+            mutation.mutate({
+              [bccField]: next.length > 0 ? next : null,
+            } as never)
+          }
+          placeholder="add BCC email and press enter"
+        />
+        {tagDerivedBccs.length > 0 ? (
           <div className="rounded-md border border-default bg-subtle px-2 py-1 text-[11px] text-secondary">
-            Currently using primary email
-            {primaryEmail ? ` (${primaryEmail})` : ""}
-            {billingEmails && billingEmails.length > 0
-              ? ` + ${billingEmails.length} billing CC${billingEmails.length === 1 ? "" : "s"}`
-              : ""}
+            <div className="font-medium text-accent-info">
+              + auto-BCC from tags:
+            </div>
+            <ul className="ml-3 list-disc">
+              {tagDerivedBccs.map((r, i) => (
+                <li key={i}>
+                  {r.value}{" "}
+                  <span className="text-muted">({r.tag})</span>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
-        <label className="block">
-          <span className="mb-0.5 block text-[11px] text-muted">TO override</span>
-          <div className="flex gap-1">
-            <input
-              type="email"
-              value={toDraft}
-              onChange={(e) => setToDraft(e.target.value)}
-              onBlur={saveTo}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  (e.target as HTMLInputElement).blur();
-                }
-              }}
-              placeholder={primaryEmail ?? "primary email…"}
-              className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
-            />
-          </div>
-        </label>
-        <div>
-          <span className="mb-0.5 block text-[11px] text-muted">
-            CC override
-          </span>
-          {ccDraft.length > 0 ? (
-            <div className="mb-1 flex flex-wrap gap-1">
-              {ccDraft.map((addr) => (
-                <span
-                  key={addr}
-                  className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]"
-                >
-                  {addr}
-                  <button
-                    type="button"
-                    onClick={() => removeCc(addr)}
-                    className="text-muted hover:text-accent-danger"
-                    aria-label={`Remove ${addr}`}
-                  >
-                    <X className="size-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <div className="flex gap-1">
-            <input
-              type="email"
-              value={ccInput}
-              onChange={(e) => setCcInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === ",") {
-                  e.preventDefault();
-                  addCc();
-                }
-              }}
-              placeholder="add CC email and press enter"
-              className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={addCc}
-              disabled={!ccInput.trim()}
-            >
-              Add
-            </Button>
-          </div>
-        </div>
         {mutation.isError ? (
           <div className="text-[11px] text-accent-danger">
             {(mutation.error as Error)?.message ?? "save failed"}
@@ -1065,6 +1018,97 @@ function ChannelEmailsCard({
         ) : null}
       </CardBody>
     </Card>
+  );
+}
+
+// Reusable chip-list email input. The value is the source of truth;
+// blur or Enter on the input adds; the X removes. onChange fires the
+// new full list whenever entries are added/removed.
+function EmailChipList({
+  label,
+  values,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  values: string[];
+  onChange: (next: string[]) => void;
+  placeholder: string;
+}) {
+  const [draft, setDraft] = useState<string[]>(values);
+  const [input, setInput] = useState<string>("");
+
+  // Re-sync from props after parent refetches.
+  useEffect(() => {
+    setDraft(values);
+  }, [values]);
+
+  function add() {
+    const v = input.trim();
+    if (!v) return;
+    if (draft.some((e) => e.toLowerCase() === v.toLowerCase())) {
+      setInput("");
+      return;
+    }
+    const next = [...draft, v];
+    setDraft(next);
+    setInput("");
+    onChange(next);
+  }
+  function remove(addr: string) {
+    const next = draft.filter((e) => e.toLowerCase() !== addr.toLowerCase());
+    setDraft(next);
+    onChange(next);
+  }
+
+  return (
+    <div>
+      <span className="mb-0.5 block text-[11px] text-muted">{label}</span>
+      {draft.length > 0 ? (
+        <div className="mb-1 flex flex-wrap gap-1">
+          {draft.map((addr) => (
+            <span
+              key={addr}
+              className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]"
+            >
+              {addr}
+              <button
+                type="button"
+                onClick={() => remove(addr)}
+                className="text-muted hover:text-accent-danger"
+                aria-label={`Remove ${addr}`}
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex gap-1">
+        <input
+          type="email"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder={placeholder}
+          className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={add}
+          disabled={!input.trim()}
+        >
+          Add
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -1431,212 +1475,5 @@ function PhonesCard({
         ) : null}
       </CardBody>
     </Card>
-  );
-}
-
-// Read-only window into the recipient state QBO will actually use.
-// Surfaces three things: the customer-level PrimaryEmailAddr (TO QBO
-// uses on auto-creation), the company-wide SalesEmailCc/Bcc (default
-// fallback when an Invoice doesn't carry its own), and the most
-// recent invoice's BillEmail/Cc/Bcc (forensics — what was actually
-// used last time). Cached for 5 min so flipping between tabs doesn't
-// hammer QBO.
-type QboRecipientsResponse =
-  | { status: "no_qb_link"; qbCustomerId: null }
-  | {
-      status: "ok";
-      qbCustomerId: string;
-      customerLevel: { primaryEmailAddr: string | null };
-      companyDefault: {
-        cc: string | null;
-        bcc: string | null;
-        bccCompany: boolean;
-      };
-      lastInvoice: {
-        docNumber: string | null;
-        txnDate: string | null;
-        billEmail: string | null;
-        billEmailCc: string | null;
-        billEmailBcc: string | null;
-      } | null;
-    };
-
-function QboRecipientsCard({ customerId }: { customerId: string }) {
-  const queryClient = useQueryClient();
-  const queryKey = ["qbo-recipients", customerId];
-  const { data, isPending, isError, error, isFetching } =
-    useQuery<QboRecipientsResponse>({
-      queryKey,
-      queryFn: async () => {
-        const res = await fetch(
-          `/api/customers/${encodeURIComponent(customerId)}/qbo-recipients`,
-        );
-        if (!res.ok) {
-          const body = await res.text();
-          throw new Error(body || `HTTP ${res.status}`);
-        }
-        return res.json();
-      },
-      staleTime: 5 * 60_000,
-      gcTime: 10 * 60_000,
-    });
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-medium">QuickBooks recipient state</h2>
-            <p className="mt-0.5 text-xs text-muted">
-              Read-only view of what QBO has on file. CC/BCC live on each
-              invoice (and on a single company-wide default), not on the
-              customer record — finance-hub's per-customer CC/BCC apply only
-              to invoices we send.
-            </p>
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() =>
-              queryClient.invalidateQueries({ queryKey })
-            }
-            disabled={isFetching}
-            title="Re-fetch from QuickBooks"
-          >
-            <RefreshCw
-              className={cn("size-3.5", isFetching && "animate-spin")}
-            />
-            Refresh
-          </Button>
-        </div>
-      </CardHeader>
-      <CardBody className="text-sm">
-        {isPending ? (
-          <div className="text-muted">Loading from QuickBooks…</div>
-        ) : isError ? (
-          <div className="text-accent-danger">
-            {(error as Error)?.message ?? "Failed to load QBO state"}
-          </div>
-        ) : data?.status === "no_qb_link" ? (
-          <div className="text-muted">
-            Customer is not linked to a QuickBooks record.
-          </div>
-        ) : data?.status === "ok" ? (
-          <QboRecipientsBody data={data} />
-        ) : null}
-      </CardBody>
-    </Card>
-  );
-}
-
-function QboRecipientsBody({
-  data,
-}: {
-  data: Extract<QboRecipientsResponse, { status: "ok" }>;
-}) {
-  return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <div>
-        <div className="text-xs uppercase tracking-wide text-muted">
-          Customer record (Customer.PrimaryEmailAddr)
-        </div>
-        <div className="mt-1 space-y-0.5">
-          <RecipientLine
-            label="Email"
-            value={data.customerLevel.primaryEmailAddr}
-          />
-          <div className="flex items-baseline gap-2">
-            <span className="w-10 shrink-0 text-[11px] uppercase tracking-wide text-muted">
-              CC
-            </span>
-            <span className="text-xs italic text-muted">
-              n/a — no field on Customer
-            </span>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="w-10 shrink-0 text-[11px] uppercase tracking-wide text-muted">
-              BCC
-            </span>
-            <span className="text-xs italic text-muted">
-              n/a — no field on Customer
-            </span>
-          </div>
-        </div>
-        <p className="mt-1 text-[11px] text-muted">
-          QBO copies the email onto the BillEmail of any invoice it
-          auto-creates. CC/BCC live on the invoice or in company defaults.
-        </p>
-      </div>
-      <div>
-        <div className="text-xs uppercase tracking-wide text-muted">
-          Company default (Preferences.SalesFormsPrefs)
-        </div>
-        <div className="mt-1 space-y-0.5">
-          <RecipientLine label="CC" value={data.companyDefault.cc} />
-          <RecipientLine label="BCC" value={data.companyDefault.bcc} />
-          {data.companyDefault.bccCompany ? (
-            <div className="text-[11px] text-muted">
-              + EmailCopyToCompany is on (BCC company email)
-            </div>
-          ) : null}
-        </div>
-        <p className="mt-1 text-[11px] text-muted">
-          Used as a fallback when an invoice doesn't carry its own
-          BillEmailCc/Bcc.
-        </p>
-      </div>
-      <div>
-        <div className="text-xs uppercase tracking-wide text-muted">
-          Most recent invoice
-        </div>
-        {data.lastInvoice ? (
-          <>
-            <div className="mt-1 text-xs text-muted">
-              {data.lastInvoice.docNumber ?? "(no doc #)"}
-              {data.lastInvoice.txnDate ? ` · ${data.lastInvoice.txnDate}` : ""}
-            </div>
-            <div className="mt-1 space-y-0.5">
-              <RecipientLine
-                label="TO"
-                value={data.lastInvoice.billEmail}
-              />
-              <RecipientLine
-                label="CC"
-                value={data.lastInvoice.billEmailCc}
-              />
-              <RecipientLine
-                label="BCC"
-                value={data.lastInvoice.billEmailBcc}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="mt-1 text-muted">No invoices on file.</div>
-        )}
-        <p className="mt-1 text-[11px] text-muted">
-          What QBO actually used the last time it sent.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function RecipientLine({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | null;
-}) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <span className="w-10 shrink-0 text-[11px] uppercase tracking-wide text-muted">
-        {label}
-      </span>
-      <span className={cn("text-sm", value ? "text-primary" : "text-muted")}>
-        {value ?? "—"}
-      </span>
-    </div>
   );
 }

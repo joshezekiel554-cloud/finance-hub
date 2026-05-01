@@ -91,19 +91,6 @@ export type QboInvoice = {
   };
 };
 
-// Company-level preferences. We only model the SalesFormsPrefs slice
-// because that's where the global default CC/BCC for QBO-sent
-// invoices lives (used as the fallback when an invoice doesn't have
-// its own BillEmailCc/Bcc set).
-export type QboPreferences = {
-  Id: string;
-  SyncToken?: string;
-  SalesFormsPrefs?: {
-    SalesEmailCc?: QboEmailAddr;
-    SalesEmailBcc?: QboEmailAddr;
-    EmailCopyToCompany?: boolean;
-  };
-};
 
 export type QboPayment = {
   Id: string;
@@ -154,7 +141,6 @@ export type QboQueryResponse<T> = {
     CreditMemo?: T[];
     Term?: T[];
     Item?: T[];
-    Preferences?: T[];
     startPosition?: number;
     maxResults?: number;
     totalCount?: number;

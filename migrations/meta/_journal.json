@@ -127,6 +127,13 @@
       "when": 1777590039818,
       "tag": "0017_parallel_peter_quill",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1777600000000,
+      "tag": "0018_channel_email_arrays",
+      "breakpoints": true
     }
   ]
 }
