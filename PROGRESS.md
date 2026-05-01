@@ -13,6 +13,81 @@ If you're new to this file:
 
 ## Current phase
 
+**Invoices tab + editable-compose-everywhere. 🟢 SHIPPED** (commits
+`5cf12d3` → `50302d9`, 2026-05-01, ~10 commits). Two threads
+landed in one session:
+
+**(1) Customer profile Invoices tab** got a complete rebuild:
+- Unified table — invoices AND credit memos in one list, with a
+  type pill per row (commit `5cf12d3`). Backend GET fetches local
+  invoices + live QBO credit memos in parallel, gracefully
+  degrades when QBO is flaky (`creditMemoError` surfaces inline).
+- Filter chips (status: All / Open / Paid / Overdue / Sent / Void;
+  type: All / Invoices / Credit memos) + doc# search input +
+  sortable column headers (Doc # / Issued / Total / Balance) +
+  footer totals showing "Showing N of M · Total $X · Open $Y"
+  that update as filters narrow.
+- New Memo column showing QBO `CustomerMemo.value` — synced into
+  the local invoices table via migration `0019` and the
+  `customer_memo text` field. Truncates at 220px with hover for
+  full text. (Commit `2126e35`.)
+- Per-row PDF download icon (uses existing /api/qb-pdf), Send
+  button (always visible — flips label to "Re-send" when sent
+  before), and "Remind" button on open invoices.
+- Action column normalised: buttons in a fixed-width slot on every
+  row, "sent {date}" caption stacked underneath when applicable
+  (commit `95f6ab6`). Re-send is always available regardless of
+  prior send state (`4910253`).
+- Multi-select + bulk PDF download: row checkboxes with tri-state
+  header checkbox; selecting 1+ rows surfaces a bulk-action bar.
+  Server fetches the selected PDFs in parallel (CONCURRENCY=5, well
+  under QBO's ~10rps cap), zips with jszip, streams a single
+  archive back. Per-doc failures surface in a `_failed.txt` ZIP
+  entry instead of 500-ing the whole request. Selection survives
+  filter changes. (Commit `5418a8e`, new dep `jszip`.)
+
+**(2) Editable-compose pattern applied across every outbound send**
+— the operator now sees the templated message, can edit anything
+(recipients / subject / body / attachments), and confirms before
+send. Uniform shape across three paths:
+- **Invoice reminder** (commit `d77438a`) — per-row "Remind" button
+  on open invoices opens a dedicated `<InvoiceReminderDialog>`.
+  New `invoice_reminder` template context + seed (editable in
+  Settings) + extended `TemplateVars` (`invoice_number`, `total`,
+  `balance`, `issue_date`, `due_date`, `days_overdue`). Dialog
+  auto-fetches the invoice PDF and attaches it (with detach
+  toggle). Send goes via `/api/send` which now accepts optional
+  `refType`/`refId` overrides so the resulting `email_out`
+  activity links to the invoice (refType="invoice") instead of
+  the generic email_send.
+- **Statement send** (commit `2cc848e`) — `StatementSendDialog`
+  gains a Subject input + Body textarea, both pre-filled from the
+  rendered `statement_open_items` template. The preview endpoint
+  now returns the rendered template alongside the recipient list;
+  the send route + `sendStatement` module thread overrides
+  through, falling back to template defaults when not provided.
+  Plain-text edits get auto-wrapped to <p>-broken HTML so a
+  non-HTML body still renders as paragraphs in Gmail.
+- **Chase per-row send** (commit `2cc848e`) — chase page action
+  menu now opens a new `<ChaseEmailSendDialog>` instead of firing
+  immediately. New `GET /api/chase/preview-chase-email` returns
+  recipients + rendered subject + body for the chosen level;
+  `POST /api/chase/send-chase-email` accepts the same overrides
+  shape as statements.
+
+**Loose-end cleanups in the same session:**
+- One-click "Dismiss (B2C paid upfront)" button on `/invoicing/today`
+  rows where the matched doc is a B2C SalesReceipt that got
+  filtered out — saves three clicks per row in the dominant case
+  (commit `55e434d`).
+- All em-dashes (U+2014) stripped from email templates — both in
+  the seed file and across all 6 already-seeded DB rows via
+  `scripts/strip-emdashes-from-templates.ts`. Fresh installs land
+  clean; re-runnable + idempotent (commit `50302d9`).
+- Bug-fix: literal control bytes in `sanitizeFilenameSegment`
+  regex were making `customers.ts` look like a binary file to git
+  + grep. Replaced with proper escape sequences (commit `6ebf2c2`).
+
 **Customer ops + B2B invoicing recipient overhaul. 🟢 SHIPPED**
 (commits `a6a69c6` → `fac9231`, 2026-04-30 → 2026-05-01, ~25
 commits). The single biggest substantive change since week 7:
@@ -635,6 +710,18 @@ These don't block current work but block specific later phases:
 - `dec1e53` — `tasks-ui` agent: Kanban + list + detail drawer + comments + @mentions
 - `4641b1f` — Bug-check pass: regex tightening, LIKE escape, missing SSE events, N+1
 - `28f4e28` — PROGRESS catch-up
+
+**Invoices tab + editable-compose-everywhere** (2026-05-01, commits `5cf12d3` → `50302d9`):
+- `5cf12d3` — Unified Documents view (invoices + credit memos) with filters / search / sort / PDF / Send
+- `4910253` — Always show Send + Re-send, beef up PDF button
+- `95f6ab6` — Align action buttons + show sent caption for invoices
+- `2126e35` — Memo column (migration 0019)
+- `5418a8e` — Multi-select + bulk PDF download (new dep: jszip)
+- `d77438a` — Per-row Send reminder — editable compose with PDF attached
+- `6ebf2c2` — Bug fix: escape literal control bytes in regex (customers.ts no longer detected as binary)
+- `2cc848e` — Phase 2: editable subject/body on statement + chase sends
+- `55e434d` — One-click "Dismiss B2C" on hidden SalesReceipt rows
+- `50302d9` — Strip em-dashes from email templates
 
 **Customer ops + B2B invoicing recipient overhaul** (2026-04-30 → 2026-05-01, commits `a6a69c6` → `fac9231`):
 - `a6a69c6` — Phones card (Main + labelled extras) + unactioned-email indicators
