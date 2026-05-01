@@ -1974,28 +1974,35 @@ function InvoiceTableRow({
         <InvoiceStatusBadge status={row.status} isPaid={isPaid} />
       </td>
       <td className="px-3 py-2 text-right">
-        <div className="flex items-center justify-end gap-1">
+        <div className="flex items-center justify-end gap-2">
+          {row.sentAt ? (
+            <span
+              className="text-[10px] text-muted"
+              title={
+                row.sentVia
+                  ? `Last sent via ${row.sentVia}`
+                  : "Last sent"
+              }
+            >
+              {row.sentAt === "(sent)"
+                ? "sent"
+                : `sent ${new Date(row.sentAt).toLocaleDateString()}`}
+            </span>
+          ) : null}
           <a
             href={pdfHref}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center rounded-md border border-default bg-base px-1.5 py-1 text-xs text-secondary hover:bg-elevated hover:text-primary"
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-default bg-base px-2 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
             title={`Open ${row.docType === "credit_memo" ? "credit memo" : "invoice"} PDF`}
           >
             <FileText className="size-3.5" />
+            PDF
           </a>
-          {row.sentAt ? (
-            <span className="text-[11px] text-muted">
-              {row.sentAt === "(sent)"
-                ? "Sent (qbo)"
-                : `Sent ${new Date(row.sentAt).toLocaleDateString()}${row.sentVia ? ` · ${row.sentVia}` : ""}`}
-            </span>
-          ) : (
-            <Button size="sm" variant="secondary" onClick={onSend}>
-              <Send className="size-3.5" />
-              Send
-            </Button>
-          )}
+          <Button size="sm" variant="secondary" onClick={onSend}>
+            <Send className="size-3.5" />
+            {row.sentAt ? "Re-send" : "Send"}
+          </Button>
         </div>
       </td>
     </tr>
