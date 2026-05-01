@@ -20,6 +20,7 @@ export const EMAIL_TEMPLATE_CONTEXTS = [
   "chase",
   "statement",
   "payment_confirmation",
+  "invoice_reminder",
   "generic",
   "reply",
 ] as const;

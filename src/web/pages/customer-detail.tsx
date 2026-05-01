@@ -35,6 +35,9 @@ import StatementSendDialog, {
 import InvoiceSendDialog, {
   type InvoiceSendSuccess,
 } from "../components/invoice-send-dialog";
+import InvoiceReminderDialog, {
+  type InvoiceReminderSuccess,
+} from "../components/invoice-reminder-dialog";
 import { cn } from "../lib/cn";
 
 type Customer = {
@@ -1548,6 +1551,9 @@ function InvoicesPanel({
   const [sending, setSending] = useState<InvoiceRow | null>(null);
   const [sentSuccess, setSentSuccess] =
     useState<InvoiceSendSuccess | null>(null);
+  const [reminding, setReminding] = useState<InvoiceRow | null>(null);
+  const [reminderSuccess, setReminderSuccess] =
+    useState<InvoiceReminderSuccess | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [search, setSearch] = useState<string>("");
@@ -1580,6 +1586,12 @@ function InvoicesPanel({
     const t = setTimeout(() => setSentSuccess(null), 6000);
     return () => clearTimeout(t);
   }, [sentSuccess]);
+
+  useEffect(() => {
+    if (!reminderSuccess) return;
+    const t = setTimeout(() => setReminderSuccess(null), 6000);
+    return () => clearTimeout(t);
+  }, [reminderSuccess]);
 
   const allRows = data?.invoices ?? [];
 
@@ -1743,6 +1755,20 @@ function InvoicesPanel({
               : ""}
             {sentSuccess.bcc.length > 0
               ? ` · BCC ${sentSuccess.bcc.length}`
+              : ""}
+          </span>
+        </div>
+      ) : null}
+      {reminderSuccess ? (
+        <div
+          role="status"
+          className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+        >
+          <CheckCircle2 className="size-4" />
+          <span>
+            Reminder sent
+            {reminderSuccess.docNumber
+              ? ` for invoice ${reminderSuccess.docNumber}`
               : ""}
           </span>
         </div>
@@ -1923,6 +1949,7 @@ function InvoicesPanel({
                     selected={selected.has(rowKey(row))}
                     onToggle={() => toggleRow(row)}
                     onSend={() => setSending(row)}
+                    onRemind={() => setReminding(row)}
                   />
                 ))}
               </tbody>
@@ -1979,6 +2006,29 @@ function InvoicesPanel({
           onSent={(result) => {
             setSentSuccess(result);
             setSending(null);
+          }}
+        />
+      ) : null}
+
+      {reminding ? (
+        <InvoiceReminderDialog
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setReminding(null);
+          }}
+          customerId={customerId}
+          customerName={customerName}
+          invoice={{
+            qbInvoiceId: reminding.qbId,
+            docNumber: reminding.docNumber,
+            total: reminding.total,
+            balance: reminding.balance,
+            issueDate: reminding.issueDate,
+            dueDate: reminding.dueDate,
+          }}
+          onSent={(result) => {
+            setReminderSuccess(result);
+            setReminding(null);
           }}
         />
       ) : null}
@@ -2073,11 +2123,13 @@ function InvoiceTableRow({
   selected,
   onToggle,
   onSend,
+  onRemind,
 }: {
   row: InvoiceRow;
   selected: boolean;
   onToggle: () => void;
   onSend: () => void;
+  onRemind: () => void;
 }) {
   const total = Number(row.total);
   const balance = Number(row.balance);
@@ -2184,6 +2236,17 @@ function InvoiceTableRow({
               <FileText className="size-3.5" />
               PDF
             </a>
+            {row.docType === "invoice" && balance > 0 ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={onRemind}
+                title="Send a custom reminder email with the invoice attached"
+              >
+                <Mail className="size-3.5" />
+                Remind
+              </Button>
+            ) : null}
             <Button size="sm" variant="secondary" onClick={onSend}>
               <Send className="size-3.5" />
               {wasSent ? "Re-send" : "Send"}

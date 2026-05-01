@@ -54,6 +54,13 @@ const sendBodySchema = z.object({
   threadId: z.string().max(255).optional(),
   customerId: z.string().max(64).optional(),
   attachments: z.array(attachmentSchema).max(20).optional(),
+  // Optional overrides for the activity row this send produces. When
+  // provided, the activity's refType/refId point at the related doc
+  // (e.g. an invoice or credit memo) instead of the default
+  // "email_send" + messageId. Lets the customer timeline link the
+  // outbound mail to the right entity for filter/jump-to purposes.
+  refType: z.string().max(64).optional(),
+  refId: z.string().max(64).optional(),
 });
 
 // Minimal HTML escape — sufficient since we control the surrounding
@@ -114,6 +121,8 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       threadId,
       customerId,
       attachments,
+      refType: refTypeOverride,
+      refId: refIdOverride,
     } = parse.data;
 
     const html = bodyToHtml(body);
@@ -188,8 +197,8 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
         userId: user.id,
         subject,
         body,
-        refType: "email_send",
-        refId: result.messageId,
+        refType: refTypeOverride ?? "email_send",
+        refId: refIdOverride ?? result.messageId,
         meta: {
           to,
           cc: cc ?? null,
@@ -197,6 +206,11 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
           alias: alias ?? null,
           threadId: result.threadId,
           messageId: result.messageId,
+          // Always carry the messageId — when refType/refId are
+          // overridden to point at an invoice etc., the timeline can
+          // still surface the underlying email via this meta field.
+          emailRefType: "email_send",
+          emailRefId: result.messageId,
         },
       });
     }

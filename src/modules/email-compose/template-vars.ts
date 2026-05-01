@@ -14,6 +14,15 @@ export type TemplateVars = {
   company_name: string;
   thread_subject: string;
   statement_table?: string;
+  // Per-invoice variables — populated only when the template is
+  // rendered against a specific invoice (e.g. invoice_reminder).
+  // Other contexts leave these as empty strings.
+  invoice_number?: string;
+  invoice_total?: string;
+  invoice_balance?: string;
+  invoice_issue_date?: string;
+  invoice_due_date?: string;
+  invoice_days_overdue?: string;
 };
 
 const COMPANY_NAME = "Feldart";

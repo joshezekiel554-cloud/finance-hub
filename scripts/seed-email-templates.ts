@@ -147,6 +147,24 @@ Thanks,
 {{user_name}}
 {{company_name}}`,
   },
+  {
+    slug: "invoice_reminder",
+    name: "Invoice reminder",
+    context: "invoice_reminder",
+    description:
+      "Per-invoice nudge sent from the customer profile's Invoices tab. The PDF is attached automatically.",
+    subject:
+      "Reminder: Invoice {{invoice_number}} from {{company_name}}",
+    body: `Hi {{customer_name}},
+
+Just a friendly reminder about invoice {{invoice_number}} ({{invoice_total}}, due {{invoice_due_date}}). Could you let me know the status when you get a chance?
+
+I've attached a copy of the invoice for reference.
+
+Thanks,
+{{user_name}}
+{{company_name}}`,
+  },
 ];
 
 async function main() {
