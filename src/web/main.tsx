@@ -21,6 +21,7 @@ import MondayTermsImportPage from "./pages/monday-terms-import";
 import ShopifyB2bAuditPage from "./pages/shopify-b2b-audit";
 import ShopifyLinkPage from "./pages/shopify-link";
 import RosterTagImportPage from "./pages/roster-tag-import";
+import ReturnsListPage from "./pages/returns";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -112,6 +113,18 @@ const rosterTagImportRoute = createRoute({
   component: RosterTagImportPage,
 });
 
+const returnsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns",
+  component: ReturnsListPage,
+});
+
+const returnDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns/$rmaId",
+  component: ReturnsListPage, // placeholder — detail page is Phase 1+
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -125,6 +138,8 @@ const routeTree = rootRoute.addChildren([
   shopifyB2bAuditRoute,
   shopifyLinkRoute,
   rosterTagImportRoute,
+  returnsRoute,
+  returnDetailRoute,
 ]);
 
 const router = createRouter({ routeTree });

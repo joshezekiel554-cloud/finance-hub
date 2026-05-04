@@ -9,6 +9,7 @@ import {
   Sparkles,
   Settings,
   AlertCircle,
+  RotateCcw,
 } from "lucide-react";
 import { cn } from "./lib/cn";
 import { NotificationBell } from "./components/notification-bell";
@@ -20,6 +21,7 @@ const navItems = [
   { to: "/chase", label: "Chase", icon: AlertCircle },
   { to: "/statements", label: "Statements", icon: Receipt },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
+  { to: "/returns", label: "Returns", icon: RotateCcw },
   { to: "/agent", label: "Agent", icon: Sparkles },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
