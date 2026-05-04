@@ -4,6 +4,7 @@ import { db } from "../../db/index.js";
 import {
   rmaItems,
   rmas,
+  seasons,
   type NewRma,
   type NewRmaItem,
   type Rma,
@@ -11,9 +12,13 @@ import {
   type RmaReturnType,
   type RmaStatus,
 } from "../../db/schema/returns.js";
+import { customers } from "../../db/schema/customers.js";
 import { recordActivity } from "../crm/activity-ingester.js";
 import { validateTransition } from "./rma-state.js";
 import { buildAndPushCreditMemo } from "./credit-memo-builder.js";
+import { runEligibility } from "./eligibility.js";
+import { generateEligibilityPdf } from "./eligibility-pdf.js";
+import { buildExtensivExportFile } from "./extensiv-export.js";
 
 // ---------------------------------------------------------------------------
 // createRma
@@ -148,7 +153,7 @@ export type ApproveRmaInput = {
 
 export type ApproveRmaResult =
   | { ok: true; rma: Rma }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; eligibilityBreakdown?: import("./eligibility.js").EligibilityBreakdown };
 
 function generateDamageRmaNumber(): string {
   const now = new Date();
@@ -170,16 +175,87 @@ export async function approveRma(
   });
   if (!transition.ok) return { ok: false, reason: transition.reason };
 
+  // For damage: allocate DC-... rma number immediately.
+  // For seasonal/non-seasonal: rmaNumber stays null until set_warehouse_number.
   const rmaNumber = current.returnType === "damage" ? generateDamageRmaNumber() : null;
+
+  // --- Eligibility check for seasonal / non-seasonal ---
+  let eligibilityPatch: {
+    eligibilityDetails?: unknown;
+    eligibleAmount?: string;
+    returnPercentage?: string;
+    thresholdOverridden?: boolean;
+    overrideReason?: string;
+    overrideByUserId?: string;
+  } = {};
+
+  if (current.returnType !== "damage") {
+    if (!current.seasonId) {
+      return { ok: false, reason: "RMA has no season — cannot compute eligibility" };
+    }
+
+    // Fetch items for this RMA
+    const itemRows = (await db
+      .select()
+      .from(rmaItems)
+      .where(eq(rmaItems.rmaId, id))) as RmaItem[];
+
+    const breakdown = await runEligibility({
+      customerId: current.customerId,
+      qbCustomerId: current.qbCustomerId ?? "",
+      seasonId: current.seasonId,
+      proposedItems: itemRows.map((item) => ({
+        lineTotal: item.lineTotal,
+        classification: item.classification,
+      })),
+      excludeRmaId: id,
+    });
+
+    // For non-seasonal: eligibility runs informationally — never gates approval.
+    // For seasonal: gate on threshold, allow override.
+    if (current.returnType === "seasonal" && !breakdown.passesThreshold) {
+      if (!input.overrideThreshold) {
+        return {
+          ok: false,
+          reason: "Over threshold — provide override or deny",
+          eligibilityBreakdown: breakdown,
+        } as ApproveRmaResult;
+      }
+      if (!input.overrideReason) {
+        return {
+          ok: false,
+          reason: "Override reason required",
+          eligibilityBreakdown: breakdown,
+        } as ApproveRmaResult;
+      }
+    }
+
+    eligibilityPatch = {
+      eligibilityDetails: breakdown,
+      eligibleAmount: breakdown.proposedSubtotalCountingTowardThreshold,
+      returnPercentage: breakdown.cumulativeReturnPct,
+      thresholdOverridden: input.overrideThreshold ?? false,
+      overrideReason: input.overrideReason ?? null,
+      overrideByUserId: input.overrideThreshold ? input.userId : null,
+    };
+  }
+
   const now = new Date();
   await db.update(rmas).set({
     status: "approved",
     approvedAt: now,
     approvedByUserId: input.userId,
     rmaNumber,
-    thresholdOverridden: input.overrideThreshold ?? false,
-    overrideReason: input.overrideReason ?? null,
-    overrideByUserId: input.overrideThreshold ? input.userId : null,
+    thresholdOverridden: eligibilityPatch.thresholdOverridden ?? (input.overrideThreshold ?? false),
+    overrideReason: eligibilityPatch.overrideReason ?? (input.overrideReason ?? null),
+    overrideByUserId: eligibilityPatch.overrideByUserId ?? (input.overrideThreshold ? input.userId : null),
+    ...(eligibilityPatch.eligibilityDetails !== undefined
+      ? {
+          eligibilityDetails: eligibilityPatch.eligibilityDetails,
+          eligibleAmount: eligibilityPatch.eligibleAmount,
+          returnPercentage: eligibilityPatch.returnPercentage,
+        }
+      : {}),
   }).where(eq(rmas.id, id));
 
   await recordActivity(
@@ -190,13 +266,14 @@ export async function approveRma(
       userId: input.userId,
       refType: "rma",
       refId: id,
+      meta: input.overrideThreshold ? { thresholdOverridden: true } : undefined,
     },
     db,
   );
 
   // If a Drive folder exists (photos were uploaded pre-approval), rename it
   // from "RMA-{id}" to the newly allocated rmaNumber.
-  // Note: for the seasonal flow (Phase 3), apply the same pattern at
+  // Note: for the seasonal flow, apply the same pattern at
   // set_warehouse_number when the warehouse RMA number is allocated.
   if (current.driveFolderId && rmaNumber) {
     try {
@@ -243,11 +320,83 @@ export async function denyRma(
   });
   if (!transition.ok) return { ok: false, reason: transition.reason };
 
+  // For seasonal RMAs: generate eligibility PDF and save to Drive (best-effort).
+  let denialPdfDriveId: string | null = null;
+  if (current.returnType === "seasonal" && current.seasonId) {
+    try {
+      const itemRows = (await db
+        .select()
+        .from(rmaItems)
+        .where(eq(rmaItems.rmaId, id))) as RmaItem[];
+
+      const breakdown = await runEligibility({
+        customerId: current.customerId,
+        qbCustomerId: current.qbCustomerId ?? "",
+        seasonId: current.seasonId,
+        proposedItems: itemRows.map((item) => ({
+          lineTotal: item.lineTotal,
+          classification: item.classification,
+        })),
+        // Don't exclude the RMA being denied — it's still being evaluated
+      });
+
+      // Fetch customer name for PDF
+      const customerRows = await db
+        .select({ displayName: customers.displayName })
+        .from(customers)
+        .where(eq(customers.id, current.customerId));
+      const customerName = customerRows[0]?.displayName ?? "Customer";
+
+      // Fetch season name for PDF
+      const seasonRows = await db
+        .select({ name: seasons.name })
+        .from(seasons)
+        .where(eq(seasons.id, current.seasonId));
+      const seasonName = seasonRows[0]?.name ?? "Season";
+
+      const pdfBuffer = await generateEligibilityPdf({
+        rma: { id: current.id, rmaNumber: current.rmaNumber ?? null },
+        customer: { name: customerName },
+        season: { name: seasonName },
+        breakdown,
+        items: itemRows.map((item) => ({
+          sku: item.sku,
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          lineTotal: item.lineTotal,
+          classification: item.classification,
+          priorSeasonId: item.priorSeasonId,
+        })),
+      });
+
+      // Upload to Drive — best-effort, catch errors
+      const { uploadFile } = await import("../../integrations/google-drive/client.js");
+      const now2 = new Date();
+      const dateStr = `${now2.getFullYear()}${String(now2.getMonth() + 1).padStart(2, "0")}${String(now2.getDate()).padStart(2, "0")}`;
+      const driveFolderId = current.driveFolderId;
+      if (driveFolderId) {
+        const uploadResult = await uploadFile({
+          userId: input.userId,
+          folderId: driveFolderId,
+          filename: `denial-${id}-${dateStr}.pdf`,
+          mimeType: "application/pdf",
+          content: pdfBuffer,
+        });
+        denialPdfDriveId = uploadResult.fileId;
+      }
+    } catch (err) {
+      // Don't fail the denial if PDF generation or Drive upload fails
+      console.error("[denyRma] Eligibility PDF generation/upload failed:", err);
+    }
+  }
+
   const now = new Date();
   await db.update(rmas).set({
     status: "denied",
     deniedAt: now,
     denialReason: input.reason,
+    ...(denialPdfDriveId ? { denialPdfDriveId } : {}),
   }).where(eq(rmas.id, id));
 
   await recordActivity(
@@ -263,6 +412,323 @@ export async function denyRma(
   );
 
   const updated = await db.select().from(rmas).where(eq(rmas.id, id));
+  return { ok: true, rma: updated[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// generateWarehouseExport
+// ---------------------------------------------------------------------------
+
+export type GenerateWarehouseExportInput = {
+  rmaId: string;
+  userId: string;
+};
+
+export type GenerateWarehouseExportResult =
+  | { ok: true; rma: Rma; exportFile: { filename: string; content: string } }
+  | { ok: false; reason: string };
+
+export async function generateWarehouseExport(
+  input: GenerateWarehouseExportInput,
+): Promise<GenerateWarehouseExportResult | null> {
+  const { rmaId, userId } = input;
+  const existing = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "generate_warehouse_export",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  // Fetch items
+  const itemRows = (await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+
+  // Fetch customer
+  const customerRows = await db
+    .select()
+    .from(customers)
+    .where(eq(customers.id, current.customerId))
+    .limit(1);
+  const customerRow = customerRows[0];
+  const customerName = customerRow?.displayName ?? "Customer";
+
+  // Fetch season
+  let seasonName = "";
+  if (current.seasonId) {
+    const seasonRows = await db
+      .select({ name: seasons.name })
+      .from(seasons)
+      .where(eq(seasons.id, current.seasonId));
+    seasonName = seasonRows[0]?.name ?? "";
+  }
+
+  // Build extensiv ref: "{customerName} {seasonName} returns"
+  const extensivRef = [customerName, seasonName, "returns"]
+    .filter(Boolean)
+    .join(" ");
+
+  const exportFile = buildExtensivExportFile({
+    rma: { rmaNumber: current.rmaNumber ?? null, extensivRef },
+    customer: {
+      name: customerName,
+      qbCustomerId: current.qbCustomerId ?? "",
+    },
+    season: { name: seasonName },
+    items: itemRows.map((item) => ({
+      sku: item.sku,
+      name: item.name,
+      quantity: item.quantity,
+    })),
+  });
+
+  const now = new Date();
+  await db.update(rmas).set({
+    status: "awaiting_warehouse_number",
+    extensivRef,
+    extensivExportGeneratedAt: now,
+  }).where(eq(rmas.id, rmaId));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_warehouse_export_generated",
+      source: "user_action",
+      userId,
+      refType: "rma",
+      refId: rmaId,
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  return { ok: true, rma: updated[0] as Rma, exportFile };
+}
+
+// ---------------------------------------------------------------------------
+// cancelWarehouseExport
+// ---------------------------------------------------------------------------
+
+export type CancelWarehouseExportInput = {
+  rmaId: string;
+  userId: string;
+};
+
+export type CancelWarehouseExportResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function cancelWarehouseExport(
+  input: CancelWarehouseExportInput,
+): Promise<CancelWarehouseExportResult | null> {
+  const { rmaId, userId } = input;
+  const existing = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "cancel_warehouse_export",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  await db.update(rmas).set({
+    status: "approved",
+    extensivExportGeneratedAt: null,
+  }).where(eq(rmas.id, rmaId));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_warehouse_export_cancelled",
+      source: "user_action",
+      userId,
+      refType: "rma",
+      refId: rmaId,
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  return { ok: true, rma: updated[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// setWarehouseNumber
+// ---------------------------------------------------------------------------
+
+export type SetWarehouseNumberInput = {
+  rmaId: string;
+  userId: string;
+  txNumber: string;
+};
+
+export type SetWarehouseNumberResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function setWarehouseNumber(
+  input: SetWarehouseNumberInput,
+): Promise<SetWarehouseNumberResult | null> {
+  const { rmaId, userId, txNumber } = input;
+  const existing = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "set_warehouse_number",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  const now = new Date();
+  await db.update(rmas).set({
+    status: "sent_to_warehouse",
+    rmaNumber: txNumber,
+    extensivTxNumber: txNumber,
+    sentToWarehouseAt: now,
+  }).where(eq(rmas.id, rmaId));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_sent_to_warehouse",
+      source: "user_action",
+      userId,
+      refType: "rma",
+      refId: rmaId,
+      meta: { txNumber },
+    },
+    db,
+  );
+
+  // If a Drive folder exists, rename it to the warehouse tx number.
+  if (current.driveFolderId) {
+    try {
+      const { renameFolder } = await import("../../integrations/google-drive/client.js");
+      await renameFolder({
+        userId,
+        folderId: current.driveFolderId,
+        newName: txNumber,
+      });
+    } catch (err) {
+      console.error("[setWarehouseNumber] Drive folder rename failed:", err);
+    }
+  }
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  return { ok: true, rma: updated[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// manualMarkReceived
+// ---------------------------------------------------------------------------
+
+export type ManualMarkReceivedInput = {
+  rmaId: string;
+  userId: string;
+};
+
+export type ManualMarkReceivedResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function manualMarkReceived(
+  input: ManualMarkReceivedInput,
+): Promise<ManualMarkReceivedResult | null> {
+  const { rmaId, userId } = input;
+  const existing = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "mark_received",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  const now = new Date();
+  await db.update(rmas).set({
+    status: "received",
+    receivedAtWarehouseAt: now,
+  }).where(eq(rmas.id, rmaId));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_received_at_warehouse",
+      source: "user_action",
+      userId,
+      refType: "rma",
+      refId: rmaId,
+      meta: { source: "manual" },
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  return { ok: true, rma: updated[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// overrideApproveRma
+// ---------------------------------------------------------------------------
+
+export type OverrideApproveRmaInput = {
+  rmaId: string;
+  userId: string;
+  reason: string;
+};
+
+export type OverrideApproveRmaResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function overrideApproveRma(
+  input: OverrideApproveRmaInput,
+): Promise<OverrideApproveRmaResult | null> {
+  const { rmaId, userId, reason } = input;
+  const existing = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "override_approve",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  // deniedAt + denialReason preserved as history. Denial PDF stays attached.
+  await db.update(rmas).set({
+    status: "approved",
+    thresholdOverridden: true,
+    overrideReason: reason,
+    overrideByUserId: userId,
+  }).where(eq(rmas.id, rmaId));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_override_approved",
+      source: "user_action",
+      userId,
+      refType: "rma",
+      refId: rmaId,
+      meta: { reason },
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
   return { ok: true, rma: updated[0] as Rma };
 }
 
