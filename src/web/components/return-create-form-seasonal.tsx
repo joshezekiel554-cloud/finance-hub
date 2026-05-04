@@ -409,16 +409,21 @@ function defaultClassification(returnType: "seasonal" | "non_seasonal"): string 
   return returnType === "seasonal" ? "seasonal_current" : "non_seasonal";
 }
 
-function formatDate(dateStr: string): string {
-  try {
-    return new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return dateStr;
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  // Drizzle's date() column may serialise as either YYYY-MM-DD or a full ISO
+  // timestamp depending on the driver. Try as-is first; only append T00:00:00
+  // to coerce a bare date.
+  let d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) {
+    d = new Date(`${dateStr}T00:00:00`);
   }
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 // Suppress unused import — Select used in JSX above
