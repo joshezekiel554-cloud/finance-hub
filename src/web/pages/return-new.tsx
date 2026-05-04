@@ -1,4 +1,4 @@
-// /returns/new — create a new damage RMA.
+// /returns/new — create a new RMA (damage, seasonal, or non-seasonal).
 // Pre-fills the customer when ?customerId=... is in the URL (launched
 // from a customer profile). Otherwise shows a customer picker.
 
@@ -11,6 +11,9 @@ import { Button } from "../components/ui/button";
 import ReturnCreateFormDamage, {
   type DamageFormState,
 } from "../components/return-create-form-damage";
+import ReturnCreateFormSeasonal, {
+  type SeasonalFormState,
+} from "../components/return-create-form-seasonal";
 import RmaApprovalEmailDialog from "../components/rma-approval-email-dialog";
 import RmaDenialEmailDialog from "../components/rma-denial-email-dialog";
 import { makeEmptyRow } from "../components/rma-items-table";
@@ -49,12 +52,23 @@ type ApproveResult = {
   customerId: string;
 };
 
+type RmaReturnType = "damage" | "seasonal" | "non_seasonal";
+
+const RETURN_TYPE_LABELS: Record<RmaReturnType, string> = {
+  damage: "Damage",
+  seasonal: "Seasonal",
+  non_seasonal: "Non-seasonal",
+};
+
 export default function ReturnNewPage() {
   const navigate = useNavigate();
 
   // TanStack Router v1 search params — read customerId from the query string
   const search = useSearch({ strict: false }) as { customerId?: string };
   const prefilledCustomerId = search.customerId ?? null;
+
+  // Return type selection
+  const [returnType, setReturnType] = useState<RmaReturnType>("damage");
 
   // Customer selection state
   const [selectedCustomer, setSelectedCustomer] =
@@ -128,6 +142,19 @@ export default function ReturnNewPage() {
   };
   const [formState, setFormState] = useState<DamageFormState>(defaultFormState);
 
+  // Seasonal / non-seasonal form state
+  const defaultSeasonalState: SeasonalFormState = {
+    items: [makeEmptyRow()],
+    itemClassifications: {},
+    seasonId: null,
+    photosUrl: "",
+    notes: "",
+    overrideThreshold: false,
+    overrideReason: "",
+  };
+  const [seasonalFormState, setSeasonalFormState] =
+    useState<SeasonalFormState>(defaultSeasonalState);
+
   // Create RMA draft mutation (fires on first meaningful interaction if
   // rmaId not yet set, and also on Save Draft click)
   const createMutation = useMutation<RmaCreated, Error, void>({
@@ -135,14 +162,16 @@ export default function ReturnNewPage() {
       if (!selectedCustomer?.id || !selectedCustomer.qbCustomerId) {
         throw new Error("Select a customer first");
       }
+      const notes =
+        returnType === "damage" ? formState.notes : seasonalFormState.notes;
       const res = await fetch("/api/rmas", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           customerId: selectedCustomer.id,
           qbCustomerId: selectedCustomer.qbCustomerId,
-          returnType: "damage",
-          notes: formState.notes || null,
+          returnType,
+          notes: notes || null,
         }),
       });
       if (!res.ok) {
@@ -192,23 +221,32 @@ export default function ReturnNewPage() {
 
   // Approve flow:
   // 1. If no rmaId, create the RMA first
-  // 2. Call POST /api/rmas/:id/approve
+  // 2. Call POST /api/rmas/:id/approve (with override context for seasonal)
   // 3. Open approval email dialog
-  const approveMutation = useMutation<ApproveResult, Error, void>({
-    mutationFn: async () => {
+  const approveMutation = useMutation<
+    ApproveResult,
+    Error,
+    { overrideThreshold?: boolean; overrideReason?: string }
+  >({
+    mutationFn: async ({ overrideThreshold, overrideReason }) => {
       let id = rmaId;
       if (!id) {
         const created = await createMutation.mutateAsync();
         id = created.id;
       }
+      const body: Record<string, unknown> = {};
+      if (overrideThreshold) {
+        body.overrideThreshold = true;
+        body.overrideReason = overrideReason ?? "";
+      }
       const res = await fetch(`/api/rmas/${id}/approve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
+        const resBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(resBody.error ?? `HTTP ${res.status}`);
       }
       return res.json();
     },
@@ -219,7 +257,14 @@ export default function ReturnNewPage() {
   });
 
   function handleApprove() {
-    approveMutation.mutate();
+    approveMutation.mutate({});
+  }
+
+  function handleSeasonalApprove(override: { enabled: boolean; reason: string }) {
+    approveMutation.mutate({
+      overrideThreshold: override.enabled,
+      overrideReason: override.reason,
+    });
   }
 
   function handleDeny() {
@@ -266,7 +311,9 @@ export default function ReturnNewPage() {
           Returns
         </button>
         <span className="text-muted">/</span>
-        <h1 className="text-xl font-semibold">New return — Damage</h1>
+        <h1 className="text-xl font-semibold">
+          New return — {RETURN_TYPE_LABELS[returnType]}
+        </h1>
       </div>
 
       {/* Customer selection */}
@@ -323,8 +370,33 @@ export default function ReturnNewPage() {
         </CardBody>
       </Card>
 
+      {/* Return type picker — locked once rmaId is set */}
+      {selectedCustomer && !rmaId && (
+        <Card>
+          <CardHeader>
+            <h2 className="text-sm font-medium">Return type</h2>
+          </CardHeader>
+          <CardBody>
+            <div className="flex gap-4">
+              {(["damage", "seasonal", "non_seasonal"] as RmaReturnType[]).map((type) => (
+                <label key={type} className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="radio"
+                    name="returnType"
+                    value={type}
+                    checked={returnType === type}
+                    onChange={() => setReturnType(type)}
+                  />
+                  <span className="text-sm">{RETURN_TYPE_LABELS[type]}</span>
+                </label>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
       {/* Damage form — shown once customer is selected */}
-      {selectedCustomer && (
+      {selectedCustomer && returnType === "damage" && (
         <>
           <ReturnCreateFormDamage
             rmaId={rmaId}
@@ -337,6 +409,35 @@ export default function ReturnNewPage() {
           />
 
           <PhotoUploadZone rmaId={rmaId} />
+
+          <div className="flex justify-start gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={isSaving || !selectedCustomer}
+              loading={isSaving}
+              onClick={handleSaveDraft}
+            >
+              {rmaId ? "Save changes" : "Save draft"}
+            </Button>
+          </div>
+        </>
+      )}
+
+      {/* Seasonal / non-seasonal form */}
+      {selectedCustomer && (returnType === "seasonal" || returnType === "non_seasonal") && (
+        <>
+          <ReturnCreateFormSeasonal
+            rmaId={rmaId}
+            returnType={returnType}
+            value={seasonalFormState}
+            onChange={setSeasonalFormState}
+            onApprove={handleSeasonalApprove}
+            onDeny={handleDeny}
+            isSaving={isSaving}
+            saveError={saveError}
+          />
 
           <div className="flex justify-start gap-2">
             <Button
