@@ -32,7 +32,14 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
               "openid",
               "email",
               "profile",
-              "https://www.googleapis.com/auth/drive.file",
+              // Full Drive scope rather than drive.file — drive.file only
+              // grants access to files the app itself created, which means
+              // operators can't point the photo root at an existing folder
+              // (e.g. one they already use for returns paperwork). Full
+              // drive scope lets the app create subfolders + files inside
+              // any folder the operator chooses. Acceptable trade-off for
+              // an internal tool with email allowlist + audit logging.
+              "https://www.googleapis.com/auth/drive",
             ].join(" "),
             access_type: "offline",
             prompt: "consent",
