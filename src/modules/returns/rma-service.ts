@@ -473,3 +473,64 @@ export async function addRmaItem(
 
   return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
 }
+
+// ---------------------------------------------------------------------------
+// updateRmaItem
+// ---------------------------------------------------------------------------
+
+export type UpdateRmaItemInput = {
+  quantity?: string;
+  unitPrice?: string;
+  listUnitPrice?: string | null;
+  invoiceDiscountPct?: string | null;
+  reason?: string | null;
+  originalInvoiceDocNumber?: string | null;
+  originalInvoiceDate?: string | null;
+  priorSeasonId?: string | null;
+  priorSeasonOverrideReason?: string | null;
+  classification?: RmaItem["classification"];
+};
+
+export async function updateRmaItem(
+  itemId: string,
+  patch: UpdateRmaItemInput,
+): Promise<RmaWithItems | null> {
+  const itemRows = await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.id, itemId));
+  if (itemRows.length === 0) return null;
+  const item = itemRows[0] as RmaItem;
+
+  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, item.rmaId));
+  if (rmaRows.length === 0) return null;
+  const rma = rmaRows[0] as Rma;
+  if (rma.status !== "draft") {
+    throw new Error(
+      `Cannot update items on RMA in "${rma.status}" status — only draft is editable`,
+    );
+  }
+
+  // Recalculate lineTotal if quantity or unitPrice changed
+  const newQty = patch.quantity ?? item.quantity;
+  const newPrice = patch.unitPrice ?? item.unitPrice;
+  const lineTotal = (parseFloat(newQty) * parseFloat(newPrice)).toFixed(2);
+
+  await db
+    .update(rmaItems)
+    .set({ ...patch, lineTotal })
+    .where(eq(rmaItems.id, itemId));
+
+  await recomputeTotalValue(item.rmaId);
+
+  const updatedRmaRows = await db
+    .select()
+    .from(rmas)
+    .where(eq(rmas.id, item.rmaId));
+  const updatedItems = (await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, item.rmaId))) as RmaItem[];
+
+  return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
+}

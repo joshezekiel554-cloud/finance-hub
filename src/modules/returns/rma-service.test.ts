@@ -93,7 +93,7 @@ vi.mock("./credit-memo-builder.js", () => ({
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { approveRma, denyRma, issueCreditMemo, markReplacementSent, addRmaItem, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, denyRma, issueCreditMemo, markReplacementSent, addRmaItem, updateRmaItem, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -474,5 +474,43 @@ describe("addRmaItem", () => {
         classification: "damage",
       }),
     ).rejects.toThrow(/draft/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updateRmaItem
+// ---------------------------------------------------------------------------
+describe("updateRmaItem", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+  });
+
+  it("updates item fields and recomputes parent totalValue when rma is in draft", async () => {
+    setSelectResults([
+      [{ id: "item-1", rmaId: "rma-1", lineTotal: "50.00", position: 0, quantity: "1.0000", unitPrice: "50.0000" }],
+      [{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1", totalValue: "50.00" }],
+      [{ id: "item-1", rmaId: "rma-1", lineTotal: "75.00", position: 0, quantity: "1.0000", unitPrice: "75.0000" }],
+      [{ id: "rma-1", status: "draft", totalValue: "75.00", returnType: "damage", customerId: "cust-1" }],
+      [{ id: "item-1", rmaId: "rma-1", lineTotal: "75.00" }],
+    ]);
+    const result = await updateRmaItem("item-1", { unitPrice: "75.0000" });
+    expect(result).not.toBeNull();
+  });
+
+  it("throws when parent rma is not in draft status", async () => {
+    setSelectResults([
+      [{ id: "item-1", rmaId: "rma-1", lineTotal: "50.00", position: 0 }],
+      [{ id: "rma-1", status: "approved", returnType: "damage" }],
+    ]);
+    await expect(
+      updateRmaItem("item-1", { unitPrice: "75.0000" }),
+    ).rejects.toThrow(/draft/i);
+  });
+
+  it("returns null when item not found", async () => {
+    setSelectResults([[]]);
+    const result = await updateRmaItem("missing", { unitPrice: "10.0000" });
+    expect(result).toBeNull();
   });
 });
