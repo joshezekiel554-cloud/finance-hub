@@ -84,11 +84,8 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
 
   // ---- Upload handler -------------------------------------------------------
 
-  async function handleFiles(fileList: FileList | null) {
-    if (!rmaId || !fileList || fileList.length === 0) return;
-
-    // Kick off one upload per file, independently tracked
-    const files = Array.from(fileList);
+  async function handleFiles(files: File[]) {
+    if (!rmaId || files.length === 0) return;
 
     for (const file of files) {
       const key = ++uploadKeyRef.current;
@@ -155,7 +152,8 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     setIsDraggingOver(false);
-    void handleFiles(e.dataTransfer.files);
+    const files = Array.from(e.dataTransfer.files);
+    void handleFiles(files);
   }
 
   // ---- Null state -----------------------------------------------------------
@@ -227,7 +225,11 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
           multiple
           className="hidden"
           onChange={(e) => {
-            const files = e.target.files;
+            // Snapshot the file list BEFORE clearing the input — `files` is a
+            // live reference; resetting `value` empties it.
+            const files = e.target.files
+              ? Array.from(e.target.files)
+              : [];
             // Reset value so picking the same file twice fires the event
             e.target.value = "";
             void handleFiles(files);
