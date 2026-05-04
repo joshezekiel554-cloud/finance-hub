@@ -22,6 +22,7 @@ import ShopifyB2bAuditPage from "./pages/shopify-b2b-audit";
 import ShopifyLinkPage from "./pages/shopify-link";
 import RosterTagImportPage from "./pages/roster-tag-import";
 import ReturnsListPage from "./pages/returns";
+import ReturnNewPage from "./pages/return-new";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -119,6 +120,12 @@ const returnsRoute = createRoute({
   component: ReturnsListPage,
 });
 
+const returnNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns/new",
+  component: ReturnNewPage,
+});
+
 const returnDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/returns/$rmaId",
@@ -139,6 +146,7 @@ const routeTree = rootRoute.addChildren([
   shopifyLinkRoute,
   rosterTagImportRoute,
   returnsRoute,
+  returnNewRoute,
   returnDetailRoute,
 ]);
 
