@@ -16,6 +16,7 @@
 
 import { google } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
+import { Readable } from "node:stream";
 import { and, eq } from "drizzle-orm";
 import { db } from "~/db/index.js";
 import { accounts } from "~/db/schema/auth.js";
@@ -227,6 +228,10 @@ export async function uploadFile(input: {
   const drive = await getDriveClient(input.userId);
   const { folderId, filename, mimeType, content } = input;
 
+  // googleapis expects `media.body` to be a Readable stream (not a Buffer).
+  // multer's memoryStorage gives us a Buffer, so wrap it.
+  const body = Buffer.isBuffer(content) ? Readable.from(content) : content;
+
   const res = await drive.files.create({
     requestBody: {
       name: filename,
@@ -235,7 +240,7 @@ export async function uploadFile(input: {
     },
     media: {
       mimeType,
-      body: content,
+      body,
     },
     fields: "id,webViewLink,thumbnailLink,mimeType,size",
     supportsAllDrives: true,
