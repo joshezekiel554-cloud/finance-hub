@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   date,
   decimal,
@@ -70,6 +71,7 @@ export const rmas = mysqlTable(
     extensivRef: varchar("extensiv_ref", { length: 255 }),
     extensivTxNumber: varchar("extensiv_tx_number", { length: 64 }),
     extensivExportGeneratedAt: timestamp("extensiv_export_generated_at"),
+    driveFolderId: varchar("drive_folder_id", { length: 255 }), // null until first photo uploaded; renamed when rmaNumber allocated
     createdViaReceipt: boolean("created_via_receipt").notNull().default(false),
     originalEmail: text("original_email"),
     parsedConfidence: decimal("parsed_confidence", { precision: 3, scale: 2 }),
@@ -193,3 +195,30 @@ export const rmaItems = mysqlTable(
 
 export type RmaItem = typeof rmaItems.$inferSelect;
 export type NewRmaItem = typeof rmaItems.$inferInsert;
+
+export const rmaPhotos = mysqlTable(
+  "rma_photos",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    rmaId: varchar("rma_id", { length: 24 })
+      .notNull()
+      .references(() => rmas.id, { onDelete: "cascade" }),
+    position: int("position").notNull(),
+    driveFileId: varchar("drive_file_id", { length: 255 }).notNull(),
+    driveViewUrl: varchar("drive_view_url", { length: 2000 }).notNull(),
+    driveThumbnailUrl: varchar("drive_thumbnail_url", { length: 2000 }),
+    filename: varchar("filename", { length: 255 }).notNull(),
+    mimeType: varchar("mime_type", { length: 64 }).notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    uploadedByUserId: varchar("uploaded_by_user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id),
+    uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    rmaIdx: index("idx_rma_photos_rma").on(t.rmaId),
+  }),
+);
+
+export type RmaPhoto = typeof rmaPhotos.$inferSelect;
+export type NewRmaPhoto = typeof rmaPhotos.$inferInsert;

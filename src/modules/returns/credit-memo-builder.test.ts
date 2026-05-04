@@ -86,6 +86,7 @@ function makeRma(overrides: Partial<Rma> = {}): Rma {
     extensivRef: null,
     extensivTxNumber: null,
     extensivExportGeneratedAt: null,
+    driveFolderId: null,
     createdViaReceipt: false,
     originalEmail: null,
     parsedConfidence: null,
