@@ -194,6 +194,24 @@ export async function approveRma(
     db,
   );
 
+  // If a Drive folder exists (photos were uploaded pre-approval), rename it
+  // from "RMA-{id}" to the newly allocated rmaNumber.
+  // Note: for the seasonal flow (Phase 3), apply the same pattern at
+  // set_warehouse_number when the warehouse RMA number is allocated.
+  if (current.driveFolderId && rmaNumber) {
+    try {
+      const { renameFolder } = await import("../../integrations/google-drive/client.js");
+      await renameFolder({
+        userId: input.userId,
+        folderId: current.driveFolderId,
+        newName: rmaNumber,
+      });
+    } catch (err) {
+      // Don't fail the whole approval if folder rename fails — log + continue.
+      console.error("[approveRma] Drive folder rename failed:", err);
+    }
+  }
+
   const updated = await db.select().from(rmas).where(eq(rmas.id, id));
   return { ok: true, rma: updated[0] as Rma };
 }
