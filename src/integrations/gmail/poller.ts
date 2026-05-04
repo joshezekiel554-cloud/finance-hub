@@ -9,6 +9,7 @@ import { createLogger } from "~/lib/logger.js";
 import { recordActivity } from "~/modules/crm/index.js";
 import { classifyExtensivEmail } from "~/modules/returns/extensiv-receipt-classifier.js";
 import { matchReceiptToRma } from "~/modules/returns/rma-matcher.js";
+import { linkCustomerReplyIfRmaThread } from "~/modules/returns/rma-customer-reply-linker.js";
 import { BUSINESS_EMAILS } from "./business-emails.js";
 import { searchEmails } from "./client.js";
 import type {
@@ -378,6 +379,27 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
           },
         });
         if (created) activitiesCreated++;
+
+        // Side-channel: link inbound emails that are replies to RMA threads.
+        // Non-blocking — errors are caught and logged; a linker failure never
+        // aborts the main poll loop.
+        if (direction === "inbound" && email.threadId) {
+          try {
+            await linkCustomerReplyIfRmaThread({
+              gmailMessageId: email.id ?? "",
+              threadId: email.threadId,
+              inReplyTo: email.messageIdHeader || undefined, // empty string → undefined
+              from: email.from || "",
+              subject: email.subject || "",
+              bodySnippet: email.snippet || email.body?.slice(0, 512) || "",
+            });
+          } catch (linkErr) {
+            log.debug(
+              { err: linkErr, gmailMessageId: email.id },
+              "rma reply linker failed (non-fatal)",
+            );
+          }
+        }
       } catch (err) {
         log.error(
           { err, gmailMessageId: email.id, customerId },
