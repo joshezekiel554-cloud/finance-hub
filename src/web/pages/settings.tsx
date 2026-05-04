@@ -74,6 +74,7 @@ export default function SettingsPage() {
       </div>
       <EmailTemplatesSection />
       <StatementPdfSection />
+      <ReturnsSection />
       <RoutingRulesSection />
       <ImportsSection />
     </div>
@@ -955,6 +956,110 @@ function StatementPdfSection() {
             </div>
           </>
         )}
+      </CardBody>
+    </Card>
+  );
+}
+
+// ───────────────────────── Returns section ──────────────────────────────
+
+function ReturnsSection() {
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const initial = settingsQuery.data?.settings.drive_root_folder_id ?? "";
+  const [draft, setDraft] = useState<string>("");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  // Snap draft to server value on (re)load.
+  useEffect(() => {
+    if (settingsQuery.data) setDraft(initial);
+  }, [settingsQuery.data, initial]);
+
+  const dirty = draft.trim() !== initial.trim();
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ drive_root_folder_id: draft.trim() }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as AppSettingsResponse;
+    },
+    onSuccess: () => {
+      setSavedAt(Date.now());
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    },
+  });
+
+  // Try to extract a folder ID if the operator pastes a full Drive URL.
+  function handleChange(raw: string): void {
+    const match = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    setDraft(match?.[1] ?? raw);
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-base font-semibold">Returns</h2>
+        <p className="mt-1 text-xs text-muted">
+          Settings that apply to all RMA workflows.
+        </p>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <div>
+          <label
+            htmlFor="drive-root-folder-id"
+            className="block text-sm font-medium text-secondary"
+          >
+            Google Drive folder for RMA photos
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Photos uploaded on damage RMAs land here, in a per-RMA subfolder.
+            Paste the folder URL or just the ID. To find the ID: open the folder
+            in Drive — the ID is the last segment of the URL after{" "}
+            <code className="rounded bg-elevated px-1">/folders/</code>.
+          </p>
+          <Input
+            id="drive-root-folder-id"
+            type="text"
+            placeholder="https://drive.google.com/drive/folders/... or just the ID"
+            value={draft}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={!dirty || saveMutation.isPending}
+          >
+            <Save className="size-4" />
+            {saveMutation.isPending ? "Saving…" : "Save"}
+          </Button>
+          {savedAt && !dirty && (
+            <span className="text-xs text-muted">Saved.</span>
+          )}
+          {saveMutation.isError && (
+            <span className="text-xs text-accent-danger">
+              {(saveMutation.error as Error).message}
+            </span>
+          )}
+        </div>
       </CardBody>
     </Card>
   );

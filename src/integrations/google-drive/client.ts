@@ -18,6 +18,7 @@ import { google } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
 import { and, eq } from "drizzle-orm";
 import { db } from "~/db/index.js";
+import { accounts } from "~/db/schema/auth.js";
 import { oauthTokens } from "~/db/schema/oauth.js";
 import { decrypt, encrypt } from "~/lib/crypto.js";
 import { env } from "~/lib/env.js";
@@ -66,24 +67,40 @@ function buildOAuth2Client(): OAuth2Client {
   );
 }
 
-async function loadStoredToken(externalAccountId?: string): Promise<StoredToken | null> {
-  // Drive re-uses the gmail oauth token row (same provider, same scopes grant).
-  const rows = externalAccountId
-    ? await db
-        .select()
-        .from(oauthTokens)
-        .where(
-          and(
-            eq(oauthTokens.provider, "gmail"),
-            eq(oauthTokens.externalAccountId, externalAccountId),
-          ),
-        )
-        .limit(1)
-    : await db
-        .select()
-        .from(oauthTokens)
-        .where(eq(oauthTokens.provider, "gmail"))
-        .limit(1);
+async function loadStoredToken(userId?: string): Promise<StoredToken | null> {
+  // Drive uses tokens from the Auth.js `accounts` table (provider=google).
+  // The user signs in via Auth.js with the drive.file scope; that grant
+  // lands here. We prefer this source over the legacy oauth_tokens row
+  // used by Gmail polling (which doesn't include drive.file).
+  if (userId) {
+    const rows = await db
+      .select()
+      .from(accounts)
+      .where(and(eq(accounts.userId, userId), eq(accounts.provider, "google")))
+      .limit(1);
+    const row = rows[0];
+    if (row?.access_token && row?.refresh_token) {
+      return {
+        rowId: `account:${row.userId}:${row.providerAccountId}`,
+        externalAccountId: row.providerAccountId,
+        tokens: {
+          accessToken: row.access_token,
+          refreshToken: row.refresh_token,
+          expiresAt:
+            row.expires_at != null ? new Date(row.expires_at * 1000) : null,
+          scope: row.scope ?? null,
+          externalAccountId: row.providerAccountId,
+        },
+      };
+    }
+  }
+
+  // Fallback: legacy oauth_tokens row (used by Gmail polling).
+  const rows = await db
+    .select()
+    .from(oauthTokens)
+    .where(eq(oauthTokens.provider, "gmail"))
+    .limit(1);
 
   const row = rows[0];
   if (!row || row.revokedAt) return null;
@@ -128,11 +145,11 @@ function tokenHasDriveScope(scope: string | null): boolean {
 // Build an authenticated OAuth2Client for Drive calls
 // ---------------------------------------------------------------------------
 
-async function getDriveClient(externalAccountId?: string): Promise<ReturnType<typeof google.drive>> {
-  const stored = await loadStoredToken(externalAccountId);
+async function getDriveClient(userId?: string): Promise<ReturnType<typeof google.drive>> {
+  const stored = await loadStoredToken(userId);
   if (!stored) {
     throw new Error(
-      "Drive not authenticated. Run /oauth/start/gmail to connect a Google account with drive.file scope.",
+      "Drive not authenticated. Sign out and sign back in via Google to grant photo upload permission.",
     );
   }
   if (!stored.tokens.refreshToken) {
@@ -142,7 +159,7 @@ async function getDriveClient(externalAccountId?: string): Promise<ReturnType<ty
   }
   if (!tokenHasDriveScope(stored.tokens.scope)) {
     throw new Error(
-      "Drive not authorized — please log out and log back in to grant photo upload permission.",
+      "Drive not authorized — sign out and sign back in to grant photo upload permission.",
     );
   }
 
@@ -200,7 +217,7 @@ export async function uploadFile(input: {
   mimeType: string;
   content: Buffer | NodeJS.ReadableStream;
 }): Promise<DriveUploadResult> {
-  const drive = await getDriveClient();
+  const drive = await getDriveClient(input.userId);
   const { folderId, filename, mimeType, content } = input;
 
   const res = await drive.files.create({
@@ -236,7 +253,7 @@ export async function deleteFile(input: {
   userId: string;
   fileId: string;
 }): Promise<void> {
-  const drive = await getDriveClient();
+  const drive = await getDriveClient(input.userId);
   try {
     await drive.files.delete({ fileId: input.fileId });
   } catch (err) {
@@ -259,7 +276,7 @@ export async function ensureFolder(input: {
   parentId: string;
   name: string;
 }): Promise<string> {
-  const drive = await getDriveClient();
+  const drive = await getDriveClient(input.userId);
   const { parentId, name } = input;
 
   // Search for an existing folder with this name under the parent.
@@ -299,7 +316,7 @@ export async function renameFolder(input: {
   folderId: string;
   newName: string;
 }): Promise<void> {
-  const drive = await getDriveClient();
+  const drive = await getDriveClient(input.userId);
   await drive.files.update({
     fileId: input.folderId,
     requestBody: { name: input.newName },
@@ -315,7 +332,7 @@ export async function makeViewable(input: {
   userId: string;
   fileId: string;
 }): Promise<void> {
-  const drive = await getDriveClient();
+  const drive = await getDriveClient(input.userId);
   await drive.permissions.create({
     fileId: input.fileId,
     requestBody: {
@@ -334,7 +351,7 @@ export async function downloadFileContent(input: {
   userId: string;
   fileId: string;
 }): Promise<Buffer> {
-  const drive = await getDriveClient();
+  const drive = await getDriveClient(input.userId);
   const res = await drive.files.get(
     { fileId: input.fileId, alt: "media" },
     { responseType: "arraybuffer" },
