@@ -222,3 +222,48 @@ export const rmaPhotos = mysqlTable(
 
 export type RmaPhoto = typeof rmaPhotos.$inferSelect;
 export type NewRmaPhoto = typeof rmaPhotos.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// extensiv_receipts — one row per return-receipt email from Extensiv.
+// Created by the Gmail poller when it classifies an incoming email as a
+// return receipt. Operator reviews and confirms (or dismisses) each row.
+// ---------------------------------------------------------------------------
+
+export const EXTENSIV_RECEIPT_MATCH_KINDS = [
+  "exact_tx_number",
+  "exact_ref_string",
+  "fuzzy_customer_sku",
+  "no_match",
+] as const;
+export type ExtensivReceiptMatchKind = (typeof EXTENSIV_RECEIPT_MATCH_KINDS)[number];
+
+export const extensivReceipts = mysqlTable(
+  "extensiv_receipts",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    rmaId: varchar("rma_id", { length: 24 }).references(() => rmas.id),
+    matchKind: mysqlEnum("match_kind", EXTENSIV_RECEIPT_MATCH_KINDS).notNull(),
+    matchConfidence: decimal("match_confidence", { precision: 3, scale: 2 }),
+    txNumber: varchar("tx_number", { length: 64 }),
+    refString: varchar("ref_string", { length: 255 }),
+    parsedItemsJson: json("parsed_items_json"),
+    inferredCustomerName: varchar("inferred_customer_name", { length: 255 }),
+    gmailMessageId: varchar("gmail_message_id", { length: 255 }).unique().notNull(),
+    dismissedAt: timestamp("dismissed_at"),
+    dismissedByUserId: varchar("dismissed_by_user_id", { length: 255 }).references(
+      () => users.id,
+    ),
+    classifiedAt: timestamp("classified_at").defaultNow().notNull(),
+    confirmedAt: timestamp("confirmed_at"),
+    confirmedByUserId: varchar("confirmed_by_user_id", { length: 255 }).references(
+      () => users.id,
+    ),
+  },
+  (t) => ({
+    rmaIdx: index("idx_extensiv_receipts_rma").on(t.rmaId),
+    classifiedIdx: index("idx_extensiv_receipts_classified").on(t.classifiedAt),
+  }),
+);
+
+export type ExtensivReceipt = typeof extensivReceipts.$inferSelect;
+export type NewExtensivReceipt = typeof extensivReceipts.$inferInsert;
