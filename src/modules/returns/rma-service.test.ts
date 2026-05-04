@@ -93,7 +93,7 @@ vi.mock("./credit-memo-builder.js", () => ({
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { approveRma, denyRma, issueCreditMemo, markReplacementSent, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, denyRma, issueCreditMemo, markReplacementSent, addRmaItem, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -400,5 +400,79 @@ describe("markReplacementSent — damage", () => {
     setSelectResults([[]]);
     const result = await markReplacementSent("missing", { userId: "user-1" });
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// addRmaItem
+// ---------------------------------------------------------------------------
+describe("addRmaItem", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+  });
+
+  it("inserts item at position 0 when no existing items, recomputes totalValue", async () => {
+    setSelectResults([
+      [{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1", totalValue: "0" }],
+      [], // existing items (none)
+      [{ id: "rma-1", status: "draft", totalValue: "50.00", returnType: "damage", customerId: "cust-1" }],
+      [], // items after update
+    ]);
+    const result = await addRmaItem("rma-1", {
+      qbItemId: "qb-item-1",
+      sku: "SKU-001",
+      name: "Test Item",
+      quantity: "1.0000",
+      unitPrice: "50.0000",
+      classification: "damage",
+    });
+    expect(result).not.toBeNull();
+    // item should have been inserted
+    const itemInsert = insertCalls.find((c) => {
+      const v = c.values as Record<string, unknown>;
+      return v.rmaId === "rma-1";
+    });
+    expect(itemInsert).toBeDefined();
+    const itemValues = itemInsert!.values as Record<string, unknown>;
+    expect(itemValues.position).toBe(0);
+    expect(itemValues.sku).toBe("SKU-001");
+  });
+
+  it("inserts item at next position when items already exist", async () => {
+    setSelectResults([
+      [{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1", totalValue: "50.00" }],
+      [{ id: "item-existing", rmaId: "rma-1", position: 2, lineTotal: "50.00" }],
+      [{ id: "rma-1", status: "draft", totalValue: "100.00", returnType: "damage", customerId: "cust-1" }],
+      [{ id: "item-existing", rmaId: "rma-1", position: 2, lineTotal: "50.00" }],
+    ]);
+    await addRmaItem("rma-1", {
+      qbItemId: "qb-item-2",
+      sku: "SKU-002",
+      name: "Another Item",
+      quantity: "1.0000",
+      unitPrice: "50.0000",
+      classification: "damage",
+    });
+    const itemInsert = insertCalls.find((c) => {
+      const v = c.values as Record<string, unknown>;
+      return v.sku === "SKU-002";
+    });
+    expect(itemInsert).toBeDefined();
+    expect((itemInsert!.values as Record<string, unknown>).position).toBe(3);
+  });
+
+  it("throws when rma is not in draft status", async () => {
+    setSelectResults([[{ id: "rma-1", status: "approved", returnType: "damage" }]]);
+    await expect(
+      addRmaItem("rma-1", {
+        qbItemId: "qb-item-1",
+        sku: "SKU-001",
+        name: "Test",
+        quantity: "1.0000",
+        unitPrice: "10.0000",
+        classification: "damage",
+      }),
+    ).rejects.toThrow(/draft/i);
   });
 });

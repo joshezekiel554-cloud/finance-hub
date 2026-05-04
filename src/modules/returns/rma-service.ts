@@ -378,3 +378,98 @@ export async function markReplacementSent(
   const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
   return { ok: true, rma: updatedRows[0] as Rma };
 }
+
+// ---------------------------------------------------------------------------
+// Shared helper: recompute RMA totalValue from items
+// ---------------------------------------------------------------------------
+
+async function recomputeTotalValue(rmaId: string): Promise<void> {
+  const items = (await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+  const total = items
+    .reduce((sum, item) => sum + parseFloat(item.lineTotal), 0)
+    .toFixed(2);
+  await db.update(rmas).set({ totalValue: total }).where(eq(rmas.id, rmaId));
+}
+
+// ---------------------------------------------------------------------------
+// addRmaItem
+// ---------------------------------------------------------------------------
+
+export type AddRmaItemInput = {
+  qbItemId: string;
+  sku: string;
+  name: string;
+  quantity: string;
+  unitPrice: string;
+  classification: RmaItem["classification"];
+  listUnitPrice?: string | null;
+  invoiceDiscountPct?: string | null;
+  reason?: string | null;
+  originalInvoiceDocNumber?: string | null;
+  originalInvoiceDate?: string | null;
+  priorSeasonId?: string | null;
+  priorSeasonOverrideReason?: string | null;
+};
+
+export async function addRmaItem(
+  rmaId: string,
+  input: AddRmaItemInput,
+): Promise<RmaWithItems> {
+  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (rmaRows.length === 0) throw new Error(`RMA not found: ${rmaId}`);
+  const current = rmaRows[0] as Rma;
+  if (current.status !== "draft") {
+    throw new Error(
+      `Cannot add items to RMA in "${current.status}" status — only draft is editable`,
+    );
+  }
+
+  const existingItems = (await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+
+  const maxPosition = existingItems.reduce(
+    (max, item) => Math.max(max, item.position),
+    -1,
+  );
+  const position = maxPosition + 1;
+
+  const qty = parseFloat(input.quantity);
+  const price = parseFloat(input.unitPrice);
+  const lineTotal = (qty * price).toFixed(2);
+
+  const newItem: NewRmaItem = {
+    id: nanoid(24),
+    rmaId,
+    position,
+    qbItemId: input.qbItemId,
+    sku: input.sku,
+    name: input.name,
+    quantity: input.quantity,
+    unitPrice: input.unitPrice,
+    lineTotal,
+    classification: input.classification,
+    listUnitPrice: input.listUnitPrice ?? null,
+    invoiceDiscountPct: input.invoiceDiscountPct ?? null,
+    reason: input.reason ?? null,
+    originalInvoiceDocNumber: input.originalInvoiceDocNumber ?? null,
+    originalInvoiceDate: input.originalInvoiceDate ?? null,
+    priorSeasonId: input.priorSeasonId ?? null,
+    priorSeasonOverrideReason: input.priorSeasonOverrideReason ?? null,
+  };
+
+  await db.insert(rmaItems).values(newItem);
+  await recomputeTotalValue(rmaId);
+
+  const updatedRmaRows = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  const updatedItems = (await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+
+  return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
+}
