@@ -23,6 +23,7 @@ import ShopifyLinkPage from "./pages/shopify-link";
 import RosterTagImportPage from "./pages/roster-tag-import";
 import ReturnsListPage from "./pages/returns";
 import ReturnNewPage from "./pages/return-new";
+import ReturnDetailPage from "./pages/return-detail";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -129,7 +130,7 @@ const returnNewRoute = createRoute({
 const returnDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/returns/$rmaId",
-  component: ReturnsListPage, // placeholder — detail page is Phase 1+
+  component: ReturnDetailPage,
 });
 
 const routeTree = rootRoute.addChildren([
