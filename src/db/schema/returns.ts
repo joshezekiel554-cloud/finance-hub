@@ -1,5 +1,6 @@
 import {
   boolean,
+  date,
   decimal,
   index,
   json,
@@ -98,3 +99,96 @@ export const rmas = mysqlTable(
 
 export type Rma = typeof rmas.$inferSelect;
 export type NewRma = typeof rmas.$inferInsert;
+
+export const RMA_ITEM_CLASSIFICATIONS = [
+  "seasonal_current",
+  "seasonal_prior",
+  "non_seasonal",
+  "damage",
+] as const;
+export type RmaItemClassification = (typeof RMA_ITEM_CLASSIFICATIONS)[number];
+
+export const seasons = mysqlTable(
+  "seasons",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    name: varchar("name", { length: 255 }).notNull(),
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    createdByUserId: varchar("created_by_user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    isActiveIdx: index("idx_seasons_is_active").on(t.isActive),
+  }),
+);
+
+export type Season = typeof seasons.$inferSelect;
+export type NewSeason = typeof seasons.$inferInsert;
+
+export const seasonalProducts = mysqlTable(
+  "seasonal_products",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    seasonId: varchar("season_id", { length: 24 })
+      .notNull()
+      .references(() => seasons.id, { onDelete: "cascade" }),
+    qbItemId: varchar("qb_item_id", { length: 64 }).notNull(),
+    sku: varchar("sku", { length: 64 }).notNull(),
+    name: varchar("name", { length: 512 }).notNull(),
+    description: text("description"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    seasonProductIdx: index("idx_seasonal_products_season").on(t.seasonId),
+    qbItemIdx: index("idx_seasonal_products_qb_item").on(t.qbItemId),
+  }),
+);
+
+export type SeasonalProduct = typeof seasonalProducts.$inferSelect;
+export type NewSeasonalProduct = typeof seasonalProducts.$inferInsert;
+
+export const rmaItems = mysqlTable(
+  "rma_items",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    rmaId: varchar("rma_id", { length: 24 })
+      .notNull()
+      .references(() => rmas.id, { onDelete: "cascade" }),
+    position: decimal("position", { precision: 10, scale: 0 }).notNull(),
+    qbItemId: varchar("qb_item_id", { length: 64 }).notNull(),
+    sku: varchar("sku", { length: 64 }).notNull(),
+    name: varchar("name", { length: 512 }).notNull(),
+    quantity: decimal("quantity", { precision: 12, scale: 4 }).notNull(),
+    listUnitPrice: decimal("list_unit_price", { precision: 12, scale: 4 }),
+    unitPrice: decimal("unit_price", { precision: 12, scale: 4 }).notNull(),
+    invoiceDiscountPct: decimal("invoice_discount_pct", { precision: 6, scale: 4 }),
+    lineTotal: decimal("line_total", { precision: 12, scale: 2 }).notNull(),
+    classification: mysqlEnum("classification", RMA_ITEM_CLASSIFICATIONS).notNull(),
+    priorSeasonId: varchar("prior_season_id", { length: 24 }).references(
+      () => seasons.id,
+    ),
+    priorSeasonOverrideReason: text("prior_season_override_reason"),
+    reason: varchar("reason", { length: 512 }),
+    originalInvoiceDocNumber: varchar("original_invoice_doc_number", { length: 64 }),
+    originalInvoiceDate: date("original_invoice_date"),
+    receivedQuantity: decimal("received_quantity", { precision: 12, scale: 4 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    rmaIdx: index("idx_rma_items_rma").on(t.rmaId),
+    qbItemIdx: index("idx_rma_items_qb_item").on(t.qbItemId),
+    rmaClassificationIdx: index("idx_rma_items_rma_classification").on(
+      t.rmaId,
+      t.classification,
+    ),
+  }),
+);
+
+export type RmaItem = typeof rmaItems.$inferSelect;
+export type NewRmaItem = typeof rmaItems.$inferInsert;
