@@ -196,3 +196,53 @@ export async function approveRma(
   const updated = await db.select().from(rmas).where(eq(rmas.id, id));
   return { ok: true, rma: updated[0] as Rma };
 }
+
+// ---------------------------------------------------------------------------
+// denyRma
+// ---------------------------------------------------------------------------
+
+export type DenyRmaInput = {
+  userId: string;
+  reason: string;
+};
+
+export type DenyRmaResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function denyRma(
+  id: string,
+  input: DenyRmaInput,
+): Promise<DenyRmaResult | null> {
+  const existing = await db.select().from(rmas).where(eq(rmas.id, id));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "deny",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  const now = new Date();
+  await db.update(rmas).set({
+    status: "denied",
+    deniedAt: now,
+    denialReason: input.reason,
+  }).where(eq(rmas.id, id));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_denied",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, id));
+  return { ok: true, rma: updated[0] as Rma };
+}

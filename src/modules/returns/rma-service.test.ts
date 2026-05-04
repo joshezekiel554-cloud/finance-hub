@@ -86,7 +86,7 @@ vi.mock("../crm/activity-ingester.js", () => ({
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { approveRma, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, denyRma, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -258,6 +258,45 @@ describe("approveRma — damage", () => {
   it("returns null when rma not found", async () => {
     setSelectResults([[]]);
     const result = await approveRma("missing", { userId: "user-1" });
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// denyRma
+// ---------------------------------------------------------------------------
+describe("denyRma", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+  });
+
+  it("transitions draft → denied with reason, fires activity", async () => {
+    setSelectResults([
+      [{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1" }],
+      [{ id: "rma-1", status: "denied", returnType: "damage", customerId: "cust-1", denialReason: "Outside warranty" }],
+    ]);
+    const result = await denyRma("rma-1", { userId: "user-1", reason: "Outside warranty" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(true);
+    if (result && result.ok) expect(result.rma.status).toBe("denied");
+    expect(recordActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "rma_denied", refType: "rma", refId: "rma-1" }),
+      expect.anything(),
+    );
+  });
+
+  it("rejects deny when rma not in draft", async () => {
+    setSelectResults([[{ id: "rma-1", status: "approved", returnType: "damage" }]]);
+    const result = await denyRma("rma-1", { userId: "user-1", reason: "Too late" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(false);
+    if (result && !result.ok) expect(result.reason).toMatch(/Cannot transition/);
+  });
+
+  it("returns null when rma not found", async () => {
+    setSelectResults([[]]);
+    const result = await denyRma("missing", { userId: "user-1", reason: "No such RMA" });
     expect(result).toBeNull();
   });
 });
