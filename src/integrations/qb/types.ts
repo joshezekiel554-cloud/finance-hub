@@ -53,6 +53,15 @@ export type QboLineDetail = {
   TaxCodeRef?: QboReference;
 };
 
+export type QboDiscountLineDetail = {
+  // true → DiscountPercent is set; false → flat dollar amount in line.Amount
+  PercentBased?: boolean;
+  // Percentage value, e.g. 5 for 5%. Only present when PercentBased = true.
+  DiscountPercent?: number;
+  // Reference to a Discount item in QBO's item list (optional)
+  DiscountAccountRef?: QboReference;
+};
+
 export type QboInvoiceLine = {
   Id?: string;
   LineNum?: number;
@@ -60,6 +69,8 @@ export type QboInvoiceLine = {
   Amount?: number;
   DetailType?: string;
   SalesItemLineDetail?: QboLineDetail;
+  // Present when DetailType === "DiscountLineDetail"
+  DiscountLineDetail?: QboDiscountLineDetail;
 };
 
 export type QboInvoice = {

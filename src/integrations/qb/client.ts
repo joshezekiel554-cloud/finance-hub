@@ -444,6 +444,23 @@ export class QboClient {
     return data.QueryResponse.Invoice?.[0] ?? null;
   }
 
+  // Fetches all invoices for a given customer, sorted descending by date
+  // (most recent first). Used by the returns module to find the most recent
+  // invoice containing a specific item. We query by customer only and filter
+  // client-side by item — the QBO query DSL does not reliably support
+  // Line.SalesItemLineDetail.ItemRef across all minor versions, so a
+  // client-side filter on the per-customer invoice set is more portable.
+  //
+  // The per-customer invoice count for a typical account is on the order of
+  // tens to low hundreds, well within the PAGE_SIZE = 1000 ceiling, so this
+  // is one QBO call in the common case.
+  async findInvoicesForCustomer(customerId: string): Promise<QboInvoice[]> {
+    return this.queryAll<QboInvoice>(
+      `SELECT * FROM Invoice WHERE CustomerRef = '${escapeQboLiteral(customerId)}' ORDERBY TxnDate DESC`,
+      (r) => r.QueryResponse.Invoice,
+    );
+  }
+
   // POST to /invoice/{id}/send — QBO emails the invoice to the customer's
   // BillEmail (or PrimaryEmailAddr fallback). Optional sendToEmail overrides.
   // Returns the updated invoice with EmailStatus="EmailSent". 401 → forced
