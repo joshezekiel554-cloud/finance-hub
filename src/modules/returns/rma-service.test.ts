@@ -83,10 +83,17 @@ vi.mock("../crm/activity-ingester.js", () => ({
   recordActivity: recordActivityMock,
 }));
 
+const buildAndPushCmMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ qboCreditMemoId: "cm-qbo-1", docNumber: "DC-20260504-152448" }),
+);
+vi.mock("./credit-memo-builder.js", () => ({
+  buildAndPushCreditMemo: buildAndPushCmMock,
+}));
+
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { approveRma, denyRma, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, denyRma, issueCreditMemo, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -297,6 +304,51 @@ describe("denyRma", () => {
   it("returns null when rma not found", async () => {
     setSelectResults([[]]);
     const result = await denyRma("missing", { userId: "user-1", reason: "No such RMA" });
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issueCreditMemo
+// ---------------------------------------------------------------------------
+describe("issueCreditMemo — damage", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+    buildAndPushCmMock.mockClear();
+  });
+
+  it("approved → completed, QBO CM created, activity logged", async () => {
+    setSelectResults([
+      [{ id: "rma-1", status: "approved", returnType: "damage", customerId: "cust-1", rmaNumber: "DC-20260504-120000", qbCustomerId: "QB-1" }],
+      [], // items query
+      [{ id: "rma-1", status: "completed", qboCreditMemoId: "cm-qbo-1", returnType: "damage", customerId: "cust-1" }],
+    ]);
+    const result = await issueCreditMemo("rma-1", {
+      userId: "user-1",
+      shippingDeduction: "5.00",
+      restockingFee: null,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(true);
+    expect(buildAndPushCmMock).toHaveBeenCalled();
+    expect(recordActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "rma_credit_memo_issued", refType: "rma", refId: "rma-1" }),
+      expect.anything(),
+    );
+  });
+
+  it("rejects when rma not in approved state", async () => {
+    setSelectResults([[{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1" }]]);
+    const result = await issueCreditMemo("rma-1", { userId: "user-1" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(false);
+    if (result && !result.ok) expect(result.reason).toMatch(/Cannot transition/);
+  });
+
+  it("returns null when rma not found", async () => {
+    setSelectResults([[]]);
+    const result = await issueCreditMemo("missing", { userId: "user-1" });
     expect(result).toBeNull();
   });
 });

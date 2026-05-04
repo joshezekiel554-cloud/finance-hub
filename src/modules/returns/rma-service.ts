@@ -13,6 +13,7 @@ import {
 } from "../../db/schema/returns.js";
 import { recordActivity } from "../crm/activity-ingester.js";
 import { validateTransition } from "./rma-state.js";
+import { buildAndPushCreditMemo } from "./credit-memo-builder.js";
 
 // ---------------------------------------------------------------------------
 // createRma
@@ -245,4 +246,81 @@ export async function denyRma(
 
   const updated = await db.select().from(rmas).where(eq(rmas.id, id));
   return { ok: true, rma: updated[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// issueCreditMemo
+// ---------------------------------------------------------------------------
+
+export type IssueCreditMemoInput = {
+  userId: string;
+  shippingDeduction?: string | null;
+  restockingFee?: string | null;
+  itemOverrides?: { itemId: string; receivedQuantity: string }[];
+};
+
+export type IssueCreditMemoResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function issueCreditMemo(
+  id: string,
+  input: IssueCreditMemoInput,
+): Promise<IssueCreditMemoResult | null> {
+  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  if (rmaRows.length === 0) return null;
+  const current = rmaRows[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "issue_credit_memo",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  const items = (await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, id))) as RmaItem[];
+
+  const itemsForCm = items.map((item) => {
+    const override = input.itemOverrides?.find((o) => o.itemId === item.id);
+    return override ? { ...item, receivedQuantity: override.receivedQuantity } : item;
+  });
+
+  const cmResult = await buildAndPushCreditMemo({
+    rma: current,
+    items: itemsForCm,
+    shippingDeduction: input.shippingDeduction ?? null,
+    restockingFee: input.restockingFee ?? null,
+  });
+
+  const now = new Date();
+  await db
+    .update(rmas)
+    .set({
+      status: "completed",
+      completedAt: now,
+      qboCreditMemoId: cmResult.qboCreditMemoId,
+      creditMemoDocNumber: cmResult.docNumber,
+      shippingDeductionAmount: input.shippingDeduction ?? null,
+      restockingFeeAmount: input.restockingFee ?? null,
+    })
+    .where(eq(rmas.id, id));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_credit_memo_issued",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+      meta: { creditMemoDocNumber: cmResult.docNumber },
+    },
+    db,
+  );
+
+  const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  return { ok: true, rma: updatedRows[0] as Rma };
 }
