@@ -19,6 +19,11 @@ import {
   manualMarkReceived,
   overrideApproveRma,
 } from "../../modules/returns/index.js";
+import {
+  createRmaFromReceipt,
+  dismissExtensivReceipt,
+  confirmExtensivReceipt,
+} from "../../modules/returns/rma-service.js";
 import returnsPhotosRoute from "./returns-photos.js";
 import {
   lookupItemPriceForCustomer,
@@ -28,6 +33,7 @@ import {
   RMA_RETURN_TYPES,
   RMA_STATUSES,
   RMA_ITEM_CLASSIFICATIONS,
+  extensivReceipts,
   rmaItems,
   seasons,
 } from "../../db/schema/returns.js";
@@ -1211,6 +1217,156 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         },
         bccReasons: resolved.bccReasons ?? [],
       };
+    },
+  );
+
+  // ==========================================================================
+  // Phase 4 — Receipt routes
+  // ==========================================================================
+
+  // ---- POST /:id/attach-receipt -------------------------------------------
+  // Manually links an existing extensiv_receipt to this RMA (operator-confirmed match).
+  app.post<{ Params: { id: string } }>("/:id/attach-receipt", async (req, reply) => {
+    await requireAuth(req);
+    const parse = z.object({ receiptId: z.string().min(1) }).safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+    const { receiptId } = parse.data;
+    const rma = await getRmaById(req.params.id);
+    if (!rma) {
+      reply.code(404);
+      return { error: "RMA not found" };
+    }
+    const receiptRows = await db
+      .select()
+      .from(extensivReceipts)
+      .where(eq(extensivReceipts.id, receiptId))
+      .limit(1);
+    if (receiptRows.length === 0) {
+      reply.code(404);
+      return { error: "Receipt not found" };
+    }
+    await db
+      .update(extensivReceipts)
+      .set({ rmaId: req.params.id, matchKind: "exact_tx_number" })
+      .where(eq(extensivReceipts.id, receiptId));
+    const updated = await db
+      .select()
+      .from(extensivReceipts)
+      .where(eq(extensivReceipts.id, receiptId))
+      .limit(1);
+    return updated[0];
+  });
+
+  // ---- POST /from-receipt --------------------------------------------------
+  // Creates a new RMA in "received" status from an unmatched receipt.
+  app.post("/from-receipt", async (req, reply) => {
+    const user = await requireAuth(req);
+    const parse = z
+      .object({
+        receiptId: z.string().min(1),
+        customerId: z.string().min(1).max(24),
+        qbCustomerId: z.string().min(1).max(64),
+        returnType: z.enum(RMA_RETURN_TYPES),
+        items: z
+          .array(
+            z.object({
+              qbItemId: z.string().min(1).max(64),
+              sku: z.string().min(1).max(64),
+              name: z.string().min(1).max(500),
+              quantity: z.string().min(1),
+              unitPrice: z.string().min(1),
+              classification: z.enum(RMA_ITEM_CLASSIFICATIONS),
+              lineTotal: z.string().optional(),
+            }),
+          )
+          .min(1),
+      })
+      .safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+    try {
+      const rma = await createRmaFromReceipt({
+        receiptId: parse.data.receiptId,
+        customerId: parse.data.customerId,
+        qbCustomerId: parse.data.qbCustomerId,
+        returnType: parse.data.returnType,
+        items: parse.data.items.map((item) => ({
+          id: "", // will be replaced in service
+          rmaId: "", // will be replaced in service
+          position: 0, // will be replaced in service
+          qbItemId: item.qbItemId,
+          sku: item.sku,
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          lineTotal: item.lineTotal ?? "0",
+          classification: item.classification,
+          listUnitPrice: null,
+          invoiceDiscountPct: null,
+          reason: null,
+          originalInvoiceDocNumber: null,
+          originalInvoiceDate: null,
+          receivedQuantity: item.quantity,
+          priorSeasonId: null,
+          priorSeasonOverrideReason: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })),
+        userId: user.id,
+      });
+      reply.code(201);
+      return rma;
+    } catch (err) {
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : "Failed to create RMA from receipt" };
+    }
+  });
+
+  // ---- POST /extensiv-receipts/:receiptId/dismiss --------------------------
+  app.post<{ Params: { receiptId: string } }>(
+    "/extensiv-receipts/:receiptId/dismiss",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      try {
+        await dismissExtensivReceipt({ receiptId: req.params.receiptId, userId: user.id });
+        return { ok: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Dismiss failed";
+        if (msg.includes("not found")) {
+          reply.code(404);
+          return { error: msg };
+        }
+        reply.code(500);
+        return { error: msg };
+      }
+    },
+  );
+
+  // ---- POST /extensiv-receipts/:receiptId/confirm --------------------------
+  app.post<{ Params: { receiptId: string } }>(
+    "/extensiv-receipts/:receiptId/confirm",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      try {
+        const result = await confirmExtensivReceipt({
+          receiptId: req.params.receiptId,
+          userId: user.id,
+        });
+        return result;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Confirm failed";
+        if (msg.includes("not found")) {
+          reply.code(404);
+          return { error: msg };
+        }
+        reply.code(500);
+        return { error: msg };
+      }
     },
   );
 };

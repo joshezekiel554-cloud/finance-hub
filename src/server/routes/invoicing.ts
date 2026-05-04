@@ -15,7 +15,7 @@ import { z } from "zod";
 import { searchEmails } from "../../integrations/gmail/client.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   parseShipmentHtml,
   reconcile,
@@ -35,6 +35,11 @@ import {
   DISMISS_REASONS,
 } from "../../db/schema/dismissed-shipments.js";
 import { customers } from "../../db/schema/customers.js";
+import {
+  extensivReceipts,
+  rmas,
+  type ExtensivReceiptMatchKind,
+} from "../../db/schema/returns.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 import { requireAuth } from "../lib/auth.js";
@@ -129,6 +134,26 @@ export type InvoicingTodayRow = {
       add: number;
       addsNeedingPrice: string[];
     };
+  } | null;
+};
+
+// Return-receipt row — surfaced alongside shipment rows on /today.
+// Operators click [Review] to open the receipt review dialog.
+export type ReturnReceiptTodayRow = {
+  docType: "return_receipt";
+  receiptId: string;
+  rmaId: string | null;
+  matchKind: ExtensivReceiptMatchKind;
+  matchConfidence: number | null;
+  txNumber: string | null;
+  refString: string | null;
+  parsedItems: Array<{ sku: string; quantity: number }>;
+  inferredCustomerName: string | null;
+  classifiedAt: string;
+  rma: {
+    id: string;
+    rmaNumber: string | null;
+    customerName: string | null;
   } | null;
 };
 
@@ -341,7 +366,84 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       };
     }
 
-    return reply.send({ rows, dismissed, shadowMode: env.SHADOW_MODE });
+    // Phase 5 (Phase 4 extension): load unreviewed Extensiv return receipts and
+    // append them as `return_receipt` rows. These surface alongside shipment rows
+    // so the operator has a single "today" page for all pending actions.
+    let receiptRows: ReturnReceiptTodayRow[] = [];
+    try {
+      const rawReceipts = await db
+        .select({
+          id: extensivReceipts.id,
+          rmaId: extensivReceipts.rmaId,
+          matchKind: extensivReceipts.matchKind,
+          matchConfidence: extensivReceipts.matchConfidence,
+          txNumber: extensivReceipts.txNumber,
+          refString: extensivReceipts.refString,
+          parsedItemsJson: extensivReceipts.parsedItemsJson,
+          inferredCustomerName: extensivReceipts.inferredCustomerName,
+          classifiedAt: extensivReceipts.classifiedAt,
+          // RMA fields (null when not matched)
+          rmaRmaNumber: rmas.rmaNumber,
+          rmaCustomerId: rmas.customerId,
+        })
+        .from(extensivReceipts)
+        .leftJoin(rmas, eq(extensivReceipts.rmaId, rmas.id))
+        .where(
+          and(
+            isNull(extensivReceipts.dismissedAt),
+            isNull(extensivReceipts.confirmedAt),
+          ),
+        );
+
+      // Resolve customer names for matched RMAs in one batch.
+      const rmaCustomerIds = rawReceipts
+        .map((r) => r.rmaCustomerId)
+        .filter((id): id is string => Boolean(id));
+      const customerNameById = new Map<string, string>();
+      if (rmaCustomerIds.length > 0) {
+        const cRows = await db
+          .select({ id: customers.id, displayName: customers.displayName })
+          .from(customers)
+          .where(inArray(customers.id, rmaCustomerIds));
+        for (const c of cRows) customerNameById.set(c.id, c.displayName);
+      }
+
+      receiptRows = rawReceipts.map((r): ReturnReceiptTodayRow => {
+        let parsedItems: Array<{ sku: string; quantity: number }> = [];
+        if (Array.isArray(r.parsedItemsJson)) {
+          parsedItems = (r.parsedItemsJson as Array<{ sku?: string; quantity?: number }>)
+            .filter((item) => item && typeof item.sku === "string")
+            .map((item) => ({ sku: item.sku as string, quantity: Number(item.quantity ?? 0) }));
+        }
+        const customerName = r.rmaCustomerId
+          ? (customerNameById.get(r.rmaCustomerId) ?? null)
+          : null;
+        return {
+          docType: "return_receipt",
+          receiptId: r.id,
+          rmaId: r.rmaId ?? null,
+          matchKind: r.matchKind,
+          matchConfidence: r.matchConfidence ? parseFloat(r.matchConfidence) : null,
+          txNumber: r.txNumber ?? null,
+          refString: r.refString ?? null,
+          parsedItems,
+          inferredCustomerName: r.inferredCustomerName ?? null,
+          classifiedAt: r.classifiedAt.toISOString(),
+          rma: r.rmaId
+            ? {
+                id: r.rmaId,
+                rmaNumber: r.rmaRmaNumber ?? null,
+                customerName,
+              }
+            : null,
+        };
+      });
+    } catch (receiptErr) {
+      log.error({ err: receiptErr }, "failed to load extensiv receipt rows for /today");
+      // Non-fatal: return shipment rows without receipt rows.
+    }
+
+    return reply.send({ rows, receiptRows, dismissed, shadowMode: env.SHADOW_MODE });
   });
 
   // Batch dismiss for the "Dismiss all visible" page-level button.

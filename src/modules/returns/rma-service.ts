@@ -2,9 +2,11 @@ import { and, desc, eq, like, or, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import {
+  extensivReceipts,
   rmaItems,
   rmas,
   seasons,
+  type ExtensivReceipt,
   type NewRma,
   type NewRmaItem,
   type Rma,
@@ -1060,4 +1062,165 @@ export async function removeRmaItem(itemId: string): Promise<RmaWithItems | null
     .where(eq(rmaItems.rmaId, item.rmaId))) as RmaItem[];
 
   return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
+}
+
+// ---------------------------------------------------------------------------
+// createRmaFromReceipt
+// ---------------------------------------------------------------------------
+// Creates a new RMA in "received" state directly from an Extensiv receipt
+// (goods are already at the warehouse — skip the draft→approved→warehouse
+// round-trip). Also links the extensiv_receipt row to the new RMA.
+
+export type CreateRmaFromReceiptInput = {
+  receiptId: string;
+  customerId: string;
+  qbCustomerId: string;
+  returnType: RmaReturnType;
+  items: NewRmaItem[];
+  userId: string;
+};
+
+export async function createRmaFromReceipt(
+  input: CreateRmaFromReceiptInput,
+): Promise<Rma> {
+  const id = nanoid(24);
+  const now = new Date();
+
+  const row: NewRma = {
+    id,
+    customerId: input.customerId,
+    qbCustomerId: input.qbCustomerId,
+    returnType: input.returnType,
+    status: "received",
+    seasonId: null,
+    notes: null,
+    originalEmail: null,
+    totalValue: "0",
+    thresholdOverridden: false,
+    createdViaReceipt: true,
+    receivedAtWarehouseAt: now,
+    createdByUserId: input.userId,
+  };
+
+  await db.insert(rmas).values(row);
+
+  // Insert items with correct positions.
+  for (let i = 0; i < input.items.length; i++) {
+    const item = input.items[i];
+    if (!item) continue;
+    const qty = parseFloat(String(item.quantity ?? 0));
+    const price = parseFloat(String(item.unitPrice ?? 0));
+    const lineTotal = (qty * price).toFixed(2);
+    await db.insert(rmaItems).values({
+      ...item,
+      id: nanoid(24),
+      rmaId: id,
+      position: i,
+      lineTotal,
+    });
+  }
+
+  // Recompute total from inserted items.
+  await recomputeTotalValue(id);
+
+  // Link the extensiv_receipt to this new RMA.
+  await db
+    .update(extensivReceipts)
+    .set({ rmaId: id, matchKind: "exact_tx_number" })
+    .where(eq(extensivReceipts.id, input.receiptId));
+
+  await recordActivity(
+    {
+      customerId: input.customerId,
+      kind: "rma_created",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+      meta: { createdViaReceipt: true, receiptId: input.receiptId },
+    },
+    db,
+  );
+
+  const created = await db.select().from(rmas).where(eq(rmas.id, id));
+  return created[0] as Rma;
+}
+
+// ---------------------------------------------------------------------------
+// dismissExtensivReceipt
+// ---------------------------------------------------------------------------
+
+export async function dismissExtensivReceipt(input: {
+  receiptId: string;
+  userId: string;
+}): Promise<void> {
+  const rows = await db
+    .select({ id: extensivReceipts.id })
+    .from(extensivReceipts)
+    .where(eq(extensivReceipts.id, input.receiptId))
+    .limit(1);
+  if (rows.length === 0) throw new Error(`extensiv_receipt not found: ${input.receiptId}`);
+
+  await db
+    .update(extensivReceipts)
+    .set({ dismissedAt: new Date(), dismissedByUserId: input.userId })
+    .where(eq(extensivReceipts.id, input.receiptId));
+}
+
+// ---------------------------------------------------------------------------
+// confirmExtensivReceipt
+// ---------------------------------------------------------------------------
+// Sets confirmedAt on the receipt. If the linked RMA is in
+// `sent_to_warehouse`, also advances it to `received`.
+
+export type ConfirmExtensivReceiptResult = {
+  receipt: ExtensivReceipt;
+  rma?: Rma;
+};
+
+export async function confirmExtensivReceipt(input: {
+  receiptId: string;
+  userId: string;
+}): Promise<ConfirmExtensivReceiptResult> {
+  const receiptRows = await db
+    .select()
+    .from(extensivReceipts)
+    .where(eq(extensivReceipts.id, input.receiptId))
+    .limit(1);
+  if (receiptRows.length === 0)
+    throw new Error(`extensiv_receipt not found: ${input.receiptId}`);
+
+  const receipt = receiptRows[0] as ExtensivReceipt;
+
+  await db
+    .update(extensivReceipts)
+    .set({ confirmedAt: new Date(), confirmedByUserId: input.userId })
+    .where(eq(extensivReceipts.id, input.receiptId));
+
+  const updatedReceiptRows = await db
+    .select()
+    .from(extensivReceipts)
+    .where(eq(extensivReceipts.id, input.receiptId))
+    .limit(1);
+  const updatedReceipt = updatedReceiptRows[0] as ExtensivReceipt;
+
+  // If linked RMA is still in sent_to_warehouse, auto-advance to received.
+  if (receipt.rmaId) {
+    const rmaRows = await db
+      .select()
+      .from(rmas)
+      .where(eq(rmas.id, receipt.rmaId))
+      .limit(1);
+    const rma = rmaRows[0] as Rma | undefined;
+    if (rma?.status === "sent_to_warehouse") {
+      const result = await manualMarkReceived({ rmaId: receipt.rmaId, userId: input.userId });
+      if (result?.ok) {
+        return { receipt: updatedReceipt, rma: result.rma };
+      }
+    } else if (rma) {
+      return { receipt: updatedReceipt, rma };
+    }
+  }
+
+  return { receipt: updatedReceipt };
 }
