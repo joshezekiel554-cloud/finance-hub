@@ -238,6 +238,7 @@ export async function uploadFile(input: {
       body: content,
     },
     fields: "id,webViewLink,thumbnailLink,mimeType,size",
+    supportsAllDrives: true,
   });
 
   const file = res.data;
@@ -262,7 +263,7 @@ export async function deleteFile(input: {
 }): Promise<void> {
   const drive = await getDriveClient(input.userId);
   try {
-    await drive.files.delete({ fileId: input.fileId });
+    await drive.files.delete({ fileId: input.fileId, supportsAllDrives: true });
   } catch (err) {
     const status = (err as { code?: number; response?: { status?: number } })?.response?.status
       ?? (err as { code?: number })?.code;
@@ -291,6 +292,8 @@ export async function ensureFolder(input: {
     q: `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`,
     fields: "files(id,name)",
     spaces: "drive",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const existing = listRes.data.files?.[0];
@@ -307,6 +310,7 @@ export async function ensureFolder(input: {
       mimeType: "application/vnd.google-apps.folder",
     },
     fields: "id",
+    supportsAllDrives: true,
   });
 
   const folderId = createRes.data.id;
