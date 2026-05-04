@@ -789,22 +789,45 @@ export class QboClient {
   }
 
   // Fuzzy item search for the UI's add-line picker. Matches against Sku
-  // (prefix) OR Name (substring) — QBO's LIKE is case-sensitive so we
-  // search both ALL-CAPS and the user's literal text. Caller-side dedupe.
+  // (substring) OR Name (substring). QBO's query parser rejects the combined
+  // `(Sku LIKE ... OR Sku LIKE ... OR Name LIKE ...)` form with a
+  // ValidationFault, so we run two simpler queries in parallel and merge.
+  // QBO's LIKE is case-sensitive against stored values; we send both the
+  // literal text and uppercase to cover the common case where SKUs are
+  // stored uppercase but the operator types lowercase.
   async searchItems(query: string, max = 20): Promise<QboItem[]> {
     const q = query.trim();
     if (!q) return [];
     const escaped = escapeQboLiteral(q);
     const escapedUpper = escapeQboLiteral(q.toUpperCase());
-    const data = await this.query<QboItem>(
-      `SELECT * FROM Item WHERE Active = true AND (Sku LIKE '${escaped}%' OR Sku LIKE '${escapedUpper}%' OR Name LIKE '%${escaped}%') MAXRESULTS ${max}`,
+
+    const queries = [
+      `SELECT * FROM Item WHERE Active = true AND Sku LIKE '%${escaped}%' MAXRESULTS ${max}`,
+      `SELECT * FROM Item WHERE Active = true AND Name LIKE '%${escaped}%' MAXRESULTS ${max}`,
+    ];
+    if (escaped !== escapedUpper) {
+      queries.push(
+        `SELECT * FROM Item WHERE Active = true AND Sku LIKE '%${escapedUpper}%' MAXRESULTS ${max}`,
+      );
+    }
+
+    const results = await Promise.all(
+      queries.map((sql) =>
+        this.query<QboItem>(sql).catch(
+          () => ({ QueryResponse: { Item: [] as QboItem[] } }) as { QueryResponse: { Item?: QboItem[] } },
+        ),
+      ),
     );
+
     const seen = new Set<string>();
     const out: QboItem[] = [];
-    for (const item of data.QueryResponse.Item ?? []) {
-      if (seen.has(item.Id)) continue;
-      seen.add(item.Id);
-      out.push(item);
+    for (const data of results) {
+      for (const item of data.QueryResponse.Item ?? []) {
+        if (seen.has(item.Id)) continue;
+        seen.add(item.Id);
+        out.push(item);
+        if (out.length >= max) return out;
+      }
     }
     return out;
   }

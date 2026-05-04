@@ -384,26 +384,34 @@ function QboItemPicker({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QbItemHit[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < 2) {
       setResults([]);
+      setError(null);
       return;
     }
     const handle = setTimeout(async () => {
       setLoading(true);
+      setError(null);
       try {
         const res = await fetch(
           `/api/invoicing/items/search?q=${encodeURIComponent(trimmed)}`,
         );
         if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string };
+          setError(body.error ?? `Search failed (${res.status})`);
           setResults([]);
           return;
         }
         const body = (await res.json()) as { items: QbItemHit[] };
         setResults(body.items);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Search failed");
+        setResults([]);
       } finally {
         setLoading(false);
       }
@@ -433,7 +441,10 @@ function QboItemPicker({
           {loading && (
             <div className="px-3 py-2 text-xs text-muted">Searching…</div>
           )}
-          {!loading && results.length === 0 && (
+          {!loading && error && (
+            <div className="px-3 py-2 text-xs text-accent-danger">{error}</div>
+          )}
+          {!loading && !error && results.length === 0 && (
             <div className="px-3 py-2 text-xs text-muted">No matches.</div>
           )}
           {results.map((item) => (
