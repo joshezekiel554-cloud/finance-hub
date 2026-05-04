@@ -229,7 +229,7 @@ export default function RmaItemsTable({
               type="button"
               variant="secondary"
               size="sm"
-              disabled={bulkLookupPending || !rmaId}
+              disabled={bulkLookupPending}
               onClick={() => void bulkLookupAll()}
             >
               <RefreshCw
@@ -363,6 +363,7 @@ function ItemRow({
             <QboItemPicker
               initialQuery={row.sku || row.name || ""}
               parsedHint={!row.qbItemId && row.name ? row.name : undefined}
+              autoPick={!row.qbItemId && !!row.name}
               onPick={(hit) => {
                 onUpdate({
                   qbItemId: hit.id,
@@ -425,8 +426,8 @@ function ItemRow({
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                title="Lookup prices from most recent invoice"
-                disabled={working || !rmaId}
+                title={rmaId ? "Lookup prices from most recent invoice" : "Save the RMA as a draft first"}
+                disabled={working}
                 onClick={() => lookupMutation.mutate()}
                 className="inline-flex items-center gap-1 rounded border border-default bg-base px-1.5 py-0.5 text-[10px] text-secondary hover:bg-elevated disabled:opacity-50"
               >
@@ -435,8 +436,8 @@ function ItemRow({
               </button>
               <button
                 type="button"
-                title="Find original invoice"
-                disabled={working || !rmaId}
+                title={rmaId ? "Find original invoice" : "Save the RMA as a draft first"}
+                disabled={working}
                 onClick={() => findInvoiceMutation.mutate()}
                 className="inline-flex items-center gap-1 rounded border border-default bg-base px-1.5 py-0.5 text-[10px] text-secondary hover:bg-elevated disabled:opacity-50"
               >
@@ -494,16 +495,20 @@ function QboItemPicker({
   onPick,
   initialQuery,
   parsedHint,
+  autoPick,
 }: {
   onPick: (item: QbItemHit) => void;
   initialQuery?: string;
   parsedHint?: string;
+  /** When true and initialQuery is set, auto-pick the top search result on mount. */
+  autoPick?: boolean;
 }) {
   const [query, setQuery] = useState(initialQuery ?? "");
   const [results, setResults] = useState<QbItemHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const autoPickedRef = useRef(false);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -527,6 +532,13 @@ function QboItemPicker({
         }
         const body = (await res.json()) as { items: QbItemHit[] };
         setResults(body.items);
+        // Auto-pick the top result on mount when triggered from parsing.
+        if (autoPick && !autoPickedRef.current && body.items.length > 0) {
+          autoPickedRef.current = true;
+          onPick(body.items[0]);
+          setQuery("");
+          setResults([]);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Search failed");
         setResults([]);
@@ -535,7 +547,7 @@ function QboItemPicker({
       }
     }, 250);
     return () => clearTimeout(handle);
-  }, [query]);
+  }, [query, autoPick, onPick]);
 
   return (
     <div className="relative">
