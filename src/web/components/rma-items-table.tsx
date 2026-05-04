@@ -603,7 +603,10 @@ function QboItemPicker({
       }
     }, 250);
     return () => clearTimeout(handle);
-  }, [query, autoPick, onPick]);
+    // onPick deliberately omitted — it changes reference each parent render,
+    // and including it would cancel the timer before it fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, autoPick]);
 
   return (
     <div className="relative">

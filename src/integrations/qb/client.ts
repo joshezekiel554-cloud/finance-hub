@@ -179,11 +179,12 @@ export class QboClient {
     }
   }
 
-  // Single QBO query call. Auto-retries once on 401 by forcing a token refresh —
-  // covers the "another worker rotated the token mid-flight" race.
+  // Single QBO query call. Auto-retries:
+  //   - 401 → force a token refresh (mid-flight rotation race)
+  //   - 429 → backoff up to 3 attempts (per-second rate limit burst)
   private async query<T>(query: string): Promise<QboQueryResponse<T>> {
     const url = `${this.baseUrl}/v3/company/${this.config.realmId}/query`;
-    const accessToken = await this.getAccessToken();
+    let accessToken = await this.getAccessToken();
 
     const doRequest = async (token: string) => {
       return this.http.get<QboQueryResponse<T>>(url, {
@@ -195,18 +196,29 @@ export class QboClient {
       });
     };
 
-    try {
-      const response = await doRequest(accessToken);
-      return response.data;
-    } catch (err) {
-      const axiosErr = err as AxiosError;
-      if (axiosErr.response?.status === 401) {
-        const fresh = await this.forceRefresh();
-        const response = await doRequest(fresh);
+    const MAX_429_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+      try {
+        const response = await doRequest(accessToken);
         return response.data;
+      } catch (err) {
+        const axiosErr = err as AxiosError;
+        const status = axiosErr.response?.status;
+        if (status === 401) {
+          accessToken = await this.forceRefresh();
+          continue;
+        }
+        if (status === 429 && attempt < MAX_429_RETRIES) {
+          // Exponential backoff: 1s, 2s, 4s.
+          const waitMs = 1000 * Math.pow(2, attempt);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+    // Unreachable — loop either returns or throws.
+    throw new Error("QBO query exhausted retries");
   }
 
   // Generic paginated query — STARTPOSITION + MAXRESULTS pattern from 1.0.
