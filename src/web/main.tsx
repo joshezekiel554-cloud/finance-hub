@@ -24,6 +24,7 @@ import RosterTagImportPage from "./pages/roster-tag-import";
 import ReturnsListPage from "./pages/returns";
 import ReturnNewPage from "./pages/return-new";
 import ReturnDetailPage from "./pages/return-detail";
+import SeasonsPage from "./pages/seasons";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -133,6 +134,12 @@ const returnDetailRoute = createRoute({
   component: ReturnDetailPage,
 });
 
+const seasonsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/seasons",
+  component: SeasonsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -149,6 +156,7 @@ const routeTree = rootRoute.addChildren([
   returnsRoute,
   returnNewRoute,
   returnDetailRoute,
+  seasonsRoute,
 ]);
 
 const router = createRouter({ routeTree });
