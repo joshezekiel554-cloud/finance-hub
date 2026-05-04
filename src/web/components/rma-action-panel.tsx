@@ -11,6 +11,7 @@ import RmaDenialEmailDialog from "./rma-denial-email-dialog";
 import RmaCreditMemoDialog from "./rma-credit-memo-dialog";
 import RmaWarehouseExportAction from "./rma-warehouse-export-action";
 import RmaSetWarehouseNumberAction from "./rma-set-warehouse-number-action";
+import RmaOverrideApproveAction from "./rma-override-approve-action";
 
 export type RmaStatus =
   | "draft"
@@ -286,25 +287,19 @@ export default function RmaActionPanel({
         </div>
       )}
 
-      {/* denied — seasonal: override-approve stubbed for Phase 3 */}
+      {/* denied — seasonal: override-approve */}
       {status === "denied" && returnType === "seasonal" && (
         <div className="space-y-2">
           <div className="rounded-md border border-default px-3 py-2 text-sm text-muted">
             This RMA was denied.
           </div>
-          <div className="relative">
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full opacity-50 cursor-not-allowed"
-              disabled
-            >
-              Override-approve with reason
-            </Button>
-            <span className="block text-center text-[10px] text-muted mt-0.5">
-              (coming in Phase 3)
-            </span>
-          </div>
+          <RmaOverrideApproveAction
+            rmaId={rmaId}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              onRefresh();
+            }}
+          />
         </div>
       )}
 
