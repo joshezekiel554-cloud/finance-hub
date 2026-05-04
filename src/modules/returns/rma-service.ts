@@ -534,3 +534,39 @@ export async function updateRmaItem(
 
   return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
 }
+
+// ---------------------------------------------------------------------------
+// removeRmaItem
+// ---------------------------------------------------------------------------
+
+export async function removeRmaItem(itemId: string): Promise<RmaWithItems | null> {
+  const itemRows = await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.id, itemId));
+  if (itemRows.length === 0) return null;
+  const item = itemRows[0] as RmaItem;
+
+  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, item.rmaId));
+  if (rmaRows.length === 0) return null;
+  const rma = rmaRows[0] as Rma;
+  if (rma.status !== "draft") {
+    throw new Error(
+      `Cannot remove items from RMA in "${rma.status}" status — only draft is editable`,
+    );
+  }
+
+  await db.delete(rmaItems).where(eq(rmaItems.id, itemId));
+  await recomputeTotalValue(item.rmaId);
+
+  const updatedRmaRows = await db
+    .select()
+    .from(rmas)
+    .where(eq(rmas.id, item.rmaId));
+  const updatedItems = (await db
+    .select()
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, item.rmaId))) as RmaItem[];
+
+  return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
+}

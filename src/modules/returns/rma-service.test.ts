@@ -61,6 +61,10 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
     }),
   });
 
+  const deleteFn = (_table: unknown) => ({
+    where: (..._args: unknown[]) => Promise.resolve(),
+  });
+
   const tx = { insert };
 
   const transaction = vi.fn(
@@ -70,7 +74,7 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
   return {
     insertCalls,
     setSelectResults,
-    mockDb: { insert, update, transaction, select },
+    mockDb: { insert, update, delete: deleteFn, transaction, select },
   };
 });
 
@@ -93,7 +97,7 @@ vi.mock("./credit-memo-builder.js", () => ({
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { approveRma, denyRma, issueCreditMemo, markReplacementSent, addRmaItem, updateRmaItem, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, denyRma, issueCreditMemo, markReplacementSent, addRmaItem, updateRmaItem, removeRmaItem, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -511,6 +515,43 @@ describe("updateRmaItem", () => {
   it("returns null when item not found", async () => {
     setSelectResults([[]]);
     const result = await updateRmaItem("missing", { unitPrice: "10.0000" });
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// removeRmaItem
+// ---------------------------------------------------------------------------
+describe("removeRmaItem", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+  });
+
+  it("deletes item and recomputes parent totalValue when rma is in draft", async () => {
+    setSelectResults([
+      [{ id: "item-1", rmaId: "rma-1", lineTotal: "50.00", position: 0 }],
+      [{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1", totalValue: "50.00" }],
+      [], // remaining items after delete
+      [{ id: "rma-1", status: "draft", totalValue: "0.00", returnType: "damage", customerId: "cust-1" }],
+      [], // items for final return
+    ]);
+    const result = await removeRmaItem("item-1");
+    expect(result).not.toBeNull();
+    expect(result!.items).toHaveLength(0);
+  });
+
+  it("throws when parent rma is not in draft status", async () => {
+    setSelectResults([
+      [{ id: "item-1", rmaId: "rma-1", lineTotal: "50.00", position: 0 }],
+      [{ id: "rma-1", status: "approved", returnType: "damage" }],
+    ]);
+    await expect(removeRmaItem("item-1")).rejects.toThrow(/draft/i);
+  });
+
+  it("returns null when item not found", async () => {
+    setSelectResults([[]]);
+    const result = await removeRmaItem("missing");
     expect(result).toBeNull();
   });
 });
