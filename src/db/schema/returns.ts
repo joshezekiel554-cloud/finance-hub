@@ -3,6 +3,7 @@ import {
   date,
   decimal,
   index,
+  int,
   json,
   mysqlEnum,
   mysqlTable,
@@ -159,7 +160,7 @@ export const rmaItems = mysqlTable(
     rmaId: varchar("rma_id", { length: 24 })
       .notNull()
       .references(() => rmas.id, { onDelete: "cascade" }),
-    position: decimal("position", { precision: 10, scale: 0 }).notNull(),
+    position: int("position").notNull(),
     qbItemId: varchar("qb_item_id", { length: 64 }).notNull(),
     sku: varchar("sku", { length: 64 }).notNull(),
     name: varchar("name", { length: 512 }).notNull(),
