@@ -37,7 +37,6 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
     session: { strategy: "database" },
     trustHost: true,
     basePath: "/api/auth",
-    pages: { signIn: "/login" },
     callbacks: {
       async signIn({ user }) {
         const email = user?.email?.toLowerCase();

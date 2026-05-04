@@ -97,14 +97,19 @@ function SignOutFooter() {
     try {
       const csrfRes = await fetch("/api/auth/csrf");
       const { csrfToken } = (await csrfRes.json()) as { csrfToken: string };
-      const form = new FormData();
-      form.append("csrfToken", csrfToken);
-      form.append("callbackUrl", "/login");
-      await fetch("/api/auth/signout", { method: "POST", body: form });
+      const body = new URLSearchParams();
+      body.append("csrfToken", csrfToken);
+      body.append("callbackUrl", "/login");
+      body.append("json", "true");
+      await fetch("/api/auth/signout", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
     } catch {
       // fall through to the redirect — the cookie clear may have worked
     }
-    window.location.href = "/login";
+    window.location.href = "/api/auth/signin";
   }
 
   return (
