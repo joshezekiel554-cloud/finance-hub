@@ -94,3 +94,18 @@ export const TRANSITIONS: Record<RmaAction, TransitionRule> = {
     "cancelled",
   ),
 };
+
+export type ValidateTransitionInput = TransitionInput & { action: RmaAction };
+
+export function validateTransition(
+  input: ValidateTransitionInput,
+): TransitionResult {
+  const rule = TRANSITIONS[input.action];
+  if (!rule) {
+    return { ok: false, reason: `Unknown action: ${input.action}` };
+  }
+  return rule({
+    currentStatus: input.currentStatus,
+    returnType: input.returnType,
+  });
+}
