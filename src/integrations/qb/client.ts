@@ -646,6 +646,37 @@ export class QboClient {
     return data.QueryResponse.CreditMemo?.[0] ?? null;
   }
 
+  // Create a new CreditMemo in QBO. POST to /v3/company/.../creditmemo with the
+  // full payload (no sparse flag — this is a create, not an update). Returns the
+  // saved CreditMemo including the QBO-assigned Id and DocNumber.
+  // 401 → forced refresh → single retry, same as all other write paths.
+  async createCreditMemo(payload: object): Promise<QboCreditMemo> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/creditmemo`;
+    const accessToken = await this.getAccessToken();
+    const doRequest = async (token: string) => {
+      return this.http.post<{ CreditMemo: QboCreditMemo }>(url, payload, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+    };
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.CreditMemo;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.CreditMemo;
+      }
+      throw err;
+    }
+  }
+
   async updateCreditMemo(payload: object): Promise<QboCreditMemo> {
     const url = `${this.baseUrl}/v3/company/${this.config.realmId}/creditmemo`;
     const accessToken = await this.getAccessToken();
