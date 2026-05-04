@@ -79,6 +79,12 @@ export default function RmaItemsTable({
   onChange,
   disabled = false,
 }: RmaItemsTableProps) {
+  const [bulkLookupPending, setBulkLookupPending] = useState(false);
+  const [bulkLookupError, setBulkLookupError] = useState<string | null>(null);
+  const [bulkLookupSummary, setBulkLookupSummary] = useState<string | null>(
+    null,
+  );
+
   function updateRow(key: string, patch: Partial<RmaItemRow>) {
     onChange(
       items.map((r) => {
@@ -99,6 +105,67 @@ export default function RmaItemsTable({
 
   function addRow() {
     onChange([...items, makeEmptyRow()]);
+  }
+
+  // Run lookup-prices for every row that has a qbItemId. Parallel; results
+  // applied to the items array via a single onChange at the end.
+  async function bulkLookupAll(): Promise<void> {
+    if (!rmaId) {
+      setBulkLookupError("Save the RMA as a draft first.");
+      return;
+    }
+    const candidates = items.filter((r) => r.qbItemId);
+    if (candidates.length === 0) {
+      setBulkLookupError("No QBO items selected on any row yet.");
+      return;
+    }
+    setBulkLookupPending(true);
+    setBulkLookupError(null);
+    setBulkLookupSummary(null);
+
+    const results = await Promise.all(
+      candidates.map(async (r) => {
+        try {
+          const res = await fetch(`/api/rmas/${rmaId}/lookup-prices`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ qbItemId: r.qbItemId }),
+          });
+          if (!res.ok) return { localKey: r.localKey, ok: false };
+          const data = (await res.json()) as LookupResult;
+          return { localKey: r.localKey, ok: true, data };
+        } catch {
+          return { localKey: r.localKey, ok: false };
+        }
+      }),
+    );
+
+    const next = items.map((r) => {
+      const hit = results.find((res) => res.localKey === r.localKey);
+      if (!hit?.ok || !hit.data) return r;
+      const merged: RmaItemRow = {
+        ...r,
+        unitPrice: hit.data.unit_price ?? r.unitPrice,
+        listUnitPrice: hit.data.list_unit_price ?? r.listUnitPrice,
+        invoiceDiscountPct:
+          hit.data.invoice_discount_pct ?? r.invoiceDiscountPct,
+        originalInvoiceDocNumber:
+          hit.data.original_invoice_doc_number ?? r.originalInvoiceDocNumber,
+        originalInvoiceDate:
+          hit.data.original_invoice_date ?? r.originalInvoiceDate,
+      };
+      const qty = parseFloat(merged.quantity) || 0;
+      const price = parseFloat(merged.unitPrice) || 0;
+      merged.lineTotal = (qty * price).toFixed(2);
+      return merged;
+    });
+    onChange(next);
+
+    const succeeded = results.filter((r) => r.ok).length;
+    setBulkLookupSummary(
+      `Pulled prices + invoices for ${succeeded}/${candidates.length} item(s).`,
+    );
+    setBulkLookupPending(false);
   }
 
   return (
@@ -148,14 +215,41 @@ export default function RmaItemsTable({
       )}
 
       {!disabled && (
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={addRow}
-        >
-          + Add item
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={addRow}
+          >
+            + Add item
+          </Button>
+          {items.some((r) => r.qbItemId) && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={bulkLookupPending || !rmaId}
+              onClick={() => void bulkLookupAll()}
+            >
+              <RefreshCw
+                className={cn("size-4", bulkLookupPending && "animate-spin")}
+              />
+              {bulkLookupPending
+                ? "Pulling…"
+                : "Pull prices & invoices for all"}
+            </Button>
+          )}
+          {bulkLookupSummary && !bulkLookupError && (
+            <span className="text-xs text-muted">{bulkLookupSummary}</span>
+          )}
+          {bulkLookupError && (
+            <span className="flex items-center gap-1 text-xs text-accent-danger">
+              <AlertCircle className="size-3" />
+              {bulkLookupError}
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -239,17 +333,16 @@ function ItemRow({
   // Auto-trigger lookup-prices the first time a row gets a qbItemId set —
   // saves the operator from manually clicking "Prices" on every line.
   // Only runs once per row (guarded by autoLookedUpRef on the row's
-  // localKey + qbItemId combo).
+  // localKey + qbItemId combo). Gated on missing invoice ref rather than
+  // listUnitPrice — the picker already fills listUnitPrice from the QBO
+  // Item's default, so checking that would never trigger the lookup.
   const autoLookedUpRef = useRef<string | null>(null);
   useEffect(() => {
     if (!rmaId || !row.qbItemId) return;
     const key = `${row.localKey}:${row.qbItemId}`;
     if (autoLookedUpRef.current === key) return;
     autoLookedUpRef.current = key;
-    // Only auto-lookup if the row hasn't already been priced from an
-    // invoice (i.e., listUnitPrice not set). Avoids overwriting a manual
-    // edit on re-render.
-    if (!row.listUnitPrice) {
+    if (!row.originalInvoiceDocNumber) {
       lookupMutation.mutate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
