@@ -5,6 +5,9 @@ import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/cn";
+import ReturnReceiptReviewDialog, {
+  type ReceiptRow,
+} from "../components/return-receipt-review-dialog";
 
 type ReconcileAction =
   | { type: "set_metadata"; trackingNumber: string; shipVia: string; shipDate: string }
@@ -127,6 +130,7 @@ type DismissedRecord = {
 };
 type ApiResponse = {
   rows: Row[];
+  receiptRows?: ReceiptRow[];
   dismissed: Record<string, DismissedRecord>;
   shadowMode: boolean;
 };
@@ -158,6 +162,7 @@ function classifyRow(
 export default function InvoicingTodayPage() {
   const [tab, setTab] = useState<Tab>("open");
   const queryClient = useQueryClient();
+  const [reviewReceipt, setReviewReceipt] = useState<ReceiptRow | null>(null);
 
   const { data, isPending, isError, error, refetch, isFetching } = useQuery<ApiResponse>({
     queryKey: ["invoicing", "today"],
@@ -267,6 +272,22 @@ export default function InvoicingTodayPage() {
         </div>
       )}
 
+      {/* Return receipt rows — shown on "open" tab alongside shipments */}
+      {tab === "open" && data && (data.receiptRows ?? []).length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide">
+            Pending Return Receipts ({(data.receiptRows ?? []).length})
+          </h2>
+          {(data.receiptRows ?? []).map((receipt) => (
+            <ReceiptRowCard
+              key={receipt.receiptId}
+              receipt={receipt}
+              onReview={() => setReviewReceipt(receipt)}
+            />
+          ))}
+        </div>
+      )}
+
       {data?.rows
         .filter((r) => classifyRow(r, data.dismissed) === tab)
         .map((row) => (
@@ -278,7 +299,90 @@ export default function InvoicingTodayPage() {
             dismissedRecord={data.dismissed[row.gmailId] ?? null}
           />
         ))}
+
+      {/* Receipt review dialog */}
+      {reviewReceipt && (
+        <ReturnReceiptReviewDialog
+          open={reviewReceipt !== null}
+          onOpenChange={(next) => {
+            if (!next) setReviewReceipt(null);
+          }}
+          receipt={reviewReceipt}
+          onDone={() => {
+            setReviewReceipt(null);
+            void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReceiptRowCard — compact card for a return_receipt row on /today
+// ---------------------------------------------------------------------------
+
+function ReceiptRowCard({
+  receipt,
+  onReview,
+}: {
+  receipt: ReceiptRow;
+  onReview: () => void;
+}) {
+  const matchBadgeTone =
+    receipt.matchKind === "exact_tx_number" || receipt.matchKind === "exact_ref_string"
+      ? ("success" as const)
+      : receipt.matchKind === "fuzzy_customer_sku"
+        ? ("high" as const)
+        : ("neutral" as const);
+
+  return (
+    <Card>
+      <CardBody>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium text-sm">
+                {receipt.rma?.customerName ?? receipt.inferredCustomerName ?? "Unmatched receipt"}
+              </span>
+              <Badge tone={matchBadgeTone} className="text-xs">
+                {receipt.matchKind === "no_match"
+                  ? "Unmatched"
+                  : receipt.rma?.rmaNumber ?? "Matched"}
+              </Badge>
+            </div>
+            <div className="text-xs text-secondary space-x-2">
+              {receipt.txNumber && <span>TX# {receipt.txNumber}</span>}
+              {receipt.refString && <span>Ref: {receipt.refString}</span>}
+              <span>{receipt.parsedItems.length} item(s)</span>
+              <span>
+                Received {new Date(receipt.classifiedAt).toLocaleDateString()}
+              </span>
+            </div>
+            {receipt.parsedItems.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {receipt.parsedItems.slice(0, 5).map((p) => (
+                  <span
+                    key={p.sku}
+                    className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-xs font-mono"
+                  >
+                    {p.sku} ×{p.quantity}
+                  </span>
+                ))}
+                {receipt.parsedItems.length > 5 && (
+                  <span className="text-xs text-secondary">
+                    +{receipt.parsedItems.length - 5} more
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          <Button variant="secondary" size="sm" onClick={onReview}>
+            Review
+          </Button>
+        </div>
+      </CardBody>
+    </Card>
   );
 }
 
