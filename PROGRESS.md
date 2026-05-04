@@ -570,14 +570,42 @@ and stable. 207/207 tests green.
 
 ## What's next
 
-**Week 9 — AI agent (recommended next).** This is now the natural
-biggest piece. Foundations are ready: every tool the agent will call
-already exists as a clean function — `resolveRecipients`,
-`sendInvoiceViaQbo`, `sendInvoiceEmail` (statements path),
-`sendChaseEmail`, `createTask`, `pushCustomerTermsToQbo`,
-`pushCustomerPhoneToQbo`, etc. — all auditable + idempotent. The
-remaining work is the chat surface + tool registry + confirmation
-gating + prompt caching:
+**Returns integration (queued — comes BEFORE the AI agent).**
+Absorbing the standalone return-management desktop app into
+finance-hub: damage credits, seasonal returns, non-seasonal returns,
+all under one unified RMA flow. Plan landed at
+`C:\Users\user\.claude\plans\returns-integration.md` (894 lines,
+8 phases, ~3 weeks of focused work). Sequenced before the AI agent
+so the agent's tool registry includes returns from day one rather
+than getting a permanent invoicing/returns split.
+
+Brief shape:
+- **Phase 0** — schema + state machine + list page (~2d)
+- **Phase 1** — damage end-to-end (the simplest workflow; sets
+  schema + UI shape) (~3d)
+- **Phase 2** — Drive photo upload (~1.5d)
+- **Phase 3** — seasonal flow + eligibility + Extensiv export (~4d)
+- **Phase 4** — auto-match incoming Extensiv receipts (~2d)
+- **Phase 5** — non-seasonal flow (~2d)
+- **Phase 6** — customer-profile integration (~1d)
+- **Phase 7** — selective import from desktop SQLite (~0.5d)
+- **Phase 8** — cutover (variable)
+
+Out of scope (deferred): consignment workflow (separate module
+after main returns ships); Extensiv API (manual upload stays for
+v1); auto-completion of receipts (operator review for now).
+
+Open questions blocking phase 0 listed in the plan file §11.
+
+**Week 9 — AI agent (after returns).** This is the natural
+biggest piece once returns lands. Foundations are ready: every tool
+the agent will call already exists as a clean function —
+`resolveRecipients`, `sendInvoiceViaQbo`, `sendInvoiceEmail`
+(statements path), `sendChaseEmail`, `createTask`,
+`pushCustomerTermsToQbo`, `pushCustomerPhoneToQbo`, etc. — all
+auditable + idempotent. After returns ships, add RMA tools too:
+`get_rmas_for_customer`, `check_return_eligibility`,
+`propose_credit_memo`, `match_extensiv_receipt`. Agent shape:
 - `/agent` chat with `@customer-name` scoping syntax
 - Tool registry (read tools auto-execute; write tools require explicit
   Approve click)
