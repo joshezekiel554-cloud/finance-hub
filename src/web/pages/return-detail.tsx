@@ -10,6 +10,7 @@ import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import RmaActionPanel from "../components/rma-action-panel";
 import type { RmaStatus, RmaReturnType } from "../components/rma-action-panel";
+import { PhotoUploadZone } from "../components/photo-upload-zone";
 
 // ---- Types ------------------------------------------------------------------
 
@@ -370,6 +371,11 @@ export default function ReturnDetailPage() {
                 </p>
               </CardBody>
             </Card>
+          )}
+
+          {/* Photos — damage RMAs only */}
+          {rma.returnType === "damage" && (
+            <PhotoUploadZone rmaId={rma.id} />
           )}
         </div>
 

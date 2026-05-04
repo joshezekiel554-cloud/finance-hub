@@ -14,6 +14,7 @@ import ReturnCreateFormDamage, {
 import RmaApprovalEmailDialog from "../components/rma-approval-email-dialog";
 import RmaDenialEmailDialog from "../components/rma-denial-email-dialog";
 import { makeEmptyRow } from "../components/rma-items-table";
+import { PhotoUploadZone } from "../components/photo-upload-zone";
 
 // Shape returned by GET /api/customers?q=...
 type CustomerHit = {
@@ -334,6 +335,8 @@ export default function ReturnNewPage() {
             isSaving={isSaving}
             saveError={saveError}
           />
+
+          <PhotoUploadZone rmaId={rmaId} />
 
           <div className="flex justify-start gap-2">
             <Button
