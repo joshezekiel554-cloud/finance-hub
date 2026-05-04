@@ -56,7 +56,13 @@ type StoredToken = {
   tokens: TokenSet;
 };
 
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+// Either scope is sufficient: `drive.file` is the minimal per-file scope;
+// `drive` is the full Drive scope. Both let us upload + manage files via
+// the Drive API.
+const DRIVE_SCOPES = [
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/drive.file",
+];
 const TOKEN_REFRESH_LEAD_MS = 60_000;
 
 function buildOAuth2Client(): OAuth2Client {
@@ -138,7 +144,8 @@ async function persistToken(
 
 function tokenHasDriveScope(scope: string | null): boolean {
   if (!scope) return false;
-  return scope.split(/\s+/).filter(Boolean).includes(DRIVE_SCOPE);
+  const granted = scope.split(/\s+/).filter(Boolean);
+  return DRIVE_SCOPES.some((s) => granted.includes(s));
 }
 
 // ---------------------------------------------------------------------------
