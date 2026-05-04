@@ -1,6 +1,5 @@
 import {
   boolean,
-  date,
   decimal,
   index,
   json,
@@ -38,7 +37,7 @@ export const rmas = mysqlTable(
     rmaNumber: varchar("rma_number", { length: 64 }).unique(),
     customerId: varchar("customer_id", { length: 24 })
       .notNull()
-      .references(() => customers.id),
+      .references(() => customers.id, { onDelete: "cascade" }),
     qbCustomerId: varchar("qb_customer_id", { length: 64 }),
     returnType: mysqlEnum("return_type", RMA_RETURN_TYPES).notNull(),
     status: mysqlEnum("status", RMA_STATUSES).notNull().default("draft"),
@@ -94,7 +93,6 @@ export const rmas = mysqlTable(
     statusIdx: index("idx_rmas_status").on(t.status),
     typeCreatedIdx: index("idx_rmas_type_created").on(t.returnType, t.createdAt),
     extensivRefIdx: index("idx_rmas_extensiv_ref").on(t.extensivRef),
-    rmaNumberIdx: index("idx_rmas_rma_number").on(t.rmaNumber),
   }),
 );
 
