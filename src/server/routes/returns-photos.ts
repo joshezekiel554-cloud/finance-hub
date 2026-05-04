@@ -69,7 +69,10 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
   );
 
   // ---- POST / — upload one photo ------------------------------------------
-  app.post<{ Params: { id: string } }>("/", async (req, reply) => {
+  // bodyLimit overrides Fastify's 1MB default so phone photos (3-6 MB) and
+  // RAW shots (up to 20 MB per MAX_BYTES below) aren't rejected at the
+  // connection layer before multer can parse them.
+  app.post<{ Params: { id: string } }>("/", { bodyLimit: MAX_BYTES + 1024 * 1024 }, async (req, reply) => {
     const user = await requireAuth(req);
 
     // 1. Resolve RMA
