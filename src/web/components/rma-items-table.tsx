@@ -37,11 +37,11 @@ type QbItemHit = {
 };
 
 type LookupResult = {
-  list_unit_price: string | null;
-  unit_price: string | null;
-  invoice_discount_pct: string | null;
-  original_invoice_doc_number: string | null;
-  original_invoice_date: string | null;
+  listUnitPrice: string | null;
+  unitPrice: string | null;
+  invoiceDiscountPct: string | null;
+  originalInvoiceDocNumber: string | null;
+  originalInvoiceDate: string | null;
 };
 
 export type RmaItemsTableProps = {
@@ -129,8 +129,20 @@ export default function RmaItemsTable({
     setBulkLookupError(null);
     setBulkLookupSummary(null);
 
-    const results = await Promise.all(
-      candidates.map(async (r) => {
+    // Throttle to 3 concurrent requests so we don't blow QBO's per-second
+    // rate limit. The QboClient already does internal 401-refresh + retry,
+    // but rate-limit (429) responses surface as failures here.
+    const CONCURRENCY = 3;
+    const queue = [...candidates];
+    type LookupOutcome =
+      | { localKey: string; ok: true; data: LookupResult }
+      | { localKey: string; ok: false };
+    const results: LookupOutcome[] = [];
+
+    async function worker(): Promise<void> {
+      while (queue.length > 0) {
+        const r = queue.shift();
+        if (!r) break;
         try {
           const url = rmaId
             ? `/api/rmas/${rmaId}/lookup-prices`
@@ -143,13 +155,22 @@ export default function RmaItemsTable({
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
           });
-          if (!res.ok) return { localKey: r.localKey, ok: false };
-          const data = (await res.json()) as LookupResult;
-          return { localKey: r.localKey, ok: true, data };
+          if (!res.ok) {
+            results.push({ localKey: r.localKey, ok: false });
+          } else {
+            const data = (await res.json()) as LookupResult;
+            results.push({ localKey: r.localKey, ok: true, data });
+          }
         } catch {
-          return { localKey: r.localKey, ok: false };
+          results.push({ localKey: r.localKey, ok: false });
         }
-      }),
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () =>
+        worker(),
+      ),
     );
 
     const next = items.map((r) => {
@@ -157,14 +178,14 @@ export default function RmaItemsTable({
       if (!hit?.ok || !hit.data) return r;
       const merged: RmaItemRow = {
         ...r,
-        unitPrice: hit.data.unit_price ?? r.unitPrice,
-        listUnitPrice: hit.data.list_unit_price ?? r.listUnitPrice,
+        unitPrice: hit.data.unitPrice ?? r.unitPrice,
+        listUnitPrice: hit.data.listUnitPrice ?? r.listUnitPrice,
         invoiceDiscountPct:
-          hit.data.invoice_discount_pct ?? r.invoiceDiscountPct,
+          hit.data.invoiceDiscountPct ?? r.invoiceDiscountPct,
         originalInvoiceDocNumber:
-          hit.data.original_invoice_doc_number ?? r.originalInvoiceDocNumber,
+          hit.data.originalInvoiceDocNumber ?? r.originalInvoiceDocNumber,
         originalInvoiceDate:
-          hit.data.original_invoice_date ?? r.originalInvoiceDate,
+          hit.data.originalInvoiceDate ?? r.originalInvoiceDate,
       };
       const qty = parseFloat(merged.quantity) || 0;
       const price = parseFloat(merged.unitPrice) || 0;
@@ -316,11 +337,11 @@ function ItemRow({
     onSuccess: (data) => {
       setLookupError(null);
       onUpdate({
-        unitPrice: data.unit_price ?? row.unitPrice,
-        listUnitPrice: data.list_unit_price ?? null,
-        invoiceDiscountPct: data.invoice_discount_pct ?? null,
-        originalInvoiceDocNumber: data.original_invoice_doc_number ?? null,
-        originalInvoiceDate: data.original_invoice_date ?? null,
+        unitPrice: data.unitPrice ?? row.unitPrice,
+        listUnitPrice: data.listUnitPrice ?? null,
+        invoiceDiscountPct: data.invoiceDiscountPct ?? null,
+        originalInvoiceDocNumber: data.originalInvoiceDocNumber ?? null,
+        originalInvoiceDate: data.originalInvoiceDate ?? null,
       });
     },
     onError: (err) => setLookupError(err.message),
@@ -353,8 +374,8 @@ function ItemRow({
     onSuccess: (data) => {
       setLookupError(null);
       onUpdate({
-        originalInvoiceDocNumber: data.original_invoice_doc_number ?? null,
-        originalInvoiceDate: data.original_invoice_date ?? null,
+        originalInvoiceDocNumber: data.originalInvoiceDocNumber ?? null,
+        originalInvoiceDate: data.originalInvoiceDate ?? null,
       });
     },
     onError: (err) => setLookupError(err.message),
