@@ -657,6 +657,136 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       };
     },
   );
+
+  // ---- POST /:id/preview-credit-memo-email ---------------------------------
+  // Returns { subject, body, recipients } for the credit memo dialog so the
+  // operator can review + edit before sending. Accepts optional overrides for
+  // shippingDeduction, restockingFee, and receivedQuantity per item.
+  // The CM doc number isn't allocated yet at preview time — for damage RMAs
+  // the doc number equals the rmaNumber (allocated on approve), so we use that
+  // as the preview placeholder.
+  app.post<{ Params: { id: string } }>(
+    "/:id/preview-credit-memo-email",
+    async (req, reply) => {
+      await requireAuth(req);
+
+      const bodyParse = z
+        .object({
+          shippingDeduction: z.string().optional(),
+          restockingFee: z.string().optional(),
+          itemOverrides: z
+            .array(
+              z.object({
+                itemId: z.string().min(1),
+                receivedQuantity: z.string().min(1),
+              }),
+            )
+            .optional(),
+        })
+        .safeParse(req.body);
+
+      const overrides = bodyParse.success ? bodyParse.data : {};
+
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, rma.customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        reply.code(404);
+        return { error: "Customer not found" };
+      }
+
+      const templateRows = await db
+        .select()
+        .from(emailTemplates)
+        .where(eq(emailTemplates.slug, "rma-credit-memo"))
+        .limit(1);
+      const template = templateRows[0];
+      if (!template) {
+        reply.code(404);
+        return {
+          error:
+            "rma-credit-memo template not found — run the seed script",
+        };
+      }
+
+      // Apply received-quantity overrides and compute totals
+      const items = rma.items ?? [];
+      const itemsWithOverrides = items.map((item) => {
+        const override = overrides.itemOverrides?.find(
+          (o) => o.itemId === item.id,
+        );
+        const rcvdQty = override?.receivedQuantity ?? item.receivedQuantity ?? item.quantity;
+        return {
+          ...item,
+          effectiveReceivedQty: parseFloat(rcvdQty) || 0,
+        };
+      });
+
+      const goodsSubtotal = itemsWithOverrides.reduce((sum, item) => {
+        return sum + item.effectiveReceivedQty * (parseFloat(item.unitPrice) || 0);
+      }, 0);
+
+      const shippingAmt = parseFloat(overrides.shippingDeduction ?? "0") || 0;
+      const restockingAmt = parseFloat(overrides.restockingFee ?? "0") || 0;
+      const totalCreditAmount = Math.max(0, goodsSubtotal - shippingAmt - restockingAmt);
+
+      // For damage RMAs the CM doc number = RMA number (allocated on approve).
+      // For preview before issuance, use rmaNumber or a "[pending]" placeholder.
+      const creditMemoDocNumber =
+        rma.creditMemoDocNumber ??
+        rma.rmaNumber ??
+        "[pending]";
+
+      const vars: Record<string, string> = {
+        customer_name: customer.displayName,
+        rma_number: rma.rmaNumber ?? rma.id,
+        credit_memo_doc_number: creditMemoDocNumber,
+        goods_subtotal: `$${goodsSubtotal.toFixed(2)}`,
+        shipping_deduction_amount:
+          shippingAmt > 0 ? `$${shippingAmt.toFixed(2)}` : "$0.00",
+        restocking_fee_amount:
+          restockingAmt > 0 ? `$${restockingAmt.toFixed(2)}` : "$0.00",
+        total_credit_amount: `$${totalCreditAmount.toFixed(2)}`,
+        company_name: "Feldart",
+        user_name: "",
+      };
+
+      const subject = renderTemplate(template.subject, vars);
+      const body = renderTemplate(template.body, vars);
+
+      const resolved = await resolveRecipients("statement", {
+        primaryEmail: customer.primaryEmail,
+        billingEmails: customer.billingEmails,
+        invoiceToEmails: customer.invoiceToEmails,
+        invoiceCcEmails: customer.invoiceCcEmails,
+        invoiceBccEmails: customer.invoiceBccEmails,
+        statementToEmails: customer.statementToEmails,
+        statementCcEmails: customer.statementCcEmails,
+        statementBccEmails: customer.statementBccEmails,
+        tags: customer.tags,
+      });
+
+      return {
+        subject,
+        body,
+        recipients: {
+          to: resolved.to.join(", "),
+          cc: resolved.cc.join(", "),
+          bcc: resolved.bcc.join(", "),
+        },
+        bccReasons: resolved.bccReasons ?? [],
+      };
+    },
+  );
 };
 
 export default returnsRoute;
