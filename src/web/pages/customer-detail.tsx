@@ -14,6 +14,7 @@ import {
   CreditCard,
   ExternalLink,
   Send,
+  RotateCcw,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -76,7 +77,7 @@ type DetailResponse = {
   recentActivities: Activity[];
 };
 
-type TabKey = "activity" | "emails" | "invoices" | "orders" | "tasks" | "notes";
+type TabKey = "activity" | "emails" | "invoices" | "orders" | "tasks" | "notes" | "returns";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "Activity" },
@@ -85,6 +86,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "orders", label: "Orders" },
   { key: "tasks", label: "Tasks" },
   { key: "notes", label: "Notes" },
+  { key: "returns", label: "Returns" },
 ];
 
 type ShopifyTagsResponse = {
@@ -426,6 +428,9 @@ export default function CustomerDetailPage() {
         )}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
         {tab === "tasks" && <PlaceholderPanel label="Tasks" />}
+        {tab === "returns" && (
+          <ReturnsPanel customerId={customer.id} />
+        )}
         {tab === "notes" && (
           <NotesPanel
             customerId={customer.id}
@@ -2288,4 +2293,303 @@ function InvoiceStatusBadge({
   if (status === "open") return <Badge tone="info">Open</Badge>;
   if (status === "applied") return <Badge tone="success">Applied</Badge>;
   return <Badge tone="medium">—</Badge>;
+}
+
+// ─── Returns tab ─────────────────────────────────────────────────────────────
+
+type RmaStatus =
+  | "draft"
+  | "approved"
+  | "awaiting_warehouse_number"
+  | "sent_to_warehouse"
+  | "received"
+  | "completed"
+  | "denied"
+  | "cancelled";
+
+type RmaReturnType = "damage" | "seasonal" | "non_seasonal";
+
+type RmaRow = {
+  id: string;
+  rmaNumber: string | null;
+  returnType: RmaReturnType;
+  status: RmaStatus;
+  totalValue: string;
+  createdAt: string;
+  completedAt: string | null;
+};
+
+type RmaListResponse = { rmas: RmaRow[] };
+
+const RMA_STATUS_LABELS: Record<RmaStatus, string> = {
+  draft: "Draft",
+  approved: "Approved",
+  awaiting_warehouse_number: "Awaiting warehouse #",
+  sent_to_warehouse: "At warehouse",
+  received: "Received",
+  completed: "Completed",
+  denied: "Denied",
+  cancelled: "Cancelled",
+};
+
+type BadgeTone = "critical" | "high" | "medium" | "low" | "neutral" | "info" | "success";
+
+const RMA_STATUS_TONES: Record<RmaStatus, BadgeTone> = {
+  draft: "neutral",
+  approved: "success",
+  awaiting_warehouse_number: "high",
+  sent_to_warehouse: "info",
+  received: "info",
+  completed: "success",
+  denied: "critical",
+  cancelled: "neutral",
+};
+
+const RMA_TYPE_LABELS: Record<RmaReturnType, string> = {
+  damage: "Damage",
+  seasonal: "Seasonal",
+  non_seasonal: "Non-seasonal",
+};
+
+// Statuses that are considered "open" (in-flight / pending resolution).
+const OPEN_STATUSES = new Set<RmaStatus>([
+  "draft",
+  "approved",
+  "awaiting_warehouse_number",
+  "sent_to_warehouse",
+  "received",
+]);
+
+function ReturnsPanel({ customerId }: { customerId: string }) {
+  const [statusFilter, setStatusFilter] = useState<RmaStatus | "all">("all");
+  const [typeFilter, setTypeFilter] = useState<RmaReturnType | "all">("all");
+
+  const { data, isPending, isError, error } = useQuery<RmaListResponse>({
+    queryKey: ["customer-rmas", customerId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/rmas?customerId=${encodeURIComponent(customerId)}`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const allRows = data?.rmas ?? [];
+
+  // Summary stats derived from the full (unfiltered) list.
+  const summary = useMemo(() => {
+    const currentYearStart = new Date(new Date().getFullYear(), 0, 1);
+    let open = 0;
+    let inFlight = 0;
+    let completedYtd = 0;
+    for (const r of allRows) {
+      if (OPEN_STATUSES.has(r.status)) {
+        open++;
+        inFlight += Number(r.totalValue);
+      }
+      if (
+        r.status === "completed" &&
+        r.completedAt &&
+        new Date(r.completedAt) >= currentYearStart
+      ) {
+        completedYtd++;
+      }
+    }
+    return { open, inFlight, completedYtd };
+  }, [allRows]);
+
+  const filteredRows = useMemo(() => {
+    return allRows
+      .filter((r) => statusFilter === "all" || r.status === statusFilter)
+      .filter((r) => typeFilter === "all" || r.returnType === typeFilter);
+  }, [allRows, statusFilter, typeFilter]);
+
+  const anyFilterActive = statusFilter !== "all" || typeFilter !== "all";
+
+  return (
+    <div className="space-y-3">
+      {/* Header row: summary + create button */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="text-sm text-secondary">
+          <span className="font-medium text-primary">{summary.open}</span> open
+          {" · "}
+          <span className="font-medium text-primary">
+            ${summary.inFlight.toFixed(2)}
+          </span>{" "}
+          in flight
+          {" · "}
+          <span className="font-medium text-primary">{summary.completedYtd}</span>{" "}
+          completed YTD
+        </div>
+        <a
+          href={`/returns/new?customerId=${encodeURIComponent(customerId)}`}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-default bg-base px-3 py-1.5 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
+        >
+          <RotateCcw className="size-3.5" />
+          Create return
+        </a>
+      </div>
+
+      {/* Filter chips: status + type */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted">Status:</span>
+          <ReturnFilterChip
+            label="All"
+            active={statusFilter === "all"}
+            onClick={() => setStatusFilter("all")}
+          />
+          {(Object.keys(RMA_STATUS_LABELS) as RmaStatus[]).map((s) => (
+            <ReturnFilterChip
+              key={s}
+              label={RMA_STATUS_LABELS[s]}
+              active={statusFilter === s}
+              onClick={() =>
+                setStatusFilter((prev) => (prev === s ? "all" : s))
+              }
+            />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted">Type:</span>
+          <ReturnFilterChip
+            label="All"
+            active={typeFilter === "all"}
+            onClick={() => setTypeFilter("all")}
+          />
+          {(Object.keys(RMA_TYPE_LABELS) as RmaReturnType[]).map((t) => (
+            <ReturnFilterChip
+              key={t}
+              label={RMA_TYPE_LABELS[t]}
+              active={typeFilter === t}
+              onClick={() =>
+                setTypeFilter((prev) => (prev === t ? "all" : t))
+              }
+            />
+          ))}
+        </div>
+        {anyFilterActive && (
+          <button
+            type="button"
+            onClick={() => {
+              setStatusFilter("all");
+              setTypeFilter("all");
+            }}
+            className="text-xs text-muted hover:text-primary"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <h2 className="text-sm font-medium text-secondary">
+            {isPending
+              ? "Loading…"
+              : `${filteredRows.length} RMA${filteredRows.length === 1 ? "" : "s"}`}
+          </h2>
+        </CardHeader>
+        <CardBody className="p-0">
+          {isError && (
+            <div className="p-4 text-sm text-accent-danger">
+              {(error as Error)?.message ?? "Failed to load returns"}
+            </div>
+          )}
+          <table className="w-full text-sm">
+            <thead className="border-b border-default bg-subtle text-left text-xs uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-3 py-2">RMA #</th>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((r) => (
+                <tr
+                  key={r.id}
+                  className="border-b border-default last:border-b-0 hover:bg-elevated"
+                >
+                  <td className="px-3 py-2 font-medium">
+                    <Link
+                      to="/returns/$rmaId"
+                      params={{ rmaId: r.id }}
+                      className="font-mono text-xs hover:text-accent-primary hover:underline underline-offset-2"
+                    >
+                      {r.rmaNumber ?? `Draft ${r.id.slice(0, 6)}…`}
+                    </Link>
+                  </td>
+                  <td className="px-3 py-2 text-secondary">
+                    {RMA_TYPE_LABELS[r.returnType]}
+                  </td>
+                  <td className="px-3 py-2">
+                    <Badge tone={RMA_STATUS_TONES[r.status]}>
+                      {RMA_STATUS_LABELS[r.status]}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    <span
+                      className={cn(
+                        "font-medium",
+                        Number(r.totalValue) > 0
+                          ? "text-primary"
+                          : "text-muted",
+                      )}
+                    >
+                      ${Number(r.totalValue).toFixed(2)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-secondary">
+                    {new Date(r.createdAt).toLocaleDateString(undefined, {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })}
+                  </td>
+                </tr>
+              ))}
+              {!isPending && filteredRows.length === 0 && (
+                <tr>
+                  <td
+                    className="p-8 text-center text-sm text-muted"
+                    colSpan={5}
+                  >
+                    No RMAs match the current filters
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+function ReturnFilterChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-2.5 py-1 transition-colors",
+        active
+          ? "border-accent-primary/40 bg-accent-primary/10 text-accent-primary"
+          : "border-default text-secondary hover:bg-elevated hover:text-primary",
+      )}
+    >
+      {label}
+    </button>
+  );
 }
