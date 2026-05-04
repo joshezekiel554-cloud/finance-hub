@@ -127,3 +127,85 @@ describe("validateTransition — seasonal flow", () => {
     if (r.ok) expect(r.nextStatus).toBe("completed");
   });
 });
+
+describe("validateTransition — rejections", () => {
+  it("rejects approve from a non-draft state", () => {
+    const r = validateTransition({
+      currentStatus: "approved",
+      returnType: "seasonal",
+      action: "approve",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/Cannot transition from "approved"/);
+  });
+
+  it("rejects override_approve for non-seasonal RMAs", () => {
+    const r = validateTransition({
+      currentStatus: "denied",
+      returnType: "damage",
+      action: "override_approve",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/only allowed for seasonal/);
+  });
+
+  it("allows override_approve for seasonal denied RMAs", () => {
+    const r = validateTransition({
+      currentStatus: "denied",
+      returnType: "seasonal",
+      action: "override_approve",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.nextStatus).toBe("approved");
+  });
+
+  it("rejects generate_warehouse_export for damage RMAs", () => {
+    const r = validateTransition({
+      currentStatus: "approved",
+      returnType: "damage",
+      action: "generate_warehouse_export",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/damage RMAs do not use warehouse export/);
+  });
+
+  it("rejects mark_replacement_sent for non-damage RMAs", () => {
+    const r = validateTransition({
+      currentStatus: "approved",
+      returnType: "seasonal",
+      action: "mark_replacement_sent",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/only valid for damage/);
+  });
+
+  it("rejects issue_credit_memo from approved for seasonal RMAs", () => {
+    const r = validateTransition({
+      currentStatus: "approved",
+      returnType: "seasonal",
+      action: "issue_credit_memo",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok)
+      expect(r.reason).toMatch(/from approved is only valid for damage/);
+  });
+
+  it("allows cancel from awaiting_warehouse_number", () => {
+    const r = validateTransition({
+      currentStatus: "awaiting_warehouse_number",
+      returnType: "seasonal",
+      action: "cancel",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.nextStatus).toBe("cancelled");
+  });
+
+  it("rejects cancel from completed", () => {
+    const r = validateTransition({
+      currentStatus: "completed",
+      returnType: "seasonal",
+      action: "cancel",
+    });
+    expect(r.ok).toBe(false);
+  });
+});
