@@ -15,6 +15,7 @@ import RmaItemsTable, {
   makeEmptyRow,
 } from "./rma-items-table";
 import EligibilityCard from "./eligibility-card";
+import ParseEmailSection, { type ParsedItem } from "./parse-email-section";
 
 // ---- Types ------------------------------------------------------------------
 
@@ -126,8 +127,33 @@ export default function ReturnCreateFormSeasonal({
       ? CLASSIFICATION_OPTIONS_SEASONAL
       : CLASSIFICATION_OPTIONS_NON_SEASONAL;
 
+  function appendParsedItems(parsed: ParsedItem[]): void {
+    const newRows: RmaItemRow[] = parsed.map((p) => ({
+      ...makeEmptyRow(),
+      qbItemId: "",
+      sku: p.sku ?? "",
+      name: p.name ?? "",
+      quantity: p.quantity > 0 ? String(p.quantity) : "1",
+      reason: p.reason ?? "",
+    }));
+    const newClassifications = { ...value.itemClassifications };
+    for (const row of newRows) {
+      newClassifications[row.localKey] = "seasonal_current";
+    }
+    patch({
+      items: [...value.items, ...newRows],
+      itemClassifications: newClassifications,
+    });
+  }
+
   return (
     <div className="space-y-6">
+      {/* Parse customer email (optional) */}
+      <ParseEmailSection
+        onItemsParsed={appendParsedItems}
+        disabled={disabled}
+      />
+
       {/* Season picker — required for seasonal, optional for non-seasonal */}
       <Card>
         <CardHeader>

@@ -447,8 +447,8 @@ function EditSeasonDialog({
   onUpdated: () => void;
 }) {
   const [name, setName] = useState(season.name);
-  const [startDate, setStartDate] = useState(season.startDate);
-  const [endDate, setEndDate] = useState(season.endDate);
+  const [startDate, setStartDate] = useState(toDateInputValue(season.startDate));
+  const [endDate, setEndDate] = useState(toDateInputValue(season.endDate));
   const [isActive, setIsActive] = useState(season.isActive);
 
   const mutation = useMutation<{ season: Season }, Error, void>({
@@ -637,14 +637,32 @@ function DuplicateSeasonDialog({
 
 // ---- Helpers -----------------------------------------------------------------
 
-function formatDate(dateStr: string): string {
-  try {
-    return new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return dateStr;
+// Normalise a date value (YYYY-MM-DD or ISO timestamp) into YYYY-MM-DD —
+// the only format <input type="date"> accepts as `value`.
+function toDateInputValue(v: string | null | undefined): string {
+  if (!v) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  // Use toISOString() so we get the UTC date — avoids the input flipping
+  // a day earlier/later from local-TZ rendering of the Date.
+  return d.toISOString().slice(0, 10);
+}
+
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  // Drizzle's date() column may serialise as either a bare YYYY-MM-DD or
+  // a full ISO timestamp depending on the driver. Try the value as-is
+  // first; only if that's invalid, append T00:00:00 to coerce a YYYY-MM-DD
+  // into a valid ISO datetime.
+  let d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) {
+    d = new Date(`${dateStr}T00:00:00`);
   }
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }

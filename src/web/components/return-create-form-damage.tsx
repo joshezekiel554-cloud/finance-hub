@@ -12,6 +12,7 @@ import RmaItemsTable, {
   type RmaItemRow,
   makeEmptyRow,
 } from "./rma-items-table";
+import ParseEmailSection, { type ParsedItem } from "./parse-email-section";
 
 export type DamageFormState = {
   items: RmaItemRow[];
@@ -92,8 +93,26 @@ export default function ReturnCreateFormDamage({
   // RMA has been saved (rmaId is set).
   const canAction = !!rmaId && hasItems && hasValidItems && !isSaving && !disabled;
 
+  function appendParsedItems(parsed: ParsedItem[]): void {
+    const newRows: RmaItemRow[] = parsed.map((p) => ({
+      ...makeEmptyRow(),
+      qbItemId: "", // operator confirms via picker
+      sku: p.sku ?? "",
+      name: p.name ?? "",
+      quantity: p.quantity > 0 ? String(p.quantity) : "1",
+      reason: p.reason ?? "",
+    }));
+    patch({ items: [...value.items, ...newRows] });
+  }
+
   return (
     <div className="space-y-6">
+      {/* Parse customer email (optional) */}
+      <ParseEmailSection
+        onItemsParsed={appendParsedItems}
+        disabled={disabled}
+      />
+
       {/* Items */}
       <Card>
         <CardHeader>

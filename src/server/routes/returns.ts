@@ -29,6 +29,7 @@ import {
   lookupItemPriceForCustomer,
   findOriginalInvoiceForItem,
 } from "../../modules/returns/qbo-lookup.js";
+import { parseReturnRequestEmail } from "../../modules/returns/parser.js";
 import {
   RMA_RETURN_TYPES,
   RMA_STATUSES,
@@ -246,6 +247,30 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     });
     reply.code(201);
     return rma;
+  });
+
+  // ---- POST /parse-email — AI-extract items from a customer email ---------
+  // No rmaId required — operator can parse before saving the draft.
+  app.post("/parse-email", async (req, reply) => {
+    await requireAuth(req);
+    const schema = z.object({
+      emailBody: z.string().min(1).max(50000),
+      attachmentText: z.string().max(50000).optional(),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+    try {
+      const result = await parseReturnRequestEmail(parse.data);
+      return result;
+    } catch (err) {
+      reply.code(502);
+      return {
+        error: err instanceof Error ? err.message : "Parse failed",
+      };
+    }
   });
 
   // ---- PATCH /:id ----------------------------------------------------------

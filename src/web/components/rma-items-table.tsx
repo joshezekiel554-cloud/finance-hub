@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Trash2, Search, RefreshCw, AlertCircle } from "lucide-react";
+import { Trash2, Search, RefreshCw, AlertCircle, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "../lib/cn";
 
@@ -235,6 +235,25 @@ function ItemRow({
 
   const working =
     lookupMutation.isPending || findInvoiceMutation.isPending;
+
+  // Auto-trigger lookup-prices the first time a row gets a qbItemId set —
+  // saves the operator from manually clicking "Prices" on every line.
+  // Only runs once per row (guarded by autoLookedUpRef on the row's
+  // localKey + qbItemId combo).
+  const autoLookedUpRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rmaId || !row.qbItemId) return;
+    const key = `${row.localKey}:${row.qbItemId}`;
+    if (autoLookedUpRef.current === key) return;
+    autoLookedUpRef.current = key;
+    // Only auto-lookup if the row hasn't already been priced from an
+    // invoice (i.e., listUnitPrice not set). Avoids overwriting a manual
+    // edit on re-render.
+    if (!row.listUnitPrice) {
+      lookupMutation.mutate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rmaId, row.qbItemId, row.localKey]);
 
   return (
     <>
