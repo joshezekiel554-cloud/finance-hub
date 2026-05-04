@@ -28,6 +28,18 @@ export const ACTIVITY_KINDS = [
   "manual_note",
   "task_created",
   "task_completed",
+  "rma_created",
+  "rma_approved",
+  "rma_denied",
+  "rma_override_approved",
+  "rma_warehouse_export_generated",
+  "rma_warehouse_export_cancelled",
+  "rma_sent_to_warehouse",
+  "rma_received_at_warehouse",
+  "rma_credit_memo_issued",
+  "rma_completed",
+  "rma_customer_reply",
+  "rma_cancelled",
 ] as const;
 
 export const ACTIVITY_SOURCES = [
