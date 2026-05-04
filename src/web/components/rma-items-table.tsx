@@ -383,25 +383,9 @@ function ItemRow({
 
   const working =
     lookupMutation.isPending || findInvoiceMutation.isPending;
-
-  // Auto-trigger lookup-prices the first time a row gets a qbItemId set —
-  // saves the operator from manually clicking "Prices" on every line.
-  // Only runs once per row (guarded by autoLookedUpRef on the row's
-  // localKey + qbItemId combo). Gated on missing invoice ref rather than
-  // listUnitPrice — the picker already fills listUnitPrice from the QBO
-  // Item's default, so checking that would never trigger the lookup.
-  const autoLookedUpRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!row.qbItemId) return;
-    if (!rmaId && !qbCustomerId) return; // need at least one source for the lookup
-    const key = `${row.localKey}:${row.qbItemId}`;
-    if (autoLookedUpRef.current === key) return;
-    autoLookedUpRef.current = key;
-    if (!row.originalInvoiceDocNumber) {
-      lookupMutation.mutate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rmaId, qbCustomerId, row.qbItemId, row.localKey]);
+  // Per-row auto-lookup intentionally removed — operator runs the bulk
+  // "Pull prices & invoices" button after items are added, which avoids
+  // per-keystroke QBO traffic. Per-row buttons remain for manual re-trigger.
 
   return (
     <>
