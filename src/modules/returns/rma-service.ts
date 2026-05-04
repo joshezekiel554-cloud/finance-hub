@@ -409,7 +409,8 @@ export type AddRmaItemInput = {
   invoiceDiscountPct?: string | null;
   reason?: string | null;
   originalInvoiceDocNumber?: string | null;
-  originalInvoiceDate?: string | null;
+  /** YYYY-MM-DD string or Date — stored as MySQL DATE */
+  originalInvoiceDate?: Date | string | null;
   priorSeasonId?: string | null;
   priorSeasonOverrideReason?: string | null;
 };
@@ -457,7 +458,7 @@ export async function addRmaItem(
     invoiceDiscountPct: input.invoiceDiscountPct ?? null,
     reason: input.reason ?? null,
     originalInvoiceDocNumber: input.originalInvoiceDocNumber ?? null,
-    originalInvoiceDate: input.originalInvoiceDate ?? null,
+    originalInvoiceDate: (input.originalInvoiceDate ?? null) as Date | null,
     priorSeasonId: input.priorSeasonId ?? null,
     priorSeasonOverrideReason: input.priorSeasonOverrideReason ?? null,
   };
@@ -485,7 +486,8 @@ export type UpdateRmaItemInput = {
   invoiceDiscountPct?: string | null;
   reason?: string | null;
   originalInvoiceDocNumber?: string | null;
-  originalInvoiceDate?: string | null;
+  /** YYYY-MM-DD string or Date — stored as MySQL DATE */
+  originalInvoiceDate?: Date | string | null;
   priorSeasonId?: string | null;
   priorSeasonOverrideReason?: string | null;
   classification?: RmaItem["classification"];
@@ -516,9 +518,14 @@ export async function updateRmaItem(
   const newPrice = patch.unitPrice ?? item.unitPrice;
   const lineTotal = (parseFloat(newQty) * parseFloat(newPrice)).toFixed(2);
 
+  const setPatch = {
+    ...patch,
+    lineTotal,
+    originalInvoiceDate: (patch.originalInvoiceDate ?? undefined) as Date | null | undefined,
+  };
   await db
     .update(rmaItems)
-    .set({ ...patch, lineTotal })
+    .set(setPatch)
     .where(eq(rmaItems.id, itemId));
 
   await recomputeTotalValue(item.rmaId);
