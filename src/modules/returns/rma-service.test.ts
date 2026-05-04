@@ -1,8 +1,52 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockDb, insertCalls } = vi.hoisted(() => {
+// ---------------------------------------------------------------------------
+// Hoisted mocks — must live before any imports that trigger module resolution
+// ---------------------------------------------------------------------------
+const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
   type InsertCall = { table: unknown; values: unknown };
   const insertCalls: InsertCall[] = [];
+
+  // Queue of result arrays consumed in order by successive select chains.
+  let selectResultsQueue: unknown[][] = [];
+  const setSelectResults = (queue: unknown[][]) => {
+    selectResultsQueue = queue.slice();
+  };
+
+  // A lazy chainable node. It only pulls from the queue when awaited (.then()).
+  // Each chain step returns a new node so the queue is consumed once per await.
+  type LazyNode = {
+    then: (
+      resolve: (v: unknown[]) => unknown,
+      reject?: (e: unknown) => unknown,
+    ) => Promise<unknown>;
+    catch: (reject: (e: unknown) => unknown) => Promise<unknown>;
+    where: (...args: unknown[]) => LazyNode;
+    orderBy: (...args: unknown[]) => LazyNode;
+    limit: (...args: unknown[]) => LazyNode;
+    from: (...args: unknown[]) => LazyNode;
+  };
+
+  const makeNode = (): LazyNode => {
+    const node: LazyNode = {
+      then(resolve, reject) {
+        return Promise.resolve(selectResultsQueue.shift() ?? []).then(
+          resolve,
+          reject,
+        );
+      },
+      catch(reject) {
+        return Promise.resolve(selectResultsQueue.shift() ?? []).catch(reject);
+      },
+      where: (..._args: unknown[]) => makeNode(),
+      orderBy: (..._args: unknown[]) => makeNode(),
+      limit: (..._args: unknown[]) => makeNode(),
+      from: (..._args: unknown[]) => makeNode(),
+    };
+    return node;
+  };
+
+  const select = vi.fn(() => makeNode());
 
   const insert = (table: unknown) => ({
     values: (values: unknown) => {
@@ -11,16 +55,22 @@ const { mockDb, insertCalls } = vi.hoisted(() => {
     },
   });
 
+  const update = (_table: unknown) => ({
+    set: (_values: unknown) => ({
+      where: (..._args: unknown[]) => Promise.resolve(),
+    }),
+  });
+
   const tx = { insert };
 
   const transaction = vi.fn(
     async (fn: (tx: unknown) => Promise<unknown>) => fn(tx),
   );
-  const select = vi.fn();
 
   return {
     insertCalls,
-    mockDb: { insert, transaction, select },
+    setSelectResults,
+    mockDb: { insert, update, transaction, select },
   };
 });
 
@@ -33,9 +83,15 @@ vi.mock("../crm/activity-ingester.js", () => ({
   recordActivity: recordActivityMock,
 }));
 
-import { createRma } from "./rma-service.js";
+// ---------------------------------------------------------------------------
+// Imports (after mocks)
+// ---------------------------------------------------------------------------
+import { createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
+// ---------------------------------------------------------------------------
+// createRma
+// ---------------------------------------------------------------------------
 describe("createRma", () => {
   beforeEach(() => {
     insertCalls.length = 0;
@@ -78,5 +134,88 @@ describe("createRma", () => {
       }),
       expect.anything(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getRmaById
+// ---------------------------------------------------------------------------
+describe("getRmaById", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    setSelectResults([[]]);
+  });
+
+  it("returns null when no rma matches", async () => {
+    setSelectResults([[]]);
+    const result = await getRmaById("missing-id");
+    expect(result).toBeNull();
+  });
+
+  it("returns the rma with attached items when found", async () => {
+    // First select resolves to the rma row; second resolves to items (empty).
+    setSelectResults([
+      [{ id: "rma-1", customerId: "cust-1", returnType: "seasonal", status: "draft" }],
+      [],
+    ]);
+    const result = await getRmaById("rma-1");
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe("rma-1");
+    expect(Array.isArray(result!.items)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listRmas
+// ---------------------------------------------------------------------------
+describe("listRmas", () => {
+  beforeEach(() => {
+    setSelectResults([[]]);
+  });
+
+  it("returns rows from db.select() — basic call", async () => {
+    setSelectResults([[]]);
+    const result = await listRmas({});
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("calls db.select with status + type filter when provided", async () => {
+    setSelectResults([[
+      { id: "rma-1", status: "approved", returnType: "damage" },
+    ]]);
+    const result = await listRmas({ status: "approved", type: "damage", limit: 50 });
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updateRma
+// ---------------------------------------------------------------------------
+describe("updateRma", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+  });
+
+  it("updates allowed fields when rma is in draft", async () => {
+    setSelectResults([
+      [{ id: "rma-1", status: "draft" }],
+      [{ id: "rma-1", status: "draft", notes: "updated note" }],
+    ]);
+    const result = await updateRma("rma-1", { notes: "updated note" });
+    expect(result).not.toBeNull();
+  });
+
+  it("returns null when rma not found", async () => {
+    setSelectResults([[]]);
+    const result = await updateRma("missing", { notes: "no-go" });
+    expect(result).toBeNull();
+  });
+
+  it("rejects updates to a completed rma", async () => {
+    setSelectResults([[{ id: "rma-1", status: "completed" }]]);
+    await expect(
+      updateRma("rma-1", { notes: "no-go" }),
+    ).rejects.toThrow(/cannot edit/i);
   });
 });
