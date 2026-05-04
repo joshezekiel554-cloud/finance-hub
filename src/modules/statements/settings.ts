@@ -31,6 +31,8 @@ export type AppSettingsMap = {
   footer_note: string;
   statement_number_next: string;
   statement_bcc_email: string;
+  // Google Drive folder ID that is the root for all RMA photo subfolders.
+  drive_root_folder_id: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -46,6 +48,7 @@ const DEFAULTS: AppSettingsMap = {
   // Preserves the historical hardcoded BCC. Operator can clear via
   // the Settings page → "Statement BCC" field to disable.
   statement_bcc_email: "accounts@feldart.com",
+  drive_root_folder_id: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

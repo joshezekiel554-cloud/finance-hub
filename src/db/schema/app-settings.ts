@@ -48,5 +48,8 @@ export const APP_SETTING_KEYS = [
   // string = no BCC. Defaults to accounts@feldart.com so existing
   // behaviour is preserved on a fresh install.
   "statement_bcc_email",
+  // Google Drive folder ID that is the root for all RMA photo subfolders.
+  // Set via Settings UI or direct API call. If empty, photo upload returns 412.
+  "drive_root_folder_id",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

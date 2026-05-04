@@ -154,7 +154,8 @@ describe("uploadFile", () => {
     });
 
     expect(driveFilesCreateMock).toHaveBeenCalledOnce();
-    const callArg = driveFilesCreateMock.mock.calls[0][0] as {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const callArg = driveFilesCreateMock.mock.calls[0]![0] as {
       requestBody: { name: string; parents: string[]; mimeType: string };
       media: { mimeType: string };
       fields: string;
@@ -245,7 +246,8 @@ describe("ensureFolder", () => {
     const id = await ensureFolder({ userId: "u", parentId: "root-folder", name: "DC-20260504-120000" });
 
     expect(id).toBe("new-folder-id");
-    const createArg = driveFilesCreateMock.mock.calls[0][0] as {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const createArg = driveFilesCreateMock.mock.calls[0]![0] as {
       requestBody: { name: string; parents: string[]; mimeType: string };
     };
     expect(createArg.requestBody.name).toBe("DC-20260504-120000");

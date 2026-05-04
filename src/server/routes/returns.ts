@@ -14,6 +14,7 @@ import {
   updateRmaItem,
   removeRmaItem,
 } from "../../modules/returns/index.js";
+import returnsPhotosRoute from "./returns-photos.js";
 import {
   lookupItemPriceForCustomer,
   findOriginalInvoiceForItem,
@@ -166,6 +167,10 @@ function mapServiceResult<T>(
 // ---------------------------------------------------------------------------
 
 const returnsRoute: FastifyPluginAsync = async (app) => {
+  // Photo upload/list/delete sub-routes (multipart — registered first so the
+  // content-type parser is scoped before JSON routes try to parse bodies).
+  await app.register(returnsPhotosRoute, { prefix: "/:id/photos" });
+
   // ---- GET / ---------------------------------------------------------------
   app.get("/", async (req, reply) => {
     await requireAuth(req);

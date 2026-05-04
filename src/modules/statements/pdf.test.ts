@@ -83,6 +83,7 @@ const SETTINGS: AppSettingsMap = {
   footer_note: "Thank you for your business.",
   statement_number_next: "101",
   statement_bcc_email: "",
+  drive_root_folder_id: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -169,6 +170,7 @@ describe("renderStatementPdf", () => {
         footer_note: "",
         statement_number_next: "1",
         statement_bcc_email: "",
+        drive_root_folder_id: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,
