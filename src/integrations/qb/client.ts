@@ -815,6 +815,38 @@ export class QboClient {
     );
     return data.QueryResponse.Item?.[0] ?? null;
   }
+
+  // Fetch a single Item by its QBO Id. Used when caller already has the
+  // qbItemId (e.g. from a seasonal_product row) and doesn't need a query-by-SKU
+  // round-trip. Falls back gracefully — returns null if the item doesn't exist.
+  async getItemById(itemId: string): Promise<QboItem | null> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/item/${encodeURIComponent(itemId)}`;
+    const accessToken = await this.getAccessToken();
+
+    const doRequest = async (token: string) => {
+      return this.http.get<{ Item: QboItem }>(url, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.Item ?? null;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.Item ?? null;
+      }
+      if ((axiosErr.response?.status ?? 0) === 404) return null;
+      throw err;
+    }
+  }
 }
 
 // -------- Helpers (pure, exported for testing) --------
