@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import {
   createRma,
@@ -21,7 +22,13 @@ import {
   RMA_RETURN_TYPES,
   RMA_STATUSES,
   RMA_ITEM_CLASSIFICATIONS,
+  rmaItems,
 } from "../../db/schema/returns.js";
+import { customers } from "../../db/schema/customers.js";
+import { emailTemplates } from "../../db/schema/email-templates.js";
+import { db } from "../../db/index.js";
+import { renderTemplate } from "../../modules/email-compose/index.js";
+import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
 import { requireAuth } from "../lib/auth.js";
 
 // ---------------------------------------------------------------------------
@@ -448,6 +455,206 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         return { error: "No matching invoice found for this item and customer" };
       }
       return result;
+    },
+  );
+  // ==========================================================================
+  // Email preview routes
+  // ==========================================================================
+
+  // ---- POST /:id/preview-approval-email ------------------------------------
+  // Returns { subject, body, recipients } pre-rendered from the rma-approval
+  // template with all template_vars resolved. Used by the approval email
+  // dialog so the operator can review + edit before send.
+  app.post<{ Params: { id: string } }>(
+    "/:id/preview-approval-email",
+    async (req, reply) => {
+      await requireAuth(req);
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+
+      // Fetch items for the items_list variable
+      const items = await db
+        .select()
+        .from(rmaItems)
+        .where(eq(rmaItems.rmaId, rma.id));
+
+      // Fetch customer
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, rma.customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        reply.code(404);
+        return { error: "Customer not found" };
+      }
+
+      // Fetch template
+      const templateRows = await db
+        .select()
+        .from(emailTemplates)
+        .where(eq(emailTemplates.slug, "rma-approval"))
+        .limit(1);
+      const template = templateRows[0];
+      if (!template) {
+        reply.code(404);
+        return { error: "rma-approval template not found — run the seed script" };
+      }
+
+      // Build items_list
+      const itemsList = items
+        .map((item) => {
+          const qty = parseFloat(item.quantity).toFixed(0);
+          const price = parseFloat(item.unitPrice).toFixed(2);
+          const invRef = item.originalInvoiceDocNumber
+            ? ` (inv. ${item.originalInvoiceDocNumber})`
+            : "";
+          return `  - ${item.sku} ${item.name} x${qty} @ $${price}${invRef}`;
+        })
+        .join("\n");
+
+      // Build resolution body snippet
+      const resolutionBody =
+        rma.resolutionType === "replacement"
+          ? "We will ship a replacement order to you shortly. No return is required."
+          : "A credit memo will be issued to your account. You will receive a separate confirmation once it has been processed.";
+
+      const approvalOpening =
+        rma.thresholdOverridden
+          ? "We have reviewed your return request and are pleased to approve it (approved with override)."
+          : "We have reviewed your return request and are pleased to approve it.";
+
+      const vars: Record<string, string> = {
+        customer_name: customer.displayName,
+        rma_number: rma.rmaNumber ?? rma.id,
+        items_list: itemsList || "  (no items recorded)",
+        resolution_body: resolutionBody,
+        approval_opening: approvalOpening,
+        company_name: "Feldart",
+        user_name: "",
+      };
+
+      const subject = renderTemplate(template.subject, vars);
+      const body = renderTemplate(template.body, vars);
+
+      // Resolve recipients (use statement channel as the closest match)
+      const resolved = await resolveRecipients("statement", {
+        primaryEmail: customer.primaryEmail,
+        billingEmails: customer.billingEmails,
+        invoiceToEmails: customer.invoiceToEmails,
+        invoiceCcEmails: customer.invoiceCcEmails,
+        invoiceBccEmails: customer.invoiceBccEmails,
+        statementToEmails: customer.statementToEmails,
+        statementCcEmails: customer.statementCcEmails,
+        statementBccEmails: customer.statementBccEmails,
+        tags: customer.tags,
+      });
+
+      return {
+        subject,
+        body,
+        recipients: {
+          to: resolved.to.join(", "),
+          cc: resolved.cc.join(", "),
+          bcc: resolved.bcc.join(", "),
+        },
+        bccReasons: resolved.bccReasons ?? [],
+      };
+    },
+  );
+
+  // ---- POST /:id/preview-denial-email -------------------------------------
+  // Returns { subject, body, recipients } for the denial email dialog.
+  // Accepts optional { reason } in body so the dialog can re-fetch when the
+  // operator types a custom denial reason.
+  app.post<{ Params: { id: string } }>(
+    "/:id/preview-denial-email",
+    async (req, reply) => {
+      await requireAuth(req);
+      const bodyParse = z
+        .object({ reason: z.string().max(2000).optional() })
+        .safeParse(req.body);
+      const denialReasonOverride = bodyParse.success
+        ? (bodyParse.data.reason ?? null)
+        : null;
+
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, rma.customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        reply.code(404);
+        return { error: "Customer not found" };
+      }
+
+      const templateRows = await db
+        .select()
+        .from(emailTemplates)
+        .where(eq(emailTemplates.slug, "rma-denial"))
+        .limit(1);
+      const template = templateRows[0];
+      if (!template) {
+        reply.code(404);
+        return { error: "rma-denial template not found — run the seed script" };
+      }
+
+      const denialReason =
+        denialReasonOverride ??
+        rma.denialReason ??
+        "The item does not qualify for return under our current policy.";
+
+      const vars: Record<string, string> = {
+        customer_name: customer.displayName,
+        rma_number: rma.rmaNumber ?? rma.id,
+        denial_reason: denialReason,
+        // Seasonal eligibility fields — empty for damage in Phase 1
+        eligibility_section: "",
+        eligible_amount: "",
+        return_percentage: "",
+        threshold: "",
+        items_proposed: "",
+        items_purchased: "",
+        company_name: "Feldart",
+        user_name: "",
+      };
+
+      const subject = renderTemplate(template.subject, vars);
+      const body = renderTemplate(template.body, vars);
+
+      const resolved = await resolveRecipients("statement", {
+        primaryEmail: customer.primaryEmail,
+        billingEmails: customer.billingEmails,
+        invoiceToEmails: customer.invoiceToEmails,
+        invoiceCcEmails: customer.invoiceCcEmails,
+        invoiceBccEmails: customer.invoiceBccEmails,
+        statementToEmails: customer.statementToEmails,
+        statementCcEmails: customer.statementCcEmails,
+        statementBccEmails: customer.statementBccEmails,
+        tags: customer.tags,
+      });
+
+      return {
+        subject,
+        body,
+        recipients: {
+          to: resolved.to.join(", "),
+          cc: resolved.cc.join(", "),
+          bcc: resolved.bcc.join(", "),
+        },
+        bccReasons: resolved.bccReasons ?? [],
+      };
     },
   );
 };
