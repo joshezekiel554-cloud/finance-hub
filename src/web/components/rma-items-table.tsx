@@ -46,6 +46,7 @@ type LookupResult = {
 
 export type RmaItemsTableProps = {
   rmaId: string | null; // null while the RMA hasn't been persisted yet
+  qbCustomerId?: string | null; // for customer-scoped lookups before the RMA is saved
   items: RmaItemRow[];
   onChange: (items: RmaItemRow[]) => void;
   disabled?: boolean;
@@ -75,6 +76,7 @@ export function makeEmptyRow(): RmaItemRow {
 
 export default function RmaItemsTable({
   rmaId,
+  qbCustomerId = null,
   items,
   onChange,
   disabled = false,
@@ -108,10 +110,14 @@ export default function RmaItemsTable({
   }
 
   // Run lookup-prices for every row that has a qbItemId. Parallel; results
-  // applied to the items array via a single onChange at the end.
+  // applied to the items array via a single onChange at the end. Uses the
+  // customer-scoped endpoint when no rmaId is set yet (operator hasn't
+  // saved the draft), falls back to the rma-scoped endpoint otherwise.
   async function bulkLookupAll(): Promise<void> {
-    if (!rmaId) {
-      setBulkLookupError("Save the RMA as a draft first.");
+    if (!rmaId && !qbCustomerId) {
+      setBulkLookupError(
+        "Pick a customer first (price lookup needs the customer to find their invoices).",
+      );
       return;
     }
     const candidates = items.filter((r) => r.qbItemId);
@@ -126,10 +132,16 @@ export default function RmaItemsTable({
     const results = await Promise.all(
       candidates.map(async (r) => {
         try {
-          const res = await fetch(`/api/rmas/${rmaId}/lookup-prices`, {
+          const url = rmaId
+            ? `/api/rmas/${rmaId}/lookup-prices`
+            : `/api/rmas/qbo-lookup-prices`;
+          const body = rmaId
+            ? { qbItemId: r.qbItemId }
+            : { qbCustomerId, qbItemId: r.qbItemId };
+          const res = await fetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ qbItemId: r.qbItemId }),
+            body: JSON.stringify(body),
           });
           if (!res.ok) return { localKey: r.localKey, ok: false };
           const data = (await res.json()) as LookupResult;
@@ -190,6 +202,7 @@ export default function RmaItemsTable({
                   key={row.localKey}
                   row={row}
                   rmaId={rmaId}
+                  qbCustomerId={qbCustomerId}
                   disabled={disabled}
                   onUpdate={(patch) => updateRow(row.localKey, patch)}
                   onRemove={() => removeRow(row.localKey)}
@@ -260,31 +273,43 @@ export default function RmaItemsTable({
 function ItemRow({
   row,
   rmaId,
+  qbCustomerId,
   disabled,
   onUpdate,
   onRemove,
 }: {
   row: RmaItemRow;
   rmaId: string | null;
+  qbCustomerId: string | null;
   disabled: boolean;
   onUpdate: (patch: Partial<RmaItemRow>) => void;
   onRemove: () => void;
 }) {
   const [lookupError, setLookupError] = useState<string | null>(null);
 
-  // Lookup prices mutation
+  // Lookup prices mutation — uses customer-scoped route when no rmaId yet,
+  // RMA-scoped route otherwise. Either path requires a customer for the
+  // invoice search.
   const lookupMutation = useMutation<LookupResult, Error, void>({
     mutationFn: async () => {
-      if (!rmaId) throw new Error("Save the RMA first before looking up prices");
       if (!row.qbItemId) throw new Error("Select a QB item first");
-      const res = await fetch(`/api/rmas/${rmaId}/lookup-prices`, {
+      if (!rmaId && !qbCustomerId) {
+        throw new Error("Pick a customer first to look up prices");
+      }
+      const url = rmaId
+        ? `/api/rmas/${rmaId}/lookup-prices`
+        : `/api/rmas/qbo-lookup-prices`;
+      const body = rmaId
+        ? { qbItemId: row.qbItemId }
+        : { qbCustomerId, qbItemId: row.qbItemId };
+      const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ qbItemId: row.qbItemId }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
       }
       return res.json();
     },
@@ -301,19 +326,27 @@ function ItemRow({
     onError: (err) => setLookupError(err.message),
   });
 
-  // Find original invoice mutation
+  // Find original invoice mutation — same dual-route pattern as lookupMutation.
   const findInvoiceMutation = useMutation<LookupResult, Error, void>({
     mutationFn: async () => {
-      if (!rmaId) throw new Error("Save the RMA first");
       if (!row.qbItemId) throw new Error("Select a QB item first");
-      const res = await fetch(`/api/rmas/${rmaId}/find-original-invoice`, {
+      if (!rmaId && !qbCustomerId) {
+        throw new Error("Pick a customer first to find invoice");
+      }
+      const url = rmaId
+        ? `/api/rmas/${rmaId}/find-original-invoice`
+        : `/api/rmas/qbo-find-original-invoice`;
+      const body = rmaId
+        ? { qbItemId: row.qbItemId }
+        : { qbCustomerId, qbItemId: row.qbItemId };
+      const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ qbItemId: row.qbItemId }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
       }
       return res.json();
     },
@@ -338,7 +371,8 @@ function ItemRow({
   // Item's default, so checking that would never trigger the lookup.
   const autoLookedUpRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!rmaId || !row.qbItemId) return;
+    if (!row.qbItemId) return;
+    if (!rmaId && !qbCustomerId) return; // need at least one source for the lookup
     const key = `${row.localKey}:${row.qbItemId}`;
     if (autoLookedUpRef.current === key) return;
     autoLookedUpRef.current = key;
@@ -346,7 +380,7 @@ function ItemRow({
       lookupMutation.mutate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rmaId, row.qbItemId, row.localKey]);
+  }, [rmaId, qbCustomerId, row.qbItemId, row.localKey]);
 
   return (
     <>
@@ -533,9 +567,10 @@ function QboItemPicker({
         const body = (await res.json()) as { items: QbItemHit[] };
         setResults(body.items);
         // Auto-pick the top result on mount when triggered from parsing.
-        if (autoPick && !autoPickedRef.current && body.items.length > 0) {
+        const top = body.items[0];
+        if (autoPick && !autoPickedRef.current && top) {
           autoPickedRef.current = true;
-          onPick(body.items[0]);
+          onPick(top);
           setQuery("");
           setResults([]);
         }

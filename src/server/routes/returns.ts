@@ -462,6 +462,54 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
   // QBO lookup routes
   // ==========================================================================
 
+  // ---- POST /qbo-lookup-prices ---------------------------------------------
+  // Customer-scoped lookup — doesn't require a saved RMA. Used by the create
+  // form so operators can pull prices BEFORE saving a draft.
+  app.post("/qbo-lookup-prices", async (req, reply) => {
+    await requireAuth(req);
+    const schema = z.object({
+      qbCustomerId: z.string().min(1),
+      qbItemId: z.string().min(1),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+    const result = await lookupItemPriceForCustomer({
+      qboCustomerId: parse.data.qbCustomerId,
+      qbItemId: parse.data.qbItemId,
+    });
+    if (!result) {
+      reply.code(404);
+      return { error: "No matching invoice found for this item and customer" };
+    }
+    return result;
+  });
+
+  // ---- POST /qbo-find-original-invoice -------------------------------------
+  app.post("/qbo-find-original-invoice", async (req, reply) => {
+    await requireAuth(req);
+    const schema = z.object({
+      qbCustomerId: z.string().min(1),
+      qbItemId: z.string().min(1),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+    const result = await findOriginalInvoiceForItem({
+      qboCustomerId: parse.data.qbCustomerId,
+      qbItemId: parse.data.qbItemId,
+    });
+    if (!result) {
+      reply.code(404);
+      return { error: "No matching invoice found" };
+    }
+    return result;
+  });
+
   // ---- POST /:id/lookup-prices ---------------------------------------------
   app.post<{ Params: { id: string } }>(
     "/:id/lookup-prices",

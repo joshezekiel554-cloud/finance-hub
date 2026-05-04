@@ -400,6 +400,7 @@ export default function ReturnNewPage() {
         <>
           <ReturnCreateFormDamage
             rmaId={rmaId}
+            qbCustomerId={selectedCustomer?.qbCustomerId ?? null}
             value={formState}
             onChange={setFormState}
             onApprove={handleApprove}
@@ -430,6 +431,7 @@ export default function ReturnNewPage() {
         <>
           <ReturnCreateFormSeasonal
             rmaId={rmaId}
+            qbCustomerId={selectedCustomer?.qbCustomerId ?? null}
             returnType={returnType}
             value={seasonalFormState}
             onChange={setSeasonalFormState}

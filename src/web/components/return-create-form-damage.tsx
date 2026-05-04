@@ -23,6 +23,7 @@ export type DamageFormState = {
 
 export type DamageFormProps = {
   rmaId: string | null;
+  qbCustomerId?: string | null;
   value: DamageFormState;
   onChange: (next: DamageFormState) => void;
   onApprove: () => void;
@@ -38,6 +39,7 @@ type AddItemsResult = {
 
 export default function ReturnCreateFormDamage({
   rmaId,
+  qbCustomerId = null,
   value,
   onChange,
   onApprove,
@@ -125,6 +127,7 @@ export default function ReturnCreateFormDamage({
         <CardBody>
           <RmaItemsTable
             rmaId={rmaId}
+            qbCustomerId={qbCustomerId}
             items={value.items}
             disabled={disabled}
             onChange={(items) => {

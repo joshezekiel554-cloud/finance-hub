@@ -31,6 +31,7 @@ export type SeasonalFormState = {
 
 export type SeasonalFormProps = {
   rmaId: string | null;
+  qbCustomerId?: string | null;
   returnType: "seasonal" | "non_seasonal";
   value: SeasonalFormState;
   onChange: (next: SeasonalFormState) => void;
@@ -64,6 +65,7 @@ const CLASSIFICATION_OPTIONS_NON_SEASONAL = [
 
 export default function ReturnCreateFormSeasonal({
   rmaId,
+  qbCustomerId = null,
   returnType,
   value,
   onChange,
@@ -208,6 +210,7 @@ export default function ReturnCreateFormSeasonal({
         <CardBody>
           <RmaItemsTable
             rmaId={rmaId}
+            qbCustomerId={qbCustomerId}
             items={value.items}
             disabled={disabled}
             onChange={(items) => {
