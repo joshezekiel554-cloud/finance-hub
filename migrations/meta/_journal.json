@@ -141,6 +141,13 @@
       "when": 1777650000000,
       "tag": "0019_invoice_customer_memo",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1777900811806,
+      "tag": "0020_burly_sunset_bain",
+      "breakpoints": true
     }
   ]
 }
