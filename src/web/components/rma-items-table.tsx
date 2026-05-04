@@ -268,6 +268,8 @@ function ItemRow({
             </div>
           ) : (
             <QboItemPicker
+              initialQuery={row.sku || row.name || ""}
+              parsedHint={!row.qbItemId && row.name ? row.name : undefined}
               onPick={(hit) => {
                 onUpdate({
                   qbItemId: hit.id,
@@ -397,10 +399,14 @@ function ItemRow({
 
 function QboItemPicker({
   onPick,
+  initialQuery,
+  parsedHint,
 }: {
   onPick: (item: QbItemHit) => void;
+  initialQuery?: string;
+  parsedHint?: string;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery ?? "");
   const [results, setResults] = useState<QbItemHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -440,10 +446,18 @@ function QboItemPicker({
 
   return (
     <div className="relative">
+      {parsedHint && (
+        <div className="mb-1 flex items-center gap-1 text-[10px] text-muted">
+          <Sparkles className="size-3 shrink-0 text-accent-info" />
+          <span>
+            Parsed: <span className="font-medium">{parsedHint}</span> — confirm
+            QBO item below.
+          </span>
+        </div>
+      )}
       <input
         ref={inputRef}
         type="text"
-        autoFocus
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search QB items (SKU or name)…"
