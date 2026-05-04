@@ -30,6 +30,12 @@ export type EligibilityCardProps = {
   items: EligibilityItem[];
   /** Called whenever override toggle/reason changes. Parent uses this. */
   onOverrideChange: (override: { enabled: boolean; reason: string }) => void;
+  /**
+   * When true: renders the breakdown table for record-keeping but hides the
+   * threshold verdict banner and the override toggle. Used by non-seasonal
+   * RMAs where eligibility is informational only — approval is never blocked.
+   */
+  informationalOnly?: boolean;
 };
 
 export default function EligibilityCard({
@@ -37,6 +43,7 @@ export default function EligibilityCard({
   seasonId,
   items,
   onOverrideChange,
+  informationalOnly = false,
 }: EligibilityCardProps) {
   const [breakdown, setBreakdown] = useState<EligibilityBreakdown | null>(null);
   const [loading, setLoading] = useState(false);
@@ -103,6 +110,90 @@ export default function EligibilityCard({
 
   if (!rmaId || !seasonId) return null;
 
+  const innerContent = (
+    <div className="p-3 space-y-2">
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-accent-danger">
+          <AlertCircle className="size-4 shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && !breakdown && (
+        <div className="py-2 text-xs text-muted text-center">
+          Add items to see eligibility breakdown.
+        </div>
+      )}
+
+      {breakdown && (
+        <>
+          <EligibilityTable breakdown={breakdown} />
+
+          {/* Threshold verdict — hidden for informational-only (non-seasonal) */}
+          {!informationalOnly && breakdown.passesThreshold && (
+            <div className="rounded-md bg-success/10 border border-success/30 px-3 py-2 text-xs text-success font-medium">
+              Within threshold — approved to proceed
+            </div>
+          )}
+          {!informationalOnly && !breakdown.passesThreshold && (
+            <div className="rounded-md bg-accent-danger/10 border border-accent-danger/30 px-3 py-2 text-xs text-accent-danger font-medium">
+              Over threshold ({breakdown.cumulativeReturnPct}% &gt; {breakdown.thresholdPct}%)
+              — override required to approve
+            </div>
+          )}
+
+          {/* Override panel — only shown when over threshold and not informational */}
+          {!informationalOnly && !breakdown.passesThreshold && (
+            <div className="rounded-md border border-accent-warning/30 bg-accent-warning/5 p-3 space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={overrideEnabled}
+                  onChange={(e) => {
+                    setOverrideEnabled(e.target.checked);
+                    if (!e.target.checked) setOverrideReason("");
+                  }}
+                  className="rounded"
+                />
+                <span className="text-sm font-medium">Override threshold with reason</span>
+              </label>
+              {overrideEnabled && (
+                <textarea
+                  rows={2}
+                  placeholder="Reason for overriding the threshold…"
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  className="w-full rounded-md border border-default bg-base px-2 py-1.5 text-sm"
+                />
+              )}
+            </div>
+          )}
+
+          {/* Informational badge for non-seasonal */}
+          {informationalOnly && (
+            <div className="rounded-md bg-accent-info/10 border border-accent-info/30 px-3 py-2 text-xs text-accent-info font-medium">
+              Informational only — this return is not subject to the threshold gate
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  // In informationalOnly mode the parent component provides the outer card
+  // shell and header, so we just render the inner content with a loading
+  // indicator pinned to the top-right of the content area.
+  if (informationalOnly) {
+    return (
+      <div className="relative">
+        {loading && (
+          <Loader2 className="absolute right-3 top-3 size-3.5 animate-spin text-muted" />
+        )}
+        {innerContent}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-md border border-default overflow-hidden">
       {/* Header */}
@@ -112,66 +203,7 @@ export default function EligibilityCard({
         </span>
         {loading && <Loader2 className="size-3.5 animate-spin text-muted" />}
       </div>
-
-      <div className="p-3 space-y-2">
-        {error && (
-          <div className="flex items-center gap-2 text-sm text-accent-danger">
-            <AlertCircle className="size-4 shrink-0" />
-            {error}
-          </div>
-        )}
-
-        {!loading && !error && !breakdown && (
-          <div className="py-2 text-xs text-muted text-center">
-            Add items to see eligibility breakdown.
-          </div>
-        )}
-
-        {breakdown && (
-          <>
-            <EligibilityTable breakdown={breakdown} />
-
-            {/* Threshold verdict */}
-            {breakdown.passesThreshold ? (
-              <div className="rounded-md bg-success/10 border border-success/30 px-3 py-2 text-xs text-success font-medium">
-                Within threshold — approved to proceed
-              </div>
-            ) : (
-              <div className="rounded-md bg-accent-danger/10 border border-accent-danger/30 px-3 py-2 text-xs text-accent-danger font-medium">
-                Over threshold ({breakdown.cumulativeReturnPct}% &gt; {breakdown.thresholdPct}%)
-                — override required to approve
-              </div>
-            )}
-
-            {/* Override panel — only shown when over threshold */}
-            {!breakdown.passesThreshold && (
-              <div className="rounded-md border border-accent-warning/30 bg-accent-warning/5 p-3 space-y-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={overrideEnabled}
-                    onChange={(e) => {
-                      setOverrideEnabled(e.target.checked);
-                      if (!e.target.checked) setOverrideReason("");
-                    }}
-                    className="rounded"
-                  />
-                  <span className="text-sm font-medium">Override threshold with reason</span>
-                </label>
-                {overrideEnabled && (
-                  <textarea
-                    rows={2}
-                    placeholder="Reason for overriding the threshold…"
-                    value={overrideReason}
-                    onChange={(e) => setOverrideReason(e.target.value)}
-                    className="w-full rounded-md border border-default bg-base px-2 py-1.5 text-sm"
-                  />
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      {innerContent}
     </div>
   );
 }

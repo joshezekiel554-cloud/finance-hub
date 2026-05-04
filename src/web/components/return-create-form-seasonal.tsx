@@ -5,7 +5,7 @@
 
 import { useCallback, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Info } from "lucide-react";
 import { Card, CardBody, CardHeader } from "./ui/card";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -128,46 +128,47 @@ export default function ReturnCreateFormSeasonal({
 
   return (
     <div className="space-y-6">
-      {/* Season picker */}
-      {returnType === "seasonal" && (
-        <Card>
-          <CardHeader>
-            <h3 className="text-sm font-medium">Season</h3>
-            <p className="mt-0.5 text-xs text-secondary">
-              Select the season this return applies to. Required for threshold
-              eligibility checks.
+      {/* Season picker — required for seasonal, optional for non-seasonal */}
+      <Card>
+        <CardHeader>
+          <h3 className="text-sm font-medium">Season</h3>
+          <p className="mt-0.5 text-xs text-secondary">
+            {returnType === "seasonal"
+              ? "Required for threshold eligibility checks."
+              : "Optional — associate a season to see informational cumulative return totals."}
+          </p>
+        </CardHeader>
+        <CardBody>
+          {seasonsQuery.isPending ? (
+            <div className="text-sm text-muted">Loading seasons…</div>
+          ) : seasonsQuery.isError ? (
+            <div className="flex items-center gap-1 text-sm text-accent-danger">
+              <AlertCircle className="size-4 shrink-0" />
+              Failed to load seasons
+            </div>
+          ) : (
+            <Select
+              value={value.seasonId ?? ""}
+              onChange={(e) => patch({ seasonId: e.target.value || null })}
+              disabled={disabled}
+            >
+              <option value="">
+                {returnType === "seasonal" ? "— Select a season —" : "— None (optional) —"}
+              </option>
+              {(seasonsQuery.data?.seasons ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({formatDate(s.startDate)} – {formatDate(s.endDate)})
+                </option>
+              ))}
+            </Select>
+          )}
+          {seasonMissing && (
+            <p className="mt-1 text-xs text-accent-warning">
+              A season is required for seasonal RMAs.
             </p>
-          </CardHeader>
-          <CardBody>
-            {seasonsQuery.isPending ? (
-              <div className="text-sm text-muted">Loading seasons…</div>
-            ) : seasonsQuery.isError ? (
-              <div className="flex items-center gap-1 text-sm text-accent-danger">
-                <AlertCircle className="size-4 shrink-0" />
-                Failed to load seasons
-              </div>
-            ) : (
-              <Select
-                value={value.seasonId ?? ""}
-                onChange={(e) => patch({ seasonId: e.target.value || null })}
-                disabled={disabled}
-              >
-                <option value="">— Select a season —</option>
-                {(seasonsQuery.data?.seasons ?? []).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({formatDate(s.startDate)} – {formatDate(s.endDate)})
-                  </option>
-                ))}
-              </Select>
-            )}
-            {seasonMissing && (
-              <p className="mt-1 text-xs text-accent-warning">
-                A season is required for seasonal RMAs.
-              </p>
-            )}
-          </CardBody>
-        </Card>
-      )}
+          )}
+        </CardBody>
+      </Card>
 
       {/* Items with classification */}
       <Card>
@@ -235,7 +236,7 @@ export default function ReturnCreateFormSeasonal({
         </CardBody>
       </Card>
 
-      {/* Eligibility card — only shown when rmaId + seasonId set */}
+      {/* Eligibility card — threshold-gated for seasonal, informational-only for non-seasonal */}
       {returnType === "seasonal" && (
         <EligibilityCard
           rmaId={rmaId}
@@ -243,6 +244,34 @@ export default function ReturnCreateFormSeasonal({
           items={itemsWithClassification}
           onOverrideChange={handleOverrideChange}
         />
+      )}
+      {returnType === "non_seasonal" && (
+        <div className="rounded-md border border-default overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-default bg-subtle px-3 py-2">
+            <Info className="size-3.5 text-muted" />
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Eligibility (informational — no threshold gate)
+            </span>
+          </div>
+          <div className="p-3 text-xs text-secondary">
+            Non-seasonal returns are not subject to the 50% threshold gate.
+            Eligibility runs for record-keeping only — approval is never blocked.
+            {value.seasonId
+              ? " The breakdown below shows cumulative totals for reference."
+              : " Associate a season to see cumulative return totals."}
+          </div>
+          {value.seasonId && rmaId && (
+            <div className="border-t border-default">
+              <EligibilityCard
+                rmaId={rmaId}
+                seasonId={value.seasonId}
+                items={itemsWithClassification}
+                onOverrideChange={handleOverrideChange}
+                informationalOnly
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {/* Photos (Drive URL) */}
