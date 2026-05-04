@@ -93,7 +93,7 @@ vi.mock("./credit-memo-builder.js", () => ({
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { approveRma, denyRma, issueCreditMemo, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, denyRma, issueCreditMemo, markReplacementSent, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -349,6 +349,56 @@ describe("issueCreditMemo — damage", () => {
   it("returns null when rma not found", async () => {
     setSelectResults([[]]);
     const result = await issueCreditMemo("missing", { userId: "user-1" });
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markReplacementSent
+// ---------------------------------------------------------------------------
+describe("markReplacementSent — damage", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+  });
+
+  it("transitions approved → completed with resolutionType=replacement, fires activity", async () => {
+    setSelectResults([
+      [{ id: "rma-1", status: "approved", returnType: "damage", customerId: "cust-1" }],
+      [{ id: "rma-1", status: "completed", returnType: "damage", customerId: "cust-1", resolutionType: "replacement" }],
+    ]);
+    const result = await markReplacementSent("rma-1", { userId: "user-1" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(true);
+    if (result && result.ok) {
+      expect(result.rma.status).toBe("completed");
+      expect(result.rma.resolutionType).toBe("replacement");
+    }
+    expect(recordActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "rma_completed", refType: "rma", refId: "rma-1" }),
+      expect.anything(),
+    );
+  });
+
+  it("rejects when rma not in approved state", async () => {
+    setSelectResults([[{ id: "rma-1", status: "draft", returnType: "damage" }]]);
+    const result = await markReplacementSent("rma-1", { userId: "user-1" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(false);
+    if (result && !result.ok) expect(result.reason).toMatch(/Cannot transition/);
+  });
+
+  it("rejects when rma is not damage type", async () => {
+    setSelectResults([[{ id: "rma-1", status: "approved", returnType: "seasonal" }]]);
+    const result = await markReplacementSent("rma-1", { userId: "user-1" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(false);
+    if (result && !result.ok) expect(result.reason).toMatch(/damage/i);
+  });
+
+  it("returns null when rma not found", async () => {
+    setSelectResults([[]]);
+    const result = await markReplacementSent("missing", { userId: "user-1" });
     expect(result).toBeNull();
   });
 });

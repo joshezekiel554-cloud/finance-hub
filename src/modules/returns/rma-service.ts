@@ -324,3 +324,57 @@ export async function issueCreditMemo(
   const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
   return { ok: true, rma: updatedRows[0] as Rma };
 }
+
+// ---------------------------------------------------------------------------
+// markReplacementSent
+// ---------------------------------------------------------------------------
+
+export type MarkReplacementSentInput = {
+  userId: string;
+};
+
+export type MarkReplacementSentResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function markReplacementSent(
+  id: string,
+  input: MarkReplacementSentInput,
+): Promise<MarkReplacementSentResult | null> {
+  const existing = await db.select().from(rmas).where(eq(rmas.id, id));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "mark_replacement_sent",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  const now = new Date();
+  await db
+    .update(rmas)
+    .set({
+      status: "completed",
+      completedAt: now,
+      resolutionType: "replacement",
+    })
+    .where(eq(rmas.id, id));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_completed",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+      meta: { resolutionType: "replacement" },
+    },
+    db,
+  );
+
+  const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  return { ok: true, rma: updatedRows[0] as Rma };
+}
