@@ -182,11 +182,11 @@ export async function approveRma(
   // --- Eligibility check for seasonal / non-seasonal ---
   let eligibilityPatch: {
     eligibilityDetails?: unknown;
-    eligibleAmount?: string;
-    returnPercentage?: string;
+    eligibleAmount?: string | null;
+    returnPercentage?: string | null;
     thresholdOverridden?: boolean;
-    overrideReason?: string;
-    overrideByUserId?: string;
+    overrideReason?: string | null;
+    overrideByUserId?: string | null;
   } = {};
 
   if (current.returnType !== "damage") {

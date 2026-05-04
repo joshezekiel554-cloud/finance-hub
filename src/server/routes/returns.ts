@@ -13,6 +13,11 @@ import {
   addRmaItem,
   updateRmaItem,
   removeRmaItem,
+  generateWarehouseExport,
+  cancelWarehouseExport,
+  setWarehouseNumber,
+  manualMarkReceived,
+  overrideApproveRma,
 } from "../../modules/returns/index.js";
 import returnsPhotosRoute from "./returns-photos.js";
 import {
@@ -24,6 +29,7 @@ import {
   RMA_STATUSES,
   RMA_ITEM_CLASSIFICATIONS,
   rmaItems,
+  seasons,
 } from "../../db/schema/returns.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
@@ -31,6 +37,8 @@ import { db } from "../../db/index.js";
 import { renderTemplate } from "../../modules/email-compose/index.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
 import { requireAuth } from "../lib/auth.js";
+import { runEligibility } from "../../modules/returns/eligibility.js";
+import { buildExtensivExportFile } from "../../modules/returns/extensiv-export.js";
 
 // ---------------------------------------------------------------------------
 // Shared schema fragments
@@ -98,6 +106,30 @@ const issueCreditMemoBodySchema = z.object({
 });
 
 const markReplacementSentBodySchema = z.object({}).passthrough();
+
+// ---------------------------------------------------------------------------
+// Phase 3 warehouse + eligibility + override schemas
+// ---------------------------------------------------------------------------
+
+const setWarehouseNumberBodySchema = z.object({
+  txNumber: z.string().min(1).max(64),
+});
+
+const overrideApproveBodySchema = z.object({
+  reason: z.string().min(1).max(2000),
+});
+
+const runEligibilityBodySchema = z.object({
+  seasonId: z.string().min(1).max(24),
+  items: z
+    .array(
+      z.object({
+        lineTotal: z.string().min(1),
+        classification: z.enum(RMA_ITEM_CLASSIFICATIONS),
+      }),
+    )
+    .optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Items CRUD schemas
@@ -659,6 +691,395 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           bcc: resolved.bcc.join(", "),
         },
         bccReasons: resolved.bccReasons ?? [],
+      };
+    },
+  );
+
+  // ==========================================================================
+  // Phase 3 warehouse round-trip + eligibility + override-approve routes
+  // ==========================================================================
+
+  // ---- POST /:id/generate-warehouse-export ---------------------------------
+  app.post<{ Params: { id: string } }>(
+    "/:id/generate-warehouse-export",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const result = await generateWarehouseExport({ rmaId: req.params.id, userId: user.id });
+      if (result === null) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+      if (!result.ok) {
+        reply.code(409);
+        return { error: result.reason };
+      }
+      // Return JSON with base64-encoded content so the frontend can trigger a
+      // download via Blob/anchor (avoids Fastify streaming complexity for this
+      // infrequent, small file).
+      return {
+        rma: result.rma,
+        exportFile: {
+          filename: result.exportFile.filename,
+          content: Buffer.from(result.exportFile.content, "utf-8").toString("base64"),
+          mimeType: "text/tab-separated-values",
+        },
+      };
+    },
+  );
+
+  // ---- POST /:id/cancel-warehouse-export -----------------------------------
+  app.post<{ Params: { id: string } }>(
+    "/:id/cancel-warehouse-export",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const result = await cancelWarehouseExport({ rmaId: req.params.id, userId: user.id });
+      return mapServiceResult(result, reply);
+    },
+  );
+
+  // ---- POST /:id/set-warehouse-number --------------------------------------
+  app.post<{ Params: { id: string } }>(
+    "/:id/set-warehouse-number",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const parse = setWarehouseNumberBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+      const result = await setWarehouseNumber({
+        rmaId: req.params.id,
+        userId: user.id,
+        txNumber: parse.data.txNumber,
+      });
+      if (result === null) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+      if (!result.ok) {
+        reply.code(409);
+        return { error: result.reason };
+      }
+      // Return RMA + email-dialog-ready payload (PDF Drive ID if override path)
+      return {
+        rma: result.rma,
+        emailDialogPayload: {
+          pdfDriveId: result.rma.denialPdfDriveId ?? null,
+          thresholdOverridden: result.rma.thresholdOverridden ?? false,
+        },
+      };
+    },
+  );
+
+  // ---- POST /:id/manual-mark-received --------------------------------------
+  app.post<{ Params: { id: string } }>(
+    "/:id/manual-mark-received",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const result = await manualMarkReceived({ rmaId: req.params.id, userId: user.id });
+      return mapServiceResult(result, reply);
+    },
+  );
+
+  // ---- POST /:id/override-approve ------------------------------------------
+  app.post<{ Params: { id: string } }>(
+    "/:id/override-approve",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const parse = overrideApproveBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+      const result = await overrideApproveRma({
+        rmaId: req.params.id,
+        userId: user.id,
+        reason: parse.data.reason,
+      });
+      return mapServiceResult(result, reply);
+    },
+  );
+
+  // ---- GET /:id/extensiv-export --------------------------------------------
+  // Re-builds the Extensiv export file from current RMA state and returns it
+  // as base64 JSON (frontend triggers download via Blob). Useful when the
+  // original download was missed.
+  app.get<{ Params: { id: string } }>(
+    "/:id/extensiv-export",
+    async (req, reply) => {
+      await requireAuth(req);
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, rma.customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        reply.code(404);
+        return { error: "Customer not found" };
+      }
+
+      let seasonName = "";
+      if (rma.seasonId) {
+        const seasonRows = await db
+          .select({ name: seasons.name })
+          .from(seasons)
+          .where(eq(seasons.id, rma.seasonId));
+        seasonName = seasonRows[0]?.name ?? "";
+      }
+
+      const exportFile = buildExtensivExportFile({
+        rma: { rmaNumber: rma.rmaNumber ?? null, extensivRef: rma.extensivRef ?? null },
+        customer: { name: customer.displayName, qbCustomerId: rma.qbCustomerId ?? "" },
+        season: { name: seasonName },
+        items: rma.items.map((item) => ({
+          sku: item.sku,
+          name: item.name,
+          quantity: item.quantity,
+        })),
+      });
+
+      return {
+        exportFile: {
+          filename: exportFile.filename,
+          content: Buffer.from(exportFile.content, "utf-8").toString("base64"),
+          mimeType: "text/tab-separated-values",
+        },
+      };
+    },
+  );
+
+  // ---- GET /:id/eligibility-pdf --------------------------------------------
+  // Streams the denial PDF from Drive if denialPdfDriveId is set, or
+  // re-renders it on the fly if not.
+  app.get<{ Params: { id: string } }>(
+    "/:id/eligibility-pdf",
+    async (req, reply) => {
+      await requireAuth(req);
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+
+      // If we have a Drive file ID, fetch from Drive and stream it.
+      if (rma.denialPdfDriveId) {
+        try {
+          const { downloadFileContent } = await import("../../integrations/google-drive/client.js");
+          const pdfBuffer = await downloadFileContent({
+            userId: req.headers["x-user-id"] as string ?? "",
+            fileId: rma.denialPdfDriveId,
+          });
+          reply.header("Content-Type", "application/pdf");
+          reply.header("Content-Disposition", `inline; filename="eligibility-${rma.id}.pdf"`);
+          return reply.send(pdfBuffer);
+        } catch (err) {
+          // Fall through to re-render
+          console.warn("[eligibility-pdf] Drive fetch failed, re-rendering:", err);
+        }
+      }
+
+      // Re-render from current RMA state
+      if (!rma.seasonId) {
+        reply.code(409);
+        return { error: "RMA has no season — cannot generate eligibility PDF" };
+      }
+
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, rma.customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        reply.code(404);
+        return { error: "Customer not found" };
+      }
+
+      const seasonRows = await db
+        .select({ name: seasons.name })
+        .from(seasons)
+        .where(eq(seasons.id, rma.seasonId));
+      const seasonName = seasonRows[0]?.name ?? "Season";
+
+      const breakdown = await runEligibility({
+        customerId: rma.customerId,
+        qbCustomerId: rma.qbCustomerId ?? "",
+        seasonId: rma.seasonId,
+        proposedItems: rma.items.map((item) => ({
+          lineTotal: item.lineTotal,
+          classification: item.classification,
+        })),
+        excludeRmaId: rma.id,
+      });
+
+      const { generateEligibilityPdf } = await import("../../modules/returns/eligibility-pdf.js");
+      const pdfBuffer = await generateEligibilityPdf({
+        rma: { id: rma.id, rmaNumber: rma.rmaNumber ?? null },
+        customer: { name: customer.displayName },
+        season: { name: seasonName },
+        breakdown,
+        items: rma.items.map((item) => ({
+          sku: item.sku,
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          lineTotal: item.lineTotal,
+          classification: item.classification,
+          priorSeasonId: item.priorSeasonId,
+        })),
+      });
+
+      reply.header("Content-Type", "application/pdf");
+      reply.header("Content-Disposition", `inline; filename="eligibility-${rma.id}.pdf"`);
+      return reply.send(pdfBuffer);
+    },
+  );
+
+  // ---- POST /:id/run-eligibility -------------------------------------------
+  // Runs the eligibility module with the given seasonId + optionally overridden
+  // items. Used by the live eligibility card on the frontend.
+  app.post<{ Params: { id: string } }>(
+    "/:id/run-eligibility",
+    async (req, reply) => {
+      await requireAuth(req);
+      const parse = runEligibilityBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+      if (!rma.qbCustomerId) {
+        reply.code(409);
+        return { error: "RMA has no QBO customer ID" };
+      }
+
+      const proposedItems = parse.data.items
+        ? parse.data.items
+        : rma.items.map((item) => ({
+            lineTotal: item.lineTotal,
+            classification: item.classification,
+          }));
+
+      const breakdown = await runEligibility({
+        customerId: rma.customerId,
+        qbCustomerId: rma.qbCustomerId,
+        seasonId: parse.data.seasonId,
+        proposedItems,
+        excludeRmaId: rma.id,
+      });
+
+      return { breakdown };
+    },
+  );
+
+  // ---- POST /:id/preview-override-approval-email ---------------------------
+  // Pre-renders the override-approval email template with override context vars
+  // and the denial PDF drive link. Returns { subject, body, recipients, pdfDriveId }.
+  // Fired when set-warehouse-number is clicked on an override-approved RMA.
+  app.post<{ Params: { id: string } }>(
+    "/:id/preview-override-approval-email",
+    async (req, reply) => {
+      await requireAuth(req);
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, rma.customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        reply.code(404);
+        return { error: "Customer not found" };
+      }
+
+      // Try the rma-override-approval template first; fall back to rma-approval.
+      const templateRows = await db
+        .select()
+        .from(emailTemplates)
+        .where(eq(emailTemplates.slug, "rma-override-approval"))
+        .limit(1);
+      const overrideTemplate = templateRows[0];
+
+      const fallbackRows = overrideTemplate
+        ? []
+        : await db
+            .select()
+            .from(emailTemplates)
+            .where(eq(emailTemplates.slug, "rma-approval"))
+            .limit(1);
+      const template = overrideTemplate ?? fallbackRows[0];
+
+      if (!template) {
+        reply.code(404);
+        return { error: "rma-approval template not found — run the seed script" };
+      }
+
+      const items = rma.items ?? [];
+      const itemsList = items
+        .map((item) => {
+          const qty = parseFloat(item.quantity).toFixed(0);
+          const price = parseFloat(item.unitPrice).toFixed(2);
+          const invRef = item.originalInvoiceDocNumber
+            ? ` (inv. ${item.originalInvoiceDocNumber})`
+            : "";
+          return `  - ${item.sku} ${item.name} x${qty} @ $${price}${invRef}`;
+        })
+        .join("\n");
+
+      const vars: Record<string, string> = {
+        customer_name: customer.displayName,
+        rma_number: rma.rmaNumber ?? rma.id,
+        items_list: itemsList || "  (no items recorded)",
+        override_reason: rma.overrideReason ?? "",
+        approval_opening:
+          "We have reviewed your return request and are pleased to approve it (approved with management override).",
+        resolution_body: "A credit memo will be issued to your account once the return is received and processed.",
+        company_name: "Feldart",
+        user_name: "",
+      };
+
+      const subject = renderTemplate(template.subject, vars);
+      const body = renderTemplate(template.body, vars);
+
+      const resolved = await resolveRecipients("statement", {
+        primaryEmail: customer.primaryEmail,
+        billingEmails: customer.billingEmails,
+        invoiceToEmails: customer.invoiceToEmails,
+        invoiceCcEmails: customer.invoiceCcEmails,
+        invoiceBccEmails: customer.invoiceBccEmails,
+        statementToEmails: customer.statementToEmails,
+        statementCcEmails: customer.statementCcEmails,
+        statementBccEmails: customer.statementBccEmails,
+        tags: customer.tags,
+      });
+
+      return {
+        subject,
+        body,
+        recipients: {
+          to: resolved.to.join(", "),
+          cc: resolved.cc.join(", "),
+          bcc: resolved.bcc.join(", "),
+        },
+        bccReasons: resolved.bccReasons ?? [],
+        pdfDriveId: rma.denialPdfDriveId ?? null,
       };
     },
   );

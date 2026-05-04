@@ -325,3 +325,20 @@ export async function makeViewable(input: {
   });
   log.debug({ fileId: input.fileId }, "drive file made publicly viewable");
 }
+
+/**
+ * Download the binary content of a Drive file.
+ * Returns a Buffer. Caller handles MIME type detection.
+ */
+export async function downloadFileContent(input: {
+  userId: string;
+  fileId: string;
+}): Promise<Buffer> {
+  const drive = await getDriveClient();
+  const res = await drive.files.get(
+    { fileId: input.fileId, alt: "media" },
+    { responseType: "arraybuffer" },
+  );
+  const data = res.data as ArrayBuffer;
+  return Buffer.from(data);
+}
