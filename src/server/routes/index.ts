@@ -27,6 +27,7 @@ import emailRoutingRulesRoute from "./email-routing-rules.js";
 import logoUploadRoute from "./logo-upload.js";
 import rosterTagRoute from "./roster-tag.js";
 import returnsRoute from "./returns.js";
+import seasonsRoute from "./seasons.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -74,6 +75,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(logoUploadRoute, { prefix: "/api" });
   await app.register(rosterTagRoute, { prefix: "/api/roster-tag" });
   await app.register(returnsRoute, { prefix: "/api/rmas" });
+  await app.register(seasonsRoute, { prefix: "/api/seasons" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });

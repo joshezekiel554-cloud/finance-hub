@@ -205,7 +205,7 @@ describe("parseReturnRequestEmail", () => {
       attachmentText: "Item: MENORAH-7, Qty: 1, Reason: Defective",
     });
 
-    const callArgs = mockCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    const callArgs = (mockCreate.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
     const messages = callArgs.messages as Array<{ role: string; content: string }>;
     expect(messages[0]?.content).toContain("Attachment text:");
     expect(messages[0]?.content).toContain("MENORAH-7");
