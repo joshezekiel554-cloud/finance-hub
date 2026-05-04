@@ -19,6 +19,18 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
       Google({
         clientId: env.AUTH_GOOGLE_CLIENT_ID,
         clientSecret: env.AUTH_GOOGLE_CLIENT_SECRET,
+        authorization: {
+          params: {
+            scope: [
+              "openid",
+              "email",
+              "profile",
+              "https://www.googleapis.com/auth/drive.file",
+            ].join(" "),
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
       }),
     ],
     secret: env.AUTH_SECRET,
