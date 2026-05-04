@@ -15,6 +15,7 @@ import {
   View,
   renderToBuffer,
 } from "@react-pdf/renderer";
+import type { Style } from "@react-pdf/types";
 import * as React from "react";
 import type { RmaItemClassification } from "../../db/schema/returns.js";
 import type { EligibilityBreakdown } from "./eligibility.js";
@@ -373,7 +374,7 @@ function ItemsTable({
   items: ItemRow[];
   title: string;
   note?: string;
-  rowStyle?: object;
+  rowStyle?: Style;
 }): React.ReactElement | null {
   if (items.length === 0) return null;
   return (

@@ -166,18 +166,26 @@ export async function runEligibility(
 
   // 5. Sum eligible_amount (or total_value) from approved+ RMAs for this
   //    customer × season — excluding the current draft if excludeRmaId given.
-  const approvedStatuses = [
+  // Use the typed RMA_STATUSES enum values directly so Drizzle's inArray
+  // overload resolves to the enum-typed column variant (not the string[] overload).
+  const approvedStatuses: Array<
+    | "approved"
+    | "awaiting_warehouse_number"
+    | "sent_to_warehouse"
+    | "received"
+    | "completed"
+  > = [
     "approved",
     "awaiting_warehouse_number",
     "sent_to_warehouse",
     "received",
     "completed",
-  ] as const;
+  ];
 
   const baseConditions = [
     eq(rmas.customerId, customerId),
     eq(rmas.seasonId, seasonId),
-    inArray(rmas.status, approvedStatuses as unknown as string[]),
+    inArray(rmas.status, approvedStatuses),
   ];
   if (excludeRmaId) {
     baseConditions.push(ne(rmas.id, excludeRmaId));
