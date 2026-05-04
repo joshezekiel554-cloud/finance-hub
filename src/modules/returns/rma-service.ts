@@ -5,12 +5,14 @@ import {
   rmaItems,
   rmas,
   type NewRma,
+  type NewRmaItem,
   type Rma,
   type RmaItem,
   type RmaReturnType,
   type RmaStatus,
 } from "../../db/schema/returns.js";
 import { recordActivity } from "../crm/activity-ingester.js";
+import { validateTransition } from "./rma-state.js";
 
 // ---------------------------------------------------------------------------
 // createRma
@@ -131,4 +133,66 @@ export async function updateRma(
   await db.update(rmas).set(patch).where(eq(rmas.id, id));
   const updated = await db.select().from(rmas).where(eq(rmas.id, id));
   return (updated[0] ?? null) as Rma | null;
+}
+
+// ---------------------------------------------------------------------------
+// approveRma
+// ---------------------------------------------------------------------------
+
+export type ApproveRmaInput = {
+  userId: string;
+  overrideThreshold?: boolean;
+  overrideReason?: string;
+};
+
+export type ApproveRmaResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+function generateDamageRmaNumber(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `DC-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+export async function approveRma(
+  id: string,
+  input: ApproveRmaInput,
+): Promise<ApproveRmaResult | null> {
+  const existing = await db.select().from(rmas).where(eq(rmas.id, id));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "approve",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  const rmaNumber = current.returnType === "damage" ? generateDamageRmaNumber() : null;
+  const now = new Date();
+  await db.update(rmas).set({
+    status: "approved",
+    approvedAt: now,
+    approvedByUserId: input.userId,
+    rmaNumber,
+    thresholdOverridden: input.overrideThreshold ?? false,
+    overrideReason: input.overrideReason ?? null,
+    overrideByUserId: input.overrideThreshold ? input.userId : null,
+  }).where(eq(rmas.id, id));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_approved",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, id));
+  return { ok: true, rma: updated[0] as Rma };
 }

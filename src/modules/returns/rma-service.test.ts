@@ -86,7 +86,7 @@ vi.mock("../crm/activity-ingester.js", () => ({
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -217,5 +217,47 @@ describe("updateRma", () => {
     await expect(
       updateRma("rma-1", { notes: "no-go" }),
     ).rejects.toThrow(/cannot edit/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// approveRma
+// ---------------------------------------------------------------------------
+describe("approveRma — damage", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+  });
+
+  it("transitions draft → approved, allocates DC-... rma number, fires activity", async () => {
+    setSelectResults([
+      [{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1" }],
+      [{ id: "rma-1", status: "approved", returnType: "damage", customerId: "cust-1", rmaNumber: "DC-20260504-120000" }],
+    ]);
+    const result = await approveRma("rma-1", { userId: "user-1" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(true);
+    if (result && result.ok) {
+      expect(result.rma.status).toBe("approved");
+      expect(result.rma.rmaNumber).toMatch(/^DC-\d{8}-\d{6}$/);
+    }
+    expect(recordActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "rma_approved", refType: "rma", refId: "rma-1" }),
+      expect.anything(),
+    );
+  });
+
+  it("rejects approve when rma not in draft", async () => {
+    setSelectResults([[{ id: "rma-1", status: "approved", returnType: "damage" }]]);
+    const result = await approveRma("rma-1", { userId: "user-1" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(false);
+    if (result && !result.ok) expect(result.reason).toMatch(/Cannot transition/);
+  });
+
+  it("returns null when rma not found", async () => {
+    setSelectResults([[]]);
+    const result = await approveRma("missing", { userId: "user-1" });
+    expect(result).toBeNull();
   });
 });
