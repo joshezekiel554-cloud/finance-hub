@@ -55,6 +55,20 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
         }
         return allowList.has(email);
       },
+      async redirect({ url, baseUrl }) {
+        // Auth.js's default redirect can land on stale callbackUrls (e.g.
+        // /login from an old session) that aren't real routes. Bounce
+        // those to /. Also force same-origin: external URLs are unsafe
+        // as redirect targets.
+        try {
+          const target = new URL(url, baseUrl);
+          if (target.origin !== baseUrl) return baseUrl;
+          if (target.pathname === "/login") return baseUrl;
+          return target.toString();
+        } catch {
+          return baseUrl;
+        }
+      },
       async session({ session, user }) {
         if (session.user && user) {
           session.user.id = user.id;
