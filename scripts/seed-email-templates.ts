@@ -165,6 +165,70 @@ Thanks,
 {{user_name}}
 {{company_name}}`,
   },
+  {
+    slug: "rma-approval",
+    name: "RMA approval",
+    context: "rma_approval",
+    description:
+      "Sent when an RMA is approved. Includes the RMA number, items, and return-shipping instructions for warehouse-routed RMAs (or replacement note for damage replacements).",
+    subject: "Your return request - RMA {{rma_number}}",
+    body: `Hi {{customer_name}},
+
+{{approval_opening}}
+
+RMA Number: {{rma_number}}
+
+Items approved for return:
+{{items_list}}
+
+{{resolution_body}}
+
+Thanks,
+{{user_name}}
+{{company_name}}`,
+  },
+  {
+    slug: "rma-denial",
+    name: "RMA denial",
+    context: "rma_denial",
+    description:
+      "Sent when an RMA is denied. For seasonal RMAs, includes an eligibility breakdown PDF as attachment (handled at send time).",
+    subject: "Your return request - {{customer_name}}",
+    body: `Hi {{customer_name}},
+
+Thank you for your return request. After review, we are unable to approve it at this time.
+
+Reason: {{denial_reason}}
+
+{{eligibility_section}}
+
+If you believe this decision should be reviewed, please reply to this email and we'll discuss.
+
+Thanks,
+{{user_name}}
+{{company_name}}`,
+  },
+  {
+    slug: "rma-credit-memo",
+    name: "RMA credit memo",
+    context: "rma_credit_memo",
+    description:
+      "Sent when a credit memo is issued for an approved RMA. Includes the credit memo PDF as attachment.",
+    subject: "Credit memo {{credit_memo_doc_number}} - RMA {{rma_number}}",
+    body: `Hi {{customer_name}},
+
+Please find attached credit memo {{credit_memo_doc_number}} for RMA {{rma_number}}.
+
+Goods credited: {{goods_subtotal}}
+{{deductions_section}}
+Total credit: {{total_credit_amount}}
+
+This credit has been applied to your account.
+
+Thanks,
+{{user_name}}
+{{company_name}}`,
+  },
 ];
 
 async function main() {
