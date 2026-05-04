@@ -19,7 +19,12 @@ export type MatchResult =
   | { kind: "fuzzy_customer_sku"; rmaId: string; confidence: number; alternateMatches: string[] }
   | { kind: "no_match" };
 
-const ACTIVE_STATUSES = ["sent_to_warehouse", "received"] as const;
+// Typed as the specific enum literals so that Drizzle's inArray overload resolves
+// to the enum-column variant (not the generic string[] overload).
+const ACTIVE_STATUSES: Array<"sent_to_warehouse" | "received"> = [
+  "sent_to_warehouse",
+  "received",
+];
 
 // ---------------------------------------------------------------------------
 // Jaccard similarity between two sets of strings.
@@ -54,7 +59,7 @@ export async function matchReceiptToRma(input: {
       .where(
         and(
           or(eq(rmas.rmaNumber, txNumber), eq(rmas.extensivTxNumber, txNumber)),
-          inArray(rmas.status, ACTIVE_STATUSES as unknown as [string, ...string[]]),
+          inArray(rmas.status, ACTIVE_STATUSES),
         ),
       )
       .limit(2);
@@ -75,7 +80,7 @@ export async function matchReceiptToRma(input: {
       .where(
         and(
           eq(rmas.extensivRef, refString),
-          inArray(rmas.status, ACTIVE_STATUSES as unknown as [string, ...string[]]),
+          inArray(rmas.status, ACTIVE_STATUSES),
         ),
       )
       .limit(2);
