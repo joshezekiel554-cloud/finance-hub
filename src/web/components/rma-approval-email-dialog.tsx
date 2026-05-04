@@ -34,6 +34,12 @@ export type RmaApprovalEmailDialogProps = {
   rmaNumber: string;
   customerId: string;
   onSent: () => void;
+  /**
+   * When set (override-approval path), the eligibility PDF with this Drive ID
+   * is fetched and its URL included in the email send payload so the backend
+   * can attach it.
+   */
+  pdfDriveId?: string | null;
 };
 
 export default function RmaApprovalEmailDialog({
@@ -43,6 +49,7 @@ export default function RmaApprovalEmailDialog({
   rmaNumber,
   customerId,
   onSent,
+  pdfDriveId = null,
 }: RmaApprovalEmailDialogProps) {
   const queryClient = useQueryClient();
 
@@ -105,19 +112,23 @@ export default function RmaApprovalEmailDialog({
   const sendMutation = useMutation<{ messageId: string }, Error, void>({
     mutationFn: async () => {
       if (!to.trim()) throw new Error("TO recipient is required");
+      const payload: Record<string, unknown> = {
+        to,
+        cc: cc.trim() || undefined,
+        bcc: bcc.trim() || undefined,
+        subject,
+        body,
+        customerId,
+        refType: "rma",
+        refId: rmaId,
+      };
+      if (pdfDriveId) {
+        payload.attachmentDriveId = pdfDriveId;
+      }
       const res = await fetch("/api/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          to,
-          cc: cc.trim() || undefined,
-          bcc: bcc.trim() || undefined,
-          subject,
-          body,
-          customerId,
-          refType: "rma",
-          refId: rmaId,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const text = await res.text();

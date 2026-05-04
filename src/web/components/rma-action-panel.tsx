@@ -9,6 +9,8 @@ import { Button } from "./ui/button";
 import RmaApprovalEmailDialog from "./rma-approval-email-dialog";
 import RmaDenialEmailDialog from "./rma-denial-email-dialog";
 import RmaCreditMemoDialog from "./rma-credit-memo-dialog";
+import RmaWarehouseExportAction from "./rma-warehouse-export-action";
+import RmaSetWarehouseNumberAction from "./rma-set-warehouse-number-action";
 
 export type RmaStatus =
   | "draft"
@@ -207,96 +209,47 @@ export default function RmaActionPanel({
       {/* approved — seasonal or non_seasonal */}
       {status === "approved" && (returnType === "seasonal" || returnType === "non_seasonal") && (
         <div className="space-y-2">
-          <div className="relative">
-            <Button
-              variant="primary"
-              size="sm"
-              className="w-full opacity-50 cursor-not-allowed"
-              disabled
-            >
-              Send to warehouse
-            </Button>
-            <span className="block text-center text-[10px] text-muted mt-0.5">
-              (coming in Phase 3)
-            </span>
-          </div>
-          <div className="relative">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full opacity-50 cursor-not-allowed"
-              disabled
-            >
-              Unapprove
-            </Button>
-            <span className="block text-center text-[10px] text-muted mt-0.5">
-              (not available in Phase 1)
-            </span>
-          </div>
+          <RmaWarehouseExportAction
+            rmaId={rmaId}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              onRefresh();
+            }}
+          />
         </div>
       )}
 
       {/* awaiting_warehouse_number */}
       {status === "awaiting_warehouse_number" && (
         <div className="space-y-2">
-          <div className="relative">
-            <Button
-              variant="primary"
-              size="sm"
-              className="w-full opacity-50 cursor-not-allowed"
-              disabled
-            >
-              Set warehouse number
-            </Button>
-            <span className="block text-center text-[10px] text-muted mt-0.5">
-              (coming in Phase 3)
-            </span>
-          </div>
-          <div className="relative">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full opacity-50 cursor-not-allowed"
-              disabled
-            >
-              Cancel warehouse export
-            </Button>
-            <span className="block text-center text-[10px] text-muted mt-0.5">
-              (coming in Phase 3)
-            </span>
-          </div>
+          <RmaSetWarehouseNumberAction
+            rmaId={rmaId}
+            customerId={customerId}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              onRefresh();
+            }}
+          />
+          <CancelWarehouseExportButton
+            rmaId={rmaId}
+            onSuccess={() => {
+              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              onRefresh();
+            }}
+          />
         </div>
       )}
 
       {/* sent_to_warehouse */}
       {status === "sent_to_warehouse" && (
         <div className="space-y-2">
-          <div className="relative">
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full opacity-50 cursor-not-allowed"
-              disabled
-            >
-              Manual mark received
-            </Button>
-            <span className="block text-center text-[10px] text-muted mt-0.5">
-              (coming in Phase 3)
-            </span>
-          </div>
-          <div className="relative">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full opacity-50 cursor-not-allowed"
-              disabled
-            >
-              Cancel
-            </Button>
-            <span className="block text-center text-[10px] text-muted mt-0.5">
-              (coming in Phase 3)
-            </span>
-          </div>
+          <ManualMarkReceivedButton
+            rmaId={rmaId}
+            onSuccess={() => {
+              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              onRefresh();
+            }}
+          />
         </div>
       )}
 
@@ -436,6 +389,138 @@ export default function RmaActionPanel({
           onRefresh();
         }}
       />
+    </div>
+  );
+}
+
+// ---- Cancel warehouse export -------------------------------------------------
+
+function CancelWarehouseExportButton({
+  rmaId,
+  onSuccess,
+}: {
+  rmaId: string;
+  onSuccess: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const cancelMutation = useMutation<unknown, Error, void>({
+    mutationFn: async () => {
+      const res = await fetch(`/api/rmas/${rmaId}/cancel-warehouse-export`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => { setError(null); onSuccess(); },
+    onError: (err) => setError(err.message),
+  });
+
+  return (
+    <div className="space-y-1">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full"
+        loading={cancelMutation.isPending}
+        onClick={() => { setError(null); cancelMutation.mutate(); }}
+      >
+        Cancel warehouse export
+      </Button>
+      {error && (
+        <div className="flex items-center gap-1 text-xs text-accent-danger">
+          <AlertCircle className="size-3 shrink-0" />
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Manual mark received ---------------------------------------------------
+
+function ManualMarkReceivedButton({
+  rmaId,
+  onSuccess,
+}: {
+  rmaId: string;
+  onSuccess: () => void;
+}) {
+  const [confirm, setConfirm] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation<unknown, Error, void>({
+    mutationFn: async () => {
+      const res = await fetch(`/api/rmas/${rmaId}/manual-mark-received`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => { setError(null); setConfirm(false); onSuccess(); },
+    onError: (err) => { setError(err.message); setConfirm(false); },
+  });
+
+  if (confirm) {
+    return (
+      <div className="rounded-md border border-accent-warning/30 bg-accent-warning/10 p-3 space-y-2">
+        <p className="text-sm font-medium">Mark as received?</p>
+        <p className="text-xs text-secondary">
+          Use this if automatic warehouse matching hasn't picked up the receipt.
+        </p>
+        <div className="flex gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            loading={mutation.isPending}
+            onClick={() => mutation.mutate()}
+          >
+            Confirm
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={mutation.isPending}
+            onClick={() => setConfirm(false)}
+          >
+            Cancel
+          </Button>
+        </div>
+        {error && (
+          <div className="flex items-center gap-1 text-xs text-accent-danger">
+            <AlertCircle className="size-3 shrink-0" />
+            {error}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <Button
+        variant="secondary"
+        size="sm"
+        className="w-full"
+        onClick={() => setConfirm(true)}
+      >
+        Manual mark received
+      </Button>
+      {error && (
+        <div className="flex items-center gap-1 text-xs text-accent-danger">
+          <AlertCircle className="size-3 shrink-0" />
+          {error}
+        </div>
+      )}
     </div>
   );
 }
