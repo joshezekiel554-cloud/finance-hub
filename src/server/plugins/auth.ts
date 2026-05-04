@@ -19,6 +19,13 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
       Google({
         clientId: env.AUTH_GOOGLE_CLIENT_ID,
         clientSecret: env.AUTH_GOOGLE_CLIENT_SECRET,
+        // Link to existing user row when the email matches. Safe for our
+        // single-tenant + ALLOWED_EMAILS gate — controlling the email
+        // address is sufficient identity proof here. Without this flag,
+        // Auth.js refuses to link a new OAuth account to a pre-existing
+        // user (e.g. one created earlier by the DEV_USER_EMAIL bypass) and
+        // returns OAuthAccountNotLinked.
+        allowDangerousEmailAccountLinking: true,
         authorization: {
           params: {
             scope: [
