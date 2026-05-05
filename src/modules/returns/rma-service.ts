@@ -953,6 +953,11 @@ export async function markAlreadyCredited(
   // Verify the CM actually exists in QBO and grab its internal id so the
   // RMA links to it the same way native CMs do (qboCreditMemoId is what the
   // detail page uses to render the "View CM in QBO" link).
+  //
+  // Also cross-check that the CM's CustomerRef matches the RMA's customer.
+  // Without this, an operator typo (pasting another customer's CM doc#)
+  // would silently link an unrelated CM — the RMA would mark "completed"
+  // and the wrong customer's CM would appear on the detail page.
   const { QboClient } = await import("../../integrations/qb/client.js");
   const qbo = new QboClient();
   let qboCreditMemoId: string | null = null;
@@ -962,6 +967,13 @@ export async function markAlreadyCredited(
       return {
         ok: false,
         reason: `Credit memo "${docNumber}" not found in QBO — double-check the doc number`,
+      };
+    }
+    const cmCustomerId = cm.CustomerRef?.value ?? null;
+    if (cmCustomerId !== current.qbCustomerId) {
+      return {
+        ok: false,
+        reason: `CM ${docNumber} belongs to a different customer (${cmCustomerId ?? "unknown"} vs ${current.qbCustomerId}) — double-check the doc number`,
       };
     }
     qboCreditMemoId = cm.Id;
@@ -1301,51 +1313,62 @@ export async function addRmaItem(
   rmaId: string,
   input: AddRmaItemInput,
 ): Promise<RmaWithItems> {
-  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, rmaId));
-  if (rmaRows.length === 0) throw new Error(`RMA not found: ${rmaId}`);
-  const current = rmaRows[0] as Rma;
-  if (current.status !== "draft") {
-    throw new Error(
-      `Cannot add items to RMA in "${current.status}" status — only draft is editable`,
+  // Wrap the lookup-existing-items + insert in a transaction with a row
+  // lock on the parent rma row. Without the lock, two concurrent addRmaItem
+  // calls for the same RMA both see the same maxPosition and both insert at
+  // the same position. SELECT ... FOR UPDATE on the rmas row serializes
+  // them so the second call sees the first call's freshly-inserted item.
+  await db.transaction(async (tx) => {
+    const rmaRows = await tx
+      .select()
+      .from(rmas)
+      .where(eq(rmas.id, rmaId))
+      .for("update");
+    if (rmaRows.length === 0) throw new Error(`RMA not found: ${rmaId}`);
+    const current = rmaRows[0] as Rma;
+    if (current.status !== "draft") {
+      throw new Error(
+        `Cannot add items to RMA in "${current.status}" status — only draft is editable`,
+      );
+    }
+
+    const existingItems = (await tx
+      .select()
+      .from(rmaItems)
+      .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+
+    const maxPosition = existingItems.reduce(
+      (max, item) => Math.max(max, item.position),
+      -1,
     );
-  }
+    const position = maxPosition + 1;
 
-  const existingItems = (await db
-    .select()
-    .from(rmaItems)
-    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+    const qty = parseFloat(input.quantity);
+    const price = parseFloat(input.unitPrice);
+    const lineTotal = (qty * price).toFixed(2);
 
-  const maxPosition = existingItems.reduce(
-    (max, item) => Math.max(max, item.position),
-    -1,
-  );
-  const position = maxPosition + 1;
+    const newItem: NewRmaItem = {
+      id: nanoid(24),
+      rmaId,
+      position,
+      qbItemId: input.qbItemId,
+      sku: input.sku,
+      name: input.name,
+      quantity: input.quantity,
+      unitPrice: input.unitPrice,
+      lineTotal,
+      classification: input.classification,
+      listUnitPrice: input.listUnitPrice ?? null,
+      invoiceDiscountPct: input.invoiceDiscountPct ?? null,
+      reason: input.reason ?? null,
+      originalInvoiceDocNumber: input.originalInvoiceDocNumber ?? null,
+      originalInvoiceDate: (input.originalInvoiceDate ?? null) as Date | null,
+      priorSeasonId: input.priorSeasonId ?? null,
+      priorSeasonOverrideReason: input.priorSeasonOverrideReason ?? null,
+    };
 
-  const qty = parseFloat(input.quantity);
-  const price = parseFloat(input.unitPrice);
-  const lineTotal = (qty * price).toFixed(2);
-
-  const newItem: NewRmaItem = {
-    id: nanoid(24),
-    rmaId,
-    position,
-    qbItemId: input.qbItemId,
-    sku: input.sku,
-    name: input.name,
-    quantity: input.quantity,
-    unitPrice: input.unitPrice,
-    lineTotal,
-    classification: input.classification,
-    listUnitPrice: input.listUnitPrice ?? null,
-    invoiceDiscountPct: input.invoiceDiscountPct ?? null,
-    reason: input.reason ?? null,
-    originalInvoiceDocNumber: input.originalInvoiceDocNumber ?? null,
-    originalInvoiceDate: (input.originalInvoiceDate ?? null) as Date | null,
-    priorSeasonId: input.priorSeasonId ?? null,
-    priorSeasonOverrideReason: input.priorSeasonOverrideReason ?? null,
-  };
-
-  await db.insert(rmaItems).values(newItem);
+    await tx.insert(rmaItems).values(newItem);
+  });
   await recomputeTotalValue(rmaId);
 
   const updatedRmaRows = await db.select().from(rmas).where(eq(rmas.id, rmaId));

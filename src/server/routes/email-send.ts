@@ -35,12 +35,35 @@ import { recordActivity } from "../../modules/crm/index.js";
 
 const log = createLogger({ component: "routes.email-send" });
 
+// Outbound-send body cap. Up to 20 base64 attachments at ~1.33x raw size,
+// plus headroom for body/subject/headers. Fastify's default 1MB bodyLimit
+// silently 413s any meaningful multi-attachment send (a single 750KB PDF
+// is ~1MB after base64 encoding), so the route below overrides it.
+const SEND_BODY_LIMIT_BYTES = 25 * 1024 * 1024; // 25 MB
+
+// Per-attachment cap on the base64 payload. ~25MB raw → ~33.5MB base64;
+// keep this slightly under the route bodyLimit so a single oversized
+// attachment fails the schema validator (clear 400) instead of getting
+// truncated at the connection layer.
+const MAX_ATTACHMENT_BASE64_BYTES = 35_000_000; // ~35 MB after base64
+
+// Aggregate cap across all attachments — guards against a request with 20
+// near-max-size attachments getting through schema validation but blowing
+// the route bodyLimit further down. Keep below SEND_BODY_LIMIT_BYTES so
+// the schema-side check is what fires first.
+const MAX_TOTAL_ATTACHMENTS_BASE64_BYTES = 24 * 1024 * 1024;
+
 const attachmentSchema = z.object({
   filename: z.string().min(1).max(255),
   mimeType: z.string().min(1).max(255),
   // Base64-encoded payload from the browser. Decoded once into a Buffer
-  // before handing to the MIME builder.
-  dataBase64: z.string().min(1),
+  // before handing to the MIME builder. Capped per-attachment so a single
+  // oversized file is rejected with a clear 400 instead of slipping through
+  // and tripping the route bodyLimit.
+  dataBase64: z
+    .string()
+    .min(1)
+    .max(MAX_ATTACHMENT_BASE64_BYTES, "attachment exceeds per-file size limit"),
 });
 
 const sendBodySchema = z.object({
@@ -53,7 +76,23 @@ const sendBodySchema = z.object({
   inReplyTo: z.string().max(998).optional(),
   threadId: z.string().max(255).optional(),
   customerId: z.string().max(64).optional(),
-  attachments: z.array(attachmentSchema).max(20).optional(),
+  attachments: z
+    .array(attachmentSchema)
+    .max(20)
+    .optional()
+    .superRefine((attachments, ctx) => {
+      if (!attachments) return;
+      const total = attachments.reduce(
+        (sum, a) => sum + a.dataBase64.length,
+        0,
+      );
+      if (total > MAX_TOTAL_ATTACHMENTS_BASE64_BYTES) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `total attachment size exceeds ${Math.floor(MAX_TOTAL_ATTACHMENTS_BASE64_BYTES / 1024 / 1024)}MB after base64 encoding`,
+        });
+      }
+    }),
   // Optional overrides for the activity row this send produces. When
   // provided, the activity's refType/refId point at the related doc
   // (e.g. an invoice or credit memo) instead of the default
@@ -102,7 +141,10 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
 
   // POST /api/email/send — user-initiated send. Mounted with prefix
   // `/api/email` so this resolves to /api/email/send.
-  app.post("/send", async (req, reply) => {
+  // bodyLimit override: Fastify's 1MB default would 413 any send with
+  // even a single mid-sized attachment (a 750KB PDF base64-encodes to
+  // ~1MB). 25MB matches what Gmail itself accepts on the upstream send.
+  app.post("/send", { bodyLimit: SEND_BODY_LIMIT_BYTES }, async (req, reply) => {
     const user = await requireAuth(req);
     const parse = sendBodySchema.safeParse(req.body);
     if (!parse.success) {

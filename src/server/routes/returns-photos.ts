@@ -132,18 +132,45 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "Missing 'file' field." });
     }
 
-    // 4. Determine / ensure Drive folder
+    // 4. Determine / ensure Drive folder.
+    //
+    // Atomicity: lock the rma row (SELECT ... FOR UPDATE) before deciding
+    // whether to create a new Drive folder. Without the lock, two concurrent
+    // first-uploads on the same RMA both see driveFolderId === null, both
+    // call ensureFolder, and Google Drive ends up with two folders for the
+    // same RMA (ensureFolder lists by name + creates if no match — but the
+    // other request's folder may not be visible yet during the race window).
     const folderLabel = rma.rmaNumber ?? `RMA-${rma.id}`;
     let folderId: string;
-
-    if (rma.driveFolderId) {
-      folderId = rma.driveFolderId;
-    } else {
+    {
+      // Snapshot the current driveFolderId under a row lock; if absent,
+      // create the folder + persist before the lock is released so the
+      // other concurrent caller sees the freshly-stored id.
+      let lockedFolderId: string | null = null;
       try {
-        folderId = await ensureFolder({
-          userId: user.id,
-          parentId: rootFolderId,
-          name: folderLabel,
+        await db.transaction(async (tx) => {
+          const lockedRows = await tx
+            .select({ driveFolderId: rmas.driveFolderId })
+            .from(rmas)
+            .where(eq(rmas.id, rma.id))
+            .for("update");
+          if (lockedRows.length === 0) {
+            throw new Error("RMA disappeared during photo upload");
+          }
+          if (lockedRows[0]!.driveFolderId) {
+            lockedFolderId = lockedRows[0]!.driveFolderId;
+            return;
+          }
+          const created = await ensureFolder({
+            userId: user.id,
+            parentId: rootFolderId,
+            name: folderLabel,
+          });
+          await tx
+            .update(rmas)
+            .set({ driveFolderId: created })
+            .where(eq(rmas.id, rma.id));
+          lockedFolderId = created;
         });
       } catch (err) {
         log.error({ err, rmaId: rma.id }, "failed to ensure Drive folder");
@@ -151,14 +178,17 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
           error: "Failed to create Drive folder — check Google Drive authorization.",
         });
       }
-      // Persist folderId on the RMA row so subsequent uploads skip the lookup.
-      await db
-        .update(rmas)
-        .set({ driveFolderId: folderId })
-        .where(eq(rmas.id, rma.id));
+      if (!lockedFolderId) {
+        // Defensive — transaction body should have set this.
+        return reply.code(500).send({ error: "Drive folder allocation failed unexpectedly." });
+      }
+      folderId = lockedFolderId;
     }
 
     // 5. Determine filename: {folderLabel}_{yyyymmdd}_{n}.{ext}
+    // (Filename's photoNumber is best-effort — multiple concurrent uploads
+    // could land on the same number, but Drive tolerates duplicate names.
+    // The DB position is allocated atomically below.)
     const photoCountRows = await db
       .select({ n: count() })
       .from(rmaPhotos)
@@ -198,12 +228,46 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       log.warn({ err, fileId: uploadResult.fileId }, "makeViewable failed; continuing");
     }
 
-    // 8. Insert rma_photos row
+    // 8. Insert rma_photos row.
+    // Re-read the photo count under a row lock on the parent RMA so two
+    // concurrent uploads can't end up at the same position. The FOR UPDATE
+    // on the rmas row serializes the count + insert across requests for
+    // the same RMA.
     const photoId = nanoid(24);
+    let position = existingCount;
+    await db.transaction(async (tx) => {
+      const lockedRows = await tx
+        .select({ id: rmas.id })
+        .from(rmas)
+        .where(eq(rmas.id, rma.id))
+        .for("update");
+      if (lockedRows.length === 0) {
+        throw new Error("RMA disappeared during photo insert");
+      }
+      const countRows = await tx
+        .select({ n: count() })
+        .from(rmaPhotos)
+        .where(eq(rmaPhotos.rmaId, rma.id));
+      position = Number(countRows[0]?.n ?? 0);
+      await tx.insert(rmaPhotos).values({
+        id: photoId,
+        rmaId: rma.id,
+        position, // 0-indexed
+        driveFileId: uploadResult.fileId,
+        driveViewUrl: uploadResult.viewUrl,
+        driveThumbnailUrl: uploadResult.thumbnailUrl,
+        filename,
+        mimeType: file.mimetype,
+        sizeBytes: uploadResult.sizeBytes,
+        uploadedByUserId: user.id,
+        uploadedAt: now,
+      });
+    });
+
     const newPhoto = {
       id: photoId,
       rmaId: rma.id,
-      position: existingCount, // 0-indexed
+      position,
       driveFileId: uploadResult.fileId,
       driveViewUrl: uploadResult.viewUrl,
       driveThumbnailUrl: uploadResult.thumbnailUrl,
@@ -213,8 +277,6 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       uploadedByUserId: user.id,
       uploadedAt: now,
     };
-
-    await db.insert(rmaPhotos).values(newPhoto);
 
     log.info(
       { rmaId: rma.id, fileId: uploadResult.fileId, filename, sizeBytes: uploadResult.sizeBytes },

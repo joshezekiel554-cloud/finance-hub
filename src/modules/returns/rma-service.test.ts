@@ -25,6 +25,7 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
     orderBy: (...args: unknown[]) => LazyNode;
     limit: (...args: unknown[]) => LazyNode;
     from: (...args: unknown[]) => LazyNode;
+    for: (...args: unknown[]) => LazyNode;
   };
 
   const makeNode = (): LazyNode => {
@@ -42,6 +43,7 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
       orderBy: (..._args: unknown[]) => makeNode(),
       limit: (..._args: unknown[]) => makeNode(),
       from: (..._args: unknown[]) => makeNode(),
+      for: (..._args: unknown[]) => makeNode(),
     };
     return node;
   };
@@ -65,7 +67,9 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
     where: (..._args: unknown[]) => Promise.resolve(),
   });
 
-  const tx = { insert };
+  // Mock tx surface — mirrors mockDb so service code that uses tx.select /
+  // tx.update / tx.insert during a transaction works the same as outside.
+  const tx = { insert, select, update };
 
   const transaction = vi.fn(
     async (fn: (tx: unknown) => Promise<unknown>) => fn(tx),
@@ -94,10 +98,20 @@ vi.mock("./credit-memo-builder.js", () => ({
   buildAndPushCreditMemo: buildAndPushCmMock,
 }));
 
+// QBO client mock — markAlreadyCredited dynamically imports QboClient and
+// calls getCreditMemoByDocNumber. Tests inject the lookup result via this
+// hoisted mock fn and assert how the service handles wrong-customer cases.
+const getCreditMemoByDocNumberMock = vi.hoisted(() => vi.fn());
+vi.mock("../../integrations/qb/client.js", () => ({
+  QboClient: vi.fn().mockImplementation(() => ({
+    getCreditMemoByDocNumber: getCreditMemoByDocNumberMock,
+  })),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
-import { approveRma, denyRma, issueCreditMemo, markReplacementSent, addRmaItem, updateRmaItem, removeRmaItem, createRma, getRmaById, listRmas, updateRma } from "./rma-service.js";
+import { approveRma, denyRma, issueCreditMemo, markReplacementSent, addRmaItem, updateRmaItem, removeRmaItem, createRma, getRmaById, listRmas, updateRma, markAlreadyCredited } from "./rma-service.js";
 import { rmas } from "../../db/schema/returns.js";
 
 // ---------------------------------------------------------------------------
@@ -553,5 +567,113 @@ describe("removeRmaItem", () => {
     setSelectResults([[]]);
     const result = await removeRmaItem("missing");
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markAlreadyCredited
+// ---------------------------------------------------------------------------
+// Reconcile flow for imported RMAs whose desktop status was "credited" but
+// whose CM number wasn't carried over. Operator pastes the QBO doc number;
+// the service looks the CM up via QBO, captures its internal id, and
+// transitions the RMA to "completed" with the CM linked. Critical guard:
+// the looked-up CM must belong to the same customer as the RMA, otherwise
+// an operator typo silently links any random customer's CM.
+describe("markAlreadyCredited", () => {
+  beforeEach(() => {
+    insertCalls.length = 0;
+    recordActivityMock.mockClear();
+    getCreditMemoByDocNumberMock.mockReset();
+  });
+
+  it("rejects when the matched CM belongs to a different customer", async () => {
+    setSelectResults([
+      // initial fetch of the RMA
+      [
+        {
+          id: "rma-1",
+          status: "approved",
+          returnType: "damage",
+          customerId: "cust-1",
+          qbCustomerId: "QB-1",
+          qboCreditMemoId: null,
+          creditMemoDocNumber: null,
+        },
+      ],
+    ]);
+    // QBO lookup returns a CM linked to a DIFFERENT customer than the RMA
+    getCreditMemoByDocNumberMock.mockResolvedValue({
+      Id: "cm-other-456",
+      DocNumber: "OTHER-CM-001",
+      CustomerRef: { value: "QB-OTHER" },
+    });
+
+    const result = await markAlreadyCredited("rma-1", {
+      userId: "user-1",
+      creditMemoDocNumber: "OTHER-CM-001",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(false);
+    if (result && !result.ok) {
+      // Error must surface BOTH customer ids so the operator can see the
+      // mismatch instead of being told "lookup failed" with no detail.
+      expect(result.reason).toMatch(/different customer/i);
+      expect(result.reason).toContain("QB-OTHER");
+      expect(result.reason).toContain("QB-1");
+    }
+    // No activity should have fired since the transition was rejected.
+    expect(recordActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("links the CM and completes the RMA when the customer matches", async () => {
+    setSelectResults([
+      // initial fetch
+      [
+        {
+          id: "rma-1",
+          status: "approved",
+          returnType: "damage",
+          customerId: "cust-1",
+          qbCustomerId: "QB-1",
+          qboCreditMemoId: null,
+          creditMemoDocNumber: null,
+        },
+      ],
+      // post-update re-fetch
+      [
+        {
+          id: "rma-1",
+          status: "completed",
+          customerId: "cust-1",
+          qbCustomerId: "QB-1",
+          qboCreditMemoId: "cm-mine-123",
+          creditMemoDocNumber: "MY-CM-001",
+        },
+      ],
+    ]);
+    getCreditMemoByDocNumberMock.mockResolvedValue({
+      Id: "cm-mine-123",
+      DocNumber: "MY-CM-001",
+      CustomerRef: { value: "QB-1" },
+    });
+
+    const result = await markAlreadyCredited("rma-1", {
+      userId: "user-1",
+      creditMemoDocNumber: "MY-CM-001",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(true);
+    if (result && result.ok) {
+      expect(result.rma.status).toBe("completed");
+      expect(result.rma.qboCreditMemoId).toBe("cm-mine-123");
+    }
+    expect(recordActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "rma_credit_memo_issued",
+        refType: "rma",
+        refId: "rma-1",
+      }),
+      expect.anything(),
+    );
   });
 });

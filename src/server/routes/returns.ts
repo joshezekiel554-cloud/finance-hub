@@ -1170,7 +1170,10 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string } }>(
     "/:id/eligibility-pdf",
     async (req, reply) => {
-      await requireAuth(req);
+      // Trust requireAuth's resolved user — never the X-User-ID header,
+      // which is client-supplied and would let any caller impersonate
+      // another operator's Drive context.
+      const user = await requireAuth(req);
       const rma = await getRmaById(req.params.id);
       if (!rma) {
         reply.code(404);
@@ -1182,7 +1185,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         try {
           const { downloadFileContent } = await import("../../integrations/google-drive/client.js");
           const pdfBuffer = await downloadFileContent({
-            userId: req.headers["x-user-id"] as string ?? "",
+            userId: user.id,
             fileId: rma.denialPdfDriveId,
           });
           reply.header("Content-Type", "application/pdf");
@@ -1755,6 +1758,53 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       reply.code(400);
       return { error: "Invalid body", details: parse.error.flatten() };
     }
+
+    // Cross-check the supplied customerId against our customers table and
+    // verify qbCustomerId actually belongs to that customer. Without this,
+    // a caller could attach an RMA to any customer they choose by tampering
+    // with the body fields. Also confirm the receipt is still unconfirmed
+    // and undismissed so a duplicate review submit fails cleanly instead
+    // of silently double-creating RMAs.
+    const customerRows = await db
+      .select({ id: customers.id, qbCustomerId: customers.qbCustomerId })
+      .from(customers)
+      .where(eq(customers.id, parse.data.customerId))
+      .limit(1);
+    if (customerRows.length === 0) {
+      reply.code(404);
+      return { error: "Customer not found" };
+    }
+    if (customerRows[0]!.qbCustomerId !== parse.data.qbCustomerId) {
+      reply.code(400);
+      return {
+        error:
+          "qbCustomerId does not match the supplied customerId — refresh the receipt review.",
+      };
+    }
+
+    const receiptRows = await db
+      .select({
+        id: extensivReceipts.id,
+        rmaId: extensivReceipts.rmaId,
+        confirmedAt: extensivReceipts.confirmedAt,
+        dismissedAt: extensivReceipts.dismissedAt,
+      })
+      .from(extensivReceipts)
+      .where(eq(extensivReceipts.id, parse.data.receiptId))
+      .limit(1);
+    if (receiptRows.length === 0) {
+      reply.code(404);
+      return { error: "Receipt not found" };
+    }
+    const existingReceipt = receiptRows[0]!;
+    if (existingReceipt.confirmedAt || existingReceipt.dismissedAt || existingReceipt.rmaId) {
+      reply.code(409);
+      return {
+        error:
+          "Receipt has already been processed (confirmed, dismissed, or linked to an RMA).",
+      };
+    }
+
     try {
       const rma = await createRmaFromReceipt({
         receiptId: parse.data.receiptId,
