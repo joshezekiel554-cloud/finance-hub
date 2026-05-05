@@ -41,19 +41,45 @@ function parseRefString(body: string): string | undefined {
   return m[1].trim() || undefined;
 }
 
+// Bluechip's "summary of the receipt" usually arrives as an HTML table
+// (no text/plain part), so the line-by-line regex can't see SKUs that
+// are wrapped in <td>. Strip tags + entities before the regex runs.
+// Replace structural elements with whitespace so cells from one row end
+// up on a single line ("<td>SKU</td><td>1.00</td>" → "SKU 1.00").
+function stripHtmlForParse(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(tr|p|div|li)>/gi, "\n")
+    .replace(/<\/?(td|th)\b[^>]*>/gi, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 function parseItems(body: string): Array<{ sku: string; quantity: number }> {
+  // Run the line regex on both the raw body (catches plain-text formats)
+  // and the HTML-stripped variant (catches table-cell formats). Dedupe
+  // on SKU so we don't double-count when both forms match.
+  const seen = new Set<string>();
   const items: Array<{ sku: string; quantity: number }> = [];
-  for (const line of body.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const m = ITEM_ROW_RE.exec(trimmed);
-    if (!m) continue;
-    const sku = m[1]!;
-    // Skip obvious header rows
-    if (HEADER_WORDS.has(sku.toLowerCase())) continue;
-    const qty = parseFloat(m[2]!);
-    if (Number.isNaN(qty)) continue;
-    items.push({ sku, quantity: qty });
+  for (const variant of [body, stripHtmlForParse(body)]) {
+    for (const line of variant.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const m = ITEM_ROW_RE.exec(trimmed);
+      if (!m) continue;
+      const sku = m[1]!;
+      if (HEADER_WORDS.has(sku.toLowerCase())) continue;
+      if (seen.has(sku)) continue;
+      const qty = parseFloat(m[2]!);
+      if (Number.isNaN(qty)) continue;
+      seen.add(sku);
+      items.push({ sku, quantity: qty });
+    }
   }
   return items;
 }
