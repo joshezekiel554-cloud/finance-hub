@@ -3,7 +3,7 @@
 // seasonId, or items change. Renders threshold math and, when over
 // threshold, surfaces an override toggle + reason textarea.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, AlertCircle } from "lucide-react";
 
 export type EligibilityItem = {
@@ -61,49 +61,17 @@ export default function EligibilityCard({
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const runEligibility = useCallback(async () => {
-    if (!seasonId) return;
-    if (!rmaId && (!customerId || !qbCustomerId)) return;
-    const countingItems = items.filter((i) => i.classification !== "damage");
-    if (countingItems.length === 0) {
-      setBreakdown(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const url = rmaId
-        ? `/api/rmas/${rmaId}/run-eligibility`
-        : `/api/rmas/qbo-run-eligibility`;
-      const body = rmaId
-        ? { seasonId, items: countingItems }
-        : { customerId, qbCustomerId, seasonId, items: countingItems };
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      // Route returns { breakdown: ... }
-      const wrapper = (await res.json()) as { breakdown: EligibilityBreakdown };
-      const data = wrapper.breakdown;
-      setBreakdown(data);
-      // Reset override toggle when threshold status changes
-      if (data.passesThreshold) {
-        setOverrideEnabled(false);
-        setOverrideReason("");
-      }
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [rmaId, seasonId, items]);
+  // Stable content key for items so the debounce effect doesn't re-fire on
+  // every parent render (parent recomputes `items` array each render — its
+  // identity churns; its content does not). Compact serialization avoids the
+  // cost of full JSON.stringify on large lists.
+  const itemsKey = items
+    .map((i) => `${i.classification}:${i.lineTotal}`)
+    .join("|");
 
-  // Debounce: 500ms after items/season change
+  // Debounce: 500ms after items/season change. The fetch body is inlined here
+  // — wrapping in useCallback caused identity-thrash on every parent render,
+  // re-firing the debounced fetch per keystroke.
   useEffect(() => {
     if (!seasonId) {
       setBreakdown(null);
@@ -113,14 +81,59 @@ export default function EligibilityCard({
       setBreakdown(null);
       return;
     }
+    const countingItems = items.filter((i) => i.classification !== "damage");
+    if (countingItems.length === 0) {
+      setBreakdown(null);
+      return;
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      void runEligibility();
+      void (async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          const url = rmaId
+            ? `/api/rmas/${rmaId}/run-eligibility`
+            : `/api/rmas/qbo-run-eligibility`;
+          const body = rmaId
+            ? { seasonId, items: countingItems }
+            : { customerId, qbCustomerId, seasonId, items: countingItems };
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) {
+            const errBody = (await res
+              .json()
+              .catch(() => ({}))) as { error?: string };
+            throw new Error(errBody.error ?? `HTTP ${res.status}`);
+          }
+          // Route returns { breakdown: ... }
+          const wrapper = (await res.json()) as {
+            breakdown: EligibilityBreakdown;
+          };
+          const data = wrapper.breakdown;
+          setBreakdown(data);
+          // Reset override toggle when threshold status changes
+          if (data.passesThreshold) {
+            setOverrideEnabled(false);
+            setOverrideReason("");
+          }
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setLoading(false);
+        }
+      })();
     }, 500);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [rmaId, customerId, qbCustomerId, seasonId, items, runEligibility]);
+    // itemsKey depends on items content; including items here would cause
+    // identity-thrash per render. eslint-disable is intentional.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rmaId, customerId, qbCustomerId, seasonId, itemsKey]);
 
   // Propagate override changes to parent
   useEffect(() => {

@@ -26,6 +26,7 @@ import {
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,6 +95,17 @@ type QbCustomerHit = {
   displayName: string;
   qbCustomerId: string;
 };
+
+// Shape returned by GET /api/customers?q=... — qbCustomerId may be null for
+// customers not yet synced from QBO. We surface those in the picker but mark
+// them as un-pickable so the operator can see why.
+type CustomerSearchHit = {
+  id: string;
+  qbCustomerId: string | null;
+  displayName: string;
+  primaryEmail: string | null;
+};
+type CustomerSearchResponse = { customers: CustomerSearchHit[] };
 
 // Per-item received quantity state key is rma_item_id
 type ReceivedQtyMap = Record<string, string>;
@@ -218,6 +230,26 @@ export default function ReturnReceiptReviewDialog({
   const [frCustomer, setFrCustomer] = useState<QbCustomerHit | null>(null);
   const [frReturnType, setFrReturnType] = useState<"damage" | "seasonal" | "non_seasonal">("damage");
 
+  // Customer search for the "Create RMA from receipt" path. Pattern mirrors
+  // CustomerPicker in src/web/pages/return-new.tsx — TanStack Query handles
+  // caching/dedup; we gate on showFromReceipt + a 2-char minimum to avoid
+  // hammering /api/customers with single-letter queries.
+  const frCustomerQuery = useQuery<CustomerSearchResponse>({
+    enabled:
+      showFromReceipt &&
+      !frCustomer &&
+      frCustomerSearch.trim().length >= 2,
+    queryKey: ["customer-search", frCustomerSearch.trim()],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/customers?q=${encodeURIComponent(frCustomerSearch.trim())}&limit=10`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
   // ---- Mutations ----------------------------------------------------------
 
   const confirmMutation = useMutation({
@@ -232,6 +264,13 @@ export default function ReturnReceiptReviewDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+      // Receipt confirm flips RMA status sent_to_warehouse → received,
+      // which the global Returns list / customer profile / chase pill all
+      // care about.
+      invalidateAfterRmaChange(queryClient, {
+        rmaId: receipt.rmaId,
+        customerId: receipt.rma?.customerId ?? null,
+      });
       onDone();
       onOpenChange(false);
     },
@@ -288,7 +327,10 @@ export default function ReturnReceiptReviewDialog({
     },
     onSuccess: (target) => {
       queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
-      queryClient.invalidateQueries({ queryKey: ["rma", receipt.rmaId] });
+      invalidateAfterRmaChange(queryClient, {
+        rmaId: target.rmaId,
+        customerId: target.customerId,
+      });
       onOpenChange(false);
       onContinueToCreditMemo?.(target);
     },
@@ -302,10 +344,17 @@ export default function ReturnReceiptReviewDialog({
         body: JSON.stringify({ receiptId: receipt.receiptId }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
+      const body = (await res.json()) as { rma?: { customerId?: string } };
+      return { ...body, rmaId };
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+      // Manual-match attaches a receipt to an existing RMA — same status
+      // transition as confirm, so invalidate broadly.
+      invalidateAfterRmaChange(queryClient, {
+        rmaId: data.rmaId,
+        customerId: data.rma?.customerId ?? null,
+      });
       onDone();
       onOpenChange(false);
     },
@@ -335,8 +384,14 @@ export default function ReturnReceiptReviewDialog({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { rma?: { id?: string } }) => {
       queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+      // from-receipt creates a brand new RMA — global Returns list +
+      // customer profile both need refresh.
+      invalidateAfterRmaChange(queryClient, {
+        rmaId: data.rma?.id ?? null,
+        customerId: frCustomer?.id ?? null,
+      });
       onDone();
       onOpenChange(false);
     },
@@ -684,15 +739,7 @@ export default function ReturnReceiptReviewDialog({
         {/* Customer picker */}
         <div>
           <label className="text-xs font-medium text-secondary">Customer</label>
-          <div className="flex gap-2 mt-1">
-            <Input
-              placeholder="Search customers…"
-              className="flex-1 text-sm"
-              value={frCustomerSearch}
-              onChange={(e) => setFrCustomerSearch(e.target.value)}
-            />
-          </div>
-          {frCustomer && (
+          {frCustomer ? (
             <div className="flex items-center gap-2 mt-2 text-sm">
               <CheckCircle2 size={14} className="text-green-600" />
               <span>{frCustomer.displayName}</span>
@@ -704,11 +751,67 @@ export default function ReturnReceiptReviewDialog({
                 <X size={12} />
               </button>
             </div>
-          )}
-          {receipt.inferredCustomerName && !frCustomer && (
-            <p className="text-xs text-secondary mt-1">
-              Suggested: {receipt.inferredCustomerName}
-            </p>
+          ) : (
+            <>
+              <div className="relative mt-1">
+                <Input
+                  placeholder="Search customers (min 2 chars)…"
+                  className="text-sm"
+                  value={frCustomerSearch}
+                  onChange={(e) => setFrCustomerSearch(e.target.value)}
+                />
+                {frCustomerSearch.trim().length >= 2 && (
+                  <div className="mt-1 max-h-48 overflow-y-auto rounded-md border border-default bg-base">
+                    {frCustomerQuery.isPending && (
+                      <p className="px-3 py-2 text-xs text-secondary">
+                        Searching…
+                      </p>
+                    )}
+                    {!frCustomerQuery.isPending &&
+                      (frCustomerQuery.data?.customers ?? []).length === 0 && (
+                        <p className="px-3 py-2 text-xs text-secondary italic">
+                          No matches.
+                        </p>
+                      )}
+                    {(frCustomerQuery.data?.customers ?? []).map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        disabled={!c.qbCustomerId}
+                        onClick={() => {
+                          if (!c.qbCustomerId) return;
+                          setFrCustomer({
+                            id: c.id,
+                            name: c.displayName,
+                            displayName: c.displayName,
+                            qbCustomerId: c.qbCustomerId,
+                          });
+                          setFrCustomerSearch("");
+                        }}
+                        className="block w-full px-3 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <div className="font-medium">{c.displayName}</div>
+                        {c.primaryEmail && (
+                          <div className="text-xs text-secondary">
+                            {c.primaryEmail}
+                          </div>
+                        )}
+                        {!c.qbCustomerId && (
+                          <div className="text-xs text-accent-warning">
+                            No QBO customer ID — cannot create RMA
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {receipt.inferredCustomerName && (
+                <p className="text-xs text-secondary mt-1">
+                  Suggested: {receipt.inferredCustomerName}
+                </p>
+              )}
+            </>
           )}
         </div>
 

@@ -42,6 +42,7 @@ import ParseEmailSection, { type ParsedItem } from "./parse-email-section";
 import RmaDenialEmailDialog from "./rma-denial-email-dialog";
 import RmaCreditMemoDialog from "./rma-credit-memo-dialog";
 import { PhotoUploadZone } from "./photo-upload-zone";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -219,6 +220,10 @@ export default function DamageWizard({
     },
     onSuccess: (data) => {
       setRmaId(data.id);
+      invalidateAfterRmaChange(queryClient, {
+        rmaId: data.id,
+        customerId: customer.id,
+      });
     },
   });
 
@@ -236,6 +241,43 @@ export default function DamageWizard({
 
   const addItemsMutation = useMutation<void, Error, string>({
     mutationFn: async (id) => {
+      // Guard: any local row missing qbItemId is unresolved. Silently
+      // dropping these (the previous behavior — filter `it.qbItemId &&
+      // !it.id`) caused operators to believe N items were recorded while
+      // the backend only saw the resolved subset. Force resolution before
+      // we persist anything.
+      const unresolved = items.filter((it) => !it.qbItemId);
+      if (unresolved.length > 0) {
+        throw new Error(
+          "Some items don't have a QBO item match — use 'Find items + prices + invoices' to resolve them all before approving.",
+        );
+      }
+
+      // Diff against the backend's current item list so rows the operator
+      // removed locally get DELETEd. Without this the wizard silently
+      // retained removed items, distorting the credit memo on next reload.
+      const backendItems = rma?.items ?? [];
+      const localItemIds = new Set(
+        items.map((it) => it.id).filter((x): x is string => !!x),
+      );
+      const idsToDelete = backendItems
+        .map((it) => it.id)
+        .filter((bid): bid is string => !!bid && !localItemIds.has(bid));
+
+      // DELETEs run first (sequentially) so a failure surfaces before any
+      // POST/PATCH partially mutates the RMA.
+      for (const itemId of idsToDelete) {
+        const res = await fetch(`/api/rmas/${id}/items/${itemId}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+      }
+
       // POST new items (no DB id yet) and PATCH existing ones whose local
       // state has been edited (e.g. imported rows where the operator just
       // picked the real QBO item via the picker — qbItemId now needs to
@@ -295,6 +337,10 @@ export default function DamageWizard({
       ]);
     },
     onSuccess: () => {
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: customer.id,
+      });
       void queryClient.invalidateQueries({ queryKey: ["rma-wizard", rmaId] });
     },
   });
@@ -324,6 +370,10 @@ export default function DamageWizard({
       return res.json();
     },
     onSuccess: () => {
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: customer.id,
+      });
       void queryClient.invalidateQueries({ queryKey: ["rma-wizard", rmaId] });
       setStepIndex(2); // Credit memo
       setCreditMemoDialogOpen(true);

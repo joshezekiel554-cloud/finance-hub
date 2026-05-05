@@ -52,6 +52,7 @@ import EligibilityCard from "./eligibility-card";
 import ParseEmailSection, { type ParsedItem } from "./parse-email-section";
 import RmaApprovalEmailDialog from "./rma-approval-email-dialog";
 import RmaDenialEmailDialog from "./rma-denial-email-dialog";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -265,11 +266,52 @@ export default function SeasonalWizard({
     },
     onSuccess: (data) => {
       setRmaId(data.id);
+      invalidateAfterRmaChange(queryClient, {
+        rmaId: data.id,
+        customerId: customer.id,
+      });
     },
   });
 
   const addItemsMutation = useMutation<void, Error, string>({
     mutationFn: async (id: string) => {
+      // Guard: any local row missing qbItemId is unresolved. Silently
+      // dropping these (the previous behavior — filter `it.qbItemId &&
+      // !it.id`) caused operators to believe N items were recorded while
+      // the backend only saw the resolved subset. Force resolution before
+      // we persist anything.
+      const unresolved = items.filter((it) => !it.qbItemId);
+      if (unresolved.length > 0) {
+        throw new Error(
+          "Some items don't have a QBO item match — use 'Find items + prices + invoices' to resolve them all before approving.",
+        );
+      }
+
+      // Diff against the backend's current item list so rows the operator
+      // removed locally get DELETEd. Without this the wizard silently
+      // retained removed items, distorting eligibility/totals on reload.
+      const backendItems = rma?.items ?? [];
+      const localItemIds = new Set(
+        items.map((it) => it.id).filter((x): x is string => !!x),
+      );
+      const idsToDelete = backendItems
+        .map((it) => it.id)
+        .filter((bid): bid is string => !!bid && !localItemIds.has(bid));
+
+      // DELETEs run first (sequentially) so a failure surfaces before any
+      // POST/PATCH partially mutates the RMA.
+      for (const itemId of idsToDelete) {
+        const res = await fetch(`/api/rmas/${id}/items/${itemId}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(body.error ?? `HTTP ${res.status}`);
+        }
+      }
+
       // Persist all items in parallel. New items (no DB id yet, picker
       // resolved) are POSTed; existing items (have a DB id, e.g. imported
       // rows where the operator picked the real QBO item afterwards) are
@@ -307,6 +349,12 @@ export default function SeasonalWizard({
           }
         }),
         ...existingItems.map(async (it) => {
+          // Mirror the POST path's classification so resumed-wizard edits
+          // to the per-item dropdown actually persist (was previously
+          // dropped on PATCH).
+          const cls =
+            itemClassifications[it.localKey] ??
+            defaultClassification(returnType);
           const res = await fetch(`/api/rmas/${id}/items/${it.id}`, {
             method: "PATCH",
             headers: { "content-type": "application/json" },
@@ -316,6 +364,7 @@ export default function SeasonalWizard({
               name: it.name,
               quantity: it.quantity,
               unitPrice: it.unitPrice,
+              classification: cls,
               listUnitPrice: it.listUnitPrice ?? null,
               invoiceDiscountPct: it.invoiceDiscountPct ?? null,
               reason: it.reason || null,
@@ -334,6 +383,10 @@ export default function SeasonalWizard({
       ]);
     },
     onSuccess: () => {
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: customer.id,
+      });
       void queryClient.invalidateQueries({ queryKey: ["rma-wizard", rmaId] });
     },
   });
@@ -395,6 +448,10 @@ export default function SeasonalWizard({
       return res.json();
     },
     onSuccess: () => {
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: customer.id,
+      });
       void queryClient.invalidateQueries({ queryKey: ["rma-wizard", rmaId] });
       setStepIndex(4); // step 5 (warehouse export)
     },
@@ -430,6 +487,10 @@ export default function SeasonalWizard({
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: customer.id,
+      });
       void queryClient.invalidateQueries({ queryKey: ["rma-wizard", rmaId] });
       setStepIndex(5); // step 6 (paste tx#)
     },
@@ -454,6 +515,10 @@ export default function SeasonalWizard({
       return res.json();
     },
     onSuccess: () => {
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: customer.id,
+      });
       void queryClient.invalidateQueries({ queryKey: ["rma-wizard", rmaId] });
       setStepIndex(6); // step 7 (approval email)
       setApprovalDialogOpen(true);
