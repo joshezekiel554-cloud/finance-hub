@@ -195,6 +195,7 @@ const updateItemBodySchema = z.object({
   originalInvoiceDocNumber: z.string().max(64).optional().nullable(),
   originalInvoiceDate: z.string().optional().nullable(),
   classification: z.enum(RMA_ITEM_CLASSIFICATIONS).optional(),
+  receivedQuantity: z.string().optional().nullable(),
 });
 
 // ---------------------------------------------------------------------------

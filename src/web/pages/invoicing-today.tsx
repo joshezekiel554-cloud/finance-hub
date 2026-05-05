@@ -8,6 +8,7 @@ import { cn } from "../lib/cn";
 import ReturnReceiptReviewDialog, {
   type ReceiptRow,
 } from "../components/return-receipt-review-dialog";
+import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
 
 type ReconcileAction =
   | { type: "set_metadata"; trackingNumber: string; shipVia: string; shipDate: string }
@@ -163,6 +164,14 @@ export default function InvoicingTodayPage() {
   const [tab, setTab] = useState<Tab>("open");
   const queryClient = useQueryClient();
   const [reviewReceipt, setReviewReceipt] = useState<ReceiptRow | null>(null);
+  // After the operator clicks "Continue to credit memo" in the receipt
+  // dialog, the receipt closes and we open the shared RmaCreditMemoDialog
+  // for the matched RMA. Stored as { rmaId, customerId } so the dialog has
+  // what it needs without an extra fetch.
+  const [creditMemoTarget, setCreditMemoTarget] = useState<{
+    rmaId: string;
+    customerId: string;
+  } | null>(null);
 
   const { data, isPending, isError, error, refetch, isFetching } = useQuery<ApiResponse>({
     queryKey: ["invoicing", "today"],
@@ -311,6 +320,30 @@ export default function InvoicingTodayPage() {
           onDone={() => {
             setReviewReceipt(null);
             void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+          }}
+          onContinueToCreditMemo={(target) => {
+            setReviewReceipt(null);
+            setCreditMemoTarget(target);
+          }}
+        />
+      )}
+
+      {/* Credit memo dialog — opened after the receipt review hands off.
+          Uses the same shared dialog the wizard does, so sales tax checkbox
+          and QBO PDF auto-attach are available here too. */}
+      {creditMemoTarget && (
+        <RmaCreditMemoDialog
+          open={creditMemoTarget !== null}
+          onOpenChange={(next) => {
+            if (!next) setCreditMemoTarget(null);
+          }}
+          rmaId={creditMemoTarget.rmaId}
+          customerId={creditMemoTarget.customerId}
+          onIssued={() => {
+            setCreditMemoTarget(null);
+            void queryClient.invalidateQueries({
+              queryKey: ["invoicing", "today"],
+            });
           }}
         />
       )}

@@ -153,6 +153,7 @@ export type ReturnReceiptTodayRow = {
   rma: {
     id: string;
     rmaNumber: string | null;
+    customerId: string | null;
     customerName: string | null;
   } | null;
 };
@@ -433,6 +434,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
             ? {
                 id: r.rmaId,
                 rmaNumber: r.rmaRmaNumber ?? null,
+                customerId: r.rmaCustomerId ?? null,
                 customerName,
               }
             : null,

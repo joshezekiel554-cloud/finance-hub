@@ -2,12 +2,14 @@
 //
 // Single-dialog flow for reviewing an Extensiv warehouse return receipt.
 //
-// Two scroll sections:
-//   TOP: Receipt review — side-by-side approved (RMA items) vs received (editable).
-//   BOTTOM: Credit memo editor (only when matched to an RMA).
+// Layout: an Expected / Received / Discrepancy table comparing what the RMA
+// expected against what the warehouse actually received. Operator edits
+// received qty per row. The credit-memo step itself runs in the shared
+// RmaCreditMemoDialog (sales tax checkbox, PDF auto-attach, etc.) which
+// the parent opens after this dialog hands off.
 //
 // Bottom action bar adapts to matched vs unmatched receipts:
-//   Matched:   [Save Receipt Only] / [Send Credit Memo & Email]
+//   Matched:   [Save Receipt Only] / [Continue to credit memo →]
 //   Unmatched: [Manual Match] / [Create RMA from receipt] / [Dismiss]
 
 import { useEffect, useMemo, useState } from "react";
@@ -34,6 +36,7 @@ type ParsedItem = { sku: string; quantity: number };
 type RmaSummary = {
   id: string;
   rmaNumber: string | null;
+  customerId: string | null;
   customerName: string | null;
 };
 
@@ -70,13 +73,6 @@ type RmaDetail = {
   items: RmaItem[];
 };
 
-type PreviewResponse = {
-  subject: string;
-  body: string;
-  recipients: { to: string; cc: string; bcc: string };
-  bccReasons: Array<{ tag: string; address: string }>;
-};
-
 type RmaListItem = {
   id: string;
   rmaNumber: string | null;
@@ -111,6 +107,14 @@ export type ReturnReceiptReviewDialogProps = {
   onOpenChange: (next: boolean) => void;
   receipt: ReceiptRow;
   onDone: () => void;
+  // Fired when the operator clicks "Continue to credit memo" — at this
+  // point the received qty has been saved + the receipt confirmed. The
+  // parent is responsible for opening the RmaCreditMemoDialog so the
+  // operator can pick deductions / sales tax / send the email.
+  onContinueToCreditMemo?: (target: {
+    rmaId: string;
+    customerId: string;
+  }) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -122,6 +126,7 @@ export default function ReturnReceiptReviewDialog({
   onOpenChange,
   receipt,
   onDone,
+  onContinueToCreditMemo,
 }: ReturnReceiptReviewDialogProps) {
   const queryClient = useQueryClient();
   const isMatched = receipt.rmaId !== null;
@@ -172,78 +177,11 @@ export default function ReturnReceiptReviewDialog({
       setReceivedQty({});
       setUnexpectedItems([]);
       setShowAddUnexpected(false);
-      setShippingDeduction("0.00");
-      setRestockingFee("0.00");
-      setEdited(false);
       setShowManualMatch(false);
       setShowFromReceipt(false);
       setRmaSearchQ("");
     }
   }, [open]);
-
-  // ---- CM editor state (matched receipts) ---------------------------------
-  const [shippingDeduction, setShippingDeduction] = useState("0.00");
-  const [restockingFee, setRestockingFee] = useState("0.00");
-  const [edited, setEdited] = useState(false);
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailBody, setEmailBody] = useState("");
-
-  const itemOverrides = useMemo(() => {
-    if (!rmaQuery.data) return [];
-    return rmaQuery.data.items.map((item) => ({
-      itemId: item.id,
-      receivedQuantity: receivedQty[item.id] ?? item.quantity,
-    }));
-  }, [rmaQuery.data, receivedQty]);
-
-  const goodsSubtotal = useMemo(() => {
-    if (!rmaQuery.data) return 0;
-    return rmaQuery.data.items.reduce((sum, item) => {
-      const qty = parseFloat(receivedQty[item.id] ?? item.quantity) || 0;
-      const price = parseFloat(item.unitPrice) || 0;
-      return sum + qty * price;
-    }, 0);
-  }, [rmaQuery.data, receivedQty]);
-
-  const totalCreditAmount = useMemo(() => {
-    const ship = parseFloat(shippingDeduction) || 0;
-    const restock = parseFloat(restockingFee) || 0;
-    return Math.max(0, goodsSubtotal - ship - restock);
-  }, [goodsSubtotal, shippingDeduction, restockingFee]);
-
-  // Email preview query (when matched + CM section visible)
-  const previewQuery = useQuery<PreviewResponse>({
-    enabled: open && isMatched && !!rmaQuery.data,
-    queryKey: [
-      "rma-credit-memo-preview",
-      receipt.rmaId,
-      shippingDeduction,
-      restockingFee,
-      JSON.stringify(itemOverrides),
-    ],
-    queryFn: async () => {
-      const res = await fetch(`/api/rmas/${receipt.rmaId}/preview-credit-memo-email`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          shippingDeduction: shippingDeduction || undefined,
-          restockingFee: restockingFee || undefined,
-          itemOverrides,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-    staleTime: 0,
-  });
-
-  // Sync email subject/body from preview
-  useEffect(() => {
-    if (previewQuery.data && !edited) {
-      setEmailSubject(previewQuery.data.subject);
-      setEmailBody(previewQuery.data.body);
-    }
-  }, [previewQuery.data, edited]);
 
   // ---- Unmatched path: manual match dialog --------------------------------
   const [showManualMatch, setShowManualMatch] = useState(false);
@@ -295,31 +233,60 @@ export default function ReturnReceiptReviewDialog({
     },
   });
 
-  const issueCmMutation = useMutation({
+  // "Continue to credit memo" — persists the received-qty edits to each
+  // RMA item, confirms the receipt (which moves the RMA to received if it
+  // was at sent_to_warehouse), then hands off to the parent so it can open
+  // the shared RmaCreditMemoDialog.
+  const continueToCmMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/rmas/${receipt.rmaId}/issue-credit-memo`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          shippingDeduction: shippingDeduction || undefined,
-          restockingFee: restockingFee || undefined,
-          itemOverrides,
+      if (!receipt.rmaId || !receipt.rma?.customerId || !rmaQuery.data) {
+        throw new Error("RMA not loaded yet");
+      }
+      // PATCH each item's receivedQuantity (only when the operator's edit
+      // differs from the current backend value — saves needless writes).
+      await Promise.all(
+        rmaQuery.data.items.map(async (item) => {
+          const next = receivedQty[item.id] ?? item.quantity;
+          const current = item.receivedQuantity ?? item.quantity;
+          if (parseFloat(next) === parseFloat(current)) return;
+          const res = await fetch(
+            `/api/rmas/${receipt.rmaId}/items/${item.id}`,
+            {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ receivedQuantity: next }),
+            },
+          );
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
         }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      // Also confirm the receipt so it disappears from /today
-      await fetch(`/api/rmas/extensiv-receipts/${receipt.receiptId}/confirm`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      return res.json();
+      );
+      // Confirm the receipt — auto-advances sent_to_warehouse → received.
+      const confirmRes = await fetch(
+        `/api/rmas/extensiv-receipts/${receipt.receiptId}/confirm`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      if (!confirmRes.ok) {
+        const body = (await confirmRes.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(body.error ?? `HTTP ${confirmRes.status}`);
+      }
+      return { rmaId: receipt.rmaId, customerId: receipt.rma.customerId };
     },
-    onSuccess: () => {
+    onSuccess: (target) => {
       queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
       queryClient.invalidateQueries({ queryKey: ["rma", receipt.rmaId] });
-      onDone();
       onOpenChange(false);
+      onContinueToCreditMemo?.(target);
     },
   });
 
@@ -389,7 +356,7 @@ export default function ReturnReceiptReviewDialog({
 
   const isBusy =
     confirmMutation.isPending ||
-    issueCmMutation.isPending ||
+    continueToCmMutation.isPending ||
     attachMutation.isPending ||
     fromReceiptMutation.isPending ||
     dismissMutation.isPending;
@@ -414,44 +381,106 @@ export default function ReturnReceiptReviewDialog({
   function ReceiptReviewSection() {
     if (isMatched && rmaQuery.data) {
       const items = rmaQuery.data.items;
+      const totalDiscrepancies = items.filter((it) => {
+        const approved = parseFloat(it.quantity);
+        const received = parseFloat(receivedQty[it.id] ?? it.quantity);
+        return Number.isFinite(approved) && Number.isFinite(received) &&
+          approved !== received;
+      }).length;
       return (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold">Receipt Review</h3>
-          <div className="grid grid-cols-2 gap-2 text-xs text-secondary font-medium pb-1 border-b">
-            <span>Approved (RMA)</span>
-            <span>Received (edit if different)</span>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Receipt review</h3>
+            {totalDiscrepancies > 0 ? (
+              <Badge tone="high" className="text-xs">
+                {totalDiscrepancies}{" "}
+                {totalDiscrepancies === 1 ? "discrepancy" : "discrepancies"}
+              </Badge>
+            ) : (
+              <span className="text-xs text-secondary">
+                All items match approved qty
+              </span>
+            )}
           </div>
-          {items.map((item) => {
-            const approved = parseFloat(item.quantity);
-            const received = parseFloat(receivedQty[item.id] ?? item.quantity);
-            const discrepancy = received !== approved;
-            return (
-              <div key={item.id} className="grid grid-cols-2 gap-2 items-center">
-                <div className="text-sm">
-                  <span className="font-mono text-xs">{item.sku}</span>{" "}
-                  <span className="text-secondary">{item.name}</span>
-                  <span className="ml-2 text-secondary">×{item.quantity}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
-                    min="0"
-                    step="1"
-                    className="w-20 text-sm"
-                    value={receivedQty[item.id] ?? item.quantity}
-                    onChange={(e) =>
-                      setReceivedQty((prev) => ({ ...prev, [item.id]: e.target.value }))
-                    }
-                  />
-                  {discrepancy && (
-                    <Badge tone="high" className="text-xs">
-                      {received < approved ? `Short ${approved - received}` : `Over ${received - approved}`}
-                    </Badge>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          <div className="overflow-x-auto rounded-md border border-default">
+            <table className="w-full text-sm">
+              <thead className="bg-subtle text-left text-xs uppercase tracking-wide text-muted">
+                <tr>
+                  <th className="px-3 py-2">Item</th>
+                  <th className="px-3 py-2 w-24 text-right">Expected</th>
+                  <th className="px-3 py-2 w-28 text-right">Received</th>
+                  <th className="px-3 py-2 w-32 text-right">Discrepancy</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-default">
+                {items.map((item) => {
+                  const approved = parseFloat(item.quantity);
+                  const received = parseFloat(
+                    receivedQty[item.id] ?? item.quantity,
+                  );
+                  const delta =
+                    Number.isFinite(approved) && Number.isFinite(received)
+                      ? received - approved
+                      : 0;
+                  const isShort = delta < 0;
+                  const isOver = delta > 0;
+                  const rowTone =
+                    isShort
+                      ? "bg-accent-danger/5"
+                      : isOver
+                        ? "bg-accent-warning/5"
+                        : "";
+                  return (
+                    <tr key={item.id} className={rowTone}>
+                      <td className="px-3 py-2">
+                        <div className="font-medium">{item.name || "—"}</div>
+                        <div className="text-xs text-muted font-mono">
+                          {item.sku}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {Number.isFinite(approved)
+                          ? approved.toFixed(0)
+                          : item.quantity}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          className="w-20 text-sm text-right ml-auto"
+                          value={receivedQty[item.id] ?? item.quantity}
+                          onChange={(e) =>
+                            setReceivedQty((prev) => ({
+                              ...prev,
+                              [item.id]: e.target.value,
+                            }))
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {isShort ? (
+                          <Badge tone="critical" className="text-xs">
+                            Short {Math.abs(delta).toFixed(0)}
+                          </Badge>
+                        ) : isOver ? (
+                          <Badge tone="high" className="text-xs">
+                            Over {delta.toFixed(0)}
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-muted">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-muted">
+            Edits save when you click "Continue to credit memo" — the next
+            dialog inherits these quantities for the credit memo lines.
+          </p>
 
           {/* Unexpected items */}
           {unexpectedItems.map((ui) => (
@@ -572,94 +601,6 @@ export default function ReturnReceiptReviewDialog({
             </div>
           ))
         )}
-      </div>
-    );
-  }
-
-  // ---- Credit memo section (bottom, matched only) -------------------------
-
-  function CreditMemoSection() {
-    if (!isMatched || !rmaQuery.data) return null;
-    return (
-      <div className="space-y-4 pt-4 border-t">
-        <h3 className="text-sm font-semibold">Credit Memo</h3>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-xs font-medium text-secondary">Shipping deduction ($)</label>
-            <Input
-              type="number"
-              min="0"
-              step="0.01"
-              className="mt-1"
-              value={shippingDeduction}
-              onChange={(e) => {
-                setShippingDeduction(e.target.value);
-                setEdited(true);
-              }}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-secondary">Restocking fee ($)</label>
-            <Input
-              type="number"
-              min="0"
-              step="0.01"
-              className="mt-1"
-              value={restockingFee}
-              onChange={(e) => {
-                setRestockingFee(e.target.value);
-                setEdited(true);
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="rounded-md bg-muted/40 px-4 py-3 text-sm space-y-1">
-          <div className="flex justify-between">
-            <span className="text-secondary">Goods subtotal</span>
-            <span>${goodsSubtotal.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between text-secondary">
-            <span>Shipping deduction</span>
-            <span>−${(parseFloat(shippingDeduction) || 0).toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between text-secondary">
-            <span>Restocking fee</span>
-            <span>−${(parseFloat(restockingFee) || 0).toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between font-semibold border-t pt-1 mt-1">
-            <span>Total credit</span>
-            <span>${totalCreditAmount.toFixed(2)}</span>
-          </div>
-        </div>
-
-        {/* Email preview */}
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-secondary">Email subject</label>
-          <Input
-            value={emailSubject}
-            onChange={(e) => {
-              setEmailSubject(e.target.value);
-              setEdited(true);
-            }}
-          />
-          <label className="text-xs font-medium text-secondary">Email body</label>
-          <textarea
-            className="w-full min-h-[120px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
-            value={emailBody}
-            onChange={(e) => {
-              setEmailBody(e.target.value);
-              setEdited(true);
-            }}
-          />
-          {previewQuery.data && (
-            <div className="text-xs text-secondary">
-              To: {previewQuery.data.recipients.to}
-              {previewQuery.data.recipients.cc && ` · CC: ${previewQuery.data.recipients.cc}`}
-            </div>
-          )}
-        </div>
       </div>
     );
   }
@@ -794,6 +735,10 @@ export default function ReturnReceiptReviewDialog({
 
   function FooterButtons() {
     if (isMatched) {
+      const canContinue =
+        !!rmaQuery.data &&
+        !!receipt.rma?.customerId &&
+        !isBusy;
       return (
         <>
           <Button
@@ -801,14 +746,16 @@ export default function ReturnReceiptReviewDialog({
             disabled={isBusy}
             onClick={() => confirmMutation.mutate()}
           >
-            {confirmMutation.isPending ? "Saving…" : "Save Receipt Only"}
+            {confirmMutation.isPending ? "Saving…" : "Save receipt only"}
           </Button>
           <Button
             variant="primary"
-            disabled={isBusy || !rmaQuery.data}
-            onClick={() => issueCmMutation.mutate()}
+            disabled={!canContinue}
+            onClick={() => continueToCmMutation.mutate()}
           >
-            {issueCmMutation.isPending ? "Sending…" : "Send Credit Memo & Email"}
+            {continueToCmMutation.isPending
+              ? "Saving…"
+              : "Continue to credit memo →"}
           </Button>
         </>
       );
@@ -862,7 +809,7 @@ export default function ReturnReceiptReviewDialog({
 
   const mutationError =
     confirmMutation.error ??
-    issueCmMutation.error ??
+    continueToCmMutation.error ??
     attachMutation.error ??
     dismissMutation.error;
 
@@ -908,13 +855,6 @@ export default function ReturnReceiptReviewDialog({
           <div className="mt-4 space-y-3">
             <ManualMatchPanel />
             <FromReceiptPanel />
-          </div>
-        )}
-
-        {/* Bottom section: CM editor (matched path) */}
-        {isMatched && (
-          <div className="mt-2">
-            <CreditMemoSection />
           </div>
         )}
 

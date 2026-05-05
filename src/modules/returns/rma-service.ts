@@ -1379,6 +1379,10 @@ export type UpdateRmaItemInput = {
   priorSeasonId?: string | null;
   priorSeasonOverrideReason?: string | null;
   classification?: RmaItem["classification"];
+  // Warehouse-confirmed quantity. Set by the receipt review dialog when the
+  // operator records what actually arrived. Persisted so the CM dialog can
+  // pre-fill its receivedQty seed.
+  receivedQuantity?: string | null;
 };
 
 export async function updateRmaItem(
@@ -1395,9 +1399,27 @@ export async function updateRmaItem(
   const rmaRows = await db.select().from(rmas).where(eq(rmas.id, item.rmaId));
   if (rmaRows.length === 0) return null;
   const rma = rmaRows[0] as Rma;
-  if (rma.status !== "draft") {
+  // Most fields are draft-only. The exception is receivedQuantity, which is
+  // recorded after the warehouse confirms receipt — so allow it on
+  // sent_to_warehouse / received. Detect "received-qty-only" patches and
+  // bypass the draft gate for those.
+  const patchKeys = Object.keys(patch);
+  const isReceivedQtyOnly =
+    patchKeys.length > 0 &&
+    patchKeys.every((k) => k === "receivedQuantity");
+  if (rma.status !== "draft" && !isReceivedQtyOnly) {
     throw new Error(
       `Cannot update items on RMA in "${rma.status}" status — only draft is editable`,
+    );
+  }
+  if (
+    isReceivedQtyOnly &&
+    rma.status !== "draft" &&
+    rma.status !== "sent_to_warehouse" &&
+    rma.status !== "received"
+  ) {
+    throw new Error(
+      `Cannot record received quantity on RMA in "${rma.status}" status`,
     );
   }
 
