@@ -95,24 +95,48 @@ export type ListRmasFilters = {
   limit?: number;
 };
 
-export async function listRmas(filters: ListRmasFilters): Promise<Rma[]> {
+// List rows include the customer's display name as a denormalised field so
+// the returns list page can render it without a per-row roundtrip. Search (q)
+// matches RMA number, notes, OR customer name so operators can search by
+// either RMA # or "yiddy" / customer name without switching modes.
+export type RmaListRow = Rma & {
+  customerDisplayName: string | null;
+};
+
+export async function listRmas(
+  filters: ListRmasFilters,
+): Promise<RmaListRow[]> {
   const wheres: SQL[] = [];
   if (filters.status) wheres.push(eq(rmas.status, filters.status));
   if (filters.type) wheres.push(eq(rmas.returnType, filters.type));
   if (filters.customerId) wheres.push(eq(rmas.customerId, filters.customerId));
   if (filters.q) {
     const pattern = `%${filters.q}%`;
-    const orClause = or(like(rmas.rmaNumber, pattern), like(rmas.notes, pattern));
+    const orClause = or(
+      like(rmas.rmaNumber, pattern),
+      like(rmas.notes, pattern),
+      like(customers.displayName, pattern),
+    );
     if (orClause) wheres.push(orClause);
   }
   const where = wheres.length ? and(...wheres) : undefined;
   const limit = filters.limit ?? 200;
-  return db
-    .select()
+
+  const rows = await db
+    .select({
+      rma: rmas,
+      customerDisplayName: customers.displayName,
+    })
     .from(rmas)
+    .leftJoin(customers, eq(customers.id, rmas.customerId))
     .where(where as SQL | undefined)
     .orderBy(desc(rmas.createdAt))
-    .limit(limit) as unknown as Promise<Rma[]>;
+    .limit(limit);
+
+  return rows.map((r) => ({
+    ...(r.rma as Rma),
+    customerDisplayName: r.customerDisplayName ?? null,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +148,12 @@ const EDITABLE_STATUSES: RmaStatus[] = ["draft"];
 export type UpdateRmaInput = {
   notes?: string | null;
   totalValue?: string;
+  // Allow patching seasonId on draft RMAs — this covers the case where an
+  // RMA was created (or imported) without a season and the operator picks
+  // one mid-wizard. Eligibility checks gate on rma.seasonId so this MUST
+  // land in the DB before approve fires, not just in the wizard's local
+  // state.
+  seasonId?: string | null;
 };
 
 export async function updateRma(
@@ -191,7 +221,10 @@ export async function approveRma(
     overrideByUserId?: string | null;
   } = {};
 
-  if (current.returnType !== "damage") {
+  // Eligibility only applies to seasonal RMAs (the threshold check is keyed on
+  // a season). Non-seasonal and damage approve without a season + without an
+  // eligibility computation.
+  if (current.returnType === "seasonal") {
     if (!current.seasonId) {
       return { ok: false, reason: "RMA has no season — cannot compute eligibility" };
     }
@@ -213,9 +246,7 @@ export async function approveRma(
       excludeRmaId: id,
     });
 
-    // For non-seasonal: eligibility runs informationally — never gates approval.
-    // For seasonal: gate on threshold, allow override.
-    if (current.returnType === "seasonal" && !breakdown.passesThreshold) {
+    if (!breakdown.passesThreshold) {
       if (!input.overrideThreshold) {
         return {
           ok: false,
@@ -798,6 +829,12 @@ export type IssueCreditMemoInput = {
   shippingDeduction?: string | null;
   restockingFee?: string | null;
   itemOverrides?: { itemId: string; receivedQuantity: string }[];
+  // Sales tax. When applyTax is true we mirror the source invoice's tax
+  // code onto the QBO credit memo — QBO computes the actual tax amount.
+  // The frontend pulls the default + taxCodeRef from the source-invoice-tax
+  // lookup so the operator only ticks/unticks one box.
+  applyTax?: boolean;
+  taxCodeRef?: string | null;
 };
 
 export type IssueCreditMemoResult =
@@ -834,6 +871,8 @@ export async function issueCreditMemo(
     items: itemsForCm,
     shippingDeduction: input.shippingDeduction ?? null,
     restockingFee: input.restockingFee ?? null,
+    applyTax: input.applyTax ?? false,
+    taxCodeRef: input.taxCodeRef ?? null,
   });
 
   const now = new Date();
@@ -864,6 +903,308 @@ export async function issueCreditMemo(
 
   const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
   return { ok: true, rma: updatedRows[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// markAlreadyCredited — reconcile imported RMAs whose desktop status was
+// stale (CM was actually issued in QBO; desktop never advanced past
+// approved). Looks up the CM by doc number to verify + grab the QBO id,
+// then transitions to completed without re-creating anything in QBO.
+// ---------------------------------------------------------------------------
+
+export type MarkAlreadyCreditedInput = {
+  userId: string;
+  creditMemoDocNumber: string;
+};
+
+export type MarkAlreadyCreditedResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function markAlreadyCredited(
+  id: string,
+  input: MarkAlreadyCreditedInput,
+): Promise<MarkAlreadyCreditedResult | null> {
+  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  if (rmaRows.length === 0) return null;
+  const current = rmaRows[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "mark_already_credited",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  // Don't allow overwriting an existing CM link — operator should explicitly
+  // unlink first if they need to change it (rare; not currently exposed).
+  if (current.qboCreditMemoId) {
+    return {
+      ok: false,
+      reason: `RMA is already linked to credit memo ${current.creditMemoDocNumber ?? current.qboCreditMemoId}`,
+    };
+  }
+
+  const docNumber = input.creditMemoDocNumber.trim();
+  if (!docNumber) {
+    return { ok: false, reason: "Credit memo doc number is required" };
+  }
+
+  // Verify the CM actually exists in QBO and grab its internal id so the
+  // RMA links to it the same way native CMs do (qboCreditMemoId is what the
+  // detail page uses to render the "View CM in QBO" link).
+  const { QboClient } = await import("../../integrations/qb/client.js");
+  const qbo = new QboClient();
+  let qboCreditMemoId: string | null = null;
+  try {
+    const cm = await qbo.getCreditMemoByDocNumber(docNumber);
+    if (!cm) {
+      return {
+        ok: false,
+        reason: `Credit memo "${docNumber}" not found in QBO — double-check the doc number`,
+      };
+    }
+    qboCreditMemoId = cm.Id;
+  } catch (err) {
+    return {
+      ok: false,
+      reason:
+        err instanceof Error
+          ? `QBO lookup failed: ${err.message}`
+          : "QBO lookup failed",
+    };
+  }
+
+  const now = new Date();
+  await db
+    .update(rmas)
+    .set({
+      status: "completed",
+      completedAt: now,
+      qboCreditMemoId,
+      creditMemoDocNumber: docNumber,
+    })
+    .where(eq(rmas.id, id));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_credit_memo_issued",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+      meta: { creditMemoDocNumber: docNumber, reconciledFromImport: true },
+    },
+    db,
+  );
+
+  const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  return { ok: true, rma: updatedRows[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// forceStatus — operator override that bypasses the state machine.
+// Used to fix imported RMAs whose lifecycle stage drifted from reality
+// (e.g. flip an imported "approved" to "sent_to_warehouse" without walking
+// through the wizard). Does NOT touch other fields — operator can use
+// revert_to_draft if they need to clear workflow side-effects. Records an
+// activity entry tagged manualStatusOverride for audit.
+// ---------------------------------------------------------------------------
+
+export type ForceStatusInput = {
+  userId: string;
+  status: RmaStatus;
+  reason?: string | null;
+};
+
+export type ForceStatusResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function forceStatus(
+  id: string,
+  input: ForceStatusInput,
+): Promise<ForceStatusResult | null> {
+  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  if (rmaRows.length === 0) return null;
+  const current = rmaRows[0] as Rma;
+
+  if (current.status === input.status) {
+    return { ok: false, reason: `RMA is already in "${input.status}" status` };
+  }
+
+  await db.update(rmas).set({ status: input.status }).where(eq(rmas.id, id));
+
+  // Reuse manual_note since there's no dedicated status-change enum value.
+  // The meta carries the actual transition for audit purposes.
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "manual_note",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+      meta: {
+        kind: "rma_status_override",
+        from: current.status,
+        to: input.status,
+        reason: input.reason ?? null,
+      },
+    },
+    db,
+  );
+
+  const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  return { ok: true, rma: updatedRows[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
+// setTracking — record the customer's return tracking number on a
+// sent_to_warehouse RMA and, if a warehouse team email is configured,
+// notify the warehouse so they expect the parcel.
+// ---------------------------------------------------------------------------
+
+export type SetTrackingInput = {
+  userId: string;
+  trackingNumber: string;
+  trackingCarrier?: string | null;
+  notes?: string | null;
+};
+
+export type SetTrackingResult =
+  | { ok: true; rma: Rma; emailedTo: string | null }
+  | { ok: false; reason: string };
+
+export async function setTracking(
+  id: string,
+  input: SetTrackingInput,
+): Promise<SetTrackingResult | null> {
+  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  if (rmaRows.length === 0) return null;
+  const current = rmaRows[0] as Rma;
+
+  // Tracking only makes sense once the warehouse has been told to expect a
+  // return — i.e. status is sent_to_warehouse ("Awaiting return"). For
+  // looser enforcement we also accept awaiting_warehouse_number so the
+  // operator can record tracking before the warehouse # has been issued.
+  if (
+    current.status !== "sent_to_warehouse" &&
+    current.status !== "awaiting_warehouse_number"
+  ) {
+    return {
+      ok: false,
+      reason: `Tracking can only be added when the RMA is awaiting return (current: ${current.status})`,
+    };
+  }
+
+  const trackingNumber = input.trackingNumber.trim();
+  if (!trackingNumber) {
+    return { ok: false, reason: "Tracking number is required" };
+  }
+  const trackingCarrier = input.trackingCarrier?.trim() || null;
+
+  const now = new Date();
+  await db
+    .update(rmas)
+    .set({
+      trackingNumber,
+      trackingCarrier,
+      trackingSavedAt: now,
+    })
+    .where(eq(rmas.id, id));
+
+  // Fire-and-store activity FIRST so the trail records the change even if
+  // the email send below fails (orphaned-tracking-without-email is fine;
+  // tracking-without-record is not).
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "manual_note",
+      source: "user_action",
+      userId: input.userId,
+      refType: "rma",
+      refId: id,
+      meta: {
+        kind: "rma_tracking_added",
+        trackingNumber,
+        trackingCarrier,
+      },
+    },
+    db,
+  );
+
+  // Notify the warehouse team if an email is configured. Lazy imports keep
+  // the module's import graph clean (this is an outbound-facing service, the
+  // service module itself shouldn't pull in gmail/templates eagerly).
+  const { loadAppSettings } = await import("../statements/settings.js");
+  const settings = await loadAppSettings();
+  const warehouseEmail = (settings.warehouse_team_email ?? "").trim();
+  if (!warehouseEmail) {
+    const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
+    return {
+      ok: true,
+      rma: updatedRows[0] as Rma,
+      emailedTo: null,
+    };
+  }
+
+  const customerRows = await db
+    .select()
+    .from(customers)
+    .where(eq(customers.id, current.customerId))
+    .limit(1);
+  const customerName = customerRows[0]?.displayName ?? "(unknown customer)";
+
+  const { emailTemplates } = await import("../../db/schema/email-templates.js");
+  const templateRows = await db
+    .select()
+    .from(emailTemplates)
+    .where(eq(emailTemplates.slug, "rma-warehouse-tracking"))
+    .limit(1);
+  const template = templateRows[0];
+  if (!template) {
+    // Template missing — return ok with no email but flag in meta. Operator
+    // can re-run scripts/seed-email-templates.ts to fix.
+    const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
+    return {
+      ok: true,
+      rma: updatedRows[0] as Rma,
+      emailedTo: null,
+    };
+  }
+
+  const { renderTemplate } = await import("../email-compose/index.js");
+  const vars: Record<string, string> = {
+    rma_number: current.rmaNumber ?? current.id,
+    tracking_number: trackingNumber,
+    tracking_carrier: trackingCarrier ?? "(not specified)",
+    tracking_notes: input.notes?.trim() || "(none)",
+    customer_name: customerName,
+    company_name: settings.company_name || "Feldart",
+  };
+
+  const subject = renderTemplate(template.subject, vars);
+  const body = renderTemplate(template.body, vars);
+
+  const { sendEmail } = await import("../../integrations/gmail/send.js");
+  await sendEmail({
+    to: warehouseEmail,
+    subject,
+    html: body
+      .split(/\n{2,}/)
+      .map((p) => `<p>${p.replace(/\n/g, "<br/>")}</p>`)
+      .join("\n"),
+    text: body,
+  });
+
+  const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
+  return {
+    ok: true,
+    rma: updatedRows[0] as Rma,
+    emailedTo: warehouseEmail,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,6 +1362,12 @@ export async function addRmaItem(
 // ---------------------------------------------------------------------------
 
 export type UpdateRmaItemInput = {
+  // Item identity / display fields. qbItemId can be patched after the
+  // operator picks a real QBO item for an imported row whose qbItemId was
+  // empty at import time (we only had SKU). sku + name follow.
+  qbItemId?: string;
+  sku?: string;
+  name?: string;
   quantity?: string;
   unitPrice?: string;
   listUnitPrice?: string | null;

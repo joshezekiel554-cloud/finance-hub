@@ -84,6 +84,7 @@ const SETTINGS: AppSettingsMap = {
   statement_number_next: "101",
   statement_bcc_email: "",
   drive_root_folder_id: "",
+  warehouse_team_email: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -171,6 +172,7 @@ describe("renderStatementPdf", () => {
         statement_number_next: "1",
         statement_bcc_email: "",
         drive_root_folder_id: "",
+        warehouse_team_email: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

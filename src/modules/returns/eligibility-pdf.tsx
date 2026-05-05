@@ -188,6 +188,59 @@ const styles = StyleSheet.create({
     color: COLOR_TABLE_HEADER_TEXT,
     textAlign: "right",
   },
+  // Per-invoice block in the purchases section. Each invoice has a small
+  // strip showing #/date/total then a sub-table of its line items below.
+  invoiceBlock: {
+    marginBottom: 8,
+    borderWidth: 0.5,
+    borderColor: COLOR_BORDER,
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  invoiceHeader: {
+    flexDirection: "row",
+    backgroundColor: COLOR_INFO_BG,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    alignItems: "center",
+  },
+  invoiceHeaderText: {
+    fontSize: 9,
+    fontFamily: "Helvetica-Bold",
+    color: COLOR_TEXT,
+    flex: 1,
+  },
+  invoiceHeaderDate: {
+    fontSize: 8.5,
+    color: COLOR_LABEL,
+    width: 80,
+  },
+  invoiceHeaderTotal: {
+    fontSize: 9,
+    fontFamily: "Helvetica-Bold",
+    color: COLOR_TEXT,
+    textAlign: "right",
+    width: 130,
+  },
+  subTableHeader: {
+    flexDirection: "row",
+    backgroundColor: COLOR_TABLE_HEADER_BG,
+    color: COLOR_TABLE_HEADER_TEXT,
+    fontFamily: "Helvetica-Bold",
+    fontSize: 7.5,
+    paddingVertical: 3,
+    paddingHorizontal: 4,
+    letterSpacing: 0.2,
+  },
+  // Yellow highlight for invoice lines being proposed for return.
+  proposedRow: {
+    backgroundColor: COLOR_WARNING_BG,
+  },
+  proposedTag: {
+    fontSize: 7,
+    fontFamily: "Helvetica-Bold",
+    color: "#92400E",
+  },
   // Prior season warning band
   warningRow: {
     backgroundColor: COLOR_WARNING_BG,
@@ -335,27 +388,75 @@ function PurchasesTable({
   }
   return (
     <View>
-      <View style={styles.tableHeader}>
-        <Text style={[styles.cellHeader, { width: "30%" }]}>INVOICE #</Text>
-        <Text style={[styles.cellHeader, { width: "35%" }]}>DATE</Text>
-        <Text style={[styles.cellHeaderRight, { width: "35%" }]}>
-          SEASONAL AMOUNT
+      <Text style={styles.infoNote}>
+        Each invoice below shows the seasonal items the customer purchased.
+        Rows highlighted in yellow are being proposed for return on this RMA.
+      </Text>
+      {perInvoice.map((inv, i) => (
+        <InvoiceBlock key={`pi-${i}`} inv={inv} />
+      ))}
+    </View>
+  );
+}
+
+function InvoiceBlock({
+  inv,
+}: {
+  inv: EligibilityBreakdown["perInvoice"][number];
+}): React.ReactElement {
+  const proposedCount = inv.lines.filter((l) => l.isProposed).length;
+  return (
+    <View style={styles.invoiceBlock} wrap={false}>
+      {/* Invoice header strip */}
+      <View style={styles.invoiceHeader}>
+        <Text style={styles.invoiceHeaderText}>
+          Invoice {inv.invoiceDocNumber}
+        </Text>
+        <Text style={styles.invoiceHeaderDate}>{inv.invoiceDate}</Text>
+        <Text style={styles.invoiceHeaderTotal}>
+          {fmtMoney(inv.amount)}
+          {proposedCount > 0 ? ` · ${proposedCount} returning` : ""}
         </Text>
       </View>
-      {perInvoice.map((row, i) => (
+
+      {/* Line items header */}
+      <View style={styles.subTableHeader}>
+        <Text style={[styles.cellHeader, { width: "60%" }]}>DESCRIPTION</Text>
+        <Text style={[styles.cellHeaderRight, { width: "12%" }]}>QTY</Text>
+        <Text style={[styles.cellHeaderRight, { width: "20%" }]}>
+          LINE TOTAL
+        </Text>
+        <Text style={[styles.cellHeaderRight, { width: "8%" }]}> </Text>
+      </View>
+
+      {/* Line item rows */}
+      {inv.lines.map((line, j) => (
         <View
-          key={`pi-${i}`}
-          style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}
+          key={`ln-${j}`}
+          style={[
+            styles.tableRow,
+            j % 2 === 1 ? styles.tableRowAlt : {},
+            line.isProposed ? styles.proposedRow : {},
+          ]}
           wrap={false}
         >
-          <Text style={[styles.cell, { width: "30%" }]}>
-            {row.invoiceDocNumber}
+          <Text style={[styles.cell, { width: "60%" }]}>
+            {line.description || "(no description)"}
           </Text>
-          <Text style={[styles.cell, { width: "35%" }]}>
-            {row.invoiceDate}
+          <Text style={[styles.cellRight, { width: "12%" }]}>
+            {line.quantity}
           </Text>
-          <Text style={[styles.cellRight, { width: "35%" }]}>
-            {fmtMoney(row.amount)}
+          <Text style={[styles.cellRight, { width: "20%" }]}>
+            {fmtMoney(line.lineTotal)}
+          </Text>
+          <Text
+            style={[
+              styles.cellRight,
+              { width: "8%" },
+              line.isProposed ? styles.proposedTag : {},
+            ]}
+          >
+            {line.isProposed ? "RTN" : ""}
           </Text>
         </View>
       ))}
@@ -482,9 +583,9 @@ function EligibilityDocument({
         {/* Verdict box */}
         <VerdictBox breakdown={breakdown} />
 
-        {/* Table 1: Purchases */}
+        {/* Table 1: Per-invoice purchases (with line-item drill-down) */}
         <Text style={styles.sectionHeader}>
-          Customer Seasonal Purchases This Season
+          Customer Seasonal Purchases — by invoice
         </Text>
         <PurchasesTable perInvoice={breakdown.perInvoice} />
 

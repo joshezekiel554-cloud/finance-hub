@@ -1,0 +1,86 @@
+// source-invoice-tax — looks up the original invoice(s) for an RMA's items
+// in QBO to determine whether the source sale was taxed, what rate was used,
+// and which tax code QBO recorded. Drives the "Sales tax" checkbox on the
+// credit memo dialog: default it on when any source invoice had tax so the
+// credit memo mirrors the sale, default off otherwise.
+//
+// An RMA can have items from multiple invoices. We aggregate:
+//   - hadTax       = true if ANY source invoice has TotalTax > 0
+//   - ratePercent  = subtotal-weighted tax rate across all invoices found
+//   - taxCodeRef   = TxnTaxCodeRef from the first invoice with tax (mirroring
+//                    a single code is the common case; mixed-rate RMAs are
+//                    rare and the operator can adjust manually if needed)
+//
+// Errors looking up an individual invoice (deleted, never synced, QBO 404)
+// are skipped so a single bad reference doesn't block the rest of the lookup.
+
+import { eq } from "drizzle-orm";
+import { db } from "../../db/index.js";
+import { rmaItems } from "../../db/schema/returns.js";
+import { QboClient } from "../../integrations/qb/client.js";
+
+export type SourceInvoiceTaxStatus = {
+  hadTax: boolean;
+  ratePercent: number;
+  taxCodeRef: string | null;
+};
+
+export async function getSourceInvoiceTaxStatus(
+  rmaId: string,
+  qbo: QboClient = new QboClient(),
+): Promise<SourceInvoiceTaxStatus> {
+  const items = await db
+    .select({ docNumber: rmaItems.originalInvoiceDocNumber })
+    .from(rmaItems)
+    .where(eq(rmaItems.rmaId, rmaId));
+
+  const docNumbers = Array.from(
+    new Set(
+      items
+        .map((it) => it.docNumber)
+        .filter((d): d is string => typeof d === "string" && d.length > 0),
+    ),
+  );
+
+  if (docNumbers.length === 0) {
+    return { hadTax: false, ratePercent: 0, taxCodeRef: null };
+  }
+
+  let totalTax = 0;
+  let totalSubtotal = 0;
+  let anyHadTax = false;
+  let taxCodeRef: string | null = null;
+
+  for (const docNum of docNumbers) {
+    try {
+      const inv = await qbo.getInvoiceByDocNumber(docNum);
+      if (!inv) continue;
+      const tax = inv.TxnTaxDetail?.TotalTax ?? 0;
+      const total = inv.TotalAmt ?? 0;
+      // QBO's default GlobalTaxCalculation is "TaxExcluded" — line amounts are
+      // pre-tax so subtotal = TotalAmt - TotalTax. If a future tenant flips
+      // to "TaxInclusive" the rate computed here will be slightly off but
+      // hadTax + taxCodeRef remain correct, which is what drives behavior.
+      const subtotal = total - tax;
+      totalTax += tax;
+      totalSubtotal += subtotal;
+      if (tax > 0) {
+        anyHadTax = true;
+        if (!taxCodeRef && inv.TxnTaxDetail?.TxnTaxCodeRef?.value) {
+          taxCodeRef = inv.TxnTaxDetail.TxnTaxCodeRef.value;
+        }
+      }
+    } catch {
+      // Lookup failure for one invoice shouldn't block the others.
+    }
+  }
+
+  const ratePercent =
+    totalSubtotal > 0 ? (totalTax / totalSubtotal) * 100 : 0;
+
+  return {
+    hadTax: anyHadTax,
+    ratePercent,
+    taxCodeRef,
+  };
+}

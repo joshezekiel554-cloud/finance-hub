@@ -51,5 +51,10 @@ export const APP_SETTING_KEYS = [
   // Google Drive folder ID that is the root for all RMA photo subfolders.
   // Set via Settings UI or direct API call. If empty, photo upload returns 412.
   "drive_root_folder_id",
+  // Email address (or comma-separated list) that gets the "customer is
+  // shipping back RMA X with tracking Y" notification when the operator
+  // adds tracking. Empty = no email is sent (operator may notify the
+  // warehouse out-of-band).
+  "warehouse_team_email",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

@@ -229,6 +229,28 @@ Thanks,
 {{user_name}}
 {{company_name}}`,
   },
+  {
+    slug: "rma-warehouse-tracking",
+    name: "RMA warehouse tracking notification",
+    context: "rma_warehouse_tracking",
+    description:
+      "Sent to the warehouse team when the operator records the return tracking number from the customer.",
+    subject: "Inbound return: RMA {{rma_number}} — tracking {{tracking_number}}",
+    body: `Hi team,
+
+Customer {{customer_name}} is shipping back RMA {{rma_number}}.
+
+Carrier:  {{tracking_carrier}}
+Tracking: {{tracking_number}}
+
+Please flag the parcel when it arrives and confirm receipt against the
+warehouse export already on file. Operator notes:
+
+{{tracking_notes}}
+
+Thanks,
+{{company_name}}`,
+  },
 ];
 
 async function main() {

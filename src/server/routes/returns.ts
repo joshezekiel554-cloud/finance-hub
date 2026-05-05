@@ -10,6 +10,9 @@ import {
   denyRma,
   issueCreditMemo,
   markReplacementSent,
+  markAlreadyCredited,
+  forceStatus,
+  setTracking,
   addRmaItem,
   updateRmaItem,
   removeRmaItem,
@@ -33,6 +36,8 @@ import {
   findOriginalInvoiceForItem,
 } from "../../modules/returns/qbo-lookup.js";
 import { parseReturnRequestEmail } from "../../modules/returns/parser.js";
+import { getSourceInvoiceTaxStatus } from "../../modules/returns/source-invoice-tax.js";
+import { getPriorInvoiceItems } from "../../modules/returns/prior-invoice-check.js";
 import {
   RMA_RETURN_TYPES,
   RMA_STATUSES,
@@ -87,6 +92,7 @@ const createBodySchema = z.object({
 const patchBodySchema = z.object({
   notes: z.string().max(5000).nullable().optional(),
   totalValue: z.string().optional(),
+  seasonId: z.string().max(24).nullable().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -113,9 +119,26 @@ const issueCreditMemoBodySchema = z.object({
       }),
     )
     .optional(),
+  applyTax: z.boolean().optional(),
+  taxCodeRef: z.string().max(64).nullable().optional(),
 });
 
 const markReplacementSentBodySchema = z.object({}).passthrough();
+
+const markAlreadyCreditedBodySchema = z.object({
+  creditMemoDocNumber: z.string().min(1).max(64),
+});
+
+const forceStatusBodySchema = z.object({
+  status: z.enum(RMA_STATUSES),
+  reason: z.string().max(1000).nullable().optional(),
+});
+
+const setTrackingBodySchema = z.object({
+  trackingNumber: z.string().min(1).max(128),
+  trackingCarrier: z.string().max(64).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Phase 3 warehouse + eligibility + override schemas
@@ -161,6 +184,9 @@ const addItemBodySchema = z.object({
 });
 
 const updateItemBodySchema = z.object({
+  qbItemId: z.string().max(64).optional(),
+  sku: z.string().max(255).optional(),
+  name: z.string().max(255).optional(),
   quantity: z.string().optional(),
   unitPrice: z.string().optional(),
   listUnitPrice: z.string().optional().nullable(),
@@ -235,6 +261,56 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     }
     return rma;
   });
+
+  // ---- GET /qbo-prior-invoice-items?qbCustomerId=... -----------------------
+  // Returns the set of qbItemIds that have appeared on any prior invoice
+  // for a customer. Drives the damage wizard's "not found on prior invoices"
+  // soft warning. We expose this as a customer-scoped route (not RMA-scoped)
+  // so the wizard can call it before an RMA exists.
+  app.get("/qbo-prior-invoice-items", async (req, reply) => {
+    await requireAuth(req);
+    const parse = z
+      .object({ qbCustomerId: z.string().min(1).max(64) })
+      .safeParse(req.query);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "qbCustomerId required" };
+    }
+    try {
+      return await getPriorInvoiceItems(parse.data.qbCustomerId);
+    } catch (err) {
+      reply.code(502);
+      return {
+        error:
+          err instanceof Error
+            ? err.message
+            : "QBO prior-invoice lookup failed",
+      };
+    }
+  });
+
+  // ---- GET /:id/source-invoice-tax -----------------------------------------
+  // Looks up each unique original invoice for the RMA's items in QBO and
+  // reports whether sales tax was applied at the source. The credit memo
+  // dialog uses this to default the "Apply sales tax" checkbox: on if any
+  // source invoice was taxed (so a return mirrors the sale), off otherwise.
+  // ratePercent is the subtotal-weighted aggregate; taxCodeRef is the QBO
+  // TxnTaxCodeRef from the first taxed invoice (mirrored onto the CM).
+  app.get<{ Params: { id: string } }>(
+    "/:id/source-invoice-tax",
+    async (req, reply) => {
+      await requireAuth(req);
+      try {
+        return await getSourceInvoiceTaxStatus(req.params.id);
+      } catch (err) {
+        reply.code(502);
+        return {
+          error:
+            err instanceof Error ? err.message : "QBO tax lookup failed",
+        };
+      }
+    },
+  );
 
   // ---- POST / --------------------------------------------------------------
   app.post("/", async (req, reply) => {
@@ -347,6 +423,8 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         shippingDeduction: parse.data.shippingDeduction,
         restockingFee: parse.data.restockingFee,
         itemOverrides: parse.data.itemOverrides,
+        applyTax: parse.data.applyTax,
+        taxCodeRef: parse.data.taxCodeRef,
       });
       return mapServiceResult(result, reply);
     },
@@ -364,6 +442,81 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       }
       const result = await markReplacementSent(req.params.id, {
         userId: user.id,
+      });
+      return mapServiceResult(result, reply);
+    },
+  );
+
+  // ---- POST /:id/force-status ----------------------------------------------
+  // Operator override: change the RMA's status without walking through the
+  // state machine. Used to fix imported RMAs whose lifecycle stage drifted
+  // from reality (e.g. flip an imported "approved" → "sent_to_warehouse"
+  // because the warehouse handoff already happened in the desktop app).
+  // Activity log records the change for audit. Does NOT touch other fields.
+  app.post<{ Params: { id: string } }>(
+    "/:id/force-status",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const parse = forceStatusBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+      const result = await forceStatus(req.params.id, {
+        userId: user.id,
+        status: parse.data.status,
+        reason: parse.data.reason ?? null,
+      });
+      return mapServiceResult(result, reply);
+    },
+  );
+
+  // ---- POST /:id/set-tracking ---------------------------------------------
+  // Operator pastes the customer's return tracking number; we save it +
+  // notify the warehouse team if warehouse_team_email is configured.
+  app.post<{ Params: { id: string } }>(
+    "/:id/set-tracking",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const parse = setTrackingBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+      const result = await setTracking(req.params.id, {
+        userId: user.id,
+        trackingNumber: parse.data.trackingNumber,
+        trackingCarrier: parse.data.trackingCarrier ?? null,
+        notes: parse.data.notes ?? null,
+      });
+      if (result === null) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+      if (!result.ok) {
+        reply.code(409);
+        return { error: result.reason };
+      }
+      return { rma: result.rma, emailedTo: result.emailedTo };
+    },
+  );
+
+  // ---- POST /:id/mark-already-credited -------------------------------------
+  // Reconcile imported RMAs whose desktop status was stale: the CM was
+  // issued in QBO but the desktop never advanced past "approved". Operator
+  // pastes the QBO doc#, we verify it exists, then move to completed.
+  app.post<{ Params: { id: string } }>(
+    "/:id/mark-already-credited",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const parse = markAlreadyCreditedBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+      const result = await markAlreadyCredited(req.params.id, {
+        userId: user.id,
+        creditMemoDocNumber: parse.data.creditMemoDocNumber,
       });
       return mapServiceResult(result, reply);
     },
@@ -1070,6 +1223,8 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         proposedItems: rma.items.map((item) => ({
           lineTotal: item.lineTotal,
           classification: item.classification,
+          qbItemId: item.qbItemId,
+          originalInvoiceDocNumber: item.originalInvoiceDocNumber,
         })),
         excludeRmaId: rma.id,
       });
@@ -1116,6 +1271,8 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
             lineTotal: z.string(),
             classification: z.enum(RMA_ITEM_CLASSIFICATIONS),
             priorSeasonId: z.string().nullable().optional(),
+            qbItemId: z.string().nullable().optional(),
+            originalInvoiceDocNumber: z.string().nullable().optional(),
           }),
         )
         .default([]),
@@ -1155,6 +1312,8 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       proposedItems: parse.data.items.map((it) => ({
         lineTotal: it.lineTotal,
         classification: it.classification,
+        qbItemId: it.qbItemId ?? null,
+        originalInvoiceDocNumber: it.originalInvoiceDocNumber ?? null,
       })),
     });
 
@@ -1383,6 +1542,11 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
               }),
             )
             .optional(),
+          // Sales tax preview. The dialog passes both: applyTax controls
+          // whether tax is included in totals, salesTaxRatePercent is the
+          // rate from the source-invoice-tax lookup (e.g. 11 for 11%).
+          applyTax: z.boolean().optional(),
+          salesTaxRatePercent: z.number().min(0).max(100).optional(),
         })
         .safeParse(req.body);
 
@@ -1438,7 +1602,20 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
 
       const shippingAmt = parseFloat(overrides.shippingDeduction ?? "0") || 0;
       const restockingAmt = parseFloat(overrides.restockingFee ?? "0") || 0;
-      const totalCreditAmount = Math.max(0, goodsSubtotal - shippingAmt - restockingAmt);
+
+      // Sales tax estimate. Tax is computed on the goods amount net of
+      // deductions — i.e. the actual taxable credit the customer receives —
+      // matching how QBO computes tax on the credit memo from line subtotal.
+      const taxableBase = Math.max(0, goodsSubtotal - shippingAmt - restockingAmt);
+      const salesTaxAmount =
+        overrides.applyTax && overrides.salesTaxRatePercent
+          ? taxableBase * (overrides.salesTaxRatePercent / 100)
+          : 0;
+
+      const totalCreditAmount = Math.max(
+        0,
+        goodsSubtotal - shippingAmt - restockingAmt + salesTaxAmount,
+      );
 
       // For damage RMAs the CM doc number = RMA number (allocated on approve).
       // For preview before issuance, use rmaNumber or a "[pending]" placeholder.
@@ -1446,6 +1623,23 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         rma.creditMemoDocNumber ??
         rma.rmaNumber ??
         "[pending]";
+
+      // Build the deductions_section block. One line per non-zero deduction
+      // plus the sales-tax line when applicable. Empty when none apply. Sits
+      // between goods_subtotal and total_credit_amount in the template.
+      const deductionLines: string[] = [];
+      if (shippingAmt > 0) {
+        deductionLines.push(
+          `Return shipping deducted: -$${shippingAmt.toFixed(2)}`,
+        );
+      }
+      if (restockingAmt > 0) {
+        deductionLines.push(`Restocking fee: -$${restockingAmt.toFixed(2)}`);
+      }
+      if (salesTaxAmount > 0) {
+        deductionLines.push(`Sales tax: $${salesTaxAmount.toFixed(2)}`);
+      }
+      const deductionsSection = deductionLines.join("\n");
 
       const vars: Record<string, string> = {
         customer_name: customer.displayName,
@@ -1456,7 +1650,9 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           shippingAmt > 0 ? `$${shippingAmt.toFixed(2)}` : "$0.00",
         restocking_fee_amount:
           restockingAmt > 0 ? `$${restockingAmt.toFixed(2)}` : "$0.00",
+        sales_tax_amount: `$${salesTaxAmount.toFixed(2)}`,
         total_credit_amount: `$${totalCreditAmount.toFixed(2)}`,
+        deductions_section: deductionsSection,
         company_name: "Feldart",
         user_name: "",
       };

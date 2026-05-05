@@ -6,6 +6,12 @@ export type BuildAndPushInput = {
   items: RmaItem[];
   shippingDeduction: string | null;
   restockingFee: string | null;
+  // Sales tax. When applyTax is true we set TxnTaxCodeRef on the QBO payload
+  // so the credit memo mirrors the source invoice's tax treatment. taxCodeRef
+  // is the QBO id of the tax code (from the original invoice's TxnTaxDetail);
+  // QBO recomputes the actual tax amount from that code's current rate.
+  applyTax?: boolean;
+  taxCodeRef?: string | null;
 };
 
 export type BuildAndPushResult = {
@@ -180,6 +186,16 @@ export async function buildAndPushCreditMemo(
 
   if (docNumber !== undefined) {
     payload.DocNumber = docNumber;
+  }
+
+  // Mirror the source invoice's tax treatment when requested. Setting
+  // TxnTaxDetail.TxnTaxCodeRef is enough — QBO recomputes TotalTax server-side
+  // from the code's current rate and the line subtotal. When applyTax is off
+  // we omit the block entirely; QBO will treat the CM as non-taxable.
+  if (input.applyTax && input.taxCodeRef) {
+    payload.TxnTaxDetail = {
+      TxnTaxCodeRef: { value: input.taxCodeRef },
+    };
   }
 
   const response = await qbo.createCreditMemo(payload);

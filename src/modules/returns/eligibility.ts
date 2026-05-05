@@ -35,8 +35,24 @@ export type EligibilityInput = {
   proposedItems: Array<{
     lineTotal: string;
     classification: RmaItemClassification;
+    // qbItemId + originalInvoiceDocNumber are optional but if both are
+    // supplied we can mark the matching invoice line as "being proposed
+    // for return" in the per-line PDF breakdown.
+    qbItemId?: string | null;
+    originalInvoiceDocNumber?: string | null;
   }>;
   excludeRmaId?: string;
+};
+
+export type EligibilityInvoiceLine = {
+  qbItemId: string;
+  description: string;
+  quantity: string;
+  lineTotal: string;
+  // True when this exact line is being proposed for return on the current
+  // RMA. Determined by matching qbItemId + invoiceDocNumber against the
+  // RMA's items. Always false when proposedItems lacks qbItemId/docNumber.
+  isProposed: boolean;
 };
 
 export type EligibilityBreakdown = {
@@ -54,6 +70,7 @@ export type EligibilityBreakdown = {
     invoiceDocNumber: string;
     invoiceDate: string;
     amount: string;
+    lines: EligibilityInvoiceLine[];
   }>;
 };
 
@@ -116,10 +133,23 @@ export async function runEligibility(
   const seasonalItemIds = new Set(products.map((p) => p.qbItemId));
 
   // 4. Query QBO invoices for the customer; filter by season date window +
-  //    seasonal item membership. Aggregate per-invoice totals.
+  //    seasonal item membership. Aggregate per-invoice totals AND capture
+  //    each seasonal line so the eligibility PDF can show what the customer
+  //    actually bought (drilled down) vs. just per-invoice rollups.
+  type LineCapture = {
+    qbItemId: string;
+    description: string;
+    quantity: number;
+    lineTotal: number;
+  };
   const perInvoiceMap = new Map<
     string,
-    { invoiceDocNumber: string; invoiceDate: string; total: number }
+    {
+      invoiceDocNumber: string;
+      invoiceDate: string;
+      total: number;
+      lines: LineCapture[];
+    }
   >();
   let customerSeasonalPurchases = 0;
 
@@ -133,11 +163,19 @@ export async function runEligibility(
       if (!inv.Line || inv.Line.length === 0) continue;
 
       let invSeasonalTotal = 0;
+      const invLines: LineCapture[] = [];
       for (const line of inv.Line) {
         if (line.DetailType !== "SalesItemLineDetail") continue;
         const itemId = line.SalesItemLineDetail?.ItemRef?.value;
         if (!itemId || !seasonalItemIds.has(itemId)) continue;
-        invSeasonalTotal += parseDecimal(line.Amount);
+        const amount = parseDecimal(line.Amount);
+        invSeasonalTotal += amount;
+        invLines.push({
+          qbItemId: itemId,
+          description: line.Description ?? "",
+          quantity: parseDecimal(line.SalesItemLineDetail?.Qty ?? null),
+          lineTotal: amount,
+        });
       }
       if (invSeasonalTotal === 0) continue;
 
@@ -145,15 +183,26 @@ export async function runEligibility(
       const existing = perInvoiceMap.get(docNum);
       if (existing) {
         existing.total += invSeasonalTotal;
+        existing.lines.push(...invLines);
       } else {
         perInvoiceMap.set(docNum, {
           invoiceDocNumber: docNum,
           invoiceDate: txnDate,
           total: invSeasonalTotal,
+          lines: invLines,
         });
       }
       customerSeasonalPurchases += invSeasonalTotal;
     }
+  }
+
+  // Build a lookup of (docNumber, qbItemId) → "is being proposed for return"
+  // from the proposed items. Used to highlight matching lines in the per-
+  // invoice breakdown. Only items with both fields populated count.
+  const proposedKeySet = new Set<string>();
+  for (const p of proposedItems) {
+    if (!p.qbItemId || !p.originalInvoiceDocNumber) continue;
+    proposedKeySet.add(`${p.originalInvoiceDocNumber}::${p.qbItemId}`);
   }
 
   const perInvoice = Array.from(perInvoiceMap.values())
@@ -162,6 +211,15 @@ export async function runEligibility(
       invoiceDocNumber: r.invoiceDocNumber,
       invoiceDate: r.invoiceDate,
       amount: fmtDecimal(r.total),
+      lines: r.lines.map((l) => ({
+        qbItemId: l.qbItemId,
+        description: l.description,
+        quantity: fmtDecimal(l.quantity),
+        lineTotal: fmtDecimal(l.lineTotal),
+        isProposed: proposedKeySet.has(
+          `${r.invoiceDocNumber}::${l.qbItemId}`,
+        ),
+      })),
     }));
 
   // 5. Sum eligible_amount (or total_value) from approved+ RMAs for this

@@ -23,6 +23,22 @@ const FROZEN_BREAKDOWN = {
       invoiceDocNumber: "18001",
       invoiceDate: "2026-03-15",
       amount: "1000.00",
+      lines: [
+        {
+          qbItemId: "1001",
+          description: "MUG-GOLD — Gold Passover Mug",
+          quantity: "5.00",
+          lineTotal: "500.00",
+          isProposed: true,
+        },
+        {
+          qbItemId: "1002",
+          description: "PLATE-SED — Seder Plate",
+          quantity: "5.00",
+          lineTotal: "500.00",
+          isProposed: false,
+        },
+      ],
     },
   ],
 };

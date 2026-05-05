@@ -33,6 +33,8 @@ export type AppSettingsMap = {
   statement_bcc_email: string;
   // Google Drive folder ID that is the root for all RMA photo subfolders.
   drive_root_folder_id: string;
+  // Warehouse team email — used by RMA tracking notifications.
+  warehouse_team_email: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -49,6 +51,7 @@ const DEFAULTS: AppSettingsMap = {
   // the Settings page → "Statement BCC" field to disable.
   statement_bcc_email: "accounts@feldart.com",
   drive_root_folder_id: "",
+  warehouse_team_email: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

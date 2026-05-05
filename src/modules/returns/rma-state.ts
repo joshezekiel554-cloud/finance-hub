@@ -14,6 +14,7 @@ export type RmaAction =
   | "set_warehouse_number"
   | "mark_received"
   | "issue_credit_memo"
+  | "mark_already_credited"
   | "mark_replacement_sent"
   | "cancel";
 
@@ -97,6 +98,19 @@ export const TRANSITIONS: Record<RmaAction, TransitionRule> = {
     }
     return null;
   }),
+  // Used to reconcile imported RMAs whose desktop status was stale — the
+  // CM was actually issued in QBO but the desktop never advanced past
+  // "approved". The operator pastes the QBO CM doc number and the service
+  // moves the RMA to completed without re-creating anything in QBO.
+  //
+  // Also allowed from "completed" so the same button can backfill the link
+  // on RMAs that were imported as completed but lacked a CM doc number
+  // (the bulk backfill script handles 99% of them; this covers stragglers).
+  // The service guards against overwriting an existing qboCreditMemoId.
+  mark_already_credited: allowFrom(
+    ["approved", "received", "completed"],
+    "completed",
+  ),
   mark_replacement_sent: allowFrom(["approved"], "completed", ({
     returnType,
   }) =>

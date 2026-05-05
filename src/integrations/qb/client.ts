@@ -675,6 +675,19 @@ export class QboClient {
     return data.QueryResponse.CreditMemo?.[0] ?? null;
   }
 
+  // Lookup by the human-facing CM number ("18329CR"). Used by the
+  // "already credited" workflow on imported RMAs where the operator types
+  // the doc# they see in QBO and we resolve it back to the internal id +
+  // verify it really exists.
+  async getCreditMemoByDocNumber(
+    docNumber: string,
+  ): Promise<QboCreditMemo | null> {
+    const data = await this.query<QboCreditMemo>(
+      `SELECT * FROM CreditMemo WHERE DocNumber = '${escapeQboLiteral(docNumber)}'`,
+    );
+    return data.QueryResponse.CreditMemo?.[0] ?? null;
+  }
+
   // Create a new CreditMemo in QBO. POST to /v3/company/.../creditmemo with the
   // full payload (no sparse flag — this is a create, not an update). Returns the
   // saved CreditMemo including the QBO-assigned Id and DocNumber.

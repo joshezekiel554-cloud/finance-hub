@@ -73,6 +73,16 @@ export type QboInvoiceLine = {
   DiscountLineDetail?: QboDiscountLineDetail;
 };
 
+// Sales tax block on transactions. TotalTax is the dollar amount of tax on
+// the transaction (0 when the customer/items were tax-exempt). TxnTaxCodeRef
+// names the tax code QBO used — we mirror this onto credit memos so a return
+// of a taxed sale recreates the same tax treatment. TaxLine[] is QBO's
+// per-rate breakdown but we don't need it to mirror; TxnTaxCodeRef is enough.
+export type QboTxnTaxDetail = {
+  TotalTax?: number;
+  TxnTaxCodeRef?: QboReference;
+};
+
 export type QboInvoice = {
   Id: string;
   DocNumber?: string;
@@ -83,6 +93,7 @@ export type QboInvoice = {
   CustomerRef: QboReference;
   CurrencyRef?: QboReference;
   Line?: QboInvoiceLine[];
+  TxnTaxDetail?: QboTxnTaxDetail;
   EmailStatus?: string;
   PrintStatus?: string;
   SyncToken?: string;

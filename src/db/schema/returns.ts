@@ -71,6 +71,12 @@ export const rmas = mysqlTable(
     extensivRef: varchar("extensiv_ref", { length: 255 }),
     extensivTxNumber: varchar("extensiv_tx_number", { length: 64 }),
     extensivExportGeneratedAt: timestamp("extensiv_export_generated_at"),
+    // Customer-shipped return tracking. Populated when the operator pastes
+    // the tracking# from the customer's reply and saves; saving also fires
+    // an email to warehouse_team_email so the warehouse expects the parcel.
+    trackingNumber: varchar("tracking_number", { length: 128 }),
+    trackingCarrier: varchar("tracking_carrier", { length: 64 }),
+    trackingSavedAt: timestamp("tracking_saved_at"),
     driveFolderId: varchar("drive_folder_id", { length: 255 }), // null until first photo uploaded; renamed when rmaNumber allocated
     createdViaReceipt: boolean("created_via_receipt").notNull().default(false),
     originalEmail: text("original_email"),
