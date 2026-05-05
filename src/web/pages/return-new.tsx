@@ -11,13 +11,11 @@ import { Button } from "../components/ui/button";
 import ReturnCreateFormDamage, {
   type DamageFormState,
 } from "../components/return-create-form-damage";
-import ReturnCreateFormSeasonal, {
-  type SeasonalFormState,
-} from "../components/return-create-form-seasonal";
 import RmaApprovalEmailDialog from "../components/rma-approval-email-dialog";
 import RmaDenialEmailDialog from "../components/rma-denial-email-dialog";
 import { makeEmptyRow } from "../components/rma-items-table";
 import { PhotoUploadZone } from "../components/photo-upload-zone";
+import SeasonalWizard from "../components/seasonal-wizard";
 
 // Shape returned by GET /api/customers?q=...
 type CustomerHit = {
@@ -142,32 +140,18 @@ export default function ReturnNewPage() {
   };
   const [formState, setFormState] = useState<DamageFormState>(defaultFormState);
 
-  // Seasonal / non-seasonal form state
-  const defaultSeasonalState: SeasonalFormState = {
-    items: [makeEmptyRow()],
-    itemClassifications: {},
-    seasonId: null,
-    photosUrl: "",
-    notes: "",
-    overrideThreshold: false,
-    overrideReason: "",
-  };
-  const [seasonalFormState, setSeasonalFormState] =
-    useState<SeasonalFormState>(defaultSeasonalState);
+  // Seasonal / non-seasonal flow now uses SeasonalWizard which manages its
+  // own state. The createMutation below is only used by the damage flow.
 
   // Create RMA draft mutation (fires on first meaningful interaction if
-  // rmaId not yet set, and also on Save Draft click)
+  // rmaId not yet set, and also on Save Draft click) — damage only.
   const createMutation = useMutation<RmaCreated, Error, void>({
     mutationFn: async () => {
       if (!selectedCustomer?.id || !selectedCustomer.qbCustomerId) {
         throw new Error("Select a customer first");
       }
-      const notes =
-        returnType === "damage" ? formState.notes : seasonalFormState.notes;
-      // seasonId is only relevant for seasonal/non_seasonal RMAs; damage
-      // RMAs leave it null.
-      const seasonId =
-        returnType === "damage" ? null : seasonalFormState.seasonId;
+      const notes = formState.notes;
+      const seasonId = null; // damage RMAs have no season
       const res = await fetch("/api/rmas", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -263,13 +247,6 @@ export default function ReturnNewPage() {
 
   function handleApprove() {
     approveMutation.mutate({});
-  }
-
-  function handleSeasonalApprove(override: { enabled: boolean; reason: string }) {
-    approveMutation.mutate({
-      overrideThreshold: override.enabled,
-      overrideReason: override.reason,
-    });
   }
 
   function handleDeny() {
@@ -431,34 +408,23 @@ export default function ReturnNewPage() {
         </>
       )}
 
-      {/* Seasonal / non-seasonal form */}
+      {/* Seasonal / non-seasonal — multi-step wizard */}
       {selectedCustomer && (returnType === "seasonal" || returnType === "non_seasonal") && (
-        <>
-          <ReturnCreateFormSeasonal
-            rmaId={rmaId}
-            qbCustomerId={selectedCustomer?.qbCustomerId ?? null}
-            returnType={returnType}
-            value={seasonalFormState}
-            onChange={setSeasonalFormState}
-            onApprove={handleSeasonalApprove}
-            onDeny={handleDeny}
-            isSaving={isSaving}
-            saveError={saveError}
-          />
-
-          <div className="flex justify-start gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={isSaving || !selectedCustomer}
-              loading={isSaving}
-              onClick={handleSaveDraft}
-            >
-              {rmaId ? "Save changes" : "Save draft"}
-            </Button>
-          </div>
-        </>
+        <SeasonalWizard
+          customer={{
+            id: selectedCustomer.id,
+            qbCustomerId: selectedCustomer.qbCustomerId ?? "",
+            displayName: selectedCustomer.displayName,
+          }}
+          returnType={returnType}
+          initialRmaId={rmaId}
+          onCompleted={(id) => {
+            void navigate({
+              to: "/returns/$rmaId",
+              params: { rmaId: id },
+            });
+          }}
+        />
       )}
 
       {/* Approval email dialog */}
