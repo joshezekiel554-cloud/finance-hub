@@ -74,7 +74,9 @@ export default function EligibilityCard({
         const body = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
-      const data = (await res.json()) as EligibilityBreakdown;
+      // Route returns { breakdown: ... }
+      const wrapper = (await res.json()) as { breakdown: EligibilityBreakdown };
+      const data = wrapper.breakdown;
       setBreakdown(data);
       // Reset override toggle when threshold status changes
       if (data.passesThreshold) {
