@@ -28,6 +28,7 @@ import logoUploadRoute from "./logo-upload.js";
 import rosterTagRoute from "./roster-tag.js";
 import returnsRoute from "./returns.js";
 import seasonsRoute from "./seasons.js";
+import syncRoute from "./sync.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -72,6 +73,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(emailRoutingRulesRoute, {
     prefix: "/api/email-routing-rules",
   });
+  await app.register(syncRoute, { prefix: "/api/sync" });
   await app.register(logoUploadRoute, { prefix: "/api" });
   await app.register(rosterTagRoute, { prefix: "/api/roster-tag" });
   await app.register(returnsRoute, { prefix: "/api/rmas" });

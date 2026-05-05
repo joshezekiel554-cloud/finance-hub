@@ -232,12 +232,13 @@ export default function ReturnDetailPage() {
                       This RMA is a draft. Continue through the wizard to add
                       items, run eligibility, approve, and email the customer.
                     </span>
-                    <a
-                      href={`/returns/new?rmaId=${encodeURIComponent(rma.id)}`}
+                    <Link
+                      to="/returns/new"
+                      search={{ rmaId: rma.id } as never}
                       className="inline-flex items-center gap-1 rounded-md bg-accent-info px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-info/90"
                     >
                       Continue editing in wizard
-                    </a>
+                    </Link>
                   </div>
                 )}
 

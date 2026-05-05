@@ -168,17 +168,36 @@ export default function ReturnNewPage() {
   // state (items, mutations, approval/denial). This page just brokers the
   // customer + returnType selection and hands off to the right wizard.
 
+  // Back link target — when the operator came from a customer page (the
+  // "Create return" CTA on the Returns tab passes ?customerId), bounce
+  // them back there instead of dumping them on the global /returns list.
+  const backTarget = prefilledCustomerId
+    ? {
+        to: "/customers/$customerId" as const,
+        params: { customerId: prefilledCustomerId },
+        label:
+          selectedCustomer?.displayName ?? "Customer",
+      }
+    : { to: "/returns" as const, params: undefined, label: "Returns" };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={() => navigate({ to: "/returns" })}
+          onClick={() =>
+            backTarget.params
+              ? navigate({
+                  to: backTarget.to,
+                  params: backTarget.params,
+                })
+              : navigate({ to: backTarget.to })
+          }
           className="inline-flex items-center gap-1 text-sm text-secondary hover:text-primary"
         >
           <ArrowLeft className="size-4" />
-          Returns
+          {backTarget.label}
         </button>
         <span className="text-muted">/</span>
         <h1 className="text-xl font-semibold">

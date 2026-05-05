@@ -12,6 +12,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/cn";
+import { SyncQbBadge } from "../components/sync-qb-badge";
 
 type CustomerType = "b2b" | "b2c" | null;
 
@@ -220,6 +221,7 @@ export default function CustomersPage() {
             All customers from QuickBooks. Filter by type or search by name.
           </p>
         </div>
+        <SyncQbBadge />
       </div>
 
       {data && data.totals.uncategorized > 0 && tab !== "uncategorized" && (

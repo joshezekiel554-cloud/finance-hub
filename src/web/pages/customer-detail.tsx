@@ -2465,13 +2465,14 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
             </>
           )}
         </div>
-        <a
-          href={`/returns/new?customerId=${encodeURIComponent(customerId)}`}
+        <Link
+          to="/returns/new"
+          search={{ customerId } as never}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-default bg-base px-3 py-1.5 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
         >
           <RotateCcw className="size-3.5" />
           Create return
-        </a>
+        </Link>
       </div>
 
       {/* Filter chips: status + type */}

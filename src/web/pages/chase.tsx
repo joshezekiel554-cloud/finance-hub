@@ -36,6 +36,7 @@ import ChaseEmailSendDialog, {
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { SyncQbBadge } from "../components/sync-qb-badge";
 import {
   Dialog,
   DialogContent,
@@ -292,12 +293,15 @@ export default function ChasePage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Chase list</h1>
-        <p className="mt-1 text-sm text-secondary">
-          B2B customers with overdue balances. Send open-items statements
-          to selected.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Chase list</h1>
+          <p className="mt-1 text-sm text-secondary">
+            B2B customers with overdue balances. Send open-items statements
+            to selected.
+          </p>
+        </div>
+        <SyncQbBadge />
       </div>
 
       <FilterBar
