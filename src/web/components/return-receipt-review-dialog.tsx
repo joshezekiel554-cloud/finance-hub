@@ -51,6 +51,10 @@ export type ReceiptRow = {
   parsedItems: ParsedItem[];
   inferredCustomerName: string | null;
   classifiedAt: string;
+  gmailMessageId: string;
+  emailSubject: string;
+  emailFrom: string;
+  emailBody: string;
   rma: RmaSummary | null;
 };
 

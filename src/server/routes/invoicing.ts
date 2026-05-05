@@ -36,6 +36,7 @@ import {
   DISMISS_REASONS,
 } from "../../db/schema/dismissed-shipments.js";
 import { customers } from "../../db/schema/customers.js";
+import { emailLog } from "../../db/schema/crm.js";
 import {
   extensivReceipts,
   rmas,
@@ -157,6 +158,12 @@ export type ReturnReceiptTodayRow = {
   parsedItems: Array<{ sku: string; quantity: number }>;
   inferredCustomerName: string | null;
   classifiedAt: string;
+  gmailMessageId: string;
+  // Original Bluechip notification metadata + plain-text body (capped at
+  // 8 KB) so the receipt card can preview the source email inline.
+  emailSubject: string;
+  emailFrom: string;
+  emailBody: string;
   rma: {
     id: string;
     rmaNumber: string | null;
@@ -427,12 +434,22 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           parsedItemsJson: extensivReceipts.parsedItemsJson,
           inferredCustomerName: extensivReceipts.inferredCustomerName,
           classifiedAt: extensivReceipts.classifiedAt,
+          gmailMessageId: extensivReceipts.gmailMessageId,
           // RMA fields (null when not matched)
           rmaRmaNumber: rmas.rmaNumber,
           rmaCustomerId: rmas.customerId,
+          // Email metadata + body so the operator can preview the original
+          // Bluechip notification inline without bouncing to Gmail.
+          emailSubject: emailLog.subject,
+          emailFromAddress: emailLog.fromAddress,
+          emailBody: emailLog.body,
         })
         .from(extensivReceipts)
         .leftJoin(rmas, eq(extensivReceipts.rmaId, rmas.id))
+        .leftJoin(
+          emailLog,
+          eq(extensivReceipts.gmailMessageId, emailLog.gmailMessageId),
+        )
         .where(
           and(
             isNull(extensivReceipts.dismissedAt),
@@ -474,6 +491,13 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           parsedItems,
           inferredCustomerName: r.inferredCustomerName ?? null,
           classifiedAt: r.classifiedAt.toISOString(),
+          gmailMessageId: r.gmailMessageId,
+          emailSubject: r.emailSubject ?? "",
+          emailFrom: r.emailFromAddress ?? "",
+          // Cap at 8 KB — same convention as the unparseable rows. Anything
+          // larger almost certainly isn't valuable preview content; the
+          // Open-in-Gmail link still works for full inspection.
+          emailBody: (r.emailBody ?? "").slice(0, 8 * 1024),
           rma: r.rmaId
             ? {
                 id: r.rmaId,
