@@ -244,18 +244,33 @@ export default function InvoicingTodayPage() {
         </Card>
       )}
 
+      {/* Top-line "today snapshot" — clickable. Three numbers spanning
+          both Orders + Returns: how many shipments need invoicing, how
+          many invoices we've sent in the window, how many returns are
+          waiting on review. */}
+      {data && (
+        <Summary
+          rows={data.rows}
+          dismissed={data.dismissed}
+          receiptRowCount={(data.receiptRows ?? []).length}
+          onSelectOrdersTab={(t) => {
+            setTab(t);
+          }}
+          onScrollToReturns={() => {
+            document
+              .getElementById("returns-section")
+              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+        />
+      )}
+
       {/* ──────────────── Orders section ────────────────────────────── */}
       {data && (
         <section className="space-y-3">
           <SectionHeader
             title="Orders"
             subtitle="Shipment notifications matched to QBO invoices + Shopify orders. Reconcile and send the invoice email."
-            count={
-              data.rows.filter((r) => classifyRow(r, data.dismissed) === "open")
-                .length
-            }
           />
-          <Summary rows={data.rows} dismissed={data.dismissed} />
           <div className="flex items-center justify-between">
             <TabToggle
               tab={tab}
@@ -315,7 +330,10 @@ export default function InvoicingTodayPage() {
 
       {/* ──────────────── Returns section ───────────────────────────── */}
       {data && (
-        <section className="space-y-3 border-t border-default pt-6">
+        <section
+          id="returns-section"
+          className="space-y-3 mt-8 pt-6 border-t-2 border-default scroll-mt-4"
+        >
           <SectionHeader
             title="Returns received"
             subtitle="Bluechip warehouse-receipt notifications waiting for you to review and (when matched) issue the credit memo."
@@ -614,49 +632,75 @@ function TabToggle({
   );
 }
 
-function Summary({
-  rows,
-  dismissed,
-}: {
+function Summary(props: {
   rows: Row[];
   dismissed: Record<string, DismissedRecord>;
+  receiptRowCount: number;
+  onSelectOrdersTab: (tab: Tab) => void;
+  onScrollToReturns: () => void;
 }) {
-  const visible = rows.filter((r) => !dismissed[r.gmailId]);
-  const ready = visible.filter((r) => r.reconcileResult !== null);
-  const lowConfidence = visible.filter((r) => r.parseConfidence < 0.5);
-  const missingInvoice = visible.filter(
-    (r) => r.parseConfidence >= 0.5 && r.qbInvoice === null,
-  );
+  const awaitingInvoice = props.rows.filter(
+    (r) => classifyRow(r, props.dismissed) === "open",
+  ).length;
+  const sentRecently = props.rows.filter(
+    (r) => classifyRow(r, props.dismissed) === "sent",
+  ).length;
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <Card>
-        <CardBody className="flex items-center gap-3">
-          <CheckCircle2 className="size-5 text-accent-success" />
-          <div>
-            <div className="text-2xl font-semibold">{ready.length}</div>
-            <div className="text-xs text-secondary">ready to reconcile</div>
-          </div>
-        </CardBody>
-      </Card>
-      <Card>
-        <CardBody className="flex items-center gap-3">
-          <AlertCircle className="size-5 text-accent-warning" />
-          <div>
-            <div className="text-2xl font-semibold">{missingInvoice.length}</div>
-            <div className="text-xs text-secondary">no QB invoice match (likely sales receipts)</div>
-          </div>
-        </CardBody>
-      </Card>
-      <Card>
-        <CardBody className="flex items-center gap-3">
-          <Package className="size-5 text-muted" />
-          <div>
-            <div className="text-2xl font-semibold">{lowConfidence.length}</div>
-            <div className="text-xs text-secondary">unparseable / not a shipment email</div>
-          </div>
-        </CardBody>
-      </Card>
+      <StatCard
+        icon={AlertCircle}
+        iconClassName="text-accent-warning"
+        count={awaitingInvoice}
+        label={`shipment${awaitingInvoice === 1 ? "" : "s"} awaiting invoice`}
+        onClick={() => props.onSelectOrdersTab("open")}
+      />
+      <StatCard
+        icon={CheckCircle2}
+        iconClassName="text-accent-success"
+        count={sentRecently}
+        label="invoices sent in last 7 days"
+        onClick={() => props.onSelectOrdersTab("sent")}
+      />
+      <StatCard
+        icon={Package}
+        iconClassName="text-accent-info"
+        count={props.receiptRowCount}
+        label={`pending return${props.receiptRowCount === 1 ? "" : "s"} to review`}
+        onClick={props.onScrollToReturns}
+      />
     </div>
+  );
+}
+
+function StatCard({
+  icon: Icon,
+  iconClassName,
+  count,
+  label,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  iconClassName: string;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left transition-colors hover:bg-elevated rounded-lg"
+    >
+      <Card>
+        <CardBody className="flex items-center gap-3">
+          <Icon className={`size-5 ${iconClassName}`} />
+          <div>
+            <div className="text-2xl font-semibold">{count}</div>
+            <div className="text-xs text-secondary">{label}</div>
+          </div>
+        </CardBody>
+      </Card>
+    </button>
   );
 }
 
