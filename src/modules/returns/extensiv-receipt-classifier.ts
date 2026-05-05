@@ -12,6 +12,11 @@ export type ClassifiedExtensivEmail = {
   direction: ExtensivEmailDirection;
   txNumber?: string;
   refString?: string;
+  // Best-effort customer name extracted from the Ref: line. The matcher's
+  // tier-3 fuzzy path reads this when tx# and exact-ref both miss; without
+  // it that tier is dead. Conservative: empty string → undefined (treated
+  // as null by the persistence layer).
+  inferredCustomerName?: string;
   parsedItems?: Array<{ sku: string; quantity: number }>;
   confidence: number;
 };
@@ -39,6 +44,43 @@ function parseRefString(body: string): string | undefined {
   const m = REF_STRING_RE.exec(body);
   if (!m?.[1]) return undefined;
   return m[1].trim() || undefined;
+}
+
+// Season tokens we expect to see embedded in the Ref line. Matches:
+//   Spring2026, Summer 2025, Fall2026, Winter 2026, Pesach2026, Pesach 2025,
+//   RoshHashana 5787, Sukkot 5786, Pesach, etc.
+// The year part (4 digits) is optional and may be Gregorian or Hebrew.
+// The leading-anchor and trailing-anchor variants are both supported because
+// in practice the Ref looks like "{customer} {season}{year} returns" but we
+// have seen variants where the season comes first.
+const SEASON_TOKEN = "(?:spring|summer|fall|autumn|winter|pesach|passover|sukkot|sukkos|shavuos|shavuot|hannukah|chanukah|hanukkah|roshhashana|rosh\\s*hashana)";
+// Trailing form: "...word Spring2026" or "...word Spring 2026"
+const TRAILING_SEASON_RE = new RegExp(`\\s+${SEASON_TOKEN}\\s*\\d{0,4}\\s*$`, "i");
+// Leading form: "Spring2026 word..." or "2026 word..."
+const LEADING_SEASON_RE = new RegExp(`^\\s*(?:${SEASON_TOKEN}\\s*\\d{0,4}|\\d{4})\\s+`, "i");
+// Match the trailing "returns" / "return" word — leading whitespace is
+// optional so a Ref of just "returns" (rare/empty case) collapses to "".
+const TRAILING_RETURNS_RE = /(?:^|\s+)returns?\s*$/i;
+
+// Extract a best-effort customer name from a parsed Ref string.
+// Examples:
+//   "Acme Company Spring2026 returns" → "Acme Company"
+//   "Test Customer Spring2026 returns" → "Test Customer"
+//   "Best Boutique Summer 2025 returns" → "Best Boutique"
+//   "Pesach2026 Acme Company returns" → "Acme Company"
+//
+// Conservative: returns undefined for empty results so the matcher stays
+// safe rather than fuzzy-matching on noise.
+export function inferCustomerNameFromRef(ref: string | undefined): string | undefined {
+  if (!ref) return undefined;
+  let remainder = ref.trim();
+  // 1. Strip trailing "returns" / "return"
+  remainder = remainder.replace(TRAILING_RETURNS_RE, "").trim();
+  // 2. Strip trailing season token (the common case)
+  remainder = remainder.replace(TRAILING_SEASON_RE, "").trim();
+  // 3. Strip leading season-y token (rarer — season-prefixed refs)
+  remainder = remainder.replace(LEADING_SEASON_RE, "").trim();
+  return remainder.length > 0 ? remainder : undefined;
 }
 
 // Bluechip's "summary of the receipt" usually arrives as an HTML table
@@ -129,6 +171,7 @@ export function classifyExtensivEmail(input: {
   // --- Return receipt path ---
   const txNumber = parseTxNumber(fullText);
   const refString = parseRefString(body);
+  const inferredCustomerName = inferCustomerNameFromRef(refString);
   const parsedItems = parseItems(body);
   const confidence = computeConfidence("return_receipt", txNumber, refString, parsedItems);
 
@@ -136,6 +179,7 @@ export function classifyExtensivEmail(input: {
     direction: "return_receipt",
     ...(txNumber !== undefined ? { txNumber } : {}),
     ...(refString !== undefined ? { refString } : {}),
+    ...(inferredCustomerName !== undefined ? { inferredCustomerName } : {}),
     parsedItems,
     confidence,
   };

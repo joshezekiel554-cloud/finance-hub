@@ -55,6 +55,20 @@ function slugify(s: string): string {
 }
 
 /**
+ * Strip column-breaking whitespace (\t, \r, \n) from a value before it's
+ * dropped into a tab-delimited row. The Extensiv warehouse parser splits
+ * on \t and \n; an embedded tab in a customer name (sometimes pasted in
+ * from QBO with stray whitespace) silently shifts every downstream column
+ * by one and the import either fails or misaligns SKU + quantity.
+ *
+ * Applied defensively to EVERY column value, not just the high-risk ones,
+ * so future changes to the row layout remain safe.
+ */
+function sanitize(v: string): string {
+  return v.replace(/[\t\r\n]+/g, " ").trim();
+}
+
+/**
  * Build the Extensiv ref string: "{customer} {season} returns"
  * Matches _make_ref() in excel_generator.py.
  */
@@ -74,13 +88,16 @@ function buildRef(customerName: string, seasonName: string): string {
  * col 4 = sku
  * col 5 = quantity
  * cols 1,2,6..14 = empty
+ *
+ * Every value is sanitized to strip embedded tabs/newlines that would
+ * misalign the warehouse-side parser.
  */
 function buildRow(ref: string, notes: string, sku: string, quantity: string): string {
   const cols: string[] = Array(NUM_COLUMNS).fill("");
-  cols[0] = ref;
-  cols[3] = notes;
-  cols[4] = sku;
-  cols[5] = quantity;
+  cols[0] = sanitize(ref);
+  cols[3] = sanitize(notes);
+  cols[4] = sanitize(sku);
+  cols[5] = sanitize(quantity);
   return cols.join("\t");
 }
 

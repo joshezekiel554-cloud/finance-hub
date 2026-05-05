@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { classifyExtensivEmail } from "./extensiv-receipt-classifier.js";
+import {
+  classifyExtensivEmail,
+  inferCustomerNameFromRef,
+} from "./extensiv-receipt-classifier.js";
 
 const EXTENSIV_FROM = "WMS Notifications <notifications@secure-wms.com>";
 
@@ -217,6 +220,58 @@ describe("classifyExtensivEmail", () => {
         body: "Put Into Inventory processed.",
       });
       expect(result.direction).toBe("return_receipt");
+    });
+  });
+
+  // --- inferredCustomerName: feeds the matcher's tier-3 fuzzy path ---
+  describe("inferredCustomerName extraction (Bug 3)", () => {
+    it("strips trailing season-token + 'returns' from a receipt's Ref line", () => {
+      const result = classifyExtensivEmail({
+        from: EXTENSIV_FROM,
+        subject: "Receipt (1)",
+        body: "Summary of the receipt.\nRef: Test Customer Spring2026 returns",
+      });
+      expect(result.inferredCustomerName).toBe("Test Customer");
+    });
+
+    it("populates inferredCustomerName for the canonical receipt fixture", () => {
+      const result = classifyExtensivEmail(receiptWithSummaryAndItems());
+      expect(result.inferredCustomerName).toBe("Acme Company");
+    });
+
+    it("populates inferredCustomerName for the inventory-marker fixture", () => {
+      const result = classifyExtensivEmail(receiptWithInventoryMarker());
+      expect(result.inferredCustomerName).toBe("Best Boutique");
+    });
+
+    it("populates inferredCustomerName when only the body has tx#", () => {
+      const result = classifyExtensivEmail(receiptTxInBodyOnly());
+      expect(result.inferredCustomerName).toBe("Downtown Designs");
+    });
+
+    it("returns undefined when refString is missing", () => {
+      const result = classifyExtensivEmail(receiptNoItemsNoRef());
+      expect(result.inferredCustomerName).toBeUndefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // inferCustomerNameFromRef — table-driven unit tests of the helper.
+  // ---------------------------------------------------------------------
+  describe("inferCustomerNameFromRef helper", () => {
+    it.each<[string | undefined, string | undefined]>([
+      ["Acme Company Spring2026 returns", "Acme Company"],
+      ["Test Customer Spring2026 returns", "Test Customer"],
+      ["Best Boutique Summer 2025 returns", "Best Boutique"],
+      ["Downtown Designs Fall2026 returns", "Downtown Designs"],
+      ["Foo Bar Pesach2026 returns", "Foo Bar"],
+      ["Foo Bar return", "Foo Bar"], // singular "return"
+      ["Foo Bar", "Foo Bar"], // no suffixes — leave alone
+      ["", undefined],
+      [undefined, undefined],
+      ["   returns   ", undefined], // only suffix → empty → undefined
+    ])("inferCustomerNameFromRef(%j) === %j", (input, expected) => {
+      expect(inferCustomerNameFromRef(input)).toBe(expected);
     });
   });
 });

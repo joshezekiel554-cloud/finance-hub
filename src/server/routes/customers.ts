@@ -888,7 +888,32 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     ]);
     const kpi = kpiRows[0] ?? null;
 
-    return reply.send({ customer, recentActivities, kpi });
+    // Normalise the KPI row before sending. mysql2 hands back correlated-
+    // subquery TIMESTAMPs as `"YYYY-MM-DD HH:MM:SS"` strings (UTC values
+    // styled as a local-looking string); piping through normalizeDateValue
+    // converts them to ISO so the frontend's `new Date(...)` parses them as
+    // UTC rather than local time (otherwise "5h ago" for a 4h-old contact on
+    // BST). DATE columns (oldestUnpaidInvoiceDueDate) stay as `YYYY-MM-DD`.
+    // EXISTS returns 0|1 and COUNT returns string in some mysql2 modes —
+    // coerce both. Mirrors the shape produced by the list route.
+    const normalizedKpi = kpi
+      ? {
+          ...kpi,
+          lastContactedAt: normalizeDateValue(kpi.lastContactedAt),
+          lastPaymentAt: normalizeDateValue(kpi.lastPaymentAt),
+          lastStatementSentAt: normalizeDateValue(kpi.lastStatementSentAt),
+          oldestUnpaidInvoiceDueDate: kpi.oldestUnpaidInvoiceDueDate
+            ? typeof kpi.oldestUnpaidInvoiceDueDate === "string"
+              ? kpi.oldestUnpaidInvoiceDueDate.slice(0, 10)
+              : kpi.oldestUnpaidInvoiceDueDate.toISOString().slice(0, 10)
+            : null,
+          hasPendingRma: Boolean(kpi.hasPendingRma),
+          openInvoiceCount: Number(kpi.openInvoiceCount ?? 0),
+          openTaskCount: Number(kpi.openTaskCount ?? 0),
+        }
+      : null;
+
+    return reply.send({ customer, recentActivities, kpi: normalizedKpi });
   });
 
   // PATCH /api/customers/:id — single-customer update. Used from the

@@ -160,10 +160,6 @@ describe("linkCustomerReplyIfRmaThread", () => {
         [{ id: "email-log-2" }],
         // Query 2: activities with ref_type='rma' and meta.threadId — none found
         [],
-        // Query 3: outbound with customerId
-        [{ id: "email-log-2", customerId: "customer-id-abc" }],
-        // Query 4: rma activities for customer in this thread — none
-        [],
       ]);
 
       const result = await linkCustomerReplyIfRmaThread(baseInput);
@@ -202,29 +198,26 @@ describe("linkCustomerReplyIfRmaThread", () => {
     });
   });
 
-  describe("fallback path — uses customerId from email_log when meta.threadId lookup fails", () => {
-    it("links via customer+thread fallback when first meta query returns nothing", async () => {
+  describe("dropped fallback path (Bug 4)", () => {
+    // The previous implementation re-ran the same `meta.threadId = threadId`
+    // query under the guise of a fallback, which was a strict subset of the
+    // first query and could never return rows when the first returned 0.
+    // The fallback was removed; this test asserts the new behaviour: no
+    // attempted second lookup when the first returns nothing.
+    it("does NOT attempt a second lookup after the meta.threadId query misses", async () => {
       setSelectResponses([
         // Query 1: outbound email_log rows in thread
         [{ id: "email-log-4" }],
-        // Query 2: activities with meta.threadId — not found (first path)
+        // Query 2: activities with meta.threadId — not found
         [],
-        // Query 3: outbound with customerId (fallback path)
-        [{ id: "email-log-4", customerId: "cust-ghi" }],
-        // Query 4: rma activities for customer in this thread — found
-        [{ refId: "rma-id-ghi" }],
       ]);
 
       const result = await linkCustomerReplyIfRmaThread(baseInput);
 
-      expect(result).toEqual({ linked: true, rmaId: "rma-id-ghi" });
-      expect(recordActivity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          customerId: "cust-ghi",
-          refId: "rma-id-ghi",
-          kind: "rma_customer_reply",
-        }),
-      );
+      expect(result).toEqual({ linked: false });
+      expect(recordActivity).not.toHaveBeenCalled();
+      // Two select calls only — no fallback queries.
+      expect(mockSelect).toHaveBeenCalledTimes(2);
     });
   });
 

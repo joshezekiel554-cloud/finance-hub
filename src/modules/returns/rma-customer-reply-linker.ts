@@ -7,37 +7,21 @@
 // the RMA detail page.
 //
 // Algorithm:
-//   1. Query email_log for outbound rows where:
-//        (thread_id = input.threadId OR gmail_message_id = input.inReplyTo)
-//        AND ref_type != 'rma' is NOT required — we check all outbound rows in
-//        the thread and look up the RMA through the activity table.
-//
-//      Actually we look at the activities table for the rma ref:
-//        SELECT a.ref_id FROM activities a
-//        JOIN email_log el ON el.id = a.ref_id
-//        WHERE a.ref_type = 'email_log'
-//          AND a.ref_id IN (outbound email_log ids in this thread)
-//      ... or simpler: look for activities with ref_type='rma' whose
-//      `meta` contains the threadId.
-//
-//      Simplest reliable path: look for email_log rows in this thread
-//      that are outbound, then look for activities tied to an rma that
-//      reference those email_log rows OR directly search activities where
-//      meta.threadId = threadId AND ref_type = 'rma'.
-//
-//      BUT: the rma-email-send activities use refType='rma' and store
-//      meta.threadId + meta.gmailMessageId. So the cleanest query is:
-//      SELECT ref_id FROM activities
-//      WHERE ref_type = 'rma'
-//        AND JSON_EXTRACT(meta, '$.threadId') = :threadId
-//      LIMIT 1
-//
-//      Fallback: email_log.thread_id join.
+//   1. Quick gate: confirm there is at least one outbound email_log row in
+//      this thread (or matching the inReplyTo header). If not, the inbound
+//      message can't be a reply to anything we sent — bail.
+//   2. Look up an `rma` activity whose `meta.threadId` matches. The
+//      rma-email-send path stores threadId in meta when it inserts the
+//      activity, so this is the authoritative join.
+//   3. If found, write an `rma_customer_reply` activity referencing the RMA.
+//      Otherwise return { linked: false } — we deliberately do NOT fall back
+//      to "any active RMA for the customer" to avoid false positives
+//      (statement / invoice replies attaching to an unrelated open RMA).
 //
 // This module is intentionally side-effect-free on failure — all errors are
 // returned as `{ linked: false }` to the caller, which logs and continues.
 
-import { and, eq, or, sql, isNotNull } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { emailLog } from "../../db/schema/crm.js";
 import { activities } from "../../db/schema/crm.js";
@@ -82,20 +66,15 @@ export async function linkCustomerReplyIfRmaThread(
       .select({ id: emailLog.id })
       .from(emailLog)
       .where(and(threadCondition, eq(emailLog.direction, "outbound")))
-      .limit(20);
+      .limit(1);
 
     if (outboundRows.length === 0) return { linked: false };
 
-    const emailLogIds = outboundRows.map((r) => r.id);
-
-    // Step 2: Look for activities linked to these email_log rows that have
-    // ref_type = 'rma'. The email-send activities store refType='email_log'
-    // and refId=emailLogId, but RMA-specific email activities may store
-    // refType='rma'. Try both approaches.
-
-    // First: check if any activity with ref_type='rma' has meta.threadId = threadId.
-    // This is the most reliable path when the outbound RMA email was sent via
-    // the app (which stores threadId in meta).
+    // Step 2: Look for an `rma` activity whose meta.threadId matches.
+    // The rma-email-send path stores threadId in meta when the activity is
+    // written, so this is the authoritative join. If nothing matches, the
+    // inbound email is a reply on a thread that wasn't started by an RMA
+    // email — return { linked: false } and let the caller continue.
     const rmaActivityByThread = await db
       .select({ refId: activities.refId, customerId: activities.customerId })
       .from(activities)
@@ -122,65 +101,16 @@ export async function linkCustomerReplyIfRmaThread(
       });
     }
 
-    // Second: look for email_log rows in this thread that are outbound,
-    // then find activities whose refType='email_log' and refId is in that set.
-    // Then walk up to see if any of those activities have a sibling rma activity
-    // for the same customer. This is more complex; skip it for now and use a
-    // simpler fallback: check email_log rows with a customerId, then check if
-    // that customer has an rma whose extensivRef or rmaNumber appears in the subject.
-
-    // Simpler fallback: find outbound email_log rows in this thread that have
-    // a customerId, then find an RMA for that customer that is active.
-    // This is a best-effort approach when meta.threadId isn't stored.
-    const outboundWithCustomer = await db
-      .select({ id: emailLog.id, customerId: emailLog.customerId })
-      .from(emailLog)
-      .where(
-        and(
-          threadCondition,
-          eq(emailLog.direction, "outbound"),
-          isNotNull(emailLog.customerId),
-        ),
-      )
-      .limit(1);
-
-    const firstOutboundWithCustomer = outboundWithCustomer[0];
-    if (!firstOutboundWithCustomer?.customerId) {
-      return { linked: false };
-    }
-
-    const customerId = firstOutboundWithCustomer.customerId;
-
-    // Look for an RMA activity (any kind) for this customer that references a
-    // thread via meta, or just find the most recent non-draft RMA for this customer.
-    // This is a heuristic fallback — only link if we find a clear match.
-    const rmaActivityForCustomer = await db
-      .select({ refId: activities.refId })
-      .from(activities)
-      .where(
-        and(
-          eq(activities.customerId, customerId),
-          eq(activities.refType, "rma"),
-          sql`JSON_UNQUOTE(JSON_EXTRACT(${activities.meta}, '$.threadId')) = ${threadId}`,
-        ),
-      )
-      .limit(1);
-
-    const firstRmaActivityForCustomer = rmaActivityForCustomer[0];
-    if (!firstRmaActivityForCustomer?.refId) {
-      return { linked: false };
-    }
-
-    const rmaId = firstRmaActivityForCustomer.refId;
-    return await _recordReplyActivity({
-      rmaId,
-      customerId,
-      gmailMessageId,
-      threadId,
-      from,
-      subject,
-      bodySnippet,
-    });
+    // No RMA activity references this thread → not a reply to one of our RMA
+    // emails. We deliberately do NOT fall back to "any active RMA for the
+    // customer" because that produces false positives — a customer who replies
+    // to an unrelated thread (statement, invoice question) would have their
+    // message attached to whatever RMA happened to be open.
+    //
+    // The previous fallback ran the same `meta.threadId = threadId` query a
+    // second time, which by definition could never return rows when the first
+    // returned none. It was dead code; removed in this change.
+    return { linked: false };
   } catch (err) {
     log.error({ err, gmailMessageId, threadId }, "linkCustomerReplyIfRmaThread failed");
     return { linked: false };

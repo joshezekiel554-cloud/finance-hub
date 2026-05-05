@@ -171,10 +171,13 @@ async function maybeProcessExtensivReceipt(email: ParsedEmail): Promise<void> {
       return;
     }
 
-    // Attempt to match to an open RMA.
+    // Attempt to match to an open RMA. Pass through the classifier-derived
+    // customer name so the matcher's tier-3 fuzzy path can fire when both
+    // tx# and exact-ref miss (the typical receipt-arrived-late case).
     const matchResult = await matchReceiptToRma({
       txNumber: classified.txNumber,
       refString: classified.refString,
+      inferredCustomerName: classified.inferredCustomerName,
       parsedItems: classified.parsedItems,
     });
 
@@ -195,7 +198,7 @@ async function maybeProcessExtensivReceipt(email: ParsedEmail): Promise<void> {
       txNumber: classified.txNumber ?? null,
       refString: classified.refString ?? null,
       parsedItemsJson: (classified.parsedItems ?? []) as unknown as null,
-      inferredCustomerName: null,
+      inferredCustomerName: classified.inferredCustomerName ?? null,
       gmailMessageId: email.id,
     });
 

@@ -306,6 +306,57 @@ describe("buildAndPushCreditMemo", () => {
     expect(payload.Line[0]!.SalesItemLineDetail.Qty).toBe(2);
   });
 
+  it("recomputes Amount as Qty * UnitPrice when receivedQuantity overrides", async () => {
+    // Original line: qty 3 @ $25 = $75 stored in lineTotal.
+    // Warehouse received only 2 → credit must be 2 * $25 = $50, not $75.
+    const item = makeItem({
+      quantity: "3.0000",
+      receivedQuantity: "2.0000",
+      unitPrice: "25.0000",
+      lineTotal: "75.00", // <-- stale post-discount total for original qty
+    });
+    await buildAndPushCreditMemo({
+      rma: makeRma(),
+      items: [item],
+      shippingDeduction: null,
+      restockingFee: null,
+    });
+    const payload = getLastPayload<{
+      Line: Array<{
+        Amount: number;
+        SalesItemLineDetail: { Qty: number; UnitPrice: number };
+      }>;
+    }>();
+    const line = payload.Line[0]!;
+    expect(line.SalesItemLineDetail.Qty).toBe(2);
+    expect(line.SalesItemLineDetail.UnitPrice).toBe(25);
+    expect(line.Amount).toBe(50);
+    // The invariant QBO will check: Amount === Qty * UnitPrice
+    expect(line.Amount).toBe(
+      line.SalesItemLineDetail.Qty * line.SalesItemLineDetail.UnitPrice,
+    );
+  });
+
+  it("rounds Amount to 2dp when qty * unitPrice produces a long fraction", async () => {
+    // 3 * 0.3333 = 0.9999 → rounds to 1.00.
+    const item = makeItem({
+      quantity: "3.0000",
+      receivedQuantity: null,
+      unitPrice: "0.3333",
+      lineTotal: "0.9999",
+    });
+    await buildAndPushCreditMemo({
+      rma: makeRma(),
+      items: [item],
+      shippingDeduction: null,
+      restockingFee: null,
+    });
+    const payload = getLastPayload<{
+      Line: Array<{ Amount: number }>;
+    }>();
+    expect(payload.Line[0]!.Amount).toBe(1);
+  });
+
   it("adds a negative shipping line when shippingDeduction > 0", async () => {
     await buildAndPushCreditMemo({
       rma: makeRma(),

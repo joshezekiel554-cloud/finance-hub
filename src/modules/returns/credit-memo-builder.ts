@@ -121,11 +121,18 @@ export async function buildAndPushCreditMemo(
     };
   }> = [];
 
-  // One line per returned item
+  // One line per returned item.
+  //
+  // IMPORTANT: when receivedQuantity differs from quantity (warehouse received
+  // a partial), Amount must equal Qty * UnitPrice — otherwise QBO rejects the
+  // line or silently recomputes it server-side, producing a credit memo whose
+  // total disagrees with what the operator sees in the UI. We always derive
+  // Amount from qty * unitPrice (rounded to 2dp) rather than trusting the
+  // stored item.lineTotal, which was computed against the original quantity.
   for (const item of input.items) {
     const qty = parseFloat(item.receivedQuantity ?? item.quantity);
     const unitPrice = parseFloat(item.unitPrice);
-    const amount = parseFloat(item.lineTotal);
+    const amount = Math.round(qty * unitPrice * 100) / 100;
 
     lines.push({
       DetailType: "SalesItemLineDetail",

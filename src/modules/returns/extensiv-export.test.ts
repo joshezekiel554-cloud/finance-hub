@@ -132,4 +132,52 @@ describe("buildExtensivExportFile", () => {
     expect(row1Cols[4]).toBe("BETA");
     expect(row1Cols[5]).toBe("5");
   });
+
+  // --- Sanitize: embedded tabs/newlines in column values must not break the row ---
+  it("strips embedded newlines from customer name in notes and ref", () => {
+    // Some QBO-imported customer names carry stray \n or \r (Excel-paste artefacts).
+    // The exported row must remain exactly 15 tab-separated columns and the
+    // newline-bearing value must collapse to a single space.
+    const { content } = buildExtensivExportFile(
+      makeInput({
+        customer: { name: "Acme\nCorp", qbCustomerId: "QB-1" },
+      }),
+    );
+    const rows = content.split("\n");
+    expect(rows).toHaveLength(1); // <-- if newline weren't stripped this would be 2
+    const cols = rows[0]!.split("\t");
+    expect(cols).toHaveLength(15);
+    expect(cols[0]).toBe("Acme Corp Pesach 2026 returns");
+    expect(cols[3]).toBe("Customer: Acme Corp");
+  });
+
+  it("strips embedded tabs from any column value", () => {
+    const { content } = buildExtensivExportFile(
+      makeInput({
+        customer: { name: "Acme\tInc", qbCustomerId: "QB-1" },
+        items: [{ sku: "SKU\tA", name: "Item", quantity: "1\t" }],
+      }),
+    );
+    const rows = content.split("\n");
+    expect(rows).toHaveLength(1);
+    const cols = rows[0]!.split("\t");
+    expect(cols).toHaveLength(15);
+    expect(cols[0]).toBe("Acme Inc Pesach 2026 returns");
+    expect(cols[3]).toBe("Customer: Acme Inc");
+    expect(cols[4]).toBe("SKU A");
+    expect(cols[5]).toBe("1");
+  });
+
+  it("strips carriage returns from values", () => {
+    const { content } = buildExtensivExportFile(
+      makeInput({
+        customer: { name: "Acme\r\nCorp", qbCustomerId: "QB-1" },
+      }),
+    );
+    const rows = content.split("\n");
+    expect(rows).toHaveLength(1);
+    const cols = rows[0]!.split("\t");
+    expect(cols).toHaveLength(15);
+    expect(cols[3]).toBe("Customer: Acme Corp");
+  });
 });
