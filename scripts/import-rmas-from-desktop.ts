@@ -309,7 +309,11 @@ async function importSingleRma(
       : null,
     denialReason: row.denial_reason || null,
     originalEmail: row.original_email || null,
-    notes: row.notes || null,
+    // Tag imported rows so operators can spot them in the detail view. The
+    // tag is plain text; the existing notes field already shows on detail.
+    notes: row.notes
+      ? `[Imported from desktop]\n${row.notes}`
+      : "[Imported from desktop]",
     resolutionType: resolutionType ?? null,
     thresholdOverridden: false,
     createdViaReceipt: false,
@@ -329,9 +333,13 @@ async function importSingleRma(
       id: nanoid(24),
       rmaId: financeHubId,
       position: i,
-      // qbItemId is unknown at import time — use sku as placeholder. Operator
-      // can link to a real QBO item via the return-detail edit view.
-      qbItemId: item.sku || "IMPORT_PLACEHOLDER",
+      // qbItemId is unknown at import time — leave it blank. Empty string is
+      // the existing convention for "not picked" in the items table UI, so
+      // the QboItemPicker shows up automatically pre-filled with the SKU as
+      // the search hint. The operator only needs to re-resolve when they
+      // actually want to take an in-flight imported RMA further (e.g. issue
+      // a credit memo). For the 117 completed rows this never matters.
+      qbItemId: "",
       sku: item.sku || "",
       name: item.name || "",
       quantity: String(qty),
@@ -452,10 +460,13 @@ async function main() {
   if (imported > 0 && !dryRun) {
     console.log("\nPost-import checklist:");
     console.log("  1. Verify imported RMAs at /returns (filter by status/type).");
-    console.log("  2. Assign season IDs where needed (season_id was not migrated —");
-    console.log("     desktop season IDs are SQLite integers, not finance-hub nanoids).");
-    console.log("  3. Link QBO item IDs on items with qbItemId='IMPORT_PLACEHOLDER'.");
-    console.log("  4. Upload any photos via the return-detail page.");
+    console.log("     Imported rows are tagged '[Imported from desktop]' in notes.");
+    console.log("  2. The 'completed' rows are read-only history — no further action needed.");
+    console.log("  3. For 'approved' / 'denied' rows you intend to take further: open the");
+    console.log("     RMA, items have empty qbItemId so the picker will appear pre-filled");
+    console.log("     with the SKU; resolve each item against QBO before issuing a CM.");
+    console.log("  4. Seasonal RMAs have no seasonId (the old app used different ids) —");
+    console.log("     not required for completed history.");
   }
 
   process.exit(failed > 0 ? 1 : 0);
