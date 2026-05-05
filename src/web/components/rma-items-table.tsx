@@ -109,39 +109,111 @@ export default function RmaItemsTable({
     onChange([...items, makeEmptyRow()]);
   }
 
-  // Run lookup-prices for every row that has a qbItemId. Parallel; results
-  // applied to the items array via a single onChange at the end. Uses the
-  // customer-scoped endpoint when no rmaId is set yet (operator hasn't
-  // saved the draft), falls back to the rma-scoped endpoint otherwise.
+  // Resolve all rows in two phases:
+  //   1. For rows missing qbItemId: search QBO for SKU/name → take top result
+  //   2. For all rows with qbItemId: lookup-prices + find original invoice
+  // Both phases throttled to 3 concurrent. Single button = single user action.
   async function bulkLookupAll(): Promise<void> {
     if (!rmaId && !qbCustomerId) {
       setBulkLookupError(
-        "Pick a customer first (price lookup needs the customer to find their invoices).",
+        "Pick a customer first — lookup needs the customer to find their invoices.",
       );
       return;
     }
-    const candidates = items.filter((r) => r.qbItemId);
-    if (candidates.length === 0) {
-      setBulkLookupError("No QBO items selected on any row yet.");
+    const allRows = items.filter((r) => r.sku || r.name || r.qbItemId);
+    if (allRows.length === 0) {
+      setBulkLookupError(
+        "Add at least one item (with a SKU or name) before resolving.",
+      );
       return;
     }
     setBulkLookupPending(true);
     setBulkLookupError(null);
     setBulkLookupSummary(null);
 
-    // Throttle to 3 concurrent requests so we don't blow QBO's per-second
-    // rate limit. The QboClient already does internal 401-refresh + retry,
-    // but rate-limit (429) responses surface as failures here.
     const CONCURRENCY = 3;
-    const queue = [...candidates];
+
+    // ─── Phase 1: resolve QBO items for rows missing qbItemId ──────────────
+    const unresolved = allRows.filter((r) => !r.qbItemId);
+    type ResolveOutcome =
+      | { localKey: string; ok: true; hit: QbItemHit }
+      | { localKey: string; ok: false };
+    const resolved: ResolveOutcome[] = [];
+
+    if (unresolved.length > 0) {
+      const queue1 = [...unresolved];
+      async function resolveWorker(): Promise<void> {
+        while (queue1.length > 0) {
+          const r = queue1.shift();
+          if (!r) break;
+          const q = (r.sku || r.name || "").trim();
+          if (!q) {
+            resolved.push({ localKey: r.localKey, ok: false });
+            continue;
+          }
+          try {
+            const res = await fetch(
+              `/api/invoicing/items/search?q=${encodeURIComponent(q)}`,
+            );
+            if (!res.ok) {
+              resolved.push({ localKey: r.localKey, ok: false });
+              continue;
+            }
+            const body = (await res.json()) as { items: QbItemHit[] };
+            const top = body.items[0];
+            if (top) {
+              resolved.push({ localKey: r.localKey, ok: true, hit: top });
+            } else {
+              resolved.push({ localKey: r.localKey, ok: false });
+            }
+          } catch {
+            resolved.push({ localKey: r.localKey, ok: false });
+          }
+        }
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, unresolved.length) }, () =>
+          resolveWorker(),
+        ),
+      );
+    }
+
+    // Apply phase-1 results to a working copy of items
+    const afterResolve: RmaItemRow[] = items.map((r) => {
+      if (r.qbItemId) return r;
+      const hit = resolved.find((x) => x.localKey === r.localKey);
+      if (!hit?.ok) return r;
+      const merged: RmaItemRow = {
+        ...r,
+        qbItemId: hit.hit.id,
+        sku: hit.hit.sku ?? r.sku,
+        name: hit.hit.name,
+        unitPrice:
+          hit.hit.unitPrice != null
+            ? hit.hit.unitPrice.toFixed(4)
+            : r.unitPrice,
+        listUnitPrice:
+          hit.hit.unitPrice != null
+            ? hit.hit.unitPrice.toFixed(4)
+            : r.listUnitPrice,
+      };
+      const qty = parseFloat(merged.quantity) || 0;
+      const price = parseFloat(merged.unitPrice) || 0;
+      merged.lineTotal = (qty * price).toFixed(2);
+      return merged;
+    });
+
+    // ─── Phase 2: lookup-prices for all rows that now have qbItemId ───────
+    const priceCandidates = afterResolve.filter((r) => r.qbItemId);
+    const queue2 = [...priceCandidates];
     type LookupOutcome =
       | { localKey: string; ok: true; data: LookupResult }
       | { localKey: string; ok: false };
-    const results: LookupOutcome[] = [];
+    const priced: LookupOutcome[] = [];
 
-    async function worker(): Promise<void> {
-      while (queue.length > 0) {
-        const r = queue.shift();
+    async function priceWorker(): Promise<void> {
+      while (queue2.length > 0) {
+        const r = queue2.shift();
         if (!r) break;
         try {
           const url = rmaId
@@ -156,25 +228,26 @@ export default function RmaItemsTable({
             body: JSON.stringify(body),
           });
           if (!res.ok) {
-            results.push({ localKey: r.localKey, ok: false });
+            priced.push({ localKey: r.localKey, ok: false });
           } else {
             const data = (await res.json()) as LookupResult;
-            results.push({ localKey: r.localKey, ok: true, data });
+            priced.push({ localKey: r.localKey, ok: true, data });
           }
         } catch {
-          results.push({ localKey: r.localKey, ok: false });
+          priced.push({ localKey: r.localKey, ok: false });
         }
       }
     }
-
     await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () =>
-        worker(),
+      Array.from(
+        { length: Math.min(CONCURRENCY, priceCandidates.length) },
+        () => priceWorker(),
       ),
     );
 
-    const next = items.map((r) => {
-      const hit = results.find((res) => res.localKey === r.localKey);
+    // Apply phase-2 results
+    const finalRows = afterResolve.map((r) => {
+      const hit = priced.find((res) => res.localKey === r.localKey);
       if (!hit?.ok || !hit.data) return r;
       const merged: RmaItemRow = {
         ...r,
@@ -192,12 +265,23 @@ export default function RmaItemsTable({
       merged.lineTotal = (qty * price).toFixed(2);
       return merged;
     });
-    onChange(next);
 
-    const succeeded = results.filter((r) => r.ok).length;
-    setBulkLookupSummary(
-      `Pulled prices + invoices for ${succeeded}/${candidates.length} item(s).`,
-    );
+    onChange(finalRows);
+
+    const resolvedCount = resolved.filter((r) => r.ok).length;
+    const pricedCount = priced.filter((r) => r.ok).length;
+    const summaryParts: string[] = [];
+    if (unresolved.length > 0) {
+      summaryParts.push(
+        `Matched ${resolvedCount}/${unresolved.length} item(s)`,
+      );
+    }
+    if (priceCandidates.length > 0) {
+      summaryParts.push(
+        `pulled prices + invoices for ${pricedCount}/${priceCandidates.length}`,
+      );
+    }
+    setBulkLookupSummary(summaryParts.join(", ") + ".");
     setBulkLookupPending(false);
   }
 
@@ -258,7 +342,7 @@ export default function RmaItemsTable({
           >
             + Add item
           </Button>
-          {items.some((r) => r.qbItemId) && (
+          {items.length > 0 && (
             <Button
               type="button"
               variant="secondary"
@@ -270,8 +354,8 @@ export default function RmaItemsTable({
                 className={cn("size-4", bulkLookupPending && "animate-spin")}
               />
               {bulkLookupPending
-                ? "Pulling…"
-                : "Pull prices & invoices for all"}
+                ? "Resolving…"
+                : "Find items + prices + invoices"}
             </Button>
           )}
           {bulkLookupSummary && !bulkLookupError && (
@@ -402,7 +486,6 @@ function ItemRow({
             <QboItemPicker
               initialQuery={row.sku || row.name || ""}
               parsedHint={!row.qbItemId && row.name ? row.name : undefined}
-              autoPick={!row.qbItemId && !!row.name}
               onPick={(hit) => {
                 onUpdate({
                   qbItemId: hit.id,
@@ -534,20 +617,16 @@ function QboItemPicker({
   onPick,
   initialQuery,
   parsedHint,
-  autoPick,
 }: {
   onPick: (item: QbItemHit) => void;
   initialQuery?: string;
   parsedHint?: string;
-  /** When true and initialQuery is set, auto-pick the top search result on mount. */
-  autoPick?: boolean;
 }) {
   const [query, setQuery] = useState(initialQuery ?? "");
   const [results, setResults] = useState<QbItemHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const autoPickedRef = useRef(false);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -571,14 +650,6 @@ function QboItemPicker({
         }
         const body = (await res.json()) as { items: QbItemHit[] };
         setResults(body.items);
-        // Auto-pick the top result on mount when triggered from parsing.
-        const top = body.items[0];
-        if (autoPick && !autoPickedRef.current && top) {
-          autoPickedRef.current = true;
-          onPick(top);
-          setQuery("");
-          setResults([]);
-        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Search failed");
         setResults([]);
@@ -587,10 +658,7 @@ function QboItemPicker({
       }
     }, 250);
     return () => clearTimeout(handle);
-    // onPick deliberately omitted — it changes reference each parent render,
-    // and including it would cancel the timer before it fires.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, autoPick]);
+  }, [query]);
 
   return (
     <div className="relative">
