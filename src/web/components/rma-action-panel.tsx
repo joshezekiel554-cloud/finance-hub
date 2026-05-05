@@ -384,6 +384,192 @@ export default function RmaActionPanel({
           onRefresh();
         }}
       />
+
+      {/* Cancel + Delete — visible at the end of the action panel.
+          Cancel: approved / awaiting_warehouse_number / sent_to_warehouse only.
+          Delete: draft / cancelled only. */}
+      <div className="border-t border-default pt-3">
+        <RmaLifecycleActionsInPanel
+          rmaId={rmaId}
+          status={status}
+          onChanged={() => {
+            queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+            onRefresh();
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---- Cancel + Delete on the detail page -------------------------------------
+
+function RmaLifecycleActionsInPanel({
+  rmaId,
+  status,
+  onChanged,
+}: {
+  rmaId: string;
+  status: RmaStatus;
+  onChanged: () => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState<null | "cancel" | "delete">(
+    null,
+  );
+  const [reason, setReason] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canCancel =
+    status === "approved" ||
+    status === "awaiting_warehouse_number" ||
+    status === "sent_to_warehouse";
+  const canDelete = status === "draft" || status === "cancelled";
+
+  if (!canCancel && !canDelete) return null;
+
+  async function runCancel(): Promise<void> {
+    setPending(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: reason || null }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setConfirmOpen(null);
+      setReason("");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cancel failed");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function runDelete(): Promise<void> {
+    setPending(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      window.location.href = "/returns";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {canCancel && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setConfirmOpen("cancel");
+              setError(null);
+            }}
+          >
+            Cancel RMA
+          </Button>
+        )}
+        {canDelete && (
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            onClick={() => {
+              setConfirmOpen("delete");
+              setError(null);
+            }}
+          >
+            Delete
+          </Button>
+        )}
+      </div>
+
+      {confirmOpen === "cancel" && (
+        <div className="rounded-md border border-default bg-elevated p-3 text-xs">
+          <div className="font-medium">Cancel this RMA?</div>
+          <div className="mt-1 text-muted">
+            Stays in your records (audit trail) but no further action can be
+            taken. Reason is optional.
+          </div>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason (optional)"
+            rows={2}
+            className="mt-2 w-full rounded-md border border-default bg-base px-2 py-1.5 text-sm"
+          />
+          {error && (
+            <div className="mt-2 text-accent-danger">{error}</div>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setConfirmOpen(null)}
+              disabled={pending}
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void runCancel()}
+              disabled={pending}
+            >
+              {pending ? "Cancelling…" : "Confirm cancel"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {confirmOpen === "delete" && (
+        <div className="rounded-md border border-accent-danger/40 bg-accent-danger/5 p-3 text-xs">
+          <div className="font-medium text-accent-danger">
+            Delete permanently?
+          </div>
+          <div className="mt-1 text-muted">
+            Wipes the RMA + items from the database. Drive photos remain.
+          </div>
+          {error && (
+            <div className="mt-2 text-accent-danger">{error}</div>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setConfirmOpen(null)}
+              disabled={pending}
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              onClick={() => void runDelete()}
+              disabled={pending}
+            >
+              {pending ? "Deleting…" : "Yes, delete"}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

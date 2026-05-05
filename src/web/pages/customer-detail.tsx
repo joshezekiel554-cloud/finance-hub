@@ -28,6 +28,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { ActivityTimeline } from "../components/activity-timeline";
+import RmaRowMenu from "../components/rma-row-menu";
 import { EmailList } from "../components/email-list";
 import { HoldBanner } from "../components/hold-banner";
 import StatementSendDialog, {
@@ -2505,6 +2506,7 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2 text-right">Total</th>
                 <th className="px-3 py-2">Created</th>
+                <th className="px-3 py-2 w-8"></th>
               </tr>
             </thead>
             <tbody>
@@ -2549,13 +2551,24 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
                       year: "numeric",
                     })}
                   </td>
+                  <td className="px-3 py-2">
+                    <RmaRowMenu
+                      rmaId={r.id}
+                      status={r.status}
+                      invalidateKeys={[
+                        ["returns-list"],
+                        ["rmas"],
+                        ["customer-rmas", customerId],
+                      ]}
+                    />
+                  </td>
                 </tr>
               ))}
               {!isPending && filteredRows.length === 0 && (
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={5}
+                    colSpan={6}
                   >
                     No RMAs match the current filters
                   </td>

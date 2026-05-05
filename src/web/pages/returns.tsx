@@ -6,6 +6,7 @@ import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/cn";
+import RmaRowMenu from "../components/rma-row-menu";
 
 type RmaStatus =
   | "draft"
@@ -186,6 +187,7 @@ export default function ReturnsListPage() {
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2 text-right">Total</th>
                 <th className="px-3 py-2">Created</th>
+                <th className="px-3 py-2 w-8"></th>
               </tr>
             </thead>
             <tbody>
@@ -230,6 +232,13 @@ export default function ReturnsListPage() {
                       year: "numeric",
                     })}
                   </td>
+                  <td className="px-3 py-2">
+                    <RmaRowMenu
+                      rmaId={r.id}
+                      status={r.status}
+                      invalidateKeys={[["returns-list"], ["rmas"]]}
+                    />
+                  </td>
                 </tr>
               ))}
               {!isPending && rows.length === 0 && (
@@ -249,6 +258,7 @@ export default function ReturnsListPage() {
     </div>
   );
 }
+
 
 function FilterChip({
   label,
