@@ -418,6 +418,8 @@ export default function SeasonalWizard({
       stepContent = (
         <StepEligibility
           rmaId={rmaId}
+          customerId={customer.id}
+          qbCustomerId={customer.qbCustomerId}
           seasonId={seasonId}
           items={items}
           itemClassifications={itemClassifications}
@@ -824,6 +826,8 @@ function StepItems({
 
 function StepEligibility({
   rmaId,
+  customerId,
+  qbCustomerId,
   seasonId,
   items,
   itemClassifications,
@@ -834,6 +838,8 @@ function StepEligibility({
   onNext,
 }: {
   rmaId: string | null;
+  customerId: string;
+  qbCustomerId: string | null;
   seasonId: string | null;
   items: RmaItemRow[];
   itemClassifications: Record<string, string>;
@@ -879,6 +885,8 @@ function StepEligibility({
       {seasonId && cardItems.length > 0 ? (
         <EligibilityCard
           rmaId={rmaId}
+          customerId={customerId}
+          qbCustomerId={qbCustomerId}
           seasonId={seasonId}
           items={cardItems}
           onOverrideChange={handleOverrideChange}

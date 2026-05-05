@@ -26,6 +26,10 @@ export type EligibilityBreakdown = {
 
 export type EligibilityCardProps = {
   rmaId: string | null;
+  /** Required when rmaId is null — used to fall back to customer-scoped lookup. */
+  customerId?: string | null;
+  /** Required when rmaId is null. */
+  qbCustomerId?: string | null;
   seasonId: string | null;
   items: EligibilityItem[];
   /** Called whenever override toggle/reason changes. Parent uses this. */
@@ -40,6 +44,8 @@ export type EligibilityCardProps = {
 
 export default function EligibilityCard({
   rmaId,
+  customerId = null,
+  qbCustomerId = null,
   seasonId,
   items,
   onOverrideChange,
@@ -56,7 +62,8 @@ export default function EligibilityCard({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const runEligibility = useCallback(async () => {
-    if (!rmaId || !seasonId) return;
+    if (!seasonId) return;
+    if (!rmaId && (!customerId || !qbCustomerId)) return;
     const countingItems = items.filter((i) => i.classification !== "damage");
     if (countingItems.length === 0) {
       setBreakdown(null);
@@ -65,10 +72,16 @@ export default function EligibilityCard({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/rmas/${rmaId}/run-eligibility`, {
+      const url = rmaId
+        ? `/api/rmas/${rmaId}/run-eligibility`
+        : `/api/rmas/qbo-run-eligibility`;
+      const body = rmaId
+        ? { seasonId, items: countingItems }
+        : { customerId, qbCustomerId, seasonId, items: countingItems };
+      const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ seasonId, items: countingItems }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
@@ -92,7 +105,11 @@ export default function EligibilityCard({
 
   // Debounce: 500ms after items/season change
   useEffect(() => {
-    if (!rmaId || !seasonId) {
+    if (!seasonId) {
+      setBreakdown(null);
+      return;
+    }
+    if (!rmaId && (!customerId || !qbCustomerId)) {
       setBreakdown(null);
       return;
     }
@@ -103,14 +120,15 @@ export default function EligibilityCard({
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [rmaId, seasonId, items, runEligibility]);
+  }, [rmaId, customerId, qbCustomerId, seasonId, items, runEligibility]);
 
   // Propagate override changes to parent
   useEffect(() => {
     onOverrideChange({ enabled: overrideEnabled, reason: overrideReason });
   }, [overrideEnabled, overrideReason, onOverrideChange]);
 
-  if (!rmaId || !seasonId) return null;
+  if (!seasonId) return null;
+  if (!rmaId && (!customerId || !qbCustomerId)) return null;
 
   const innerContent = (
     <div className="p-3 space-y-2">

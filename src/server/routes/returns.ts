@@ -1021,6 +1021,38 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // ---- POST /qbo-run-eligibility -------------------------------------------
+  // Customer-scoped eligibility — doesn't require a saved RMA. Used by the
+  // wizard's eligibility step before the operator has approved.
+  app.post("/qbo-run-eligibility", async (req, reply) => {
+    await requireAuth(req);
+    const schema = z.object({
+      customerId: z.string().min(1),
+      qbCustomerId: z.string().min(1),
+      seasonId: z.string().min(1),
+      items: z
+        .array(
+          z.object({
+            lineTotal: z.string(),
+            classification: z.enum(RMA_ITEM_CLASSIFICATIONS),
+          }),
+        )
+        .default([]),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+    const breakdown = await runEligibility({
+      customerId: parse.data.customerId,
+      qbCustomerId: parse.data.qbCustomerId,
+      seasonId: parse.data.seasonId,
+      proposedItems: parse.data.items,
+    });
+    return { breakdown };
+  });
+
   // ---- POST /:id/run-eligibility -------------------------------------------
   // Runs the eligibility module with the given seasonId + optionally overridden
   // items. Used by the live eligibility card on the frontend.
