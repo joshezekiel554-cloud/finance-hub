@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ChevronDown,
   Reply,
+  ReplyAll,
   X,
 } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
@@ -94,6 +95,16 @@ export function EmailList({
     queryClient.invalidateQueries({ queryKey });
   });
 
+  // Marking an email actioned/unactioned changes the unactionedEmailCount
+  // shown on the customers list ("Has unactioned email" filter + per-row
+  // counter) and on the customer detail page header. Invalidate those too
+  // so the badge updates without a manual refresh.
+  function invalidateUnactionedCounts(): void {
+    queryClient.invalidateQueries({ queryKey });
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+  }
+
   const actionMutation = useMutation({
     mutationFn: async (input: { id: string; actioned: boolean }) => {
       const res = await fetch(`/api/email-log/${input.id}`, {
@@ -104,7 +115,7 @@ export function EmailList({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onSuccess: () => invalidateUnactionedCounts(),
   });
 
   const bulkActionMutation = useMutation<
@@ -122,7 +133,7 @@ export function EmailList({
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey });
+      invalidateUnactionedCounts();
       setSelectedIds(new Set());
     },
   });
@@ -166,6 +177,42 @@ export function EmailList({
       queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
     },
   });
+
+  // Reply-all asks the backend for the original message's To+Cc headers
+  // (we don't store CC in email_log), filters out our own addresses + the
+  // sender, then opens compose-modal with cc prefilled.
+  async function openReplyAll(
+    email: EmailLogRow,
+    ctx: {
+      customerId: string;
+      customerName: string | undefined;
+      customerEmail: string | null | undefined;
+    },
+  ): Promise<void> {
+    let cc = "";
+    try {
+      const res = await fetch(`/api/email-log/${email.id}/recipients`);
+      if (res.ok) {
+        const body = (await res.json()) as { cc?: string };
+        cc = body.cc ?? "";
+      }
+    } catch {
+      // Fall through with empty cc — operator can fill manually.
+    }
+    setComposeContext({
+      customerId: ctx.customerId,
+      customerName: ctx.customerName,
+      customerEmail: ctx.customerEmail ?? undefined,
+      inReplyTo: {
+        messageId: email.messageIdHeader ?? email.gmailMessageId,
+        threadId: email.threadId ?? "",
+        subject: email.subject ?? "",
+        from: email.fromAddress ?? ctx.customerEmail ?? "",
+        bodyExcerpt: email.body ? email.body.slice(0, 1000) : "",
+        cc,
+      },
+    });
+  }
 
   function toggleExpand(id: string) {
     const next = new Set(expanded);
@@ -548,6 +595,20 @@ export function EmailList({
                           >
                             <Reply className="size-3.5" />
                             Reply
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() =>
+                              void openReplyAll(email, {
+                                customerId,
+                                customerName,
+                                customerEmail,
+                              })
+                            }
+                          >
+                            <ReplyAll className="size-3.5" />
+                            Reply all
                           </Button>
                         </div>
                       )}

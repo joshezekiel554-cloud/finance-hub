@@ -19,9 +19,9 @@
 // text and html parts so the recipient's mail client picks whichever it
 // prefers.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Send } from "lucide-react";
+import { Paperclip, Send } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -76,6 +76,10 @@ export type ComposeContext = {
     subject: string;
     from: string;
     bodyExcerpt: string;
+    // When set (Reply all path), prefills the cc field. Comma-separated,
+    // already filtered to drop our own outbound addresses + the original
+    // sender (which goes to the To field instead).
+    cc?: string;
   };
 };
 
@@ -173,6 +177,9 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
   const [body, setBody] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Attachments selected for this send. Stored as File so we can show
+  // size/name in the chip; serialised to base64 only at send time.
+  const [attachments, setAttachments] = useState<File[]>([]);
 
   // Hydrate form fields when the modal opens, when context changes, or
   // when the aliases finish loading. We rely on a key generated from the
@@ -190,13 +197,17 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
       return;
     }
     setTo(reply?.from ?? context?.customerEmail ?? "");
-    setCc("");
+    // Reply-all prefills the cc; otherwise start blank.
+    setCc(reply?.cc ?? "");
     setBcc("");
-    setShowCcBcc(false);
+    // If there are reply-all recipients, expose the cc/bcc row by default
+    // so the operator can see + edit before sending.
+    setShowCcBcc(Boolean(reply?.cc));
     setSubject(reply ? `Re: ${reply.subject}` : "");
     setBody(reply ? buildReplyQuoteBody(reply) : "");
     setSelectedTemplateId("");
     setErrorMessage(null);
+    setAttachments([]);
     // formKey is the controlled re-init trigger — we don't want this
     // effect to re-fire on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,6 +239,17 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
 
   const sendMutation = useMutation({
     mutationFn: async () => {
+      // Encode any attached files to base64 before serialising the
+      // payload — /api/send expects { filename, mimeType, dataBase64 }.
+      const encodedAttachments = attachments.length
+        ? await Promise.all(
+            attachments.map(async (f) => ({
+              filename: f.name,
+              mimeType: f.type || "application/octet-stream",
+              dataBase64: await fileToBase64(f),
+            })),
+          )
+        : undefined;
       const payload = {
         to,
         cc: cc || undefined,
@@ -238,6 +260,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
         inReplyTo: reply?.messageId,
         threadId: reply?.threadId,
         customerId: context?.customerId,
+        attachments: encodedAttachments,
       };
       const res = await fetch("/api/send", {
         method: "POST",
@@ -382,6 +405,11 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
                 placeholder="Write your message…"
               />
             </label>
+
+            <AttachmentsField
+              attachments={attachments}
+              onChange={setAttachments}
+            />
           </div>
         </div>
 
@@ -433,6 +461,95 @@ function FieldRow({
       {children}
     </label>
   );
+}
+
+// Compact file-picker + chip list for outbound attachments. Backend
+// /api/send caps at 20 files; we don't enforce client-side beyond a
+// reasonable per-file size warning.
+function AttachmentsField({
+  attachments,
+  onChange,
+}: {
+  attachments: File[];
+  onChange: (next: File[]) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  return (
+    <div>
+      <span className="mb-1 block text-xs font-medium text-secondary">
+        Attachments
+      </span>
+      <div className="space-y-1.5">
+        {attachments.map((f, i) => (
+          <div
+            key={`${f.name}-${i}`}
+            className="flex items-center justify-between rounded-md border border-default bg-elevated px-2 py-1 text-xs"
+          >
+            <span className="truncate">
+              <span className="font-medium">{f.name}</span>
+              <span className="ml-2 text-muted">
+                {formatFileSize(f.size)}
+                {f.type ? ` · ${f.type}` : ""}
+              </span>
+            </span>
+            <button
+              type="button"
+              className="ml-2 shrink-0 text-muted hover:text-accent-danger"
+              onClick={() =>
+                onChange(attachments.filter((_, j) => j !== i))
+              }
+              aria-label={`Remove ${f.name}`}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            const picked = e.target.files ? Array.from(e.target.files) : [];
+            // Reset value so the same file can be re-picked after a remove.
+            e.target.value = "";
+            if (picked.length === 0) return;
+            onChange([...attachments, ...picked]);
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs text-secondary hover:bg-elevated"
+        >
+          <Paperclip className="size-3" />
+          {attachments.length === 0 ? "Attach files" : "Add more"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Read a File as base64 (no data: prefix). Used to encode attachments
+// for the /api/send payload, which expects raw base64 per attachment.
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const idx = result.indexOf(",");
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    };
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("FileReader error"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function FromField({

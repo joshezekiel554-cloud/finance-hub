@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, MessageSquare, Package, Truck } from "lucide-react";
+import { AlertCircle, CheckCircle2, Mail, MessageSquare, Package, Truck } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -144,19 +144,21 @@ const REASON_LABELS: Record<DismissReason, string> = {
   other: "Other",
 };
 
-type Tab = "open" | "sent" | "dismissed";
+type Tab = "open" | "unparseable" | "sent" | "dismissed";
 
-// Single source of truth for which tab a row belongs in. Dismissed wins
-// (a dismissed-but-sent row still appears under Dismissed). Otherwise we
-// classify by QBO's EmailStatus — already populated in the API response
-// and rendered in the SendHistoryPill, so this mirrors what the user sees
-// per-card.
+// Single source of truth for which tab a row belongs in. Priority order:
+//   1. Dismissed wins (a dismissed row stays under Dismissed regardless).
+//   2. Already-sent rows live in Sent (matches QBO EmailStatus).
+//   3. Low-confidence parses go to Unparseable so the Open tab is just
+//      actionable shipment emails.
+//   4. Everything else is Open.
 function classifyRow(
   row: Row,
   dismissed: Record<string, DismissedRecord>,
 ): Tab {
   if (dismissed[row.gmailId]) return "dismissed";
   if (row.qbInvoice?.emailStatus === "EmailSent") return "sent";
+  if (row.parseConfidence < 0.5) return "unparseable";
   return "open";
 }
 
@@ -255,9 +257,10 @@ export default function InvoicingTodayPage() {
             onChange={setTab}
             counts={{
               open: data.rows.filter(
-                (r) =>
-                  classifyRow(r, data.dismissed) === "open" &&
-                  r.parseConfidence >= 0.5,
+                (r) => classifyRow(r, data.dismissed) === "open",
+              ).length,
+              unparseable: data.rows.filter(
+                (r) => classifyRow(r, data.dismissed) === "unparseable",
               ).length,
               sent: data.rows.filter(
                 (r) => classifyRow(r, data.dismissed) === "sent",
@@ -267,14 +270,10 @@ export default function InvoicingTodayPage() {
               ).length,
             }}
           />
-          {tab === "open" && (
+          {tab === "unparseable" && (
             <BulkDismissButton
               candidateGmailIds={data.rows
-                .filter(
-                  (r) =>
-                    classifyRow(r, data.dismissed) === "open" &&
-                    r.parseConfidence < 0.5,
-                )
+                .filter((r) => classifyRow(r, data.dismissed) === "unparseable")
                 .map((r) => r.gmailId)}
             />
           )}
@@ -299,15 +298,19 @@ export default function InvoicingTodayPage() {
 
       {data?.rows
         .filter((r) => classifyRow(r, data.dismissed) === tab)
-        .map((row) => (
-          <ShipmentCard
-            key={row.gmailId}
-            row={row}
-            shadowMode={data.shadowMode}
-            terms={terms}
-            dismissedRecord={data.dismissed[row.gmailId] ?? null}
-          />
-        ))}
+        .map((row) =>
+          tab === "unparseable" ? (
+            <UnparseableCard key={row.gmailId} row={row} />
+          ) : (
+            <ShipmentCard
+              key={row.gmailId}
+              row={row}
+              shadowMode={data.shadowMode}
+              terms={terms}
+              dismissedRecord={data.dismissed[row.gmailId] ?? null}
+            />
+          ),
+        )}
 
       {/* Receipt review dialog */}
       {reviewReceipt && (
@@ -521,6 +524,7 @@ function TabToggle({
 }) {
   const tabs: { key: Tab; label: string }[] = [
     { key: "open", label: "Open" },
+    { key: "unparseable", label: "Unparseable" },
     { key: "sent", label: "Sent" },
     { key: "dismissed", label: "Dismissed" },
   ];
@@ -601,6 +605,99 @@ type SendResult =
       emailError?: string | null;
     }
   | { ok: false; error: string };
+
+// UnparseableCard — shown on the "Unparseable" tab. Email couldn't be
+// parsed as a Feldart shipment notification (low confidence) so we don't
+// have shipment / invoice / Shopify fields to render. Surfaces what we
+// know — gmail id, received-at, missing fields — and offers a Gmail link
+// + Dismiss action so the operator can clear the row from the queue.
+function UnparseableCard({ row }: { row: Row }) {
+  const queryClient = useQueryClient();
+  const [dismissing, setDismissing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function dismiss(): Promise<void> {
+    setDismissing(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/invoicing/dismiss", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          gmailId: row.gmailId,
+          reason: "other",
+          reasonNote: "unparseable / not a shipment email",
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      void queryClient.invalidateQueries({
+        queryKey: ["invoicing", "today"],
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dismiss failed");
+    } finally {
+      setDismissing(false);
+    }
+  }
+
+  const receivedLabel = row.receivedAt
+    ? new Date(row.receivedAt).toLocaleString(undefined, {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "(no received date)";
+
+  return (
+    <Card>
+      <CardBody className="space-y-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="space-y-0.5">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge tone="neutral">Unparseable</Badge>
+              <span className="text-secondary">{receivedLabel}</span>
+              <span className="text-muted text-xs">
+                confidence {(row.parseConfidence * 100).toFixed(0)}%
+              </span>
+            </div>
+            {row.parseMissingFields.length > 0 && (
+              <div className="text-xs text-muted">
+                Missing fields: {row.parseMissingFields.join(", ")}
+              </div>
+            )}
+            <div className="text-xs text-muted font-mono">
+              Gmail id: {row.gmailId}
+            </div>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <a
+              href={`https://mail.google.com/mail/u/0/#all/${row.gmailId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs text-secondary hover:bg-elevated"
+            >
+              <Mail className="size-3" />
+              Open in Gmail
+            </a>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={dismissing}
+              loading={dismissing}
+              onClick={() => void dismiss()}
+            >
+              Dismiss
+            </Button>
+          </div>
+        </div>
+        {error && (
+          <div className="text-xs text-accent-danger">{error}</div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
 
 function ShipmentCard({
   row,
