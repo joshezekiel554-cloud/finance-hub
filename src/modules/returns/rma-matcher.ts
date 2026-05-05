@@ -19,9 +19,18 @@ export type MatchResult =
   | { kind: "fuzzy_customer_sku"; rmaId: string; confidence: number; alternateMatches: string[] }
   | { kind: "no_match" };
 
-// Typed as the specific enum literals so that Drizzle's inArray overload resolves
-// to the enum-column variant (not the generic string[] overload).
-const ACTIVE_STATUSES: Array<"sent_to_warehouse" | "received"> = [
+// Statuses we'll match against for the exact-identifier tiers (tx# / ref).
+// Includes "approved" so imported RMAs whose warehouse handoff happened in
+// the desktop app — and were never marked sent_to_warehouse here — still
+// auto-match when the warehouse-receipt email arrives. Exact identifier
+// match is unambiguous so the wider net doesn't cause false positives.
+// Fuzzy matching (tier 3) intentionally stays narrow (sent_to_warehouse
+// only) because customer-name + SKU overlap CAN false-match across
+// multiple approved RMAs for the same customer.
+// Typed as the specific enum literals so that Drizzle's inArray overload
+// resolves to the enum-column variant (not the generic string[] overload).
+const ACTIVE_STATUSES: Array<"approved" | "sent_to_warehouse" | "received"> = [
+  "approved",
   "sent_to_warehouse",
   "received",
 ];
