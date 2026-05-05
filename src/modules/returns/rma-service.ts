@@ -562,6 +562,61 @@ export async function cancelWarehouseExport(
 }
 
 // ---------------------------------------------------------------------------
+// cancelRma — transitions to `cancelled` from approved / awaiting_warehouse_number / sent_to_warehouse
+// ---------------------------------------------------------------------------
+
+export type CancelRmaInput = {
+  rmaId: string;
+  userId: string;
+  reason?: string | null;
+};
+
+export type CancelRmaResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function cancelRma(
+  input: CancelRmaInput,
+): Promise<CancelRmaResult | null> {
+  const { rmaId, userId, reason } = input;
+  const existing = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "cancel",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  await db
+    .update(rmas)
+    .set({
+      status: "cancelled",
+      cancelledAt: new Date(),
+      notes: reason ? `${current.notes ?? ""}\n[cancelled: ${reason}]`.trim() : current.notes,
+    })
+    .where(eq(rmas.id, rmaId));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_cancelled",
+      source: "user_action",
+      userId,
+      refType: "rma",
+      refId: rmaId,
+      meta: reason ? { reason } : undefined,
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  return { ok: true, rma: updated[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
 // setWarehouseNumber
 // ---------------------------------------------------------------------------
 
@@ -1223,4 +1278,31 @@ export async function confirmExtensivReceipt(input: {
   }
 
   return { receipt: updatedReceipt };
+}
+
+// ---------------------------------------------------------------------------
+// deleteRma — hard delete, only allowed for draft or cancelled RMAs
+// ---------------------------------------------------------------------------
+//
+// Other statuses preserve their audit trail in the DB. Operators who want to
+// "remove" an in-flight RMA should cancel it first, then delete if needed.
+// rma_items rows cascade via the FK ON DELETE CASCADE constraint.
+
+export async function deleteRma(id: string): Promise<
+  | { ok: true }
+  | { ok: false; reason: string }
+  | null
+> {
+  const rows = await db.select().from(rmas).where(eq(rmas.id, id)).limit(1);
+  if (rows.length === 0) return null;
+  const current = rows[0] as Rma;
+  if (current.status !== "draft" && current.status !== "cancelled") {
+    return {
+      ok: false,
+      reason:
+        "RMAs in this state cannot be deleted — cancel it first to preserve audit history.",
+    };
+  }
+  await db.delete(rmas).where(eq(rmas.id, id));
+  return { ok: true };
 }

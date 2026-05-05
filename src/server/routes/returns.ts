@@ -15,6 +15,8 @@ import {
   removeRmaItem,
   generateWarehouseExport,
   cancelWarehouseExport,
+  cancelRma,
+  deleteRma,
   setWarehouseNumber,
   manualMarkReceived,
   overrideApproveRma,
@@ -805,6 +807,55 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       };
     },
   );
+
+  // ---- POST /:id/cancel ----------------------------------------------------
+  // Transitions an in-flight RMA (approved / awaiting_warehouse_number /
+  // sent_to_warehouse) to cancelled. Reason is appended to notes.
+  app.post<{ Params: { id: string } }>(
+    "/:id/cancel",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const schema = z.object({
+        reason: z.string().max(2000).optional().nullable(),
+      });
+      const parse = schema.safeParse(req.body ?? {});
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+      const result = await cancelRma({
+        rmaId: req.params.id,
+        userId: user.id,
+        reason: parse.data.reason ?? null,
+      });
+      if (!result) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+      if (!result.ok) {
+        reply.code(409);
+        return { error: result.reason };
+      }
+      return result.rma;
+    },
+  );
+
+  // ---- DELETE /:id ---------------------------------------------------------
+  // Hard-delete an RMA. Only allowed for `draft` or `cancelled` — anything
+  // in-flight needs to be cancelled first to preserve audit trail.
+  app.delete<{ Params: { id: string } }>("/:id", async (req, reply) => {
+    await requireAuth(req);
+    const result = await deleteRma(req.params.id);
+    if (!result) {
+      reply.code(404);
+      return { error: "RMA not found" };
+    }
+    if (!result.ok) {
+      reply.code(409);
+      return { error: result.reason };
+    }
+    return { ok: true };
+  });
 
   // ---- POST /:id/cancel-warehouse-export -----------------------------------
   app.post<{ Params: { id: string } }>(

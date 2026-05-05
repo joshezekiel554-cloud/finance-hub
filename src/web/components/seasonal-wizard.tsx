@@ -506,19 +506,37 @@ export default function SeasonalWizard({
   return (
     <div className="space-y-4">
       {/* Stepper */}
-      <Stepper steps={STEPS} active={stepIndex} stepEnabled={stepEnabled} />
+      <Stepper
+        steps={STEPS}
+        active={stepIndex}
+        stepEnabled={stepEnabled}
+        onJump={setStepIndex}
+      />
 
-      {/* RMA status badge */}
+      {/* RMA status badge + cancel/delete actions */}
       {rma && (
-        <div className="flex items-center gap-2 text-xs text-secondary">
-          <span>RMA</span>
-          <span className="font-mono text-primary">
-            {rma.rmaNumber ?? `Draft ${rma.id.slice(0, 8)}…`}
-          </span>
-          <Badge tone={statusTone(rma.status)}>{statusLabel(rma.status)}</Badge>
-          {rma.thresholdOverridden && (
-            <Badge tone="medium">Override applied</Badge>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-default bg-subtle px-3 py-2 text-xs">
+          <div className="flex items-center gap-2 text-secondary">
+            <span>RMA</span>
+            <span className="font-mono text-primary">
+              {rma.rmaNumber ?? `Draft ${rma.id.slice(0, 8)}…`}
+            </span>
+            <Badge tone={statusTone(rma.status)}>
+              {statusLabel(rma.status)}
+            </Badge>
+            {rma.thresholdOverridden && (
+              <Badge tone="medium">Override applied</Badge>
+            )}
+          </div>
+          <RmaLifecycleActions
+            rmaId={rma.id}
+            status={rma.status}
+            onChanged={() => {
+              void queryClient.invalidateQueries({
+                queryKey: ["rma-wizard", rmaId],
+              });
+            }}
+          />
         </div>
       )}
 
@@ -568,10 +586,12 @@ function Stepper({
   steps,
   active,
   stepEnabled,
+  onJump,
 }: {
   steps: readonly { id: number; label: string }[];
   active: number;
   stepEnabled: (idx: number) => boolean;
+  onJump: (idx: number) => void;
 }) {
   return (
     <ol className="flex flex-wrap items-center gap-2 text-xs">
@@ -580,32 +600,38 @@ function Stepper({
         const isPast = idx < active;
         const isEnabled = stepEnabled(idx);
         return (
-          <li
-            key={s.id}
-            className={cn(
-              "flex items-center gap-1.5 rounded-full border px-3 py-1",
-              isActive
-                ? "border-accent-primary bg-accent-primary/10 text-accent-primary"
-                : isPast
-                  ? "border-default bg-elevated text-secondary"
-                  : isEnabled
-                    ? "border-default text-muted"
-                    : "border-default text-muted opacity-50",
-            )}
-          >
-            <span
+          <li key={s.id}>
+            <button
+              type="button"
+              disabled={!isEnabled && !isPast && !isActive}
+              onClick={() => {
+                if (isEnabled || isPast || isActive) onJump(idx);
+              }}
               className={cn(
-                "flex size-4 items-center justify-center rounded-full text-[10px] font-semibold",
+                "flex items-center gap-1.5 rounded-full border px-3 py-1 transition-colors",
                 isActive
-                  ? "bg-accent-primary text-white"
+                  ? "border-accent-primary bg-accent-primary/10 text-accent-primary"
                   : isPast
-                    ? "bg-success/30 text-success"
-                    : "bg-elevated text-muted",
+                    ? "border-default bg-elevated text-secondary hover:bg-elevated/80"
+                    : isEnabled
+                      ? "border-default text-muted hover:bg-elevated/50"
+                      : "border-default text-muted opacity-50 cursor-not-allowed",
               )}
             >
-              {isPast ? <Check className="size-3" /> : s.id}
-            </span>
-            <span className="font-medium">{s.label}</span>
+              <span
+                className={cn(
+                  "flex size-4 items-center justify-center rounded-full text-[10px] font-semibold",
+                  isActive
+                    ? "bg-accent-primary text-white"
+                    : isPast
+                      ? "bg-success/30 text-success"
+                      : "bg-elevated text-muted",
+                )}
+              >
+                {isPast ? <Check className="size-3" /> : s.id}
+              </span>
+              <span className="font-medium">{s.label}</span>
+            </button>
           </li>
         );
       })}
@@ -1290,6 +1316,179 @@ function StepApprovalEmail({
         </div>
       </CardBody>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cancel / Delete actions
+// ---------------------------------------------------------------------------
+
+function RmaLifecycleActions({
+  rmaId,
+  status,
+  onChanged,
+}: {
+  rmaId: string;
+  status: RmaSummary["status"];
+  onChanged: () => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState<null | "cancel" | "delete">(
+    null,
+  );
+  const [reason, setReason] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canCancel =
+    status === "approved" ||
+    status === "awaiting_warehouse_number" ||
+    status === "sent_to_warehouse";
+  const canDelete = status === "draft" || status === "cancelled";
+
+  async function runCancel(): Promise<void> {
+    setPending(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: reason || null }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setConfirmOpen(null);
+      setReason("");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cancel failed");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function runDelete(): Promise<void> {
+    setPending(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setConfirmOpen(null);
+      // Hard navigation back to the list since the RMA no longer exists.
+      window.location.href = "/returns";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (!canCancel && !canDelete) return null;
+
+  return (
+    <>
+      <div className="flex gap-1.5">
+        {canCancel && (
+          <button
+            type="button"
+            onClick={() => {
+              setConfirmOpen("cancel");
+              setError(null);
+            }}
+            className="rounded border border-default bg-base px-2 py-1 text-[11px] text-secondary hover:bg-elevated"
+          >
+            Cancel RMA
+          </button>
+        )}
+        {canDelete && (
+          <button
+            type="button"
+            onClick={() => {
+              setConfirmOpen("delete");
+              setError(null);
+            }}
+            className="rounded border border-accent-danger/40 bg-accent-danger/5 px-2 py-1 text-[11px] text-accent-danger hover:bg-accent-danger/10"
+          >
+            Delete
+          </button>
+        )}
+      </div>
+
+      {confirmOpen === "cancel" && (
+        <div className="mt-2 w-full rounded-md border border-default bg-base p-3">
+          <div className="text-sm font-medium">Cancel this RMA?</div>
+          <div className="mt-1 text-xs text-muted">
+            The RMA stays in your records (audit trail) but no further action
+            can be taken. Cancellation reason is optional.
+          </div>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason (optional)"
+            rows={2}
+            className="mt-2 w-full rounded-md border border-default bg-base px-2 py-1.5 text-sm"
+          />
+          {error && (
+            <div className="mt-2 text-xs text-accent-danger">{error}</div>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmOpen(null)}
+              disabled={pending}
+              className="rounded border border-default bg-base px-3 py-1 text-xs text-secondary hover:bg-elevated"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={() => void runCancel()}
+              disabled={pending}
+              className="rounded bg-accent-warning px-3 py-1 text-xs text-white hover:bg-accent-warning/90 disabled:opacity-50"
+            >
+              {pending ? "Cancelling…" : "Confirm cancel"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {confirmOpen === "delete" && (
+        <div className="mt-2 w-full rounded-md border border-accent-danger/40 bg-accent-danger/5 p-3">
+          <div className="text-sm font-medium text-accent-danger">
+            Delete this RMA permanently?
+          </div>
+          <div className="mt-1 text-xs text-muted">
+            This wipes the RMA + its items from the database. Photos in Drive
+            are not deleted. This is only allowed for draft or cancelled RMAs.
+          </div>
+          {error && (
+            <div className="mt-2 text-xs text-accent-danger">{error}</div>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmOpen(null)}
+              disabled={pending}
+              className="rounded border border-default bg-base px-3 py-1 text-xs text-secondary hover:bg-elevated"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={() => void runDelete()}
+              disabled={pending}
+              className="rounded bg-accent-danger px-3 py-1 text-xs text-white hover:bg-accent-danger/90 disabled:opacity-50"
+            >
+              {pending ? "Deleting…" : "Yes, delete"}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
