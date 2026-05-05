@@ -118,7 +118,9 @@ export default function ReturnCreateFormSeasonal({
   const hasValidItems = value.items.every(
     (i) => i.qbItemId && parseFloat(i.quantity) > 0,
   );
-  const canAction = !!rmaId && hasItems && hasValidItems && !isSaving && !disabled;
+  // rmaId not required — the page-level approve/deny handlers auto-create
+  // the draft if needed.
+  const canAction = hasItems && hasValidItems && !isSaving && !disabled;
 
   // For seasonal: a season must be selected; for non_seasonal, optional
   const seasonRequired = returnType === "seasonal";

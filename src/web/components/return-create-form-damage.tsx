@@ -93,7 +93,9 @@ export default function ReturnCreateFormDamage({
 
   // Approve/Deny can only fire when we have at least one valid item and the
   // RMA has been saved (rmaId is set).
-  const canAction = !!rmaId && hasItems && hasValidItems && !isSaving && !disabled;
+  // rmaId not required — the page-level approve/deny handlers auto-create
+  // the draft if needed.
+  const canAction = hasItems && hasValidItems && !isSaving && !disabled;
 
   function appendParsedItems(parsed: ParsedItem[]): void {
     const newRows: RmaItemRow[] = parsed.map((p) => ({
