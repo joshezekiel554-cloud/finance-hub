@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { AlertCircle, CheckCircle2, Mail, MessageSquare, Package, Truck } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -61,6 +62,10 @@ type Row = {
   receivedAt: string | null;
   parseConfidence: number;
   parseMissingFields: string[];
+  emailSubject: string;
+  emailFrom: string;
+  emailSnippet: string;
+  emailBody: string;
   parsed: {
     poNumber: string | null;
     shopifyOrderNumber: string | null;
@@ -203,9 +208,10 @@ export default function InvoicingTodayPage() {
     <div className="space-y-6">
       <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Invoicing — Today</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Today</h1>
           <p className="mt-1 text-sm text-secondary">
-            Feldart shipment notifications from the last 7 days, matched to QuickBooks invoices and Shopify orders.
+            Feldart's pending workload — orders to ship out and returns
+            received from the warehouse, last 7 days.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -238,79 +244,110 @@ export default function InvoicingTodayPage() {
         </Card>
       )}
 
-      {data && data.rows.length === 0 && (
-        <Card>
-          <CardBody>
-            <p className="text-sm text-secondary">No shipment notifications found in the last 7 days.</p>
-          </CardBody>
-        </Card>
-      )}
-
-      {data && data.rows.length > 0 && (
-        <Summary rows={data.rows} dismissed={data.dismissed} />
-      )}
-
+      {/* ──────────────── Orders section ────────────────────────────── */}
       {data && (
-        <div className="flex items-center justify-between">
-          <TabToggle
-            tab={tab}
-            onChange={setTab}
-            counts={{
-              open: data.rows.filter(
-                (r) => classifyRow(r, data.dismissed) === "open",
-              ).length,
-              unparseable: data.rows.filter(
-                (r) => classifyRow(r, data.dismissed) === "unparseable",
-              ).length,
-              sent: data.rows.filter(
-                (r) => classifyRow(r, data.dismissed) === "sent",
-              ).length,
-              dismissed: data.rows.filter(
-                (r) => classifyRow(r, data.dismissed) === "dismissed",
-              ).length,
-            }}
+        <section className="space-y-3">
+          <SectionHeader
+            title="Orders"
+            subtitle="Shipment notifications matched to QBO invoices + Shopify orders. Reconcile and send the invoice email."
+            count={
+              data.rows.filter((r) => classifyRow(r, data.dismissed) === "open")
+                .length
+            }
           />
-          {tab === "unparseable" && (
-            <BulkDismissButton
-              candidateGmailIds={data.rows
-                .filter((r) => classifyRow(r, data.dismissed) === "unparseable")
-                .map((r) => r.gmailId)}
+          <Summary rows={data.rows} dismissed={data.dismissed} />
+          <div className="flex items-center justify-between">
+            <TabToggle
+              tab={tab}
+              onChange={setTab}
+              counts={{
+                open: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "open",
+                ).length,
+                unparseable: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "unparseable",
+                ).length,
+                sent: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "sent",
+                ).length,
+                dismissed: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "dismissed",
+                ).length,
+              }}
             />
-          )}
-        </div>
-      )}
-
-      {/* Return receipt rows — shown on "open" tab alongside shipments */}
-      {tab === "open" && data && (data.receiptRows ?? []).length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide">
-            Pending Return Receipts ({(data.receiptRows ?? []).length})
-          </h2>
-          {(data.receiptRows ?? []).map((receipt) => (
-            <ReceiptRowCard
-              key={receipt.receiptId}
-              receipt={receipt}
-              onReview={() => setReviewReceipt(receipt)}
-            />
-          ))}
-        </div>
-      )}
-
-      {data?.rows
-        .filter((r) => classifyRow(r, data.dismissed) === tab)
-        .map((row) =>
-          tab === "unparseable" ? (
-            <UnparseableCard key={row.gmailId} row={row} />
+            {tab === "unparseable" && (
+              <BulkDismissButton
+                candidateGmailIds={data.rows
+                  .filter(
+                    (r) => classifyRow(r, data.dismissed) === "unparseable",
+                  )
+                  .map((r) => r.gmailId)}
+              />
+            )}
+          </div>
+          {data.rows.length === 0 ? (
+            <Card>
+              <CardBody>
+                <p className="text-sm text-secondary">
+                  No shipment notifications in the last 7 days.
+                </p>
+              </CardBody>
+            </Card>
           ) : (
-            <ShipmentCard
-              key={row.gmailId}
-              row={row}
-              shadowMode={data.shadowMode}
-              terms={terms}
-              dismissedRecord={data.dismissed[row.gmailId] ?? null}
-            />
-          ),
-        )}
+            data.rows
+              .filter((r) => classifyRow(r, data.dismissed) === tab)
+              .map((row) =>
+                tab === "unparseable" ? (
+                  <UnparseableCard key={row.gmailId} row={row} />
+                ) : (
+                  <ShipmentCard
+                    key={row.gmailId}
+                    row={row}
+                    shadowMode={data.shadowMode}
+                    terms={terms}
+                    dismissedRecord={data.dismissed[row.gmailId] ?? null}
+                  />
+                ),
+              )
+          )}
+        </section>
+      )}
+
+      {/* ──────────────── Returns section ───────────────────────────── */}
+      {data && (
+        <section className="space-y-3 border-t border-default pt-6">
+          <SectionHeader
+            title="Returns received"
+            subtitle="Bluechip warehouse-receipt notifications waiting for you to review and (when matched) issue the credit memo."
+            count={(data.receiptRows ?? []).length}
+          />
+          {(data.receiptRows ?? []).length === 0 ? (
+            <Card>
+              <CardBody>
+                <p className="text-sm text-secondary">
+                  No pending return receipts. Confirmed receipts are visible
+                  on the matched RMA via{" "}
+                  <Link
+                    to="/returns"
+                    className="text-accent-primary underline-offset-2 hover:underline"
+                  >
+                    /returns
+                  </Link>
+                  .
+                </p>
+              </CardBody>
+            </Card>
+          ) : (
+            (data.receiptRows ?? []).map((receipt) => (
+              <ReceiptRowCard
+                key={receipt.receiptId}
+                receipt={receipt}
+                onReview={() => setReviewReceipt(receipt)}
+              />
+            ))
+          )}
+        </section>
+      )}
 
       {/* Receipt review dialog */}
       {reviewReceipt && (
@@ -513,6 +550,34 @@ function BulkDismissButton({
   );
 }
 
+function SectionHeader({
+  title,
+  subtitle,
+  count,
+}: {
+  title: string;
+  subtitle?: string;
+  count?: number;
+}) {
+  return (
+    <div className="flex items-end justify-between gap-4">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight">
+          {title}
+          {typeof count === "number" && (
+            <span className="ml-2 text-sm font-normal text-muted">
+              ({count})
+            </span>
+          )}
+        </h2>
+        {subtitle && (
+          <p className="mt-0.5 text-xs text-secondary">{subtitle}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TabToggle({
   tab,
   onChange,
@@ -649,11 +714,17 @@ function UnparseableCard({ row }: { row: Row }) {
       })
     : "(no received date)";
 
+  const [showFullBody, setShowFullBody] = useState(false);
+  const bodyTruncated = row.emailBody.length > 800;
+  const visibleBody = showFullBody
+    ? row.emailBody
+    : row.emailBody.slice(0, 800);
+
   return (
     <Card>
-      <CardBody className="space-y-2">
+      <CardBody className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="space-y-0.5">
+          <div className="space-y-0.5 min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Badge tone="neutral">Unparseable</Badge>
               <span className="text-secondary">{receivedLabel}</span>
@@ -661,14 +732,21 @@ function UnparseableCard({ row }: { row: Row }) {
                 confidence {(row.parseConfidence * 100).toFixed(0)}%
               </span>
             </div>
-            {row.parseMissingFields.length > 0 && (
-              <div className="text-xs text-muted">
-                Missing fields: {row.parseMissingFields.join(", ")}
+            {row.emailSubject && (
+              <div className="text-sm font-medium truncate">
+                {row.emailSubject}
               </div>
             )}
-            <div className="text-xs text-muted font-mono">
-              Gmail id: {row.gmailId}
-            </div>
+            {row.emailFrom && (
+              <div className="text-xs text-secondary truncate">
+                From: {row.emailFrom}
+              </div>
+            )}
+            {row.parseMissingFields.length > 0 && (
+              <div className="text-xs text-muted">
+                Missing: {row.parseMissingFields.join(", ")}
+              </div>
+            )}
           </div>
           <div className="flex gap-2 shrink-0">
             <a
@@ -691,6 +769,30 @@ function UnparseableCard({ row }: { row: Row }) {
             </Button>
           </div>
         </div>
+        {/* Body preview — operator can read enough to decide without
+            jumping to Gmail. Truncated at 800 chars with show-more. */}
+        {row.emailBody && (
+          <div className="rounded-md border border-default bg-subtle/40 px-3 py-2">
+            <pre className="whitespace-pre-wrap break-words text-xs text-secondary font-sans leading-relaxed">
+              {visibleBody}
+              {!showFullBody && bodyTruncated ? "…" : ""}
+            </pre>
+            {bodyTruncated && (
+              <button
+                type="button"
+                onClick={() => setShowFullBody((v) => !v)}
+                className="mt-1 text-xs text-accent-primary hover:underline"
+              >
+                {showFullBody ? "Show less" : "Show full email"}
+              </button>
+            )}
+          </div>
+        )}
+        {!row.emailBody && (
+          <p className="text-xs text-muted italic">
+            No plain-text body captured. Open in Gmail to read.
+          </p>
+        )}
         {error && (
           <div className="text-xs text-accent-danger">{error}</div>
         )}

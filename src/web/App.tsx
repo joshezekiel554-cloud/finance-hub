@@ -19,7 +19,7 @@ import { NotificationBell } from "./components/notification-bell";
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/customers", label: "Customers", icon: Users },
-  { to: "/invoicing", label: "Invoicing", icon: FileText },
+  { to: "/invoicing", label: "Today", icon: FileText },
   { to: "/chase", label: "Chase", icon: AlertCircle },
   { to: "/statements", label: "Statements", icon: Receipt },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },

@@ -13,6 +13,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { searchEmails } from "../../integrations/gmail/client.js";
+import { classifyExtensivEmail } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
 import { and, eq, inArray, isNull } from "drizzle-orm";
@@ -63,6 +64,12 @@ export type InvoicingTodayRow = {
   receivedAt: string | null;
   parseConfidence: number;
   parseMissingFields: string[];
+  // Raw email metadata + plain-text body (capped at 8 KB) so unparseable
+  // rows can render a useful preview without a separate fetch.
+  emailSubject: string;
+  emailFrom: string;
+  emailSnippet: string;
+  emailBody: string;
   parsed: {
     poNumber: string | null;
     shopifyOrderNumber: string | null;
@@ -255,15 +262,46 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
 
     log.info({ count: emails.length, lookbackDays }, "found feldart shipment emails");
 
+    // The Gmail search above pulls every "requested transaction
+    // notification" email — that includes outbound shipments (what this
+    // page is for) AND return receipts (handled by the separate Pending
+    // Return Receipts section below). Run the receipt classifier first
+    // and drop the return-receipt rows so they don't double-up as
+    // "unparseable shipments".
+    const shipmentEmails = emails.filter((email) => {
+      const classified = classifyExtensivEmail({
+        from: email.from,
+        subject: email.subject,
+        body: email.body,
+      });
+      return classified.direction !== "return_receipt";
+    });
+    const droppedAsReceipts = emails.length - shipmentEmails.length;
+    if (droppedAsReceipts > 0) {
+      log.info(
+        { droppedAsReceipts, remainingShipments: shipmentEmails.length },
+        "filtered return receipts out of shipment pipeline",
+      );
+    }
+
     const qbClient = new QboClient();
     const shopifyClient = new ShopifyClient();
 
     // Phase 1: parse htmlBody already populated by searchEmails. The Gmail
     // client extracts text/html alongside text/plain in one messages.get
     // pass, so no second round-trip is needed here.
-    const parsed = emails.map((email) => ({
+    const parsed = shipmentEmails.map((email) => ({
       gmailId: email.id,
       receivedAt: email.emailDate,
+      // Keep subject/from/snippet on each parsed entry so unparseable rows
+      // can show enough context for the operator to decide what to do
+      // without bouncing to Gmail. Plain-text body capped server-side at
+      // 8 KB — anything larger almost certainly isn't a real shipment
+      // notification anyway, and the link-out is still there.
+      emailSubject: email.subject,
+      emailFrom: email.from,
+      emailSnippet: email.snippet,
+      emailBody: (email.body ?? "").slice(0, 8 * 1024),
       parseResult: parseShipmentHtml(email.htmlBody),
     }));
 
@@ -341,6 +379,12 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           p.gmailId,
           p.receivedAt,
           p.parseResult,
+          {
+            subject: p.emailSubject,
+            from: p.emailFrom,
+            snippet: p.emailSnippet,
+            body: p.emailBody,
+          },
           qbInvoiceMap,
           qbSalesReceiptMap,
           qbBatchError,
@@ -816,6 +860,7 @@ async function buildRow(
   gmailId: string,
   receivedAt: Date | null,
   parseResult: ReturnType<typeof parseShipmentHtml>,
+  email: { subject: string; from: string; snippet: string; body: string },
   qbInvoiceMap: Map<string, QboInvoice>,
   qbSalesReceiptMap: Map<string, QboSalesReceipt>,
   qbBatchError: string | null,
@@ -881,6 +926,10 @@ async function buildRow(
     receivedAt: receivedAt?.toISOString() ?? null,
     parseConfidence: parseResult.confidence,
     parseMissingFields: parseResult.missingFields,
+    emailSubject: email.subject,
+    emailFrom: email.from,
+    emailSnippet: email.snippet,
+    emailBody: email.body,
     parsed: {
       poNumber: parseResult.shipment.poNumber,
       shopifyOrderNumber: parseResult.shipment.shopifyOrderNumber,
