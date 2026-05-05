@@ -164,6 +164,10 @@ export default function ReturnNewPage() {
       }
       const notes =
         returnType === "damage" ? formState.notes : seasonalFormState.notes;
+      // seasonId is only relevant for seasonal/non_seasonal RMAs; damage
+      // RMAs leave it null.
+      const seasonId =
+        returnType === "damage" ? null : seasonalFormState.seasonId;
       const res = await fetch("/api/rmas", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -172,6 +176,7 @@ export default function ReturnNewPage() {
           qbCustomerId: selectedCustomer.qbCustomerId,
           returnType,
           notes: notes || null,
+          seasonId,
         }),
       });
       if (!res.ok) {
