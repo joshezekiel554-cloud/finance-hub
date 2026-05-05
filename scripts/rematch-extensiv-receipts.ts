@@ -16,8 +16,14 @@
 import "dotenv/config";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../src/db/index.js";
-import { extensivReceipts } from "../src/db/schema/returns.js";
+import { extensivReceipts, rmas } from "../src/db/schema/returns.js";
 import { matchReceiptToRma } from "../src/modules/returns/rma-matcher.js";
+
+// Use a placeholder user for auto-confirms during the backfill. The audit
+// trail shows the action came from this script via the activity log;
+// no real operator was involved. The dev account is a safe choice that
+// already exists in the user table.
+const AUTO_CONFIRM_USER_ID = "dev-joshezekiel554-gmail-com";
 
 function parseArgs(): { dryRun: boolean } {
   return { dryRun: process.argv.includes("--dry-run") };
@@ -47,6 +53,7 @@ async function main() {
   console.log(`Pending no_match receipts to re-evaluate: ${rows.length}\n`);
 
   let upgraded = 0;
+  let autoConfirmed = 0;
   let stillNoMatch = 0;
 
   for (const r of rows) {
@@ -68,9 +75,22 @@ async function main() {
       match.kind === "fuzzy_customer_sku"
         ? String(match.confidence.toFixed(2))
         : "1.00";
+
+    // Look up the linked RMA's status. When it's already "completed", the
+    // receipt is purely audit — auto-confirm it in the same UPDATE so it
+    // doesn't sit in the pending queue forever.
+    const rmaRows = await db
+      .select({ status: rmas.status })
+      .from(rmas)
+      .where(eq(rmas.id, match.rmaId))
+      .limit(1);
+    const linkedStatus = rmaRows[0]?.status ?? null;
+    const shouldAutoConfirm = linkedStatus === "completed";
+
     console.log(
-      `  ✓ ${r.id} → ${match.kind} (rma ${match.rmaId})` +
-        (r.txNumber ? ` tx#${r.txNumber}` : ""),
+      `  ✓ ${r.id} → ${match.kind} (rma ${match.rmaId}, ${linkedStatus})` +
+        (r.txNumber ? ` tx#${r.txNumber}` : "") +
+        (shouldAutoConfirm ? "  [auto-confirmed: CM already issued]" : ""),
     );
     if (!dryRun) {
       await db
@@ -79,14 +99,22 @@ async function main() {
           rmaId: match.rmaId,
           matchKind: match.kind,
           matchConfidence,
+          ...(shouldAutoConfirm
+            ? {
+                confirmedAt: new Date(),
+                confirmedByUserId: AUTO_CONFIRM_USER_ID,
+              }
+            : {}),
         })
         .where(eq(extensivReceipts.id, r.id));
     }
     upgraded++;
+    if (shouldAutoConfirm) autoConfirmed++;
   }
 
   console.log("\n=== Summary ===");
   console.log(`  ${dryRun ? "[DRY-RUN] " : ""}Upgraded to a real match: ${upgraded}`);
+  console.log(`     of which auto-confirmed (linked RMA is completed): ${autoConfirmed}`);
   console.log(`  Still no_match (truly unrecognised): ${stillNoMatch}`);
 
   process.exit(0);

@@ -20,20 +20,23 @@ export type MatchResult =
   | { kind: "no_match" };
 
 // Statuses we'll match against for the exact-identifier tiers (tx# / ref).
-// Includes "approved" so imported RMAs whose warehouse handoff happened in
-// the desktop app — and were never marked sent_to_warehouse here — still
-// auto-match when the warehouse-receipt email arrives. Exact identifier
-// match is unambiguous so the wider net doesn't cause false positives.
-// Fuzzy matching (tier 3) intentionally stays narrow (sent_to_warehouse
-// only) because customer-name + SKU overlap CAN false-match across
-// multiple approved RMAs for the same customer.
-// Typed as the specific enum literals so that Drizzle's inArray overload
+// Includes:
+//   - "approved": imported RMAs whose warehouse handoff happened in the
+//     desktop app, never marked sent_to_warehouse here.
+//   - "completed": receipts that arrive after the CM has been issued. The
+//     link is purely audit — the receipt has nothing to action — but
+//     keeping a record of "yes, this receipt corresponds to that RMA"
+//     beats letting it rot in the unmatched bucket.
+// Exact identifier match (rma_number / extensiv_tx_number) is unambiguous
+// so the wider net doesn't create false positives. Fuzzy matching
+// (tier 3) intentionally stays narrow (sent_to_warehouse only) because
+// customer-name + SKU overlap CAN false-match across multiple RMAs for
+// the same customer.
+// Typed as the specific enum literals so Drizzle's inArray overload
 // resolves to the enum-column variant (not the generic string[] overload).
-const ACTIVE_STATUSES: Array<"approved" | "sent_to_warehouse" | "received"> = [
-  "approved",
-  "sent_to_warehouse",
-  "received",
-];
+const ACTIVE_STATUSES: Array<
+  "approved" | "sent_to_warehouse" | "received" | "completed"
+> = ["approved", "sent_to_warehouse", "received", "completed"];
 
 // ---------------------------------------------------------------------------
 // Jaccard similarity between two sets of strings.
