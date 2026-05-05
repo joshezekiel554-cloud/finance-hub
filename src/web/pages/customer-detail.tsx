@@ -31,6 +31,7 @@ import { ActivityTimeline } from "../components/activity-timeline";
 import RmaRowMenu from "../components/rma-row-menu";
 import { EmailList } from "../components/email-list";
 import { HoldBanner } from "../components/hold-banner";
+import { SyncCustomerButton } from "../components/sync-customer-button";
 import StatementSendDialog, {
   type StatementSendSuccess,
 } from "../components/statement-send-dialog";
@@ -241,6 +242,9 @@ export default function CustomerDetailPage() {
         </div>
 
         <div className="flex flex-wrap items-end gap-2">
+          {/* Per-customer QB refresh — fast path for "I need fresh data
+              before sending a statement". Doesn't touch other customers. */}
+          <SyncCustomerButton customerId={customer.id} />
           {/* Statements only make sense when there's something to chase
               for. balance comes back as a string from MySQL DECIMAL —
               Number(...) > 0 weeds out "0.00" and the rare unparseable

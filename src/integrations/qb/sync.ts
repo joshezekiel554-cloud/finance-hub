@@ -595,6 +595,134 @@ async function activityAlreadyEmitted(
   return rows.length > 0;
 }
 
+// -------- syncOneCustomer --------
+//
+// Per-customer fast-path. Pulls just the customer's QBO record, their
+// invoices, and their payments — ~3 QBO calls vs the global sync's
+// hundreds. Used by the "Refresh from QB" button on the customer
+// detail page so an operator can freshen one record before sending a
+// statement without paying the 30-second full-sync cost.
+//
+// Caveat the UI flags: this only refreshes the named customer. A
+// payment that landed on someone else's invoice won't show up here —
+// global sync still runs every 30 min and is the safety net.
+
+export type OneCustomerSyncResult = {
+  customer: SyncStats;
+  invoices: SyncStats;
+  payments: SyncStats;
+};
+
+export async function syncOneCustomer(
+  qbCustomerId: string,
+  client?: QboClient,
+): Promise<OneCustomerSyncResult> {
+  const qb = client ?? new QboClient();
+  const customerStats = emptyStats();
+  const invoiceStats = emptyStats();
+  const paymentStats = emptyStats();
+
+  // 1. Customer
+  customerStats.fetched = 1;
+  const qboCustomer = await qb.getCustomerById(qbCustomerId);
+  if (!qboCustomer) {
+    customerStats.failed = 1;
+    log.warn(
+      { qb_customer_id: qbCustomerId },
+      "syncOneCustomer: customer not found in QBO",
+    );
+    return {
+      customer: customerStats,
+      invoices: invoiceStats,
+      payments: paymentStats,
+    };
+  }
+  try {
+    const r = await upsertCustomer(qboCustomer);
+    if (r === "created") customerStats.created++;
+    else if (r === "updated") customerStats.updated++;
+    else customerStats.skipped++;
+  } catch (err) {
+    customerStats.failed++;
+    log.warn(
+      { qb_customer_id: qbCustomerId, err: (err as Error).message },
+      "syncOneCustomer: customer upsert failed",
+    );
+  }
+
+  // Customer-id map (just this one entry is enough but reusing the helper
+  // is cheaper than inlining the lookup).
+  const customerIdMap = await loadCustomerIdMap();
+
+  // 2. Invoices for this customer
+  const qboInvoices = await qb.findInvoicesForCustomer(qbCustomerId);
+  invoiceStats.fetched = qboInvoices.length;
+  for (const qboInvoice of qboInvoices) {
+    try {
+      const r = await upsertInvoice(qboInvoice, customerIdMap);
+      if (r === "created") invoiceStats.created++;
+      else if (r === "updated") invoiceStats.updated++;
+      else invoiceStats.skipped++;
+    } catch (err) {
+      invoiceStats.failed++;
+      log.warn(
+        { qb_invoice_id: qboInvoice.Id, err: (err as Error).message },
+        "syncOneCustomer: invoice upsert failed",
+      );
+    }
+  }
+
+  // 3. Payments for this customer (activities only — no payments table)
+  const qboPayments = await qb.getPaymentsForCustomer(qbCustomerId);
+  paymentStats.fetched = qboPayments.length;
+  try {
+    await emitPaymentActivities(qboPayments);
+    paymentStats.created = qboPayments.length;
+  } catch (err) {
+    paymentStats.failed++;
+    log.warn(
+      { qb_customer_id: qbCustomerId, err: (err as Error).message },
+      "syncOneCustomer: payment activity emit failed",
+    );
+  }
+
+  // 4. Recompute overdue_balance for this customer only. Tighter than
+  //    the global recompute and keeps the customer's denormalised field
+  //    in step with the freshly-upserted invoices.
+  const financeHubId = customerIdMap.get(qbCustomerId);
+  if (financeHubId) {
+    await db.execute(sql`
+      UPDATE customers c
+      LEFT JOIN (
+        SELECT customer_id, SUM(balance) AS overdue
+        FROM invoices
+        WHERE balance > 0
+          AND due_date IS NOT NULL
+          AND due_date < CURRENT_DATE
+          AND customer_id = ${financeHubId}
+        GROUP BY customer_id
+      ) i ON i.customer_id = c.id
+      SET c.overdue_balance = COALESCE(i.overdue, 0)
+      WHERE c.id = ${financeHubId}
+    `);
+  }
+
+  log.info(
+    {
+      qb_customer_id: qbCustomerId,
+      customer: customerStats,
+      invoices: invoiceStats,
+      payments: paymentStats,
+    },
+    "syncOneCustomer complete",
+  );
+  return {
+    customer: customerStats,
+    invoices: invoiceStats,
+    payments: paymentStats,
+  };
+}
+
 // -------- helpers --------
 
 async function loadCustomerIdMap(): Promise<Map<string, string>> {

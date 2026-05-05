@@ -269,6 +269,13 @@ export class QboClient {
     );
   }
 
+  async getPaymentsForCustomer(qbCustomerId: string): Promise<QboPayment[]> {
+    return this.queryAll<QboPayment>(
+      `SELECT * FROM Payment WHERE CustomerRef = '${escapeQboLiteral(qbCustomerId)}'`,
+      (r) => r.QueryResponse.Payment,
+    );
+  }
+
   async getCreditMemos(): Promise<QboCreditMemo[]> {
     return this.queryAll<QboCreditMemo>(
       "SELECT * FROM CreditMemo",

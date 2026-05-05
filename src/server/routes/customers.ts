@@ -436,6 +436,50 @@ const customersRoute: FastifyPluginAsync = async (app) => {
   // customer's known email addresses (primary + billing) up to
   // maxResults (default 1000, cap 5000). Idempotent — duplicates
   // dedupe on email_log.gmailMessageId UNIQUE.
+  // POST /api/customers/:id/sync-qb — per-customer QBO refresh.
+  // Pulls just this customer + their invoices + their payments,
+  // bypassing the global 30-min cron when an operator needs fresh
+  // data fast (e.g. before sending a statement). ~3 QBO calls vs
+  // hundreds for the full sync. Per-customer scope means cross-
+  // customer state (e.g. a payment applied across multiple invoices)
+  // isn't reconciled here — the global sync remains the safety net.
+  app.post("/:id/sync-qb", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const customerRows = await db
+      .select({ qbCustomerId: customers.qbCustomerId })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    const customer = customerRows[0];
+    if (!customer) {
+      return reply.code(404).send({ error: "customer not found" });
+    }
+    if (!customer.qbCustomerId) {
+      return reply
+        .code(400)
+        .send({ error: "customer has no QBO id — cannot sync" });
+    }
+    try {
+      const { syncOneCustomer } = await import(
+        "../../integrations/qb/sync.js"
+      );
+      const result = await syncOneCustomer(customer.qbCustomerId);
+      return reply.send({
+        ...result,
+        syncedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      log.error(
+        { err, customerId: id, qbCustomerId: customer.qbCustomerId },
+        "per-customer QB sync failed",
+      );
+      return reply.code(502).send({
+        error: err instanceof Error ? err.message : "QB sync failed",
+      });
+    }
+  });
+
   app.post("/:id/sync-emails", async (req, reply) => {
     await requireAuth(req);
     const id = (req.params as { id: string }).id;
