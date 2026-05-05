@@ -31,6 +31,8 @@ import {
   statementSends,
 } from "../../db/schema/crm.js";
 import { invoices } from "../../db/schema/invoices.js";
+import { rmas } from "../../db/schema/returns.js";
+import { tasks } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { nanoid } from "nanoid";
 import { requireAuth } from "../lib/auth.js";
@@ -78,8 +80,21 @@ const listQuerySchema = z.object({
   hasOverdue: boolish,
   hasUnactionedEmail: boolish,
   missingTerms: boolish,
+  // Tag filter — narrows to customers whose tags JSON array contains
+  // the given tag (case-insensitive substring match against the
+  // serialised JSON; cheap because the tags array is small per row).
+  // Multiple tags AND together (all must be present).
+  tag: z.union([z.string().max(64), z.array(z.string().max(64))]).optional(),
   sort: z
-    .enum(["displayName", "balance", "overdueBalance", "lastSyncedAt"])
+    .enum([
+      "displayName",
+      "balance",
+      "overdueBalance",
+      "lastSyncedAt",
+      "lastPaymentAt",
+      "lastStatementSentAt",
+      "lastContactedAt",
+    ])
     .default("displayName"),
   dir: z.enum(["asc", "desc"]).default("asc"),
   // 5000 cap covers the full customer table in a single response (we
@@ -165,11 +180,13 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       hasOverdue,
       hasUnactionedEmail,
       missingTerms,
+      tag,
       sort,
       dir,
       limit,
       offset,
     } = parse.data;
+    const tagFilters = Array.isArray(tag) ? tag : tag ? [tag] : [];
 
     const filters = [];
     if (q && q.trim()) {
@@ -201,6 +218,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     if (missingTerms) {
       filters.push(isNull(customers.paymentTerms));
     }
+    // Tag filter: customers.tags is a JSON array. JSON_CONTAINS gives us
+    // exact matching; JSON_SEARCH would let us do partial. We go with
+    // exact since the tag picker UI lists known tags verbatim.
+    for (const t of tagFilters) {
+      filters.push(
+        sql`JSON_CONTAINS(${customers.tags}, JSON_QUOTE(${t}))`,
+      );
+    }
     if (hasUnactionedEmail) {
       // EXISTS subquery — Drizzle renders this as `> 0` against the
       // count expression below, but for filtering we want a cheaper
@@ -218,11 +243,34 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     }
     const where = filters.length > 0 ? and(...filters) : undefined;
 
+    // Subqueries used both in SELECT (for row data) and ORDER BY (for the
+    // new sort options). Defined here so we can reference them in either
+    // context without re-stating the SQL.
+    const lastContactedAtExpr = sql<Date | string | null>`(
+      SELECT MAX(${emailLog.emailDate})
+      FROM ${emailLog}
+      WHERE ${emailLog.customerId} = \`customers\`.\`id\`
+    )`;
+    const lastPaymentExprForSort = sql<Date | string | null>`(
+      SELECT MAX(${activities.occurredAt})
+      FROM ${activities}
+      WHERE ${activities.customerId} = \`customers\`.\`id\`
+        AND ${activities.kind} = 'qbo_payment'
+    )`;
+    const lastStatementExprForSort = sql<Date | string | null>`(
+      SELECT MAX(${statementSends.sentAt})
+      FROM ${statementSends}
+      WHERE ${statementSends.customerId} = \`customers\`.\`id\`
+    )`;
+
     const sortCol = {
       displayName: customers.displayName,
       balance: customers.balance,
       overdueBalance: customers.overdueBalance,
       lastSyncedAt: customers.lastSyncedAt,
+      lastPaymentAt: lastPaymentExprForSort,
+      lastStatementSentAt: lastStatementExprForSort,
+      lastContactedAt: lastContactedAtExpr,
     }[sort];
     const orderFn = dir === "asc" ? asc : desc;
 
@@ -259,6 +307,20 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         AND ${emailLog.actionedAt} IS NULL
         AND ${emailLog.direction} = 'inbound'
     )`;
+    // RMA in flight = any RMA in an active workflow status (i.e. not
+    // completed, denied, or cancelled). EXISTS short-circuits as soon
+    // as it finds one, so this is cheap even for customers with many
+    // historical RMAs.
+    const hasPendingRmaExpr = sql<boolean>`(
+      EXISTS (
+        SELECT 1 FROM ${rmas}
+        WHERE ${rmas.customerId} = \`customers\`.\`id\`
+          AND ${rmas.status} IN (
+            'draft','approved','awaiting_warehouse_number',
+            'sent_to_warehouse','received'
+          )
+      )
+    )`;
 
     const rowsPromise = db
       .select({
@@ -277,7 +339,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         daysOverdue: daysOverdueExpr,
         lastPaymentAt: lastPaymentExpr,
         lastStatementSentAt: lastStatementSentExpr,
+        lastContactedAt: lastContactedAtExpr,
         unactionedEmailCount: unactionedEmailCountExpr,
+        hasPendingRma: hasPendingRmaExpr,
       })
       .from(customers)
       .where(where)
@@ -764,16 +828,67 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     const customer = rows[0];
     if (!customer) return reply.code(404).send({ error: "customer not found" });
 
-    // Recent activities — first 50, sorted newest first. The full
-    // timeline UI paginates via cursor; this is the seed.
-    const recentActivities = await db
-      .select()
-      .from(activities)
-      .where(eq(activities.customerId, id))
-      .orderBy(desc(activities.occurredAt))
-      .limit(50);
+    // KPI rollups for the customer detail header strip. Computed in one
+    // round-trip alongside recentActivities so the page paints fast.
+    const [recentActivities, kpiRows] = await Promise.all([
+      db
+        .select()
+        .from(activities)
+        .where(eq(activities.customerId, id))
+        .orderBy(desc(activities.occurredAt))
+        .limit(50),
+      db
+        .select({
+          openInvoiceCount: sql<number>`(
+            SELECT COUNT(*) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id}
+              AND ${invoices.balance} > 0
+          )`,
+          oldestUnpaidInvoiceDueDate: sql<Date | string | null>`(
+            SELECT MIN(${invoices.dueDate}) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id}
+              AND ${invoices.balance} > 0
+              AND ${invoices.dueDate} IS NOT NULL
+          )`,
+          openTaskCount: sql<number>`(
+            SELECT COUNT(*) FROM ${tasks}
+            WHERE ${tasks.customerId} = ${id}
+              AND ${tasks.status} IN ('open','in_progress','blocked')
+          )`,
+          hasPendingRma: sql<boolean>`(
+            EXISTS (
+              SELECT 1 FROM ${rmas}
+              WHERE ${rmas.customerId} = ${id}
+                AND ${rmas.status} IN (
+                  'draft','approved','awaiting_warehouse_number',
+                  'sent_to_warehouse','received'
+                )
+            )
+          )`,
+          lastContactedAt: sql<Date | string | null>`(
+            SELECT MAX(${emailLog.emailDate})
+            FROM ${emailLog}
+            WHERE ${emailLog.customerId} = ${id}
+          )`,
+          lastPaymentAt: sql<Date | string | null>`(
+            SELECT MAX(${activities.occurredAt})
+            FROM ${activities}
+            WHERE ${activities.customerId} = ${id}
+              AND ${activities.kind} = 'qbo_payment'
+          )`,
+          lastStatementSentAt: sql<Date | string | null>`(
+            SELECT MAX(${statementSends.sentAt})
+            FROM ${statementSends}
+            WHERE ${statementSends.customerId} = ${id}
+          )`,
+        })
+        .from(customers)
+        .where(eq(customers.id, id))
+        .limit(1),
+    ]);
+    const kpi = kpiRows[0] ?? null;
 
-    return reply.send({ customer, recentActivities });
+    return reply.send({ customer, recentActivities, kpi });
   });
 
   // PATCH /api/customers/:id — single-customer update. Used from the

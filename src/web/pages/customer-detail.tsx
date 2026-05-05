@@ -74,9 +74,24 @@ type Customer = {
 // stays in sync with what it renders (amount, currency, qbId, etc.).
 import type { Activity } from "../components/activity-timeline";
 
+// KPI rollups computed server-side in the customer GET. All counts are
+// numbers and timestamps are ISO strings (mysql2 subquery normalised
+// route-side). Nullable when there's nothing of that kind for the
+// customer — e.g. lastContactedAt is null when no email_log row exists.
+type CustomerKpi = {
+  openInvoiceCount: number;
+  oldestUnpaidInvoiceDueDate: string | null;
+  openTaskCount: number;
+  hasPendingRma: boolean;
+  lastContactedAt: string | null;
+  lastPaymentAt: string | null;
+  lastStatementSentAt: string | null;
+};
+
 type DetailResponse = {
   customer: Customer;
   recentActivities: Activity[];
+  kpi: CustomerKpi | null;
 };
 
 type TabKey = "activity" | "emails" | "invoices" | "orders" | "tasks" | "notes" | "returns";
@@ -177,7 +192,7 @@ export default function CustomerDetailPage() {
   }
   if (!data) return null;
 
-  const { customer, recentActivities } = data;
+  const { customer, recentActivities, kpi } = data;
   const balance = Number(customer.balance);
   const overdue = Number(customer.overdueBalance);
 
@@ -230,6 +245,23 @@ export default function CustomerDetailPage() {
               >
                 Yiddy
               </Badge>
+            ) : null}
+            {kpi?.hasPendingRma ? (
+              <Badge
+                tone="high"
+                title="This customer has an active RMA in progress — check the Returns tab"
+              >
+                <RotateCcw className="mr-1 size-3" />
+                RMA in flight
+              </Badge>
+            ) : null}
+            {kpi?.lastContactedAt ? (
+              <span
+                className="text-xs text-muted"
+                title={new Date(kpi.lastContactedAt).toLocaleString()}
+              >
+                Last contacted {detailRelativeTime(kpi.lastContactedAt)}
+              </span>
             ) : null}
           </div>
           <CustomerRecipientsRow
@@ -367,7 +399,7 @@ export default function CustomerDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
         <StatCard label="Open balance" value={`$${balance.toFixed(2)}`} />
         <StatCard
           label="Overdue"
@@ -375,12 +407,25 @@ export default function CustomerDetailPage() {
           tone={overdue > 0 ? "warning" : "neutral"}
         />
         <StatCard
-          label="Type"
+          label="Open invoices"
           value={
-            customer.customerType
-              ? customer.customerType.toUpperCase()
-              : "Untagged"
+            kpi?.openInvoiceCount && kpi.openInvoiceCount > 0
+              ? String(kpi.openInvoiceCount)
+              : "—"
           }
+        />
+        <StatCard
+          label="Open tasks"
+          value={
+            kpi?.openTaskCount && kpi.openTaskCount > 0
+              ? String(kpi.openTaskCount)
+              : "—"
+          }
+        />
+        <StatCard
+          label="RMA in flight"
+          value={kpi?.hasPendingRma ? "Yes" : "—"}
+          tone={kpi?.hasPendingRma ? "warning" : "neutral"}
         />
         <TermsCard
           customerId={customer.id}
@@ -2642,6 +2687,31 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
       </Card>
     </div>
   );
+}
+
+// Short relative-time formatter for the "Last contacted N ago" chip in
+// the customer header. Mirrors the chase-page relativeTime() shape but
+// kept local — the chase helper isn't a public export and the customer
+// detail file already has its own helper section.
+function detailRelativeTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const diffMs = Date.now() - d.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks <= 6) return `${weeks}w ago`;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year:
+      d.getUTCFullYear() === new Date().getUTCFullYear() ? undefined : "numeric",
+  });
 }
 
 function ReturnFilterChip({

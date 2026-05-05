@@ -35,6 +35,7 @@ import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { activities, statementSends } from "../../db/schema/crm.js";
 import { invoices } from "../../db/schema/invoices.js";
+import { rmas } from "../../db/schema/returns.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
@@ -58,6 +59,15 @@ const log = createLogger({ component: "routes.chase" });
 const BATCH_CONCURRENCY = 5;
 const BATCH_MAX_CUSTOMERS = 100;
 
+// Boolean-ish coerce — accepts true/false (boolean) or "true"/"false"
+// (query string). Returns false for everything else, so missing/blank
+// chips are no-ops rather than 400-erroring the request. Mirrors the
+// shape used in src/server/routes/customers.ts.
+const boolish = z
+  .union([z.boolean(), z.literal("true"), z.literal("false")])
+  .optional()
+  .transform((v) => v === true || v === "true");
+
 const listQuerySchema = z.object({
   customerType: z.enum(["b2b", "b2c", "all"]).default("b2b"),
   // "Active" widens to include payment_upfront — those customers can
@@ -66,9 +76,22 @@ const listQuerySchema = z.object({
     .enum(["active", "hold", "payment_upfront", "all"])
     .default("all"),
   sort: z
-    .enum(["overdueBalance", "daysOverdue", "displayName", "lastActivityAt"])
+    .enum([
+      "overdueBalance",
+      "daysOverdue",
+      "displayName",
+      "lastActivityAt",
+      "balance",
+      "lastPaymentAt",
+      "lastStatementSentAt",
+    ])
     .default("overdueBalance"),
   dir: z.enum(["asc", "desc"]).default("desc"),
+  // Filter chips — same shape as the customers list. `missingTerms`
+  // narrows to customers without paymentTerms; `hasPendingRma` narrows
+  // to customers with an active RMA. Both default false → no filtering.
+  missingTerms: boolish,
+  hasPendingRma: boolish,
 });
 
 const batchBodySchema = z.object({
@@ -110,7 +133,14 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .code(400)
         .send({ error: "invalid query", details: parse.error.flatten() });
     }
-    const { customerType, holdStatus, sort, dir } = parse.data;
+    const {
+      customerType,
+      holdStatus,
+      sort,
+      dir,
+      missingTerms,
+      hasPendingRma: hasPendingRmaFilter,
+    } = parse.data;
 
     const filters = [gt(customers.overdueBalance, "0")];
     if (customerType === "b2b") {
@@ -126,6 +156,26 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       filters.push(inArray(customers.holdStatus, ["active", "payment_upfront"]));
     } else if (holdStatus !== "all") {
       filters.push(eq(customers.holdStatus, holdStatus));
+    }
+
+    if (missingTerms) {
+      filters.push(sql`${customers.paymentTerms} IS NULL`);
+    }
+    // Hand-qualified customers.id pattern (matches the other correlated
+    // subqueries here) — Drizzle's serializer drops the table prefix
+    // inside an sql template, which would silently make this WHERE
+    // always-false against the inner table.
+    if (hasPendingRmaFilter) {
+      filters.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${rmas}
+          WHERE ${rmas.customerId} = \`customers\`.\`id\`
+            AND ${rmas.status} IN (
+              'draft','approved','awaiting_warehouse_number',
+              'sent_to_warehouse','received'
+            )
+        )`,
+      );
     }
 
     // Correlated subqueries. Picked over a LEFT JOIN + GROUP BY because
@@ -177,6 +227,19 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       FROM ${statementSends}
       WHERE ${statementSends.customerId} = \`customers\`.\`id\`
     )`;
+    // RMA in flight = any RMA in an active workflow status (not
+    // completed, denied, or cancelled). EXISTS short-circuits on
+    // first match so this is cheap regardless of historical RMA count.
+    const hasPendingRmaExpr = sql<boolean>`(
+      EXISTS (
+        SELECT 1 FROM ${rmas}
+        WHERE ${rmas.customerId} = \`customers\`.\`id\`
+          AND ${rmas.status} IN (
+            'draft','approved','awaiting_warehouse_number',
+            'sent_to_warehouse','received'
+          )
+      )
+    )`;
 
     // Sort column resolution.
     const orderFn = dir === "asc" ? asc : desc;
@@ -187,12 +250,18 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       orderByClauses = [orderFn(customers.displayName), asc(customers.id)];
     } else if (sort === "overdueBalance") {
       orderByClauses = [orderFn(customers.overdueBalance), asc(customers.id)];
+    } else if (sort === "balance") {
+      orderByClauses = [orderFn(customers.balance), asc(customers.id)];
     } else if (sort === "lastActivityAt") {
       // MySQL default: NULLs first when ASC, last when DESC. The
       // intuitive "show me unattended customers" lands at the top of
       // either direction (oldest first or unknown first), so we keep
       // the default.
       orderByClauses = [orderFn(lastActivityExpr), asc(customers.id)];
+    } else if (sort === "lastPaymentAt") {
+      orderByClauses = [orderFn(lastPaymentExpr), asc(customers.id)];
+    } else if (sort === "lastStatementSentAt") {
+      orderByClauses = [orderFn(lastStatementSentExpr), asc(customers.id)];
     } else {
       // daysOverdue: positive = past due. Sort the daysOverdue
       // expression directly — desc → most overdue first.
@@ -213,6 +282,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         lastActivityAt: lastActivityExpr,
         lastPaymentAt: lastPaymentExpr,
         lastStatementSentAt: lastStatementSentExpr,
+        hasPendingRma: hasPendingRmaExpr,
       })
       .from(customers)
       .where(where)
@@ -238,6 +308,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       lastActivityAt: normalizeSubqueryDate(r.lastActivityAt),
       lastPaymentAt: normalizeSubqueryDate(r.lastPaymentAt),
       lastStatementSentAt: normalizeSubqueryDate(r.lastStatementSentAt),
+      // EXISTS comes back as 0/1 from mysql2; coerce to boolean so the
+      // wire shape matches the UI's `hasPendingRma: boolean` expectation.
+      hasPendingRma: Boolean(r.hasPendingRma),
     }));
 
     return reply.send({ rows: out, total: out.length });

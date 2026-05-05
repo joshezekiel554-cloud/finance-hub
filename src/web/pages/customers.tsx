@@ -32,7 +32,9 @@ type CustomerRow = {
   daysOverdue: number | null;
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
+  lastContactedAt: string | null;
   unactionedEmailCount: number;
+  hasPendingRma: boolean;
   tags: string[] | null;
 };
 
@@ -43,7 +45,32 @@ type ListResponse = {
 };
 
 type FilterTab = "b2b" | "b2c" | "uncategorized" | "all";
-type SortKey = "displayName" | "balance" | "overdueBalance" | "lastSyncedAt";
+type HoldFilter = "all" | "active" | "hold" | "payment_upfront";
+type SortKey =
+  | "displayName"
+  | "balance"
+  | "overdueBalance"
+  | "lastSyncedAt"
+  | "lastPaymentAt"
+  | "lastStatementSentAt"
+  | "lastContactedAt";
+
+const SORT_LABELS: Record<SortKey, string> = {
+  displayName: "Name",
+  balance: "Balance",
+  overdueBalance: "Overdue",
+  lastSyncedAt: "Last synced",
+  lastPaymentAt: "Last payment",
+  lastStatementSentAt: "Last statement",
+  lastContactedAt: "Last contacted",
+};
+
+const HOLD_LABELS: Record<HoldFilter, string> = {
+  all: "All",
+  active: "Active",
+  hold: "On hold",
+  payment_upfront: "Payment upfront",
+};
 
 const TAB_LABELS: Record<FilterTab, string> = {
   b2b: "B2B",
@@ -528,8 +555,30 @@ export default function CustomersPage() {
                   align="right"
                 />
                 <th className="px-3 py-2 text-right">Days</th>
-                <th className="px-3 py-2">Last payment</th>
-                <th className="px-3 py-2">Last statement</th>
+                <SortableTh
+                  label="Last payment"
+                  active={sort === "lastPaymentAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastPaymentAt", sort, setSort, dir, setDir)
+                  }
+                />
+                <SortableTh
+                  label="Last statement"
+                  active={sort === "lastStatementSentAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastStatementSentAt", sort, setSort, dir, setDir)
+                  }
+                />
+                <SortableTh
+                  label="Last contacted"
+                  active={sort === "lastContactedAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastContactedAt", sort, setSort, dir, setDir)
+                  }
+                />
                 <th className="px-3 py-2">Terms</th>
                 <th className="px-3 py-2">Status</th>
               </tr>
@@ -588,6 +637,14 @@ export default function CustomersPage() {
                               : row.unactionedEmailCount}
                           </span>
                         ) : null}
+                        {row.hasPendingRma ? (
+                          <span
+                            className="inline-flex items-center rounded border border-accent-warning/40 bg-accent-warning/10 px-1 text-[9px] font-medium uppercase tracking-wide text-accent-warning"
+                            title="Has an active RMA in progress"
+                          >
+                            RMA
+                          </span>
+                        ) : null}
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-secondary">
@@ -625,6 +682,9 @@ export default function CustomersPage() {
                       {relativeShortDate(row.lastStatementSentAt)}
                     </td>
                     <td className="px-3 py-2 text-secondary">
+                      {relativeShortDate(row.lastContactedAt)}
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
                       {row.paymentTerms ?? "—"}
                     </td>
                     <td className="px-3 py-2">
@@ -637,7 +697,7 @@ export default function CustomersPage() {
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={sweepMode ? 10 : 9}
+                    colSpan={sweepMode ? 11 : 10}
                   >
                     No customers match.
                   </td>
@@ -762,6 +822,17 @@ function toggleSort(
     setDir(currentDir === "asc" ? "desc" : "asc");
   } else {
     setSort(col);
-    setDir(col === "balance" || col === "overdueBalance" ? "desc" : "asc");
+    // Money + recency columns start desc (largest / newest first); name
+    // starts asc (A→Z). lastSyncedAt left to default desc too — operator
+    // wants "what synced most recently" surfaced, not stalest.
+    const descByDefault: SortKey[] = [
+      "balance",
+      "overdueBalance",
+      "lastPaymentAt",
+      "lastStatementSentAt",
+      "lastContactedAt",
+      "lastSyncedAt",
+    ];
+    setDir(descByDefault.includes(col) ? "desc" : "asc");
   }
 }
