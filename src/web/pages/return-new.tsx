@@ -4,18 +4,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, AlertCircle } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
-import { Button } from "../components/ui/button";
-import ReturnCreateFormDamage, {
-  type DamageFormState,
-} from "../components/return-create-form-damage";
-import RmaApprovalEmailDialog from "../components/rma-approval-email-dialog";
-import RmaDenialEmailDialog from "../components/rma-denial-email-dialog";
-import { makeEmptyRow } from "../components/rma-items-table";
-import { PhotoUploadZone } from "../components/photo-upload-zone";
 import SeasonalWizard from "../components/seasonal-wizard";
+import DamageWizard from "../components/damage-wizard";
 
 // Shape returned by GET /api/customers?q=...
 type CustomerHit = {
@@ -34,22 +27,6 @@ type CustomerDetail = {
   primaryEmail: string | null;
 };
 
-// Shape returned by POST /api/rmas
-type RmaCreated = {
-  id: string;
-  customerId: string;
-  returnType: string;
-  status: string;
-};
-
-// Shape returned by POST /api/rmas/:id/approve
-type ApproveResult = {
-  id: string;
-  rmaNumber: string | null;
-  status: string;
-  customerId: string;
-};
-
 type RmaReturnType = "damage" | "seasonal" | "non_seasonal";
 
 const RETURN_TYPE_LABELS: Record<RmaReturnType, string> = {
@@ -61,12 +38,50 @@ const RETURN_TYPE_LABELS: Record<RmaReturnType, string> = {
 export default function ReturnNewPage() {
   const navigate = useNavigate();
 
-  // TanStack Router v1 search params — read customerId from the query string
-  const search = useSearch({ strict: false }) as { customerId?: string };
+  // TanStack Router v1 search params — read customerId + rmaId from query string.
+  // rmaId is set when resuming/editing an existing RMA in the wizard.
+  const search = useSearch({ strict: false }) as {
+    customerId?: string;
+    rmaId?: string;
+  };
   const prefilledCustomerId = search.customerId ?? null;
+  const resumeRmaId = search.rmaId ?? null;
+
+  // When resuming an existing RMA, fetch it to know returnType + customerId
+  // so we can preselect the right form/wizard.
+  const resumeRmaQuery = useQuery<{
+    id: string;
+    customerId: string;
+    qbCustomerId: string | null;
+    returnType: RmaReturnType;
+    status: string;
+  }>({
+    enabled: !!resumeRmaId,
+    queryKey: ["rma-resume", resumeRmaId],
+    queryFn: async () => {
+      const res = await fetch(`/api/rmas/${resumeRmaId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
 
   // Return type selection
   const [returnType, setReturnType] = useState<RmaReturnType>("damage");
+
+  // When the resume-RMA arrives, hydrate returnType + selected customer.
+  useEffect(() => {
+    if (!resumeRmaQuery.data) return;
+    setReturnType(resumeRmaQuery.data.returnType);
+    if (!selectedCustomer) {
+      setSelectedCustomer({
+        id: resumeRmaQuery.data.customerId,
+        qbCustomerId: resumeRmaQuery.data.qbCustomerId,
+        displayName: "",
+        primaryEmail: null,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeRmaQuery.data]);
 
   // Customer selection state
   const [selectedCustomer, setSelectedCustomer] =
@@ -79,13 +94,20 @@ export default function ReturnNewPage() {
   >([]);
   const pickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch pre-filled customer when customerId is in URL
+  // Customer to fetch — either from ?customerId= or from the resumed RMA's customerId.
+  const customerIdToFetch =
+    prefilledCustomerId ?? resumeRmaQuery.data?.customerId ?? null;
+
+  // Use a distinct query key — `["customer", id]` is owned by the customer
+  // detail page and stores the full `{ customer, recentActivities }` shape;
+  // unwrapping `.customer` here under the same key poisoned that page's cache
+  // (causing intermittent "reading 'balance' of undefined" until refresh).
   const prefillQuery = useQuery<CustomerDetail>({
-    enabled: !!prefilledCustomerId && !selectedCustomer,
-    queryKey: ["customer", prefilledCustomerId],
+    enabled: !!customerIdToFetch,
+    queryKey: ["customer-summary", customerIdToFetch],
     queryFn: async () => {
       const res = await fetch(
-        `/api/customers/${encodeURIComponent(prefilledCustomerId!)}`,
+        `/api/customers/${encodeURIComponent(customerIdToFetch!)}`,
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as { customer: CustomerDetail };
@@ -94,8 +116,12 @@ export default function ReturnNewPage() {
     staleTime: 60_000,
   });
 
+  // When the customer detail arrives, replace the placeholder customer with the
+  // real one (or set it if not yet picked). Always overwrite when resuming so
+  // the empty-displayName placeholder is replaced.
   useEffect(() => {
-    if (prefillQuery.data && !selectedCustomer) {
+    if (!prefillQuery.data) return;
+    if (!selectedCustomer || !selectedCustomer.displayName) {
       setSelectedCustomer(prefillQuery.data);
     }
   }, [prefillQuery.data, selectedCustomer]);
@@ -128,157 +154,19 @@ export default function ReturnNewPage() {
     };
   }, [customerPickerQuery, selectedCustomer]);
 
-  // RMA draft state
-  const [rmaId, setRmaId] = useState<string | null>(null);
+  // RMA draft state. When the page is opened with ?rmaId= we seed this from
+  // the URL so the form/wizard treats the existing RMA as the working draft.
+  const [rmaId, setRmaId] = useState<string | null>(resumeRmaId);
 
-  // Damage form state
-  const defaultFormState: DamageFormState = {
-    items: [makeEmptyRow()],
-    photosUrl: "",
-    notes: "",
-    resolutionType: "credit",
-  };
-  const [formState, setFormState] = useState<DamageFormState>(defaultFormState);
-
-  // Seasonal / non-seasonal flow now uses SeasonalWizard which manages its
-  // own state. The createMutation below is only used by the damage flow.
-
-  // Create RMA draft mutation (fires on first meaningful interaction if
-  // rmaId not yet set, and also on Save Draft click) — damage only.
-  const createMutation = useMutation<RmaCreated, Error, void>({
-    mutationFn: async () => {
-      if (!selectedCustomer?.id || !selectedCustomer.qbCustomerId) {
-        throw new Error("Select a customer first");
-      }
-      const notes = formState.notes;
-      const seasonId = null; // damage RMAs have no season
-      const res = await fetch("/api/rmas", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          customerId: selectedCustomer.id,
-          qbCustomerId: selectedCustomer.qbCustomerId,
-          returnType,
-          notes: notes || null,
-          seasonId,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      return res.json();
-    },
-    onSuccess: (data) => {
-      setRmaId(data.id);
-    },
-  });
-
-  // Patch RMA (notes / resolutionType) — only when rmaId exists
-  const patchMutation = useMutation<unknown, Error, void>({
-    mutationFn: async () => {
-      if (!rmaId) return;
-      const res = await fetch(`/api/rmas/${rmaId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          notes: formState.notes || null,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      return res.json();
-    },
-  });
-
-  async function handleSaveDraft() {
-    if (!rmaId) {
-      await createMutation.mutateAsync();
-    } else {
-      await patchMutation.mutateAsync();
-    }
-  }
-
-  // Approval dialog state
-  const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
-  const [approvedRma, setApprovedRma] = useState<ApproveResult | null>(null);
-
-  // Denial dialog state
-  const [denialDialogOpen, setDenialDialogOpen] = useState(false);
-
-  // Approve flow:
-  // 1. If no rmaId, create the RMA first
-  // 2. Call POST /api/rmas/:id/approve (with override context for seasonal)
-  // 3. Open approval email dialog
-  const approveMutation = useMutation<
-    ApproveResult,
-    Error,
-    { overrideThreshold?: boolean; overrideReason?: string }
-  >({
-    mutationFn: async ({ overrideThreshold, overrideReason }) => {
-      let id = rmaId;
-      if (!id) {
-        const created = await createMutation.mutateAsync();
-        id = created.id;
-      }
-      const body: Record<string, unknown> = {};
-      if (overrideThreshold) {
-        body.overrideThreshold = true;
-        body.overrideReason = overrideReason ?? "";
-      }
-      const res = await fetch(`/api/rmas/${id}/approve`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const resBody = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(resBody.error ?? `HTTP ${res.status}`);
-      }
-      return res.json();
-    },
-    onSuccess: (data) => {
-      setApprovedRma(data);
-      setApprovalDialogOpen(true);
-    },
-  });
-
-  function handleApprove() {
-    approveMutation.mutate({});
-  }
-
-  function handleDeny() {
-    // Ensure RMA exists before opening denial dialog
-    if (!rmaId) {
-      createMutation.mutate();
-      // The dialog open is deferred; we open it once rmaId is available
-      // via a separate effect below
-      setPendingDenyAfterCreate(true);
-    } else {
-      setDenialDialogOpen(true);
-    }
-  }
-
-  const [pendingDenyAfterCreate, setPendingDenyAfterCreate] = useState(false);
+  // If the URL changes (e.g. user navigates between resume sessions) keep the
+  // local rmaId in sync.
   useEffect(() => {
-    if (pendingDenyAfterCreate && rmaId && !createMutation.isPending) {
-      setPendingDenyAfterCreate(false);
-      setDenialDialogOpen(true);
-    }
-  }, [pendingDenyAfterCreate, rmaId, createMutation.isPending]);
+    if (resumeRmaId) setRmaId(resumeRmaId);
+  }, [resumeRmaId]);
 
-  const isSaving =
-    createMutation.isPending ||
-    patchMutation.isPending ||
-    approveMutation.isPending;
-
-  const saveError =
-    createMutation.error?.message ??
-    patchMutation.error?.message ??
-    approveMutation.error?.message ??
-    null;
+  // The DamageWizard / SeasonalWizard manages all post-customer-selection
+  // state (items, mutations, approval/denial). This page just brokers the
+  // customer + returnType selection and hands off to the right wizard.
 
   return (
     <div className="space-y-6">
@@ -377,35 +265,28 @@ export default function ReturnNewPage() {
         </Card>
       )}
 
-      {/* Damage form — shown once customer is selected */}
-      {selectedCustomer && returnType === "damage" && (
-        <>
-          <ReturnCreateFormDamage
-            rmaId={rmaId}
-            qbCustomerId={selectedCustomer?.qbCustomerId ?? null}
-            value={formState}
-            onChange={setFormState}
-            onApprove={handleApprove}
-            onDeny={handleDeny}
-            isSaving={isSaving}
-            saveError={saveError}
-          />
-
-          <PhotoUploadZone rmaId={rmaId} />
-
-          <div className="flex justify-start gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={isSaving || !selectedCustomer}
-              loading={isSaving}
-              onClick={handleSaveDraft}
-            >
-              {rmaId ? "Save changes" : "Save draft"}
-            </Button>
-          </div>
-        </>
+      {/* Damage — multi-step wizard */}
+      {selectedCustomer && returnType === "damage" && selectedCustomer.qbCustomerId && (
+        <DamageWizard
+          customer={{
+            id: selectedCustomer.id,
+            qbCustomerId: selectedCustomer.qbCustomerId,
+            displayName: selectedCustomer.displayName,
+          }}
+          initialRmaId={rmaId}
+          onCompleted={(id) => {
+            void navigate({
+              to: "/returns/$rmaId",
+              params: { rmaId: id },
+            });
+          }}
+        />
+      )}
+      {selectedCustomer && returnType === "damage" && !selectedCustomer.qbCustomerId && (
+        <div className="flex items-center gap-2 rounded-md border border-accent-danger/30 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger">
+          <AlertCircle className="size-4 shrink-0" />
+          This customer has no QBO customer id — cannot create an RMA.
+        </div>
       )}
 
       {/* Seasonal / non-seasonal — multi-step wizard */}
@@ -427,32 +308,6 @@ export default function ReturnNewPage() {
         />
       )}
 
-      {/* Approval email dialog */}
-      {approvedRma && (
-        <RmaApprovalEmailDialog
-          open={approvalDialogOpen}
-          onOpenChange={setApprovalDialogOpen}
-          rmaId={approvedRma.id}
-          rmaNumber={approvedRma.rmaNumber ?? approvedRma.id}
-          customerId={approvedRma.customerId}
-          onSent={() => {
-            void navigate({ to: "/returns/$rmaId", params: { rmaId: approvedRma.id } });
-          }}
-        />
-      )}
-
-      {/* Denial email dialog */}
-      {rmaId && (
-        <RmaDenialEmailDialog
-          open={denialDialogOpen}
-          onOpenChange={setDenialDialogOpen}
-          rmaId={rmaId}
-          customerId={selectedCustomer?.id ?? ""}
-          onSent={() => {
-            void navigate({ to: "/returns/$rmaId", params: { rmaId: rmaId } });
-          }}
-        />
-      )}
     </div>
   );
 }

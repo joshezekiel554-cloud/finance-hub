@@ -975,23 +975,41 @@ function ReturnsSection() {
     },
   });
 
-  const initial = settingsQuery.data?.settings.drive_root_folder_id ?? "";
-  const [draft, setDraft] = useState<string>("");
+  const initialDriveFolder =
+    settingsQuery.data?.settings.drive_root_folder_id ?? "";
+  const initialWarehouseEmail =
+    settingsQuery.data?.settings.warehouse_team_email ?? "";
+
+  const [driveFolderDraft, setDriveFolderDraft] = useState<string>("");
+  const [warehouseEmailDraft, setWarehouseEmailDraft] = useState<string>("");
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  // Snap draft to server value on (re)load.
+  // Snap drafts to server values on (re)load.
   useEffect(() => {
-    if (settingsQuery.data) setDraft(initial);
-  }, [settingsQuery.data, initial]);
+    if (settingsQuery.data) {
+      setDriveFolderDraft(initialDriveFolder);
+      setWarehouseEmailDraft(initialWarehouseEmail);
+    }
+  }, [settingsQuery.data, initialDriveFolder, initialWarehouseEmail]);
 
-  const dirty = draft.trim() !== initial.trim();
+  const driveFolderDirty =
+    driveFolderDraft.trim() !== initialDriveFolder.trim();
+  const warehouseEmailDirty =
+    warehouseEmailDraft.trim() !== initialWarehouseEmail.trim();
+  const dirty = driveFolderDirty || warehouseEmailDirty;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      // Send only the keys that actually changed so the audit log + the
+      // updated_at column don't churn on every save.
+      const body: Record<string, string> = {};
+      if (driveFolderDirty) body.drive_root_folder_id = driveFolderDraft.trim();
+      if (warehouseEmailDirty)
+        body.warehouse_team_email = warehouseEmailDraft.trim();
       const res = await fetch("/api/app-settings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ drive_root_folder_id: draft.trim() }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -1006,9 +1024,9 @@ function ReturnsSection() {
   });
 
   // Try to extract a folder ID if the operator pastes a full Drive URL.
-  function handleChange(raw: string): void {
+  function handleDriveFolderChange(raw: string): void {
     const match = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/);
-    setDraft(match?.[1] ?? raw);
+    setDriveFolderDraft(match?.[1] ?? raw);
   }
 
   return (
@@ -1037,9 +1055,32 @@ function ReturnsSection() {
             id="drive-root-folder-id"
             type="text"
             placeholder="https://drive.google.com/drive/folders/... or just the ID"
-            value={draft}
-            onChange={(e) => handleChange(e.target.value)}
+            value={driveFolderDraft}
+            onChange={(e) => handleDriveFolderChange(e.target.value)}
             className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="warehouse-team-email"
+            className="block text-sm font-medium text-secondary"
+          >
+            Warehouse team email
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Recipient(s) for the "customer is shipping back RMA X with tracking
+            Y" notification. Comma-separate multiple addresses. Leave empty to
+            disable the auto-email — tracking still saves but you'll have to
+            notify the warehouse out-of-band.
+          </p>
+          <Input
+            id="warehouse-team-email"
+            type="email"
+            placeholder="warehouse@example.com"
+            value={warehouseEmailDraft}
+            onChange={(e) => setWarehouseEmailDraft(e.target.value)}
+            className="mt-2 text-xs"
           />
         </div>
 

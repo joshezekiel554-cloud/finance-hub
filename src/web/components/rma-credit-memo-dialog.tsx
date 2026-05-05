@@ -28,6 +28,7 @@ import { Badge } from "./ui/badge";
 
 type RmaItem = {
   id: string;
+  qbItemId: string;
   sku: string;
   name: string;
   quantity: string;
@@ -50,6 +51,12 @@ type PreviewResponse = {
   body: string;
   recipients: { to: string; cc: string; bcc: string };
   bccReasons: Array<{ tag: string; address: string }>;
+};
+
+type SourceInvoiceTaxStatus = {
+  hadTax: boolean;
+  ratePercent: number;
+  taxCodeRef: string | null;
 };
 
 // Per-row override for received quantity
@@ -88,6 +95,33 @@ export default function RmaCreditMemoDialog({
   const [receivedQty, setReceivedQty] = useState<ReceivedQtyMap>({});
   const [shippingDeduction, setShippingDeduction] = useState("0.00");
   const [restockingFee, setRestockingFee] = useState("0.00");
+  // Sales tax. Defaulted from the source invoice lookup — checked when any
+  // source invoice was taxed, unchecked otherwise. Operator can override.
+  // applyTaxTouched gates the auto-default so we don't fight the operator
+  // after they manually toggle the box.
+  const [applyTax, setApplyTax] = useState(false);
+  const [applyTaxTouched, setApplyTaxTouched] = useState(false);
+
+  // Look up whether the source invoice(s) for this RMA were taxed in QBO.
+  // The dialog uses this to seed the checkbox + show the rate in the totals.
+  const taxStatusQuery = useQuery<SourceInvoiceTaxStatus>({
+    enabled: open,
+    queryKey: ["rma-source-invoice-tax", rmaId],
+    queryFn: async () => {
+      const res = await fetch(`/api/rmas/${rmaId}/source-invoice-tax`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  // Auto-seed applyTax from the lookup until the operator manually toggles.
+  useEffect(() => {
+    if (applyTaxTouched) return;
+    const status = taxStatusQuery.data;
+    if (!status) return;
+    setApplyTax(status.hadTax);
+  }, [taxStatusQuery.data, applyTaxTouched]);
 
   // Seed received quantities from item data when dialog opens
   useEffect(() => {
@@ -113,6 +147,8 @@ export default function RmaCreditMemoDialog({
       setReceivedQty({});
       setShippingDeduction("0.00");
       setRestockingFee("0.00");
+      setApplyTax(false);
+      setApplyTaxTouched(false);
       setEdited(false);
     }
   }, [open]);
@@ -127,11 +163,23 @@ export default function RmaCreditMemoDialog({
     }, 0);
   }, [rmaQuery.data?.items, receivedQty]);
 
+  // Sales tax applied to the post-deduction taxable base. The rate comes
+  // from the source invoice lookup; QBO will recompute the exact amount
+  // server-side from the tax code's current rate when the CM is created.
+  const ratePercent = taxStatusQuery.data?.ratePercent ?? 0;
+  const salesTaxAmount = useMemo(() => {
+    if (!applyTax) return 0;
+    const ship = parseFloat(shippingDeduction) || 0;
+    const restock = parseFloat(restockingFee) || 0;
+    const taxableBase = Math.max(0, goodsSubtotal - ship - restock);
+    return taxableBase * (ratePercent / 100);
+  }, [applyTax, ratePercent, goodsSubtotal, shippingDeduction, restockingFee]);
+
   const totalCreditAmount = useMemo(() => {
     const ship = parseFloat(shippingDeduction) || 0;
     const restock = parseFloat(restockingFee) || 0;
-    return Math.max(0, goodsSubtotal - ship - restock);
-  }, [goodsSubtotal, shippingDeduction, restockingFee]);
+    return Math.max(0, goodsSubtotal - ship - restock + salesTaxAmount);
+  }, [goodsSubtotal, shippingDeduction, restockingFee, salesTaxAmount]);
 
   // --- Email preview ---
   const itemOverrides = useMemo(() => {
@@ -148,6 +196,8 @@ export default function RmaCreditMemoDialog({
       rmaId,
       shippingDeduction,
       restockingFee,
+      applyTax,
+      ratePercent,
       JSON.stringify(itemOverrides),
     ],
     queryFn: async () => {
@@ -158,6 +208,8 @@ export default function RmaCreditMemoDialog({
           shippingDeduction: shippingDeduction || undefined,
           restockingFee: restockingFee || undefined,
           itemOverrides,
+          applyTax,
+          salesTaxRatePercent: ratePercent,
         }),
       });
       if (!res.ok) {
@@ -199,7 +251,9 @@ export default function RmaCreditMemoDialog({
     mutationFn: async () => {
       if (!to.trim()) throw new Error("TO recipient is required");
 
-      // Step 1: issue the credit memo in QBO + complete RMA
+      // Step 1: issue the credit memo in QBO + complete RMA. The route
+      // returns the updated Rma, including qboCreditMemoId + creditMemoDocNumber
+      // which we need to fetch the PDF for the email attachment.
       const issueRes = await fetch(`/api/rmas/${rmaId}/issue-credit-memo`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -207,14 +261,55 @@ export default function RmaCreditMemoDialog({
           shippingDeduction: shippingDeduction || undefined,
           restockingFee: restockingFee || undefined,
           itemOverrides,
+          applyTax,
+          taxCodeRef: taxStatusQuery.data?.taxCodeRef ?? null,
         }),
       });
       if (!issueRes.ok) {
-        const data = await issueRes.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error ?? `Issue CM failed: HTTP ${issueRes.status}`);
+        // Server's error envelope is { error: <code>, message: <reason> }.
+        // Prefer the underlying message — "bad_request" alone tells the
+        // operator nothing about what to fix.
+        const data = (await issueRes
+          .json()
+          .catch(() => ({}))) as { error?: string; message?: string };
+        const reason =
+          data.message ?? data.error ?? `HTTP ${issueRes.status}`;
+        throw new Error(`Issue CM failed: ${reason}`);
+      }
+      const issued = (await issueRes.json()) as {
+        qboCreditMemoId?: string | null;
+        creditMemoDocNumber?: string | null;
+      };
+
+      // Step 2: fetch the QBO credit memo PDF so we can attach it to the
+      // email. Skip silently if the issue route didn't return a qbo id (this
+      // shouldn't happen on the happy path, but we'd rather send the email
+      // without an attachment than 502 the whole flow).
+      let attachments: Array<{
+        filename: string;
+        mimeType: string;
+        dataBase64: string;
+      }> | undefined;
+      if (issued.qboCreditMemoId) {
+        const pdfRes = await fetch(
+          `/api/qb-pdf/creditmemo/${encodeURIComponent(issued.qboCreditMemoId)}`,
+        );
+        if (!pdfRes.ok) {
+          throw new Error(`Failed to fetch credit memo PDF (HTTP ${pdfRes.status})`);
+        }
+        const pdfBlob = await pdfRes.blob();
+        const dataBase64 = await blobToBase64(pdfBlob);
+        const docNum = issued.creditMemoDocNumber ?? issued.qboCreditMemoId;
+        attachments = [
+          {
+            filename: `credit-memo-${docNum}.pdf`,
+            mimeType: "application/pdf",
+            dataBase64,
+          },
+        ];
       }
 
-      // Step 2: send the email
+      // Step 3: send the email with the PDF attached.
       const sendRes = await fetch("/api/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -227,6 +322,7 @@ export default function RmaCreditMemoDialog({
           customerId,
           refType: "rma",
           refId: rmaId,
+          attachments,
         }),
       });
       if (!sendRes.ok) {
@@ -249,15 +345,24 @@ export default function RmaCreditMemoDialog({
     },
   });
 
+  const rma = rmaQuery.data;
+  const items = rma?.items ?? [];
+
+  // Items imported from the desktop app have an empty qbItemId because the
+  // old data only carried SKU. QBO will reject any CreditMemo payload whose
+  // line is missing ItemRef.value, so we have to block submission here and
+  // tell the operator how to fix it (revert to draft, walk the items step
+  // to pick the real QBO item, then come back).
+  const unresolvedItems = items.filter((it) => !it.qbItemId);
+  const hasUnresolvedItems = unresolvedItems.length > 0;
+
   const canSend =
     !sendMutation.isPending &&
     !rmaQuery.isPending &&
+    !hasUnresolvedItems &&
     to.trim().length > 0 &&
     subject.trim().length > 0 &&
     body.trim().length > 0;
-
-  const rma = rmaQuery.data;
-  const items = rma?.items ?? [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -287,6 +392,35 @@ export default function RmaCreditMemoDialog({
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                 Items
               </h3>
+
+              {hasUnresolvedItems && (
+                <div className="mb-2 flex items-start gap-2 rounded-md border border-accent-warning/40 bg-accent-warning/5 px-3 py-2 text-xs">
+                  <AlertCircle className="mt-0.5 size-4 shrink-0 text-accent-warning" />
+                  <div className="flex-1 space-y-1">
+                    <div className="font-medium text-accent-warning">
+                      {unresolvedItems.length}{" "}
+                      {unresolvedItems.length === 1 ? "item" : "items"} not
+                      linked to QBO yet
+                    </div>
+                    <div className="text-secondary">
+                      Imported RMAs have items with SKU only. QBO needs a
+                      proper Item link before a credit memo can be created.
+                      To fix: close this dialog → click <em>Edit (revert to
+                      draft)</em> on the right rail → walk through the wizard
+                      Items step (the picker will appear pre-filled with the
+                      SKU) → resolve each item → re-approve.
+                    </div>
+                    <ul className="ml-3 list-disc text-muted">
+                      {unresolvedItems.map((it) => (
+                        <li key={it.id}>
+                          <span className="font-mono">{it.sku || "—"}</span>
+                          {it.name ? ` · ${it.name}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
               <div className="overflow-x-auto rounded-md border border-default">
                 <table className="w-full text-sm">
                   <thead className="border-b border-default bg-subtle text-left text-xs uppercase tracking-wide text-muted">
@@ -395,6 +529,41 @@ export default function RmaCreditMemoDialog({
                       className="w-24 rounded-md border border-default bg-base px-2 py-1 text-right text-sm"
                     />
                   </div>
+                </div>
+
+                {/* Sales tax checkbox + computed amount. The default is set
+                    from the source-invoice-tax lookup; operator can override.
+                    The amount shown is an estimate from the source rate —
+                    QBO recomputes the exact amount on the credit memo. */}
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 text-secondary">
+                    <input
+                      type="checkbox"
+                      checked={applyTax}
+                      onChange={(e) => {
+                        setApplyTax(e.target.checked);
+                        setApplyTaxTouched(true);
+                      }}
+                      disabled={taxStatusQuery.isPending}
+                    />
+                    <span>
+                      Sales tax
+                      {ratePercent > 0 && (
+                        <span className="ml-1 text-xs text-muted">
+                          (≈{ratePercent.toFixed(2)}%)
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                  <span
+                    className={
+                      applyTax
+                        ? "tabular-nums"
+                        : "tabular-nums text-muted"
+                    }
+                  >
+                    {applyTax ? `$${salesTaxAmount.toFixed(2)}` : "—"}
+                  </span>
                 </div>
 
                 <div className="border-t border-default pt-2 flex items-center justify-between font-semibold">
@@ -516,6 +685,25 @@ export default function RmaCreditMemoDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+// ---- Helpers ---------------------------------------------------------------
+
+// Read a Blob as a base64 string (no data: URL prefix). Used to encode the
+// QBO credit memo PDF for the /api/send attachments payload.
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // FileReader.readAsDataURL returns "data:<mime>;base64,<payload>".
+      // Strip the prefix so the backend gets just the base64 payload.
+      const idx = result.indexOf(",");
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader error"));
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ---- Shared recipient field -------------------------------------------------

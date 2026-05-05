@@ -28,6 +28,16 @@ type PreviewResponse = {
   bccReasons: Array<{ tag: string; address: string }>;
 };
 
+// Common denial reasons surfaced as quick-pick chips above the textarea.
+// Clicking one populates the field; operator can still edit before sending.
+const QUICK_PICK_REASONS = [
+  "Can't find item on prior invoice",
+  "Already credited on a previous return",
+  "Outside our return window",
+  "Item ineligible for return",
+  "Need photos / more information before approving",
+];
+
 export type RmaDenialEmailDialogProps = {
   open: boolean;
   onOpenChange: (next: boolean) => void;
@@ -194,6 +204,24 @@ export default function RmaDenialEmailDialog({
                 <Badge tone="critical">required</Badge>
               )}
             </span>
+            {/* Quick-pick chips for the common denial reasons. Click pre-fills
+                the textarea (and clears the edited flag so the body re-seeds
+                from the new preview). Operator can still edit freely. */}
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {QUICK_PICK_REASONS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => {
+                    setDenialReason(r);
+                    setEdited(false);
+                  }}
+                  className="rounded-full border border-default bg-base px-2.5 py-0.5 text-[11px] text-secondary hover:bg-elevated"
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
             <textarea
               value={denialReason}
               onChange={(e) => {

@@ -45,6 +45,8 @@ type RmaDetail = {
   restockingFeeAmount: string | null;
   notes: string | null;
   resolutionType: string | null;
+  trackingNumber: string | null;
+  trackingCarrier: string | null;
   createdAt: string;
   updatedAt: string;
   items: RmaItem[];
@@ -56,7 +58,7 @@ const STATUS_LABELS: Record<RmaStatus, string> = {
   draft: "Draft",
   approved: "Approved",
   awaiting_warehouse_number: "Awaiting warehouse #",
-  sent_to_warehouse: "At warehouse",
+  sent_to_warehouse: "Awaiting return",
   received: "Received",
   completed: "Completed",
   denied: "Denied",
@@ -218,6 +220,26 @@ export default function ReturnDetailPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Resume-in-wizard CTA — drafts that belong in the multi-step
+                  wizard (seasonal / non-seasonal). Damage drafts edit in place
+                  on this page via the items table, so they don't need this. */}
+              {rma.status === "draft" &&
+                (rma.returnType === "seasonal" ||
+                  rma.returnType === "non_seasonal") && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-info/30 bg-accent-info/10 px-3 py-2 text-xs text-secondary">
+                    <span>
+                      This RMA is a draft. Continue through the wizard to add
+                      items, run eligibility, approve, and email the customer.
+                    </span>
+                    <a
+                      href={`/returns/new?rmaId=${encodeURIComponent(rma.id)}`}
+                      className="inline-flex items-center gap-1 rounded-md bg-accent-info px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-info/90"
+                    >
+                      Continue editing in wizard
+                    </a>
+                  </div>
+                )}
 
               {/* Override reason */}
               {rma.thresholdOverridden && rma.overrideReason && (
@@ -391,6 +413,8 @@ export default function ReturnDetailPage() {
                 customerId={rma.customerId}
                 qboCreditMemoId={rma.qboCreditMemoId}
                 creditMemoDocNumber={rma.creditMemoDocNumber}
+                trackingNumber={rma.trackingNumber}
+                trackingCarrier={rma.trackingCarrier}
                 onRefresh={handleRefresh}
               />
             </CardBody>

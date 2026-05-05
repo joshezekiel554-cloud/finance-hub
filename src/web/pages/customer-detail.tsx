@@ -2318,6 +2318,10 @@ type RmaRow = {
   totalValue: string;
   createdAt: string;
   completedAt: string | null;
+  // Used to compute "stuck N days" badges for awaiting-return rows.
+  sentToWarehouseAt: string | null;
+  approvedAt: string | null;
+  trackingNumber: string | null;
 };
 
 type RmaListResponse = { rmas: RmaRow[] };
@@ -2326,7 +2330,7 @@ const RMA_STATUS_LABELS: Record<RmaStatus, string> = {
   draft: "Draft",
   approved: "Approved",
   awaiting_warehouse_number: "Awaiting warehouse #",
-  sent_to_warehouse: "At warehouse",
+  sent_to_warehouse: "Awaiting return",
   received: "Received",
   completed: "Completed",
   denied: "Denied",
@@ -2361,6 +2365,34 @@ const OPEN_STATUSES = new Set<RmaStatus>([
   "received",
 ]);
 
+// "Stuck" = approved / awaiting_warehouse_number / sent_to_warehouse status
+// that's been sitting longer than expected without forward progress. We use
+// the most relevant timestamp (sentToWarehouseAt for "Awaiting return",
+// approvedAt for the others) so the count reflects time since the operator
+// last took action — not just how long the RMA has existed. Returns 0 when
+// the RMA isn't in a stuckable state.
+function stuckDays(r: {
+  status: RmaStatus;
+  sentToWarehouseAt: string | null;
+  approvedAt: string | null;
+}): number {
+  let anchor: string | null;
+  switch (r.status) {
+    case "sent_to_warehouse":
+      anchor = r.sentToWarehouseAt ?? r.approvedAt;
+      break;
+    case "awaiting_warehouse_number":
+    case "approved":
+      anchor = r.approvedAt;
+      break;
+    default:
+      return 0;
+  }
+  if (!anchor) return 0;
+  const ms = Date.now() - new Date(anchor).getTime();
+  return Math.max(0, Math.floor(ms / 86_400_000));
+}
+
 function ReturnsPanel({ customerId }: { customerId: string }) {
   const [statusFilter, setStatusFilter] = useState<RmaStatus | "all">("all");
   const [typeFilter, setTypeFilter] = useState<RmaReturnType | "all">("all");
@@ -2384,11 +2416,13 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
     let open = 0;
     let inFlight = 0;
     let completedYtd = 0;
+    let stuck = 0;
     for (const r of allRows) {
       if (OPEN_STATUSES.has(r.status)) {
         open++;
         inFlight += Number(r.totalValue);
       }
+      if (stuckDays(r) >= 7) stuck++;
       if (
         r.status === "completed" &&
         r.completedAt &&
@@ -2397,7 +2431,7 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
         completedYtd++;
       }
     }
-    return { open, inFlight, completedYtd };
+    return { open, inFlight, completedYtd, stuck };
   }, [allRows]);
 
   const filteredRows = useMemo(() => {
@@ -2422,6 +2456,14 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
           {" · "}
           <span className="font-medium text-primary">{summary.completedYtd}</span>{" "}
           completed YTD
+          {summary.stuck > 0 && (
+            <>
+              {" · "}
+              <span className="font-medium text-accent-warning">
+                {summary.stuck} stuck &gt;7d
+              </span>
+            </>
+          )}
         </div>
         <a
           href={`/returns/new?customerId=${encodeURIComponent(customerId)}`}
@@ -2528,9 +2570,24 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
                     {RMA_TYPE_LABELS[r.returnType]}
                   </td>
                   <td className="px-3 py-2">
-                    <Badge tone={RMA_STATUS_TONES[r.status]}>
-                      {RMA_STATUS_LABELS[r.status]}
-                    </Badge>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge tone={RMA_STATUS_TONES[r.status]}>
+                        {RMA_STATUS_LABELS[r.status]}
+                      </Badge>
+                      {(() => {
+                        const days = stuckDays(r);
+                        if (days < 7) return null;
+                        const tone: BadgeTone = days >= 14 ? "critical" : "high";
+                        return (
+                          <Badge tone={tone}>
+                            stuck {days}d
+                          </Badge>
+                        );
+                      })()}
+                      {r.trackingNumber && r.status === "sent_to_warehouse" && (
+                        <Badge tone="info">tracked</Badge>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     <span

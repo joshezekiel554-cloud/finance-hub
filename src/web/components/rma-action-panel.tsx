@@ -33,6 +33,8 @@ export type RmaActionPanelProps = {
   customerId: string;
   qboCreditMemoId: string | null;
   creditMemoDocNumber: string | null;
+  trackingNumber: string | null;
+  trackingCarrier: string | null;
   onRefresh: () => void;
 };
 
@@ -44,6 +46,8 @@ export default function RmaActionPanel({
   customerId,
   qboCreditMemoId,
   creditMemoDocNumber,
+  trackingNumber,
+  trackingCarrier,
   onRefresh,
 }: RmaActionPanelProps) {
   const queryClient = useQueryClient();
@@ -60,6 +64,13 @@ export default function RmaActionPanel({
 
   // Confirm state for mark-replacement-sent
   const [confirmReplacementOpen, setConfirmReplacementOpen] = useState(false);
+
+  // "Already credited" inline form (used to reconcile imported RMAs whose
+  // desktop status was stale — CM was issued in QBO but the imported row
+  // landed at "approved"). Operator pastes the QBO doc#, we look it up,
+  // verify, and transition to completed.
+  const [alreadyCreditedOpen, setAlreadyCreditedOpen] = useState(false);
+  const [alreadyCreditedDocNumber, setAlreadyCreditedDocNumber] = useState("");
 
   // Error display
   const [actionError, setActionError] = useState<string | null>(null);
@@ -121,7 +132,33 @@ export default function RmaActionPanel({
     },
   });
 
-  const isBusy = approveMutation.isPending || markReplacementMutation.isPending;
+  const markAlreadyCreditedMutation = useMutation<unknown, Error, string>({
+    mutationFn: async (docNumber) => {
+      const res = await fetch(`/api/rmas/${rmaId}/mark-already-credited`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ creditMemoDocNumber: docNumber }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      clearError();
+      setAlreadyCreditedOpen(false);
+      setAlreadyCreditedDocNumber("");
+      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      onRefresh();
+    },
+    onError: (err) => setActionError(err.message),
+  });
+
+  const isBusy =
+    approveMutation.isPending ||
+    markReplacementMutation.isPending ||
+    markAlreadyCreditedMutation.isPending;
 
   return (
     <div className="space-y-3">
@@ -190,6 +227,20 @@ export default function RmaActionPanel({
           >
             Mark replacement sent
           </Button>
+          <AlreadyCreditedAction
+            open={alreadyCreditedOpen}
+            onOpenChange={(next) => {
+              setAlreadyCreditedOpen(next);
+              if (!next) setAlreadyCreditedDocNumber("");
+            }}
+            docNumber={alreadyCreditedDocNumber}
+            onDocNumberChange={setAlreadyCreditedDocNumber}
+            isPending={markAlreadyCreditedMutation.isPending}
+            disabled={isBusy}
+            onSubmit={() =>
+              markAlreadyCreditedMutation.mutate(alreadyCreditedDocNumber)
+            }
+          />
           {/* Unapprove — endpoint not wired in Phase 1 */}
           <div className="relative">
             <Button
@@ -216,6 +267,20 @@ export default function RmaActionPanel({
               queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
               onRefresh();
             }}
+          />
+          <AlreadyCreditedAction
+            open={alreadyCreditedOpen}
+            onOpenChange={(next) => {
+              setAlreadyCreditedOpen(next);
+              if (!next) setAlreadyCreditedDocNumber("");
+            }}
+            docNumber={alreadyCreditedDocNumber}
+            onDocNumberChange={setAlreadyCreditedDocNumber}
+            isPending={markAlreadyCreditedMutation.isPending}
+            disabled={isBusy}
+            onSubmit={() =>
+              markAlreadyCreditedMutation.mutate(alreadyCreditedDocNumber)
+            }
           />
         </div>
       )}
@@ -244,6 +309,15 @@ export default function RmaActionPanel({
       {/* sent_to_warehouse */}
       {status === "sent_to_warehouse" && (
         <div className="space-y-2">
+          <TrackingAction
+            rmaId={rmaId}
+            existingTrackingNumber={trackingNumber}
+            existingTrackingCarrier={trackingCarrier}
+            onSaved={() => {
+              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              onRefresh();
+            }}
+          />
           <ManualMarkReceivedButton
             rmaId={rmaId}
             onSuccess={() => {
@@ -256,14 +330,30 @@ export default function RmaActionPanel({
 
       {/* received */}
       {status === "received" && (
-        <Button
-          variant="primary"
-          size="sm"
-          className="w-full"
-          onClick={() => { clearError(); setCreditMemoDialogOpen(true); }}
-        >
-          Issue credit memo
-        </Button>
+        <div className="space-y-2">
+          <Button
+            variant="primary"
+            size="sm"
+            className="w-full"
+            onClick={() => { clearError(); setCreditMemoDialogOpen(true); }}
+          >
+            Issue credit memo
+          </Button>
+          <AlreadyCreditedAction
+            open={alreadyCreditedOpen}
+            onOpenChange={(next) => {
+              setAlreadyCreditedOpen(next);
+              if (!next) setAlreadyCreditedDocNumber("");
+            }}
+            docNumber={alreadyCreditedDocNumber}
+            onDocNumberChange={setAlreadyCreditedDocNumber}
+            isPending={markAlreadyCreditedMutation.isPending}
+            disabled={isBusy}
+            onSubmit={() =>
+              markAlreadyCreditedMutation.mutate(alreadyCreditedDocNumber)
+            }
+          />
+        </div>
       )}
 
       {/* completed */}
@@ -273,7 +363,7 @@ export default function RmaActionPanel({
             <CheckCircle className="size-4 shrink-0" />
             RMA completed
           </div>
-          {qboCreditMemoId && (
+          {qboCreditMemoId ? (
             <a
               href={`https://app.qbo.intuit.com/app/creditmemo?txnId=${qboCreditMemoId}`}
               target="_blank"
@@ -283,6 +373,23 @@ export default function RmaActionPanel({
               <ExternalLink className="size-3.5" />
               View CM {creditMemoDocNumber ?? qboCreditMemoId} in QBO
             </a>
+          ) : (
+            // Imported RMA without a CM link yet — let the operator backfill
+            // the QBO doc number using the same Already credited flow.
+            <AlreadyCreditedAction
+              open={alreadyCreditedOpen}
+              onOpenChange={(next) => {
+                setAlreadyCreditedOpen(next);
+                if (!next) setAlreadyCreditedDocNumber("");
+              }}
+              docNumber={alreadyCreditedDocNumber}
+              onDocNumberChange={setAlreadyCreditedDocNumber}
+              isPending={markAlreadyCreditedMutation.isPending}
+              disabled={isBusy}
+              onSubmit={() =>
+                markAlreadyCreditedMutation.mutate(alreadyCreditedDocNumber)
+              }
+            />
           )}
         </div>
       )}
@@ -402,6 +509,286 @@ export default function RmaActionPanel({
   );
 }
 
+// ---- Tracking number + warehouse notification ------------------------------
+// Shown on a sent_to_warehouse RMA: operator pastes the customer's return
+// tracking number and we POST it. Backend saves the columns and (if
+// warehouse_team_email is configured) emails the warehouse team so they
+// know to expect the parcel. Updates are allowed — operator can re-save a
+// corrected number.
+
+const CARRIER_OPTIONS = [
+  "UPS",
+  "FedEx",
+  "USPS",
+  "DHL",
+  "Royal Mail",
+  "Parcelforce",
+  "Other",
+] as const;
+
+function TrackingAction({
+  rmaId,
+  existingTrackingNumber,
+  existingTrackingCarrier,
+  onSaved,
+}: {
+  rmaId: string;
+  existingTrackingNumber: string | null;
+  existingTrackingCarrier: string | null;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [trackingNumber, setTrackingNumber] = useState(
+    existingTrackingNumber ?? "",
+  );
+  const [trackingCarrier, setTrackingCarrier] = useState(
+    existingTrackingCarrier ?? "UPS",
+  );
+  const [notes, setNotes] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+
+  async function submit(): Promise<void> {
+    setPending(true);
+    setError(null);
+    setSavedNotice(null);
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}/set-tracking`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          trackingNumber: trackingNumber.trim(),
+          trackingCarrier: trackingCarrier || null,
+          notes: notes.trim() || null,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+        };
+        throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        emailedTo: string | null;
+      };
+      setSavedNotice(
+        data.emailedTo
+          ? `Tracking saved. Emailed warehouse team at ${data.emailedTo}.`
+          : "Tracking saved. Set warehouse_team_email in settings to auto-notify the warehouse.",
+      );
+      setNotes("");
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (!open) {
+    // Show summary chip if tracking is already set, otherwise a CTA.
+    return existingTrackingNumber ? (
+      <div className="space-y-1">
+        <div className="rounded-md border border-default bg-subtle px-3 py-2 text-xs">
+          <div className="text-muted">Tracking</div>
+          <div className="mt-0.5 font-mono">
+            {existingTrackingCarrier ? `${existingTrackingCarrier} · ` : ""}
+            {existingTrackingNumber}
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="w-full"
+          onClick={() => {
+            setOpen(true);
+            setError(null);
+            setSavedNotice(null);
+          }}
+        >
+          Update tracking
+        </Button>
+      </div>
+    ) : (
+      <Button
+        type="button"
+        variant="primary"
+        size="sm"
+        className="w-full"
+        onClick={() => {
+          setOpen(true);
+          setError(null);
+          setSavedNotice(null);
+        }}
+      >
+        Add tracking #
+      </Button>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-default bg-subtle p-3 space-y-2">
+      <p className="text-xs font-medium">
+        {existingTrackingNumber ? "Update tracking" : "Add tracking number"}
+      </p>
+      <p className="text-[11px] text-muted">
+        Saved tracking is emailed to the warehouse team
+        {" "}
+        (configured via <code>warehouse_team_email</code> in settings).
+      </p>
+      <label className="block">
+        <span className="mb-0.5 block text-[10px] uppercase tracking-wide text-muted">
+          Carrier
+        </span>
+        <select
+          value={trackingCarrier}
+          onChange={(e) => setTrackingCarrier(e.target.value)}
+          className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+        >
+          {CARRIER_OPTIONS.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block">
+        <span className="mb-0.5 block text-[10px] uppercase tracking-wide text-muted">
+          Tracking number
+        </span>
+        <input
+          type="text"
+          autoFocus
+          value={trackingNumber}
+          onChange={(e) => setTrackingNumber(e.target.value)}
+          placeholder="e.g. 1Z999AA10123456784"
+          className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm font-mono"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && trackingNumber.trim()) void submit();
+            if (e.key === "Escape") setOpen(false);
+          }}
+        />
+      </label>
+      <label className="block">
+        <span className="mb-0.5 block text-[10px] uppercase tracking-wide text-muted">
+          Notes for warehouse (optional)
+        </span>
+        <input
+          type="text"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="e.g. fragile — handle with care"
+          className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+        />
+      </label>
+      {error && <div className="text-xs text-accent-danger">{error}</div>}
+      {savedNotice && (
+        <div className="text-xs text-success">{savedNotice}</div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => setOpen(false)}
+          disabled={pending}
+        >
+          Close
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={pending || !trackingNumber.trim()}
+          onClick={() => void submit()}
+        >
+          {pending ? "Saving…" : "Save & notify warehouse"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Already credited (manual reconciliation) -------------------------------
+// Inline button + form for marking an RMA as completed without creating a new
+// QBO credit memo — used when the imported desktop status was stale and the
+// CM was actually issued in QBO under a known doc number.
+
+function AlreadyCreditedAction({
+  open,
+  onOpenChange,
+  docNumber,
+  onDocNumberChange,
+  isPending,
+  disabled,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  docNumber: string;
+  onDocNumberChange: (next: string) => void;
+  isPending: boolean;
+  disabled: boolean;
+  onSubmit: () => void;
+}) {
+  if (!open) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full"
+        disabled={disabled}
+        onClick={() => onOpenChange(true)}
+      >
+        Already credited (link existing CM)
+      </Button>
+    );
+  }
+  return (
+    <div className="rounded-md border border-default bg-subtle p-3 space-y-2">
+      <p className="text-xs font-medium">Already credited in QBO?</p>
+      <p className="text-[11px] text-muted">
+        Paste the QBO credit memo doc number (e.g. <code>18329CR</code>). We'll
+        verify it exists and move this RMA to Completed without re-creating
+        anything in QBO.
+      </p>
+      <input
+        type="text"
+        autoFocus
+        value={docNumber}
+        onChange={(e) => onDocNumberChange(e.target.value)}
+        placeholder="QBO CM doc number"
+        className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && docNumber.trim()) onSubmit();
+          if (e.key === "Escape") onOpenChange(false);
+        }}
+      />
+      <div className="flex gap-2">
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={isPending || !docNumber.trim()}
+          loading={isPending}
+          onClick={onSubmit}
+        >
+          Mark completed
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={isPending}
+          onClick={() => onOpenChange(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ---- Cancel + Delete on the detail page -------------------------------------
 
 function RmaLifecycleActionsInPanel({
@@ -414,11 +801,13 @@ function RmaLifecycleActionsInPanel({
   onChanged: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState<
-    null | "cancel" | "delete" | "revert"
+    null | "cancel" | "delete" | "revert" | "changeStatus"
   >(null);
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Target status for the manual status override
+  const [targetStatus, setTargetStatus] = useState<RmaStatus>("draft");
 
   const canCancel =
     status === "approved" ||
@@ -432,7 +821,8 @@ function RmaLifecycleActionsInPanel({
     status === "received" ||
     status === "denied";
 
-  if (!canCancel && !canDelete && !canRevert) return null;
+  // No early return — the manual status override is always available as an
+  // admin escape hatch, so the lifecycle row always has at least one button.
 
   async function runCancel(): Promise<void> {
     setPending(true);
@@ -493,6 +883,32 @@ function RmaLifecycleActionsInPanel({
     }
   }
 
+  async function runForceStatus(): Promise<void> {
+    setPending(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}/force-status`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          status: targetStatus,
+          reason: reason || null,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setConfirmOpen(null);
+      setReason("");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Status change failed");
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
@@ -535,6 +951,18 @@ function RmaLifecycleActionsInPanel({
             Delete
           </Button>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setConfirmOpen("changeStatus");
+            setTargetStatus(status);
+            setError(null);
+          }}
+        >
+          Change status…
+        </Button>
       </div>
 
       {confirmOpen === "cancel" && (
@@ -646,9 +1074,89 @@ function RmaLifecycleActionsInPanel({
           </div>
         </div>
       )}
+
+      {confirmOpen === "changeStatus" && (
+        <div className="rounded-md border border-accent-warning/40 bg-accent-warning/5 p-3 text-xs space-y-2">
+          <div className="font-medium text-accent-warning">
+            Manually change status
+          </div>
+          <div className="text-muted">
+            Bypasses the normal workflow — use only to fix imported RMAs whose
+            lifecycle drifted (e.g. flip "Approved" → "Awaiting return"
+            because the warehouse handoff already happened in the desktop
+            app). Other fields aren't touched.
+          </div>
+          <label className="block">
+            <span className="mb-0.5 block text-[10px] uppercase tracking-wide text-muted">
+              New status
+            </span>
+            <select
+              value={targetStatus}
+              onChange={(e) => setTargetStatus(e.target.value as RmaStatus)}
+              className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+            >
+              {STATUS_OPTIONS.map(({ value, label }) => (
+                <option key={value} value={value} disabled={value === status}>
+                  {label}
+                  {value === status ? " (current)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-0.5 block text-[10px] uppercase tracking-wide text-muted">
+              Reason (optional, for audit log)
+            </span>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. imported, warehouse handoff already done"
+              className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+            />
+          </label>
+          {error && <div className="text-accent-danger">{error}</div>}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setConfirmOpen(null);
+                setReason("");
+              }}
+              disabled={pending}
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={pending || targetStatus === status}
+              onClick={() => void runForceStatus()}
+            >
+              {pending ? "Updating…" : "Set status"}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+// Status options for the manual override dropdown. Mirrors the labels
+// shown on the returns list / detail page so operators see consistent
+// terminology.
+const STATUS_OPTIONS: Array<{ value: RmaStatus; label: string }> = [
+  { value: "draft", label: "Draft" },
+  { value: "approved", label: "Approved" },
+  { value: "awaiting_warehouse_number", label: "Awaiting warehouse #" },
+  { value: "sent_to_warehouse", label: "Awaiting return" },
+  { value: "received", label: "Received" },
+  { value: "completed", label: "Completed" },
+  { value: "denied", label: "Denied" },
+  { value: "cancelled", label: "Cancelled" },
+];
 
 // ---- Cancel warehouse export -------------------------------------------------
 

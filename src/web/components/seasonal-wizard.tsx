@@ -99,6 +99,9 @@ type RmaSummary = {
   items: RmaItemRow[];
 };
 
+// All possible wizard steps. The case-index in the renderer switch is the
+// position in this array. visibleStepCases() filters this for non-seasonal,
+// which doesn't need Season (case 0) or Eligibility (case 2).
 const STEPS = [
   { id: 1, label: "Season" },
   { id: 2, label: "Items" },
@@ -108,6 +111,37 @@ const STEPS = [
   { id: 6, label: "Warehouse number" },
   { id: 7, label: "Approval email" },
 ] as const;
+
+// Which case-indices are visible per flow. Non-seasonal jumps Items → Approve
+// (no season picker, no eligibility check).
+const VISIBLE_STEPS_SEASONAL = [0, 1, 2, 3, 4, 5, 6] as const;
+const VISIBLE_STEPS_NON_SEASONAL = [1, 3, 4, 5, 6] as const;
+
+function visibleStepCases(
+  returnType: "seasonal" | "non_seasonal",
+): readonly number[] {
+  return returnType === "seasonal"
+    ? VISIBLE_STEPS_SEASONAL
+    : VISIBLE_STEPS_NON_SEASONAL;
+}
+
+function nextCaseIdx(
+  current: number,
+  returnType: "seasonal" | "non_seasonal",
+): number {
+  const visible = visibleStepCases(returnType);
+  const pos = visible.indexOf(current);
+  return pos >= 0 && pos < visible.length - 1 ? visible[pos + 1]! : current;
+}
+
+function prevCaseIdx(
+  current: number,
+  returnType: "seasonal" | "non_seasonal",
+): number {
+  const visible = visibleStepCases(returnType);
+  const pos = visible.indexOf(current);
+  return pos > 0 ? visible[pos - 1]! : current;
+}
 
 const CLASSIFICATION_OPTIONS_SEASONAL = [
   { value: "seasonal_current", label: "Current season" },
@@ -138,7 +172,11 @@ export default function SeasonalWizard({
   >({});
   const [notes, setNotes] = useState("");
   const [override, setOverride] = useState({ enabled: false, reason: "" });
-  const [stepIndex, setStepIndex] = useState(0); // 0-based; step 1 = STEPS[0]
+  // 0-based case index into STEPS. Seasonal starts at 0 (Season); non-seasonal
+  // starts at 1 (Items) since it skips the season picker.
+  const [stepIndex, setStepIndex] = useState(
+    returnType === "seasonal" ? 0 : 1,
+  );
 
   // Dialog state for approval / denial email send (steps 4 + 7)
   const [denialDialogOpen, setDenialDialogOpen] = useState(false);
@@ -160,13 +198,15 @@ export default function SeasonalWizard({
   const rma = rmaQuery.data ?? null;
 
   // ---- Auto-advance step when RMA status changes ──────────────────────────
+  // stepForStatus returns the *case index* (0..6) we expect the operator on
+  // for the given status. Only moves forward — never pulls backwards.
   useEffect(() => {
     if (!rma) return;
-    const targetStep = stepForStatus(rma.status);
-    if (targetStep > stepIndex + 1) {
-      setStepIndex(targetStep - 1);
+    const targetCaseIdx = stepForStatus(rma.status, returnType);
+    if (targetCaseIdx > stepIndex) {
+      setStepIndex(targetCaseIdx);
     }
-  }, [rma?.status, stepIndex, rma]);
+  }, [rma?.status, stepIndex, rma, returnType]);
 
   // ---- Hydrate from RMA when resuming ─────────────────────────────────────
   useEffect(() => {
@@ -230,40 +270,68 @@ export default function SeasonalWizard({
 
   const addItemsMutation = useMutation<void, Error, string>({
     mutationFn: async (id: string) => {
-      // Persist all items in parallel.
-      await Promise.all(
-        items
-          .filter((it) => it.qbItemId && !it.id)
-          .map(async (it) => {
-            const cls =
-              itemClassifications[it.localKey] ??
-              defaultClassification(returnType);
-            const res = await fetch(`/api/rmas/${id}/items`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                qbItemId: it.qbItemId,
-                sku: it.sku,
-                name: it.name,
-                quantity: it.quantity,
-                unitPrice: it.unitPrice,
-                classification: cls,
-                listUnitPrice: it.listUnitPrice ?? null,
-                invoiceDiscountPct: it.invoiceDiscountPct ?? null,
-                reason: it.reason || null,
-                originalInvoiceDocNumber:
-                  it.originalInvoiceDocNumber ?? null,
-                originalInvoiceDate: it.originalInvoiceDate ?? null,
-              }),
-            });
-            if (!res.ok) {
-              const body = (await res.json().catch(() => ({}))) as {
-                error?: string;
-              };
-              throw new Error(body.error ?? `HTTP ${res.status}`);
-            }
-          }),
-      );
+      // Persist all items in parallel. New items (no DB id yet, picker
+      // resolved) are POSTed; existing items (have a DB id, e.g. imported
+      // rows where the operator picked the real QBO item afterwards) are
+      // PATCHed so the new qbItemId / sku / name reach the backend.
+      const newItems = items.filter((it) => it.qbItemId && !it.id);
+      const existingItems = items.filter((it) => it.qbItemId && it.id);
+      await Promise.all([
+        ...newItems.map(async (it) => {
+          const cls =
+            itemClassifications[it.localKey] ??
+            defaultClassification(returnType);
+          const res = await fetch(`/api/rmas/${id}/items`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              qbItemId: it.qbItemId,
+              sku: it.sku,
+              name: it.name,
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              classification: cls,
+              listUnitPrice: it.listUnitPrice ?? null,
+              invoiceDiscountPct: it.invoiceDiscountPct ?? null,
+              reason: it.reason || null,
+              originalInvoiceDocNumber:
+                it.originalInvoiceDocNumber ?? null,
+              originalInvoiceDate: it.originalInvoiceDate ?? null,
+            }),
+          });
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+        }),
+        ...existingItems.map(async (it) => {
+          const res = await fetch(`/api/rmas/${id}/items/${it.id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              qbItemId: it.qbItemId,
+              sku: it.sku,
+              name: it.name,
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              listUnitPrice: it.listUnitPrice ?? null,
+              invoiceDiscountPct: it.invoiceDiscountPct ?? null,
+              reason: it.reason || null,
+              originalInvoiceDocNumber:
+                it.originalInvoiceDocNumber ?? null,
+              originalInvoiceDate: it.originalInvoiceDate ?? null,
+            }),
+          });
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+        }),
+      ]);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["rma-wizard", rmaId] });
@@ -278,6 +346,32 @@ export default function SeasonalWizard({
         const created = await createRmaMutation.mutateAsync();
         id = created.id;
       }
+
+      // If we're resuming an RMA that was created without a seasonId (or
+      // the operator picked a different season after resuming), patch the
+      // server's seasonId BEFORE approve fires — eligibility is gated on
+      // rma.seasonId, not the local state.
+      const serverSeasonId = rma?.seasonId ?? null;
+      if (
+        returnType === "seasonal" &&
+        seasonId &&
+        seasonId !== serverSeasonId
+      ) {
+        const patchRes = await fetch(`/api/rmas/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ seasonId }),
+        });
+        if (!patchRes.ok) {
+          const errBody = (await patchRes.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(
+            errBody.error ?? `Failed to set season: HTTP ${patchRes.status}`,
+          );
+        }
+      }
+
       // Persist items if any aren't yet on the backend
       await addItemsMutation.mutateAsync(id);
 
@@ -367,11 +461,15 @@ export default function SeasonalWizard({
   });
 
   // ---- Step prerequisites + navigation ────────────────────────────────────
-  const stepEnabled = (idx: number): boolean => {
-    if (idx <= stepIndex) return true; // already visited
-    if (idx === 1) return !!seasonId; // step 2 needs season
-    if (idx === 2) return !!seasonId && items.some((it) => it.qbItemId); // step 3 needs items
-    if (idx === 3) return !!seasonId && items.some((it) => it.qbItemId); // step 4 needs items + season
+  // Prerequisite check by *case index* (0..6), independent of the visible
+  // flow. Stepper sees positions, so we translate before calling this.
+  const caseEnabled = (caseIdx: number): boolean => {
+    if (caseIdx <= stepIndex) return true; // already visited
+    const hasItems = items.some((it) => it.qbItemId);
+    const seasonReady = returnType === "seasonal" ? !!seasonId : true;
+    if (caseIdx === 1) return seasonReady; // Items needs season (seasonal only)
+    if (caseIdx === 2) return seasonReady && hasItems; // Eligibility
+    if (caseIdx === 3) return seasonReady && hasItems; // Approve
     return false;
   };
 
@@ -408,8 +506,12 @@ export default function SeasonalWizard({
           returnType={returnType}
           notes={notes}
           onNotesChange={setNotes}
-          onPrev={() => setStepIndex(0)}
-          onNext={() => setStepIndex(2)}
+          onPrev={
+            returnType === "seasonal"
+              ? () => setStepIndex(prevCaseIdx(1, returnType))
+              : null
+          }
+          onNext={() => setStepIndex(nextCaseIdx(1, returnType))}
         />
       );
       break;
@@ -447,7 +549,8 @@ export default function SeasonalWizard({
             }
             setDenialDialogOpen(true);
           }}
-          onPrev={() => setStepIndex(2)}
+          onPrev={() => setStepIndex(prevCaseIdx(3, returnType))}
+          returnType={returnType}
         />
       );
       break;
@@ -503,14 +606,24 @@ export default function SeasonalWizard({
       stepContent = null;
   }
 
+  // Stepper renders only the visible steps for this flow. We translate between
+  // position-in-visible-list and case-index when wiring active / onJump.
+  const visibleCases = visibleStepCases(returnType);
+  const visibleSteps = visibleCases.map((caseIdx) => STEPS[caseIdx]!);
+  const activePosition = visibleCases.indexOf(stepIndex);
+
   return (
     <div className="space-y-4">
       {/* Stepper */}
       <Stepper
-        steps={STEPS}
-        active={stepIndex}
-        stepEnabled={stepEnabled}
-        onJump={setStepIndex}
+        steps={visibleSteps}
+        active={activePosition}
+        stepEnabled={(positionInVisible) =>
+          caseEnabled(visibleCases[positionInVisible]!)
+        }
+        onJump={(positionInVisible) =>
+          setStepIndex(visibleCases[positionInVisible]!)
+        }
       />
 
       {/* RMA status badge + cancel/delete actions */}
@@ -628,7 +741,7 @@ function Stepper({
                       : "bg-elevated text-muted",
                 )}
               >
-                {isPast ? <Check className="size-3" /> : s.id}
+                {isPast ? <Check className="size-3" /> : idx + 1}
               </span>
               <span className="font-medium">{s.label}</span>
             </button>
@@ -661,7 +774,7 @@ function StepSeason({
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-base font-semibold">1. Pick a season</h2>
+        <h2 className="text-base font-semibold">Pick a season</h2>
         <p className="mt-1 text-xs text-muted">
           {required
             ? "Required — eligibility math is computed against this season's purchases."
@@ -726,7 +839,8 @@ function StepItems({
   returnType: "seasonal" | "non_seasonal";
   notes: string;
   onNotesChange: (next: string) => void;
-  onPrev: () => void;
+  /** When null, Items is the first visible step and the Back button is hidden. */
+  onPrev: (() => void) | null;
   onNext: () => void;
 }) {
   const classOpts =
@@ -755,7 +869,7 @@ function StepItems({
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <h2 className="text-base font-semibold">2. Items</h2>
+          <h2 className="text-base font-semibold">Items</h2>
           <p className="mt-1 text-xs text-muted">
             Paste the customer's email to auto-extract items, then resolve them
             against QBO with one click.
@@ -833,10 +947,14 @@ function StepItems({
       </Card>
 
       <div className="flex justify-between">
-        <Button type="button" variant="secondary" onClick={onPrev}>
-          <ChevronLeft className="size-4" />
-          Back
-        </Button>
+        {onPrev ? (
+          <Button type="button" variant="secondary" onClick={onPrev}>
+            <ChevronLeft className="size-4" />
+            Back
+          </Button>
+        ) : (
+          <span />
+        )}
         <Button type="button" disabled={!hasResolvedItems} onClick={onNext}>
           Next
           <ChevronRight className="size-4" />
@@ -900,7 +1018,7 @@ function StepEligibility({
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <h2 className="text-base font-semibold">3. Eligibility</h2>
+          <h2 className="text-base font-semibold">Eligibility</h2>
           <p className="mt-1 text-xs text-muted">
             Live cumulative breakdown. PDF preview shows the report attached to
             the denial email if you deny.
@@ -1074,6 +1192,7 @@ function StepApprove({
   onApprove,
   onDeny,
   onPrev,
+  returnType,
 }: {
   override: { enabled: boolean; reason: string };
   isPending: boolean;
@@ -1081,16 +1200,18 @@ function StepApprove({
   onApprove: () => void;
   onDeny: () => void;
   onPrev: () => void;
+  returnType: "seasonal" | "non_seasonal";
 }) {
+  const subtitle = override.enabled
+    ? "Override is set — approving here records the override + reason and proceeds to the warehouse step."
+    : returnType === "seasonal"
+      ? "Approving here records the eligibility decision and proceeds to the warehouse step. The customer is NOT yet emailed."
+      : "Approving here proceeds to the warehouse step. The customer is NOT yet emailed.";
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-base font-semibold">4. Approve or deny</h2>
-        <p className="mt-1 text-xs text-muted">
-          {override.enabled
-            ? "Override is set — approving here records the override + reason and proceeds to the warehouse step."
-            : "Approving here records the eligibility decision and proceeds to the warehouse step. The customer is NOT yet emailed."}
-        </p>
+        <h2 className="text-base font-semibold">Approve or deny</h2>
+        <p className="mt-1 text-xs text-muted">{subtitle}</p>
       </CardHeader>
       <CardBody className="space-y-3">
         {override.enabled && (
@@ -1157,7 +1278,7 @@ function StepWarehouseExport({
     <Card>
       <CardHeader>
         <h2 className="text-base font-semibold">
-          5. Generate the Extensiv warehouse file
+          Generate the Extensiv warehouse file
         </h2>
         <p className="mt-1 text-xs text-muted">
           Click below to download the tab-delimited file. Then upload it to
@@ -1221,7 +1342,7 @@ function StepWarehouseNumber({
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-base font-semibold">6. Paste the warehouse number</h2>
+        <h2 className="text-base font-semibold">Paste the warehouse number</h2>
         <p className="mt-1 text-xs text-muted">
           Extensiv returns a transaction number after upload. Paste it here —
           it becomes the customer-facing RMA number, and the approval email
@@ -1294,7 +1415,7 @@ function StepApprovalEmail({
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-base font-semibold">7. Approval email</h2>
+        <h2 className="text-base font-semibold">Approval email</h2>
         <p className="mt-1 text-xs text-muted">
           The dialog opened automatically. Review the rendered subject + body
           and click Send. The customer will see this RMA number:{" "}
@@ -1502,23 +1623,33 @@ function defaultClassification(
   return returnType === "seasonal" ? "seasonal_current" : "non_seasonal";
 }
 
-function stepForStatus(status: RmaSummary["status"]): number {
+// Returns the case-index (0..6) the wizard should sit on for a given status.
+// returnType matters because non-seasonal skips Season (case 0) and
+// Eligibility (case 2): a fresh non-seasonal draft starts at Items (case 1).
+function stepForStatus(
+  status: RmaSummary["status"],
+  returnType: "seasonal" | "non_seasonal",
+): number {
+  const firstVisible = returnType === "seasonal" ? 0 : 1;
   switch (status) {
     case "draft":
-      return 4; // step 4 — operator hasn't approved yet
+      // Land on the first visible step so resumed/reverted drafts walk
+      // forward in order. The auto-advance only moves forward, so fresh
+      // mid-wizard creates aren't pulled backwards by this.
+      return firstVisible;
     case "approved":
-      return 5; // step 5 — generate export
+      return 4; // Warehouse export
     case "awaiting_warehouse_number":
-      return 6; // step 6 — paste tx#
+      return 5; // Warehouse number
     case "sent_to_warehouse":
     case "received":
     case "completed":
-      return 7; // step 7 — email already sent
+      return 6; // Approval email
     case "denied":
     case "cancelled":
-      return 1; // back to start; this RMA path is done
+      return firstVisible;
     default:
-      return 1;
+      return firstVisible;
   }
 }
 
@@ -1531,7 +1662,7 @@ function statusLabel(status: RmaSummary["status"]): string {
     case "awaiting_warehouse_number":
       return "Awaiting warehouse #";
     case "sent_to_warehouse":
-      return "At warehouse";
+      return "Awaiting return";
     case "received":
       return "Received";
     case "completed":
