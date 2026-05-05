@@ -2662,10 +2662,21 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
                     <RmaRowMenu
                       rmaId={r.id}
                       status={r.status}
+                      // Mirror the keys invalidateAfterRmaChange touches so
+                      // the customer-detail KPI strip ("hasPendingRma"),
+                      // activity timeline, customers list flag, and chase
+                      // RMA pill all refresh after cancel/delete from this
+                      // menu. The menu accepts plain query keys, so we
+                      // duplicate the helper's set here. (The ["rma", id]
+                      // detail key is omitted — operator is on the customer
+                      // page, not the detail.)
                       invalidateKeys={[
                         ["returns-list"],
                         ["rmas"],
                         ["customer-rmas", customerId],
+                        ["customer", customerId],
+                        ["customers"],
+                        ["chase", "customers"],
                       ]}
                     />
                   </td>

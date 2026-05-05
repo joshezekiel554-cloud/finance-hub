@@ -20,6 +20,7 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 type PreviewResponse = {
   subject: string;
@@ -169,8 +170,7 @@ export default function RmaDenialEmailDialog({
       return sendRes.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
-      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      invalidateAfterRmaChange(queryClient, { rmaId, customerId });
       onSent();
       onOpenChange(false);
     },

@@ -287,7 +287,12 @@ export default function ChasePage() {
             statementSendId: body.statementSendId,
           },
         }));
+        // Refresh the chase row + the customers list (lastStatementSentAt
+        // column derives from the statement_send activity) + the customer
+        // detail page in case it's open in another tab.
         queryClient.invalidateQueries({ queryKey: ["chase", "customers"] });
+        queryClient.invalidateQueries({ queryKey: ["customers"] });
+        queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
       }
     } finally {
       setRowSendingIds((prev) => {

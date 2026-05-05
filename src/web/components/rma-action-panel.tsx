@@ -12,6 +12,7 @@ import RmaCreditMemoDialog from "./rma-credit-memo-dialog";
 import RmaWarehouseExportAction from "./rma-warehouse-export-action";
 import RmaSetWarehouseNumberAction from "./rma-set-warehouse-number-action";
 import RmaOverrideApproveAction from "./rma-override-approve-action";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 export type RmaStatus =
   | "draft"
@@ -99,7 +100,7 @@ export default function RmaActionPanel({
     },
     onSuccess: (data) => {
       clearError();
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      invalidateAfterRmaChange(queryClient, { rmaId, customerId });
       setApprovedRmaData({ id: data.id, rmaNumber: data.rmaNumber ?? null, customerId: data.customerId ?? customerId });
       setApprovalDialogOpen(true);
     },
@@ -123,7 +124,7 @@ export default function RmaActionPanel({
     onSuccess: () => {
       clearError();
       setConfirmReplacementOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      invalidateAfterRmaChange(queryClient, { rmaId, customerId });
       onRefresh();
     },
     onError: (err) => {
@@ -149,7 +150,7 @@ export default function RmaActionPanel({
       clearError();
       setAlreadyCreditedOpen(false);
       setAlreadyCreditedDocNumber("");
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      invalidateAfterRmaChange(queryClient, { rmaId, customerId });
       onRefresh();
     },
     onError: (err) => setActionError(err.message),
@@ -264,7 +265,7 @@ export default function RmaActionPanel({
           <RmaWarehouseExportAction
             rmaId={rmaId}
             onDone={() => {
-              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              invalidateAfterRmaChange(queryClient, { rmaId, customerId });
               onRefresh();
             }}
           />
@@ -292,14 +293,14 @@ export default function RmaActionPanel({
             rmaId={rmaId}
             customerId={customerId}
             onDone={() => {
-              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              invalidateAfterRmaChange(queryClient, { rmaId, customerId });
               onRefresh();
             }}
           />
           <CancelWarehouseExportButton
             rmaId={rmaId}
             onSuccess={() => {
-              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              invalidateAfterRmaChange(queryClient, { rmaId, customerId });
               onRefresh();
             }}
           />
@@ -314,14 +315,14 @@ export default function RmaActionPanel({
             existingTrackingNumber={trackingNumber}
             existingTrackingCarrier={trackingCarrier}
             onSaved={() => {
-              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              invalidateAfterRmaChange(queryClient, { rmaId, customerId });
               onRefresh();
             }}
           />
           <ManualMarkReceivedButton
             rmaId={rmaId}
             onSuccess={() => {
-              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              invalidateAfterRmaChange(queryClient, { rmaId, customerId });
               onRefresh();
             }}
           />
@@ -403,7 +404,7 @@ export default function RmaActionPanel({
           <RmaOverrideApproveAction
             rmaId={rmaId}
             onDone={() => {
-              queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+              invalidateAfterRmaChange(queryClient, { rmaId, customerId });
               onRefresh();
             }}
           />
@@ -462,7 +463,7 @@ export default function RmaActionPanel({
           rmaNumber={approvedRmaData.rmaNumber ?? approvedRmaData.id}
           customerId={approvedRmaData.customerId}
           onSent={() => {
-            queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+            invalidateAfterRmaChange(queryClient, { rmaId, customerId });
             onRefresh();
           }}
         />
@@ -475,7 +476,7 @@ export default function RmaActionPanel({
         rmaId={rmaId}
         customerId={customerId}
         onSent={() => {
-          queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+          invalidateAfterRmaChange(queryClient, { rmaId, customerId });
           onRefresh();
         }}
       />
@@ -487,7 +488,7 @@ export default function RmaActionPanel({
         rmaId={rmaId}
         customerId={customerId}
         onIssued={() => {
-          queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+          invalidateAfterRmaChange(queryClient, { rmaId, customerId });
           onRefresh();
         }}
       />
@@ -500,7 +501,7 @@ export default function RmaActionPanel({
           rmaId={rmaId}
           status={status}
           onChanged={() => {
-            queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+            invalidateAfterRmaChange(queryClient, { rmaId, customerId });
             onRefresh();
           }}
         />

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { Button } from "./ui/button";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 type OverrideApproveResponse = {
   id: string;
@@ -40,9 +41,17 @@ export default function RmaOverrideApproveAction({
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      // Mutation response carries customerId; fall back to cache otherwise.
+      const cached = queryClient.getQueryData<{ customerId?: string }>([
+        "rma",
+        rmaId,
+      ]);
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: data.customerId ?? cached?.customerId ?? null,
+      });
       onDone();
     },
     onError: (err) => setError(err.message),

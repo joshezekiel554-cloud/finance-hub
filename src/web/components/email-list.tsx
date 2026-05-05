@@ -175,6 +175,10 @@ export function EmailList({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey });
       queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      // Backfill creates email_received activity rows that feed the
+      // customers list "last contact" column — invalidate so the list
+      // reflects the new most-recent interaction.
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
   });
 

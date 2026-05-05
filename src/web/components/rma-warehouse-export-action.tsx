@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Download, AlertCircle } from "lucide-react";
 import { Button } from "./ui/button";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 type ExportResponse = {
   rma: { id: string; status: string };
@@ -53,7 +54,16 @@ export default function RmaWarehouseExportAction({
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
 
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      // Mutation response only includes minimal rma fields, so fall back to
+      // the rma detail cache for customerId.
+      const cached = queryClient.getQueryData<{ customerId?: string }>([
+        "rma",
+        rmaId,
+      ]);
+      invalidateAfterRmaChange(queryClient, {
+        rmaId,
+        customerId: cached?.customerId ?? null,
+      });
       onDone();
     },
     onError: (err) => setError(err.message),

@@ -8,6 +8,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { Button } from "./ui/button";
 import RmaApprovalEmailDialog from "./rma-approval-email-dialog";
+import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 type SetWarehouseNumberResponse = {
   id: string;
@@ -56,7 +57,7 @@ export default function RmaSetWarehouseNumberAction({
     },
     onSuccess: (data) => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      invalidateAfterRmaChange(queryClient, { rmaId, customerId });
       setApprovedRmaData({
         id: data.id,
         rmaNumber: data.rmaNumber ?? null,
@@ -113,7 +114,7 @@ export default function RmaSetWarehouseNumberAction({
           customerId={approvedRmaData.customerId}
           pdfDriveId={approvedRmaData.pdfDriveId ?? null}
           onSent={() => {
-            queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+            invalidateAfterRmaChange(queryClient, { rmaId, customerId });
             onDone();
           }}
         />
