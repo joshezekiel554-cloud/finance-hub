@@ -883,15 +883,26 @@ function StepEligibility({
       </Card>
 
       {seasonId && cardItems.length > 0 ? (
-        <EligibilityCard
-          rmaId={rmaId}
-          customerId={customerId}
-          qbCustomerId={qbCustomerId}
-          seasonId={seasonId}
-          items={cardItems}
-          onOverrideChange={handleOverrideChange}
-          informationalOnly={informationalOnly}
-        />
+        <>
+          <EligibilityCard
+            rmaId={rmaId}
+            customerId={customerId}
+            qbCustomerId={qbCustomerId}
+            seasonId={seasonId}
+            items={cardItems}
+            onOverrideChange={handleOverrideChange}
+            informationalOnly={informationalOnly}
+          />
+          <PdfPreviewButton
+            rmaId={rmaId}
+            customerId={customerId}
+            qbCustomerId={qbCustomerId}
+            seasonId={seasonId}
+            items={items}
+            itemClassifications={itemClassifications}
+            informationalOnly={informationalOnly}
+          />
+        </>
       ) : (
         <Card>
           <CardBody>
@@ -919,6 +930,109 @@ function StepEligibility({
           <ChevronRight className="size-4" />
         </Button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PDF preview button — works with or without an rmaId
+// ---------------------------------------------------------------------------
+
+function PdfPreviewButton({
+  rmaId,
+  customerId,
+  qbCustomerId,
+  seasonId,
+  items,
+  itemClassifications,
+  informationalOnly,
+}: {
+  rmaId: string | null;
+  customerId: string;
+  qbCustomerId: string | null;
+  seasonId: string | null;
+  items: RmaItemRow[];
+  itemClassifications: Record<string, string>;
+  informationalOnly: boolean;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function preview(): Promise<void> {
+    if (rmaId) {
+      window.open(`/api/rmas/${rmaId}/eligibility-pdf`, "_blank");
+      return;
+    }
+    if (!qbCustomerId || !seasonId) {
+      setError("Customer or season missing");
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      const payloadItems = items
+        .filter((it) => it.qbItemId)
+        .map((it) => ({
+          sku: it.sku,
+          name: it.name,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          lineTotal: it.lineTotal,
+          classification:
+            itemClassifications[it.localKey] ??
+            (informationalOnly ? "non_seasonal" : "seasonal_current"),
+          priorSeasonId: null,
+        }));
+      const res = await fetch("/api/rmas/qbo-eligibility-pdf", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customerId,
+          qbCustomerId,
+          seasonId,
+          items: payloadItems,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      // Don't revoke immediately — the new tab needs the URL to load.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to preview PDF");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1 text-xs text-muted">
+      <button
+        type="button"
+        onClick={() => void preview()}
+        disabled={pending}
+        className="inline-flex w-fit items-center gap-1.5 rounded-md border border-default bg-base px-2 py-1 text-accent-primary hover:bg-elevated disabled:opacity-50"
+      >
+        {pending ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <FileText className="size-3.5" />
+        )}
+        {pending ? "Generating…" : "Preview eligibility report (PDF)"}
+      </button>
+      <span className="ml-0.5">
+        Same report attached to the denial email if you deny.
+      </span>
+      {error && (
+        <span className="text-accent-danger">
+          <AlertCircle className="mr-1 inline size-3" />
+          {error}
+        </span>
+      )}
     </div>
   );
 }

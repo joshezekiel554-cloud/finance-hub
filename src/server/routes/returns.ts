@@ -1021,6 +1021,94 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // ---- POST /qbo-eligibility-pdf -------------------------------------------
+  // Customer-scoped PDF preview — generates the eligibility report from
+  // wizard inputs without needing an existing RMA. Returns PDF binary.
+  app.post("/qbo-eligibility-pdf", async (req, reply) => {
+    await requireAuth(req);
+    const schema = z.object({
+      customerId: z.string().min(1),
+      qbCustomerId: z.string().min(1),
+      seasonId: z.string().min(1),
+      items: z
+        .array(
+          z.object({
+            sku: z.string(),
+            name: z.string(),
+            quantity: z.string(),
+            unitPrice: z.string(),
+            lineTotal: z.string(),
+            classification: z.enum(RMA_ITEM_CLASSIFICATIONS),
+            priorSeasonId: z.string().nullable().optional(),
+          }),
+        )
+        .default([]),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+
+    // Lookup customer + season for the PDF header
+    const customerRows = await db
+      .select()
+      .from(customers)
+      .where(eq(customers.id, parse.data.customerId))
+      .limit(1);
+    const customer = customerRows[0];
+    if (!customer) {
+      reply.code(404);
+      return { error: "Customer not found" };
+    }
+    const seasonRows = await db
+      .select()
+      .from(seasons)
+      .where(eq(seasons.id, parse.data.seasonId))
+      .limit(1);
+    const season = seasonRows[0];
+    if (!season) {
+      reply.code(404);
+      return { error: "Season not found" };
+    }
+
+    const breakdown = await runEligibility({
+      customerId: parse.data.customerId,
+      qbCustomerId: parse.data.qbCustomerId,
+      seasonId: parse.data.seasonId,
+      proposedItems: parse.data.items.map((it) => ({
+        lineTotal: it.lineTotal,
+        classification: it.classification,
+      })),
+    });
+
+    const { generateEligibilityPdf } = await import(
+      "../../modules/returns/eligibility-pdf.js"
+    );
+    const pdfBuffer = await generateEligibilityPdf({
+      rma: { id: "preview", rmaNumber: null },
+      customer: { name: customer.displayName },
+      season: { name: season.name },
+      breakdown,
+      items: parse.data.items.map((it) => ({
+        sku: it.sku,
+        name: it.name,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        lineTotal: it.lineTotal,
+        classification: it.classification,
+        priorSeasonId: it.priorSeasonId ?? null,
+      })),
+    });
+
+    reply.header("Content-Type", "application/pdf");
+    reply.header(
+      "Content-Disposition",
+      `inline; filename="eligibility-preview.pdf"`,
+    );
+    return reply.send(pdfBuffer);
+  });
+
   // ---- POST /qbo-run-eligibility -------------------------------------------
   // Customer-scoped eligibility — doesn't require a saved RMA. Used by the
   // wizard's eligibility step before the operator has approved.

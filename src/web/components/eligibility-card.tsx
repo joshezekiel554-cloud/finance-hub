@@ -196,22 +196,9 @@ export default function EligibilityCard({
             </div>
           )}
 
-          {/* Preview the PDF version that gets attached to denial emails */}
-          {rmaId && (
-            <div className="text-xs text-muted">
-              <a
-                href={`/api/rmas/${rmaId}/eligibility-pdf`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-accent-primary hover:underline"
-              >
-                Preview eligibility report (PDF)
-              </a>
-              <span className="ml-1">
-                — same report attached to the denial email if you deny.
-              </span>
-            </div>
-          )}
+          {/* PDF preview link is rendered by the parent — see StepEligibility
+              in seasonal-wizard.tsx, which has access to the full item rows
+              needed for the customer-scoped PDF endpoint. */}
         </>
       )}
     </div>
