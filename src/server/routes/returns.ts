@@ -17,6 +17,7 @@ import {
   cancelWarehouseExport,
   cancelRma,
   deleteRma,
+  revertToDraft,
   setWarehouseNumber,
   manualMarkReceived,
   overrideApproveRma,
@@ -805,6 +806,30 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           mimeType: "text/tab-separated-values",
         },
       };
+    },
+  );
+
+  // ---- POST /:id/revert-to-draft -------------------------------------------
+  // Roll an in-flight RMA back to draft so the operator can edit. Clears
+  // workflow side-effects (rmaNumber for non-damage, extensiv timestamps,
+  // approval/denial/override fields). Items + audit trail kept intact.
+  app.post<{ Params: { id: string } }>(
+    "/:id/revert-to-draft",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const result = await revertToDraft({
+        rmaId: req.params.id,
+        userId: user.id,
+      });
+      if (!result) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+      if (!result.ok) {
+        reply.code(409);
+        return { error: result.reason };
+      }
+      return result.rma;
     },
   );
 

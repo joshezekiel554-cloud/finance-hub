@@ -8,6 +8,7 @@ export type RmaAction =
   | "deny"
   | "override_approve"
   | "unapprove"
+  | "revert_to_draft"
   | "generate_warehouse_export"
   | "cancel_warehouse_export"
   | "set_warehouse_number"
@@ -56,6 +57,20 @@ export const TRANSITIONS: Record<RmaAction, TransitionRule> = {
       : "override_approve is only allowed for seasonal RMAs",
   ),
   unapprove: allowFrom(["approved"], "draft"),
+  // Heavier "edit again" path. Allowed from any non-terminal post-draft state
+  // so the operator can fix mistakes after approval / warehouse handoff. The
+  // service-layer impl clears workflow side-effects (rmaNumber, export
+  // timestamp, sent_to_warehouse_at) so the next walk-through starts clean.
+  revert_to_draft: allowFrom(
+    [
+      "approved",
+      "awaiting_warehouse_number",
+      "sent_to_warehouse",
+      "received",
+      "denied",
+    ],
+    "draft",
+  ),
   generate_warehouse_export: allowFrom(
     ["approved"],
     "awaiting_warehouse_number",

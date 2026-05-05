@@ -1281,6 +1281,78 @@ export async function confirmExtensivReceipt(input: {
 }
 
 // ---------------------------------------------------------------------------
+// revertToDraft — pulls the RMA back to draft for editing.
+// Clears workflow side-effects (rmaNumber, extensiv_*, sent_to_warehouse_at,
+// received_at_warehouse_at, denial fields, override fields) but keeps items
+// + audit trail intact. Operator must re-walk the wizard afterwards.
+// ---------------------------------------------------------------------------
+
+export type RevertToDraftInput = {
+  rmaId: string;
+  userId: string;
+};
+
+export type RevertToDraftResult =
+  | { ok: true; rma: Rma }
+  | { ok: false; reason: string };
+
+export async function revertToDraft(
+  input: RevertToDraftInput,
+): Promise<RevertToDraftResult | null> {
+  const { rmaId, userId } = input;
+  const existing = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "revert_to_draft",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  // Wipe workflow side-effects but keep items + denial PDF reference (the
+  // file may still be in Drive — operator can clear separately if needed).
+  await db
+    .update(rmas)
+    .set({
+      status: "draft",
+      // Damage RMAs keep their DC-... rmaNumber (it's just a deterministic
+      // timestamp); seasonal/non-seasonal had it set to the warehouse tx#
+      // which is no longer valid → clear it.
+      rmaNumber: current.returnType === "damage" ? current.rmaNumber : null,
+      extensivTxNumber: null,
+      extensivExportGeneratedAt: null,
+      sentToWarehouseAt: null,
+      receivedAtWarehouseAt: null,
+      approvedAt: null,
+      approvedByUserId: null,
+      thresholdOverridden: false,
+      overrideReason: null,
+      overrideByUserId: null,
+      denialReason: null,
+      deniedAt: null,
+    })
+    .where(eq(rmas.id, rmaId));
+
+  await recordActivity(
+    {
+      customerId: current.customerId,
+      kind: "rma_warehouse_export_cancelled", // closest existing kind; reuse for "reverted"
+      source: "user_action",
+      userId,
+      refType: "rma",
+      refId: rmaId,
+      meta: { revertedFrom: current.status },
+    },
+    db,
+  );
+
+  const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
+  return { ok: true, rma: updated[0] as Rma };
+}
+
+// ---------------------------------------------------------------------------
 // deleteRma — hard delete, only allowed for draft or cancelled RMAs
 // ---------------------------------------------------------------------------
 //

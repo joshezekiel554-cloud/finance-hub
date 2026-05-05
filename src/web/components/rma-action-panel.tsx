@@ -413,9 +413,9 @@ function RmaLifecycleActionsInPanel({
   status: RmaStatus;
   onChanged: () => void;
 }) {
-  const [confirmOpen, setConfirmOpen] = useState<null | "cancel" | "delete">(
-    null,
-  );
+  const [confirmOpen, setConfirmOpen] = useState<
+    null | "cancel" | "delete" | "revert"
+  >(null);
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -425,8 +425,14 @@ function RmaLifecycleActionsInPanel({
     status === "awaiting_warehouse_number" ||
     status === "sent_to_warehouse";
   const canDelete = status === "draft" || status === "cancelled";
+  const canRevert =
+    status === "approved" ||
+    status === "awaiting_warehouse_number" ||
+    status === "sent_to_warehouse" ||
+    status === "received" ||
+    status === "denied";
 
-  if (!canCancel && !canDelete) return null;
+  if (!canCancel && !canDelete && !canRevert) return null;
 
   async function runCancel(): Promise<void> {
     setPending(true);
@@ -467,9 +473,42 @@ function RmaLifecycleActionsInPanel({
     }
   }
 
+  async function runRevert(): Promise<void> {
+    setPending(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}/revert-to-draft`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setConfirmOpen(null);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Revert failed");
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
+        {canRevert && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setConfirmOpen("revert");
+              setError(null);
+            }}
+          >
+            Edit (revert to draft)
+          </Button>
+        )}
         {canCancel && (
           <Button
             type="button"
@@ -532,6 +571,43 @@ function RmaLifecycleActionsInPanel({
               disabled={pending}
             >
               {pending ? "Cancelling…" : "Confirm cancel"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {confirmOpen === "revert" && (
+        <div className="rounded-md border border-accent-warning/40 bg-accent-warning/5 p-3 text-xs">
+          <div className="font-medium text-accent-warning">
+            Revert to draft for editing?
+          </div>
+          <div className="mt-1 text-muted">
+            Wipes the workflow state (warehouse number, export timestamp,
+            approval/denial info). Items + activity history are preserved.
+            You'll need to re-walk Approve → Warehouse export → tx# afterwards.
+            If you've already emailed the customer their RMA number, this will
+            invalidate it — best to coordinate with them first.
+          </div>
+          {error && (
+            <div className="mt-2 text-accent-danger">{error}</div>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setConfirmOpen(null)}
+              disabled={pending}
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void runRevert()}
+              disabled={pending}
+            >
+              {pending ? "Reverting…" : "Revert to draft"}
             </Button>
           </div>
         </div>
