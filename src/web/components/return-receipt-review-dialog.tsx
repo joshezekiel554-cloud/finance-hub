@@ -27,6 +27,7 @@ import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
 import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
+import { QboItemPicker, type QbItemHit } from "./qbo-item-picker";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,7 +74,8 @@ type RmaDetail = {
   id: string;
   rmaNumber: string | null;
   customerId: string;
-  returnType: string;
+  qbCustomerId: string | null;
+  returnType: "damage" | "seasonal" | "non_seasonal";
   status: string;
   items: RmaItem[];
 };
@@ -110,12 +112,26 @@ type CustomerSearchResponse = { customers: CustomerSearchHit[] };
 // Per-item received quantity state key is rma_item_id
 type ReceivedQtyMap = Record<string, string>;
 
-// An unexpected item (not on the RMA) that was received
+// An unexpected item (not on the RMA) that was received. Operator picks
+// it via the shared QboItemPicker, which resolves SKU/name/qbItemId from
+// QBO. Once picked, we auto-fire /lookup-prices to fill in unitPrice +
+// originalInvoiceDocNumber/Date so the credit memo line is fully formed
+// without a second click.
 type UnexpectedItem = {
   key: string;
+  qbItemId: string;
   sku: string;
   name: string;
   quantity: string;
+  unitPrice: string | null;
+  listUnitPrice: string | null;
+  invoiceDiscountPct: string | null;
+  originalInvoiceDocNumber: string | null;
+  originalInvoiceDate: string | null;
+  // Tracks the per-row lookup state so the inline summary can show
+  // "looking up…" / errors without each row carrying its own mutation.
+  lookupStatus: "idle" | "pending" | "done" | "error";
+  lookupError: string | null;
 };
 
 export type ReturnReceiptReviewDialogProps = {
@@ -164,9 +180,72 @@ export default function ReturnReceiptReviewDialog({
   const [receivedQty, setReceivedQty] = useState<ReceivedQtyMap>({});
   const [unexpectedItems, setUnexpectedItems] = useState<UnexpectedItem[]>([]);
   const [showAddUnexpected, setShowAddUnexpected] = useState(false);
-  const [newItemSku, setNewItemSku] = useState("");
-  const [newItemName, setNewItemName] = useState("");
-  const [newItemQty, setNewItemQty] = useState("1");
+
+  // Fires /lookup-prices for an unexpected-item row after the operator
+  // picks a QBO item. Updates the row in place with unitPrice + invoice
+  // info so the operator doesn't have to type either.
+  async function lookupPricesForUnexpected(key: string, qbItemId: string) {
+    if (!receipt.rmaId) return;
+    setUnexpectedItems((prev) =>
+      prev.map((x) =>
+        x.key === key
+          ? { ...x, lookupStatus: "pending", lookupError: null }
+          : x,
+      ),
+    );
+    try {
+      const res = await fetch(`/api/rmas/${receipt.rmaId}/lookup-prices`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ qbItemId }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        unitPrice: string | null;
+        listUnitPrice: string | null;
+        invoiceDiscountPct: string | null;
+        originalInvoiceDocNumber: string | null;
+        originalInvoiceDate: string | null;
+      };
+      setUnexpectedItems((prev) =>
+        prev.map((x) =>
+          x.key === key
+            ? {
+                ...x,
+                unitPrice: data.unitPrice ?? x.unitPrice,
+                listUnitPrice: data.listUnitPrice ?? x.listUnitPrice,
+                invoiceDiscountPct:
+                  data.invoiceDiscountPct ?? x.invoiceDiscountPct,
+                originalInvoiceDocNumber:
+                  data.originalInvoiceDocNumber ?? x.originalInvoiceDocNumber,
+                originalInvoiceDate:
+                  data.originalInvoiceDate ?? x.originalInvoiceDate,
+                lookupStatus: "done",
+                lookupError: null,
+              }
+            : x,
+        ),
+      );
+    } catch (err) {
+      setUnexpectedItems((prev) =>
+        prev.map((x) =>
+          x.key === key
+            ? {
+                ...x,
+                lookupStatus: "error",
+                lookupError:
+                  err instanceof Error ? err.message : "Lookup failed",
+              }
+            : x,
+        ),
+      );
+    }
+  }
 
   // Seed receivedQty from parsed receipt items when dialog opens
   useEffect(() => {
@@ -285,10 +364,11 @@ export default function ReturnReceiptReviewDialog({
       if (!receipt.rmaId || !receipt.rma?.customerId || !rmaQuery.data) {
         throw new Error("RMA not loaded yet");
       }
+      const rma = rmaQuery.data;
       // PATCH each item's receivedQuantity (only when the operator's edit
       // differs from the current backend value — saves needless writes).
       await Promise.all(
-        rmaQuery.data.items.map(async (item) => {
+        rma.items.map(async (item) => {
           const next = receivedQty[item.id] ?? item.quantity;
           const current = item.receivedQuantity ?? item.quantity;
           if (parseFloat(next) === parseFloat(current)) return;
@@ -308,6 +388,45 @@ export default function ReturnReceiptReviewDialog({
           }
         }),
       );
+      // Persist any unexpected items the operator added. We POST these
+      // sequentially (not in parallel) because each call hits QBO state
+      // through the rmaItem total recompute, and the receipt-review flow
+      // produces at most a handful of unexpected rows — sequential keeps
+      // error surfacing simple. Classification mirrors the parent RMA's
+      // returnType (seasonal RMAs default new lines to seasonal_current).
+      const classification: "damage" | "seasonal_current" | "non_seasonal" =
+        rma.returnType === "damage"
+          ? "damage"
+          : rma.returnType === "seasonal"
+            ? "seasonal_current"
+            : "non_seasonal";
+      for (const ui of unexpectedItems) {
+        if (!ui.qbItemId) continue;
+        const res = await fetch(`/api/rmas/${receipt.rmaId}/items`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            qbItemId: ui.qbItemId,
+            sku: ui.sku || ui.qbItemId,
+            name: ui.name || ui.sku || ui.qbItemId,
+            quantity: ui.quantity || "1",
+            unitPrice: ui.unitPrice ?? "0",
+            classification,
+            listUnitPrice: ui.listUnitPrice,
+            invoiceDiscountPct: ui.invoiceDiscountPct,
+            originalInvoiceDocNumber: ui.originalInvoiceDocNumber,
+            originalInvoiceDate: ui.originalInvoiceDate,
+          }),
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(
+            body.error ?? `Failed to add unexpected item (${res.status})`,
+          );
+        }
+      }
       // Confirm the receipt — auto-advances sent_to_warehouse → received.
       const confirmRes = await fetch(
         `/api/rmas/extensiv-receipts/${receipt.receiptId}/confirm`,
@@ -541,95 +660,153 @@ export default function ReturnReceiptReviewDialog({
             dialog inherits these quantities for the credit memo lines.
           </p>
 
-          {/* Unexpected items */}
+          {/* Unexpected items — each row shows what was picked, the
+              looked-up price + original invoice (or a status pill), and
+              an editable qty. Removing the row is just a filter. */}
           {unexpectedItems.map((ui) => (
-            <div key={ui.key} className="grid grid-cols-2 gap-2 items-center">
-              <div className="text-sm">
-                <Badge tone="high" className="text-xs mr-1">Unexpected</Badge>
-                <span className="font-mono text-xs">{ui.sku || "(no SKU)"}</span>
-                {" "}<span className="text-secondary">{ui.name}</span>
+            <div
+              key={ui.key}
+              className="rounded-md border border-default bg-subtle/30 p-2 space-y-1"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 text-sm">
+                  <Badge tone="high" className="text-xs mr-1">
+                    Unexpected
+                  </Badge>
+                  <span className="font-mono text-xs">
+                    {ui.sku || "(no SKU)"}
+                  </span>{" "}
+                  <span className="text-secondary">{ui.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    className="w-20 text-sm"
+                    value={ui.quantity}
+                    onChange={(e) =>
+                      setUnexpectedItems((prev) =>
+                        prev.map((x) =>
+                          x.key === ui.key
+                            ? { ...x, quantity: e.target.value }
+                            : x,
+                        ),
+                      )
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="text-secondary hover:text-current"
+                    onClick={() =>
+                      setUnexpectedItems((prev) =>
+                        prev.filter((x) => x.key !== ui.key),
+                      )
+                    }
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min="1"
-                  step="1"
-                  className="w-20 text-sm"
-                  value={ui.quantity}
-                  onChange={(e) =>
-                    setUnexpectedItems((prev) =>
-                      prev.map((x) => (x.key === ui.key ? { ...x, quantity: e.target.value } : x)),
-                    )
-                  }
-                />
-                <button
-                  type="button"
-                  className="text-secondary hover:text-current"
-                  onClick={() =>
-                    setUnexpectedItems((prev) => prev.filter((x) => x.key !== ui.key))
-                  }
-                >
-                  <X size={14} />
-                </button>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-[11px] text-muted">
+                {ui.lookupStatus === "pending" && (
+                  <span>Looking up price + invoice…</span>
+                )}
+                {ui.lookupStatus === "error" && (
+                  <span className="text-accent-danger">
+                    {ui.lookupError ?? "Lookup failed"}
+                  </span>
+                )}
+                {ui.lookupStatus !== "pending" &&
+                  ui.lookupStatus !== "error" && (
+                    <>
+                      <span>
+                        Price:{" "}
+                        <span className="font-medium text-primary">
+                          {ui.unitPrice
+                            ? `$${parseFloat(ui.unitPrice).toFixed(2)}`
+                            : "—"}
+                        </span>
+                      </span>
+                      {ui.invoiceDiscountPct && (
+                        <span className="text-accent-info">
+                          {parseFloat(ui.invoiceDiscountPct)}% disc
+                        </span>
+                      )}
+                      <span>
+                        Orig. invoice:{" "}
+                        <span className="font-medium text-primary">
+                          {ui.originalInvoiceDocNumber
+                            ? `#${ui.originalInvoiceDocNumber}`
+                            : "—"}
+                        </span>
+                        {ui.originalInvoiceDate && (
+                          <span className="ml-1">
+                            {ui.originalInvoiceDate}
+                          </span>
+                        )}
+                      </span>
+                      {ui.lookupStatus === "done" && (
+                        <button
+                          type="button"
+                          className="text-accent-info hover:underline"
+                          onClick={() =>
+                            void lookupPricesForUnexpected(
+                              ui.key,
+                              ui.qbItemId,
+                            )
+                          }
+                        >
+                          Re-lookup
+                        </button>
+                      )}
+                    </>
+                  )}
               </div>
             </div>
           ))}
 
           {showAddUnexpected ? (
             <div className="border rounded-md p-3 space-y-2 bg-muted/30">
-              <p className="text-xs font-medium text-secondary">Add unexpected item</p>
-              <div className="flex gap-2">
-                <Input
-                  placeholder="SKU"
-                  className="w-28 text-sm"
-                  value={newItemSku}
-                  onChange={(e) => setNewItemSku(e.target.value)}
-                />
-                <Input
-                  placeholder="Name"
-                  className="flex-1 text-sm"
-                  value={newItemName}
-                  onChange={(e) => setNewItemName(e.target.value)}
-                />
-                <Input
-                  type="number"
-                  min="1"
-                  placeholder="Qty"
-                  className="w-16 text-sm"
-                  value={newItemQty}
-                  onChange={(e) => setNewItemQty(e.target.value)}
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    setUnexpectedItems((prev) => [
-                      ...prev,
-                      {
-                        key: `unexpected-${Date.now()}`,
-                        sku: newItemSku,
-                        name: newItemName,
-                        quantity: newItemQty,
-                      },
-                    ]);
-                    setNewItemSku("");
-                    setNewItemName("");
-                    setNewItemQty("1");
-                    setShowAddUnexpected(false);
-                  }}
-                >
-                  Add
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowAddUnexpected(false)}
-                >
-                  Cancel
-                </Button>
-              </div>
+              <p className="text-xs font-medium text-secondary">
+                Add unexpected item
+              </p>
+              <QboItemPicker
+                onPick={(hit: QbItemHit) => {
+                  const key = `unexpected-${Date.now()}`;
+                  const seedPrice =
+                    hit.unitPrice != null ? hit.unitPrice.toFixed(4) : null;
+                  setUnexpectedItems((prev) => [
+                    ...prev,
+                    {
+                      key,
+                      qbItemId: hit.id,
+                      sku: hit.sku ?? "",
+                      name: hit.name,
+                      quantity: "1",
+                      unitPrice: seedPrice,
+                      listUnitPrice: seedPrice,
+                      invoiceDiscountPct: null,
+                      originalInvoiceDocNumber: null,
+                      originalInvoiceDate: null,
+                      lookupStatus: "idle",
+                      lookupError: null,
+                    },
+                  ]);
+                  setShowAddUnexpected(false);
+                  // Fire price + invoice lookup so the operator gets the
+                  // customer-specific price (with discount) and the most
+                  // recent invoice that carried this item.
+                  void lookupPricesForUnexpected(key, hit.id);
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowAddUnexpected(false)}
+              >
+                Cancel
+              </Button>
             </div>
           ) : (
             <Button
