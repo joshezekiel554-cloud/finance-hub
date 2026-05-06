@@ -86,13 +86,16 @@ Top hits — these were real bugs, not nits:
 - **Hardcoded `SHIPPING_FEE_ITEM_ID = "1"` placeholder** in the
   CM builder would either 502 ("Item id 1 doesn't exist") or
   silently issue CMs against whatever item id 1 happened to be.
-  Now reads from `RMA_SHIPPING_FEE_QBO_ITEM_ID` /
-  `RMA_RESTOCKING_FEE_QBO_ITEM_ID` env vars; throws a clear
-  "configure RMA_*_FEE_QBO_ITEM_ID" error if a deduction is
-  requested without the env var set. **This is a pre-cutover
-  blocker** — both env vars must be set in production before any
-  CM with shipping or restocking deductions can be issued
-  (`0e3c26f`).
+  First moved to env vars (`0e3c26f`) then promoted to operator-
+  editable `app_settings` rows (`ef9e520`) — same shape as the
+  existing `drive_root_folder_id` / `warehouse_team_email` /
+  `statement_bcc_email` config. Surfaced in `/settings → Returns`
+  with two new input fields. CM builder loads from settings and
+  throws if a deduction is requested with the matching id unset
+  — refusing to silently issue against the wrong QBO item. **Pre-
+  cutover blocker:** operator sets `rma_shipping_fee_item_id` and
+  `rma_restocking_fee_item_id` to the real QBO service-item ids
+  before issuing any CM with shipping or restocking deductions.
 
 Important-tier hardening that landed in the same wave:
 
@@ -146,10 +149,13 @@ re-render). Moderate effort for moderate impact; the file was
 already heavily modified by A2 in the same session and another
 big refactor felt risky. Track for a future polish pass.
 
-**Pre-cutover blocker:** must set `RMA_SHIPPING_FEE_QBO_ITEM_ID`
-+ `RMA_RESTOCKING_FEE_QBO_ITEM_ID` env vars to the real QBO
-service-item ids before issuing any CM with shipping/restocking
-deductions. Operator action required.
+**Pre-cutover operator action:** visit `/settings → Returns` and
+paste the QBO Item ids for the shipping-deduction and restocking-fee
+service items. Empty values are fine while operators don't yet have
+those items in QBO — the CM builder only throws when a deduction
+is actually requested. Plus add admin emails to `ADMIN_EMAILS` env
+var (one operator at minimum, otherwise `forceStatus` + `deleteRma`
+return 403 for everyone).
 
 ---
 
@@ -599,15 +605,15 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-05-06 (pre-cutover bug-check + cleanup wave committed)
-**Branch**: `feat/returns-phase-5-7` (HEAD `0e3c26f`) — not yet merged to `main`
+**Date**: 2026-05-06 (pre-cutover bug-check + cleanup wave committed; fee item IDs moved to settings)
+**Branch**: `feat/returns-phase-5-7` (HEAD `ef9e520`) — not yet merged to `main`
 **Last `main` commit**: `aa7da53` (2026-04-30 home alert)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub
 **Local repo**: `C:\Users\user\Documents\finance-hub`
 **Status**: `npx tsc --noEmit` exits 0 silently · **451/451 tests pass** across 29 files · server + web + worker running via `npm run dev`
 **Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · ~4,842 activities · 509+ emails · 9 email templates (added `rma_approval` / `rma_denial` / `rma_credit_memo` during returns build) · app_settings extended with `drive_root_folder_id`, `statement_bcc_email`, statement-PDF copy
 **Migrations**: latest is `0025_fast_magik` (UNIQUE on `rmas.extensiv_tx_number`). Returns work added `0020-0024` (rmas + rma_items + seasons + seasonal_products + photos + drive_folder_id + extensiv_receipts). `0019` added `customer_memo` on invoices.
-**New env vars** (must be set before pre-cutover): `ADMIN_EMAILS` (comma-list of admin operator emails), `RMA_SHIPPING_FEE_QBO_ITEM_ID`, `RMA_RESTOCKING_FEE_QBO_ITEM_ID` (real QBO service-item ids for CM deduction lines).
+**New env vars**: `ADMIN_EMAILS` (comma-list of admin operator emails) — required before pre-cutover; empty list = nobody is admin. The RMA fee item IDs are NOT env vars — they're set via `/settings → Returns` (`rma_shipping_fee_item_id`, `rma_restocking_fee_item_id` in app_settings).
 **Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy · Google OAuth scope expanded to `drive` (RMA photo upload + folder rename)
 **Smoke**: per-customer QB sync `POST /api/customers/{id}/sync-qb` → 200 in ~3 calls; `<SyncCustomerButton>` reflects fresh data instantly via React Query cache invalidation
 
