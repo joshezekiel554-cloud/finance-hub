@@ -4,9 +4,11 @@ import { getRouteApi } from "@tanstack/react-router";
 import { Plus, LayoutGrid, List as ListIcon, Search, X } from "lucide-react";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
-import type { TasksSearch } from "../lib/search-schemas/tasks";
-
-const tasksRouteApi = getRouteApi("/tasks");
+import {
+  type TasksSearch,
+  TASK_STATUSES,
+  TASK_PRIORITIES,
+} from "../lib/search-schemas/tasks";
 import {
   ToastProvider,
   ToastViewport,
@@ -27,6 +29,8 @@ import {
 import type { TaskCardData } from "../components/task-card";
 import { useEventStream } from "../lib/use-event-stream";
 import { cn } from "../lib/cn";
+
+const tasksRouteApi = getRouteApi("/tasks");
 
 type TaskStatus = "open" | "in_progress" | "blocked" | "done" | "cancelled";
 type TaskPriority = "low" | "normal" | "high" | "urgent";
@@ -65,13 +69,7 @@ type ToastEntry = {
 type View = "board" | "list";
 type AssigneeFilter = "me" | "all";
 
-const ALL_STATUSES: TaskStatus[] = [
-  "open",
-  "in_progress",
-  "blocked",
-  "done",
-  "cancelled",
-];
+const ALL_STATUSES = [...TASK_STATUSES] as TaskStatus[];
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
   open: "Open",
@@ -125,21 +123,29 @@ export default function TasksPage() {
     [urlSearch.tags],
   );
 
-  // Keep the last-selected customer's displayName in local state so the UI
-  // can show it without a round-trip fetch. Stays in sync: when customerId
-  // is cleared we also clear the display name.
-  const [customerDisplayName, setCustomerDisplayName] = useState<string | null>(
-    null,
-  );
-  // If the URL customerId disappears (e.g. back-nav), clear the display name.
-  useEffect(() => {
-    if (!customerFilterId) setCustomerDisplayName(null);
-  }, [customerFilterId]);
+  // Fetch customer displayName from URL id so the pill survives back-nav
+  // and bookmarked URLs — no local state needed.
+  const customerFilterQuery = useQuery<{ id: string; displayName: string }>({
+    queryKey: ["customer", customerFilterId],
+    queryFn: async () => {
+      const res = await fetch(`/api/customers/${customerFilterId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      return { id: body.customer.id, displayName: body.customer.displayName };
+    },
+    enabled: !!customerFilterId,
+    staleTime: 5 * 60 * 1000,
+  });
 
-  // Derived value combining URL id + local display name for FilterBar
+  // Derived value: pill stays visible (with id placeholder) while loading
   const customerFilter: { id: string; displayName: string } | null =
-    customerFilterId && customerDisplayName
-      ? { id: customerFilterId, displayName: customerDisplayName }
+    customerFilterId
+      ? {
+          id: customerFilterId,
+          displayName:
+            customerFilterQuery.data?.displayName ??
+            `#${customerFilterId.slice(0, 8)}`,
+        }
       : null;
 
   // Setters
@@ -172,7 +178,6 @@ export default function TasksPage() {
 
   function setCustomerFilter(next: { id: string; displayName: string } | null) {
     setFilter("customerId", next?.id ?? null, { history: "push" });
-    setCustomerDisplayName(next?.displayName ?? null);
   }
 
   // --- Preserved local state ---
@@ -504,7 +509,7 @@ function FilterBar({
           </ChipGroup>
 
           <ChipGroup label="Priority">
-            {(["urgent", "high", "normal", "low"] as TaskPriority[]).map(
+            {([...TASK_PRIORITIES].reverse() as TaskPriority[]).map(
               (p) => (
                 <Chip
                   key={p}
