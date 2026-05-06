@@ -17,6 +17,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
+import { CollapsibleCard } from "../components/ui/collapsible-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -300,71 +301,74 @@ export default function CustomerDetailPage() {
           <ShopifyTagsRow tagsQuery={tagsQuery} />
         </div>
 
-        <div className="flex flex-wrap items-end gap-2">
-          {/* Per-customer QB refresh — fast path for "I need fresh data
-              before sending a statement". Doesn't touch other customers. */}
-          <SyncCustomerButton customerId={customer.id} />
-          {/* Statements only make sense when there's something to chase
-              for. balance comes back as a string from MySQL DECIMAL —
-              Number(...) > 0 weeds out "0.00" and the rare unparseable
-              edge case (NaN > 0 is false). Held customers are still
-              chase-able, so holdStatus is intentionally not gating. */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setStatementDialogOpen(true)}
-            disabled={!(balance > 0)}
-            title={
-              balance > 0
-                ? "Send a statement of open invoices to this customer"
-                : "No open balance — nothing to send"
-            }
-          >
-            <FileText className="size-3.5" />
-            Send statement
-          </Button>
-          {/* Chase email — same gate as Send statement (need a balance
-              to chase against). Defaults to L1; operator can switch
-              dunning level inside the dialog before sending. To chase
-              a SUBSET of invoices, use the multi-select bulk action
-              on the Invoices tab instead. */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setChaseDialog({})}
-            disabled={!(balance > 0)}
-            title={
-              balance > 0
-                ? "Send a chase email covering all open invoices (L1 by default — switch level inside the dialog)"
-                : "No open balance — nothing to chase"
-            }
-          >
-            <Send className="size-3.5" />
-            Send chase email
-          </Button>
-          {/* Compose-new — operator-initiated outbound with no thread
-              context. Distinct from the per-row Reply button on the
-              Email tab. Always enabled — works even if the customer
-              has no balance, no invoices, etc. ComposeModal pre-fills
-              the TO from the customer's primary email. */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setComposeOpen(true)}
-            title="Compose a new email to this customer (attachments optional)"
-            disabled={!customer.primaryEmail}
-          >
-            <Mail className="size-3.5" />
-            New email
-          </Button>
-          <StatusActions
-            holdStatus={customer.holdStatus}
-            disabled={holdToggleMutation.isPending}
-            onRequest={(target) => {
-              setPendingTarget(target);
-              setHoldDialogOpen(true);
-            }}
-          />
+        <div className="flex flex-col items-end gap-2">
+          {/* Row 1 — account-state actions: hold-toggle + (when not on
+              hold) payment-upfront-toggle + per-customer QB refresh.
+              These change the operational state of the customer rather
+              than firing an outbound message, so they live above the
+              messaging row. */}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StatusActions
+              holdStatus={customer.holdStatus}
+              disabled={holdToggleMutation.isPending}
+              onRequest={(target) => {
+                setPendingTarget(target);
+                setHoldDialogOpen(true);
+              }}
+            />
+            {/* Per-customer QB refresh — fast path for "I need fresh
+                data before sending a statement". Doesn't touch other
+                customers. */}
+            <SyncCustomerButton customerId={customer.id} />
+          </div>
+          {/* Row 2 — outbound messaging. Each gated on having something
+              to send (balance for statement/chase, primary email for
+              compose). Held customers are still chase-able so the
+              chase + statement gates intentionally don't block on
+              holdStatus. */}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setStatementDialogOpen(true)}
+              disabled={!(balance > 0)}
+              title={
+                balance > 0
+                  ? "Send a statement of open invoices to this customer"
+                  : "No open balance — nothing to send"
+              }
+            >
+              <FileText className="size-3.5" />
+              Send statement
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setChaseDialog({})}
+              disabled={!(balance > 0)}
+              title={
+                balance > 0
+                  ? "Send a chase email covering all open invoices (L1 by default — switch level inside the dialog)"
+                  : "No open balance — nothing to chase"
+              }
+            >
+              <Send className="size-3.5" />
+              Send chase email
+            </Button>
+            {/* Compose-new — operator-initiated outbound with no
+                thread context. Distinct from the per-row Reply button
+                on the Email tab. */}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setComposeOpen(true)}
+              title="Compose a new email to this customer (attachments optional)"
+              disabled={!customer.primaryEmail}
+            >
+              <Mail className="size-3.5" />
+              New email
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -996,43 +1000,53 @@ function StatusActions({
   disabled: boolean;
   onRequest: (target: "active" | "hold" | "payment_upfront") => void;
 }) {
-  const showActiveButton = holdStatus !== "active";
-  const showUpfrontButton = holdStatus !== "payment_upfront";
-  const showHoldButton = holdStatus !== "hold";
+  // Two state-aware toggles:
+  //   - hold-toggle (always visible): "Put on hold" when not held;
+  //     "Take off hold" when held.
+  //   - payment-upfront-toggle (hidden when held): "Set to payment
+  //     upfront" when active; "Set to active" when upfront. Hidden
+  //     during hold because operator must take off hold first —
+  //     mixing payment-upfront with hold is operationally
+  //     contradictory.
+  const isHeld = holdStatus === "hold";
+  const isUpfront = holdStatus === "payment_upfront";
   return (
     <>
-      {showActiveButton ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => onRequest("active")}
-          disabled={disabled}
-        >
+      <Button
+        variant={isHeld ? "secondary" : "danger"}
+        size="sm"
+        onClick={() => onRequest(isHeld ? "active" : "hold")}
+        disabled={disabled}
+      >
+        {isHeld ? (
           <Play className="size-3.5" />
-          Set active
-        </Button>
-      ) : null}
-      {showUpfrontButton ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => onRequest("payment_upfront")}
-          disabled={disabled}
-        >
-          <CreditCard className="size-3.5" />
-          Payment upfront
-        </Button>
-      ) : null}
-      {showHoldButton ? (
-        <Button
-          variant="danger"
-          size="sm"
-          onClick={() => onRequest("hold")}
-          disabled={disabled}
-        >
+        ) : (
           <Pause className="size-3.5" />
-          Put on hold
-        </Button>
+        )}
+        {isHeld ? "Take off hold" : "Put on hold"}
+      </Button>
+      {!isHeld ? (
+        isUpfront ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onRequest("active")}
+            disabled={disabled}
+          >
+            <Play className="size-3.5" />
+            Set to active
+          </Button>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onRequest("payment_upfront")}
+            disabled={disabled}
+          >
+            <CreditCard className="size-3.5" />
+            Set to payment upfront
+          </Button>
+        )
       ) : null}
     </>
   );
@@ -1044,45 +1058,102 @@ function StatusActions({
 // email_routing_rules row. All edits hit PATCH /api/customers/:id;
 // the route handles the QBO push for invoice-side fields.
 function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
+  // Collapsed-state summaries — short, glanceable, so the operator
+  // can tell at a glance whether a card has content worth expanding.
+  const invoiceSummary = summariseEmailCounts(
+    customer.invoiceToEmails,
+    customer.invoiceCcEmails,
+    customer.invoiceBccEmails,
+  );
+  const statementSummary = summariseEmailCounts(
+    customer.statementToEmails,
+    customer.statementCcEmails,
+    customer.statementBccEmails,
+  );
+  const phoneCount =
+    (customer.phone ? 1 : 0) + (customer.additionalPhones?.length ?? 0);
+  const phoneSummary =
+    phoneCount === 0
+      ? "no numbers set"
+      : `${phoneCount} number${phoneCount === 1 ? "" : "s"}`;
+  const tagCount = customer.tags?.length ?? 0;
+  const tagSummary =
+    tagCount === 0
+      ? "no tags"
+      : (customer.tags ?? []).slice(0, 3).join(", ") +
+        (tagCount > 3 ? ` (+${tagCount - 3})` : "");
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-      <ChannelEmailsCard
-        customerId={customer.id}
+      <CollapsibleCard
         title="Invoice recipients"
-        helper="Where invoice emails are sent (when finance-hub sends)."
-        toEmails={customer.invoiceToEmails}
-        ccEmails={customer.invoiceCcEmails}
-        bccEmails={customer.invoiceBccEmails}
-        toField="invoiceToEmails"
-        ccField="invoiceCcEmails"
-        bccField="invoiceBccEmails"
-        channel="invoice"
-        tags={customer.tags ?? []}
-      />
-      <ChannelEmailsCard
-        customerId={customer.id}
+        summary={invoiceSummary}
+      >
+        <ChannelEmailsCard
+          customerId={customer.id}
+          title="Invoice recipients"
+          helper="Where invoice emails are sent (when finance-hub sends)."
+          toEmails={customer.invoiceToEmails}
+          ccEmails={customer.invoiceCcEmails}
+          bccEmails={customer.invoiceBccEmails}
+          toField="invoiceToEmails"
+          ccField="invoiceCcEmails"
+          bccField="invoiceBccEmails"
+          channel="invoice"
+          tags={customer.tags ?? []}
+        />
+      </CollapsibleCard>
+      <CollapsibleCard
         title="Statement & chase recipients"
-        helper="Where Statement.pdf and chase emails are sent."
-        toEmails={customer.statementToEmails}
-        ccEmails={customer.statementCcEmails}
-        bccEmails={customer.statementBccEmails}
-        toField="statementToEmails"
-        ccField="statementCcEmails"
-        bccField="statementBccEmails"
-        channel="statement"
-        tags={customer.tags ?? []}
-      />
-      <PhonesCard
-        customerId={customer.id}
-        phone={customer.phone}
-        additionalPhones={customer.additionalPhones}
-      />
-      <TagsCard
-        customerId={customer.id}
-        currentTags={customer.tags ?? []}
-      />
+        summary={statementSummary}
+      >
+        <ChannelEmailsCard
+          customerId={customer.id}
+          title="Statement & chase recipients"
+          helper="Where Statement.pdf and chase emails are sent."
+          toEmails={customer.statementToEmails}
+          ccEmails={customer.statementCcEmails}
+          bccEmails={customer.statementBccEmails}
+          toField="statementToEmails"
+          ccField="statementCcEmails"
+          bccField="statementBccEmails"
+          channel="statement"
+          tags={customer.tags ?? []}
+        />
+      </CollapsibleCard>
+      <CollapsibleCard title="Phones" summary={phoneSummary}>
+        <PhonesCard
+          customerId={customer.id}
+          phone={customer.phone}
+          additionalPhones={customer.additionalPhones}
+        />
+      </CollapsibleCard>
+      <CollapsibleCard title="Tags" summary={tagSummary}>
+        <TagsCard
+          customerId={customer.id}
+          currentTags={customer.tags ?? []}
+        />
+      </CollapsibleCard>
     </div>
   );
+}
+
+// One-line summary of (TO / CC / BCC) counts for the recipient cards'
+// collapsed state. "no recipients set" when all three are empty so
+// the operator can tell at a glance the card needs setup.
+function summariseEmailCounts(
+  toEmails: string[] | null,
+  ccEmails: string[] | null,
+  bccEmails: string[] | null,
+): string {
+  const to = toEmails?.length ?? 0;
+  const cc = ccEmails?.length ?? 0;
+  const bcc = bccEmails?.length ?? 0;
+  if (to === 0 && cc === 0 && bcc === 0) return "no recipients set";
+  const parts: string[] = [];
+  parts.push(`${to} TO`);
+  if (cc > 0) parts.push(`${cc} CC`);
+  if (bcc > 0) parts.push(`${bcc} BCC`);
+  return parts.join(" · ");
 }
 
 // One per channel (invoice / statement). Three identical chip-list
@@ -1159,65 +1230,64 @@ function ChannelEmailsCard({
     },
   });
 
+  // Inner content only — title + Card wrapper provided by the parent
+  // CollapsibleCard. `title` prop kept on the function signature for
+  // call-site clarity even though it's no longer rendered here.
+  void title;
   return (
-    <Card>
-      <CardBody className="space-y-2 py-3">
-        <div className="text-xs uppercase tracking-wide text-muted">
-          {title}
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted">{helper}</div>
+      <EmailChipList
+        label="TO"
+        values={toEmails ?? []}
+        onChange={(next) =>
+          mutation.mutate({
+            [toField]: next.length > 0 ? next : null,
+          } as never)
+        }
+        placeholder="add TO email and press enter"
+      />
+      <EmailChipList
+        label="CC"
+        values={ccEmails ?? []}
+        onChange={(next) =>
+          mutation.mutate({
+            [ccField]: next.length > 0 ? next : null,
+          } as never)
+        }
+        placeholder="add CC email and press enter"
+      />
+      <EmailChipList
+        label="BCC"
+        values={bccEmails ?? []}
+        onChange={(next) =>
+          mutation.mutate({
+            [bccField]: next.length > 0 ? next : null,
+          } as never)
+        }
+        placeholder="add BCC email and press enter"
+      />
+      {tagDerivedBccs.length > 0 ? (
+        <div className="rounded-md border border-default bg-subtle px-2 py-1 text-[11px] text-secondary">
+          <div className="font-medium text-accent-info">
+            + auto-BCC from tags:
+          </div>
+          <ul className="ml-3 list-disc">
+            {tagDerivedBccs.map((r, i) => (
+              <li key={i}>
+                {r.value}{" "}
+                <span className="text-muted">({r.tag})</span>
+              </li>
+            ))}
+          </ul>
         </div>
-        <div className="text-[11px] text-muted">{helper}</div>
-        <EmailChipList
-          label="TO"
-          values={toEmails ?? []}
-          onChange={(next) =>
-            mutation.mutate({
-              [toField]: next.length > 0 ? next : null,
-            } as never)
-          }
-          placeholder="add TO email and press enter"
-        />
-        <EmailChipList
-          label="CC"
-          values={ccEmails ?? []}
-          onChange={(next) =>
-            mutation.mutate({
-              [ccField]: next.length > 0 ? next : null,
-            } as never)
-          }
-          placeholder="add CC email and press enter"
-        />
-        <EmailChipList
-          label="BCC"
-          values={bccEmails ?? []}
-          onChange={(next) =>
-            mutation.mutate({
-              [bccField]: next.length > 0 ? next : null,
-            } as never)
-          }
-          placeholder="add BCC email and press enter"
-        />
-        {tagDerivedBccs.length > 0 ? (
-          <div className="rounded-md border border-default bg-subtle px-2 py-1 text-[11px] text-secondary">
-            <div className="font-medium text-accent-info">
-              + auto-BCC from tags:
-            </div>
-            <ul className="ml-3 list-disc">
-              {tagDerivedBccs.map((r, i) => (
-                <li key={i}>
-                  {r.value}{" "}
-                  <span className="text-muted">({r.tag})</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {mutation.isError ? (
-          <div className="text-[11px] text-accent-danger">
-            {(mutation.error as Error)?.message ?? "save failed"}
-          </div>
-        ) : null}
-      </CardBody>
-    </Card>
+      ) : null}
+      {mutation.isError ? (
+        <div className="text-[11px] text-accent-danger">
+          {(mutation.error as Error)?.message ?? "save failed"}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1397,76 +1467,75 @@ function TagsCard({
       .map((r) => describeRule(r.action, r.value));
   }
 
+  // Inner content only — Card + title bar provided by parent
+  // CollapsibleCard.
   return (
-    <Card>
-      <CardBody className="space-y-2 py-3">
-        <div className="text-xs uppercase tracking-wide text-muted">Tags</div>
-        <div className="text-[11px] text-muted">
-          Drives auto-routing rules. Match against Settings → Email
-          routing rules.
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted">
+        Drives auto-routing rules. Match against Settings → Email
+        routing rules.
+      </div>
+      {draft.length > 0 ? (
+        <ul className="space-y-1">
+          {draft.map((tag) => {
+            const effects = effectsForTag(tag);
+            return (
+              <li key={tag} className="text-xs">
+                <span className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]">
+                  {tag}
+                  <button
+                    type="button"
+                    onClick={() => removeTag(tag)}
+                    className="text-muted hover:text-accent-danger"
+                    aria-label={`Remove tag ${tag}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+                {effects.length > 0 ? (
+                  <ul className="ml-2 mt-0.5 list-disc text-[10px] text-accent-info">
+                    {effects.map((e, i) => (
+                      <li key={i} className="ml-2">
+                        {e}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              addTag();
+            }
+          }}
+          placeholder="add tag (e.g. yiddy)"
+          className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={addTag}
+          disabled={!input.trim()}
+        >
+          Add
+        </Button>
+      </div>
+      {mutation.isError ? (
+        <div className="text-[11px] text-accent-danger">
+          {(mutation.error as Error)?.message ?? "save failed"}
         </div>
-        {draft.length > 0 ? (
-          <ul className="space-y-1">
-            {draft.map((tag) => {
-              const effects = effectsForTag(tag);
-              return (
-                <li key={tag} className="text-xs">
-                  <span className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]">
-                    {tag}
-                    <button
-                      type="button"
-                      onClick={() => removeTag(tag)}
-                      className="text-muted hover:text-accent-danger"
-                      aria-label={`Remove tag ${tag}`}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
-                  {effects.length > 0 ? (
-                    <ul className="ml-2 mt-0.5 list-disc text-[10px] text-accent-info">
-                      {effects.map((e, i) => (
-                        <li key={i} className="ml-2">
-                          {e}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        ) : null}
-        <div className="flex gap-1">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === ",") {
-                e.preventDefault();
-                addTag();
-              }
-            }}
-            placeholder="add tag (e.g. yiddy)"
-            className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={addTag}
-            disabled={!input.trim()}
-          >
-            Add
-          </Button>
-        </div>
-        {mutation.isError ? (
-          <div className="text-[11px] text-accent-danger">
-            {(mutation.error as Error)?.message ?? "save failed"}
-          </div>
-        ) : null}
-      </CardBody>
-    </Card>
+      ) : null}
+    </div>
   );
 }
 
@@ -1570,111 +1639,110 @@ function PhonesCard({
     mutation.mutate({ additionalPhones: extras.length > 0 ? extras : null });
   }
 
+  // Inner content only — Card + title bar provided by parent
+  // CollapsibleCard.
   return (
-    <Card>
-      <CardBody className="space-y-2 py-3">
-        <div className="text-xs uppercase tracking-wide text-muted">Phones</div>
-        <div className="text-[11px] text-muted">
-          Main syncs to QuickBooks. Additional lines are local-only.
-        </div>
-        <label className="block">
-          <span className="mb-0.5 block text-[11px] text-muted">Main</span>
-          <input
-            type="tel"
-            value={phoneDraft}
-            onChange={(e) => setPhoneDraft(e.target.value)}
-            onBlur={savePhone}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            placeholder="(555) 123-4567"
-            className="w-full rounded-md border border-default bg-base px-2 py-1 text-xs"
-          />
-        </label>
-        <div>
-          <span className="mb-0.5 block text-[11px] text-muted">
-            Additional ({extras.length}/10)
-          </span>
-          {extras.length > 0 ? (
-            <ul className="mb-1 space-y-1">
-              {extras.map((e, i) => (
-                <li key={i} className="flex gap-1">
-                  <input
-                    type="text"
-                    value={e.label}
-                    onChange={(ev) =>
-                      updateExtra(i, { label: ev.target.value })
-                    }
-                    onBlur={saveExtras}
-                    placeholder="Label"
-                    className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-                  />
-                  <input
-                    type="tel"
-                    value={e.number}
-                    onChange={(ev) =>
-                      updateExtra(i, { number: ev.target.value })
-                    }
-                    onBlur={saveExtras}
-                    placeholder="Number"
-                    className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeExtra(i)}
-                    className="rounded p-1 text-muted hover:text-accent-danger"
-                    aria-label={`Remove ${e.label || "phone"}`}
-                  >
-                    <X className="size-3" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {extras.length < 10 ? (
-            <div className="flex gap-1">
-              <input
-                type="text"
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-                placeholder="Label"
-                className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-              />
-              <input
-                type="tel"
-                value={newNumber}
-                onChange={(e) => setNewNumber(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addExtra();
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted">
+        Main syncs to QuickBooks. Additional lines are local-only.
+      </div>
+      <label className="block">
+        <span className="mb-0.5 block text-[11px] text-muted">Main</span>
+        <input
+          type="tel"
+          value={phoneDraft}
+          onChange={(e) => setPhoneDraft(e.target.value)}
+          onBlur={savePhone}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          placeholder="(555) 123-4567"
+          className="w-full rounded-md border border-default bg-base px-2 py-1 text-xs"
+        />
+      </label>
+      <div>
+        <span className="mb-0.5 block text-[11px] text-muted">
+          Additional ({extras.length}/10)
+        </span>
+        {extras.length > 0 ? (
+          <ul className="mb-1 space-y-1">
+            {extras.map((e, i) => (
+              <li key={i} className="flex gap-1">
+                <input
+                  type="text"
+                  value={e.label}
+                  onChange={(ev) =>
+                    updateExtra(i, { label: ev.target.value })
                   }
-                }}
-                placeholder="Number"
-                className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={addExtra}
-                disabled={!newLabel.trim() || newNumber.trim().length < 3}
-              >
-                Add
-              </Button>
-            </div>
-          ) : null}
-        </div>
-        {mutation.isError ? (
-          <div className="text-[11px] text-accent-danger">
-            {(mutation.error as Error)?.message ?? "save failed"}
+                  onBlur={saveExtras}
+                  placeholder="Label"
+                  className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                />
+                <input
+                  type="tel"
+                  value={e.number}
+                  onChange={(ev) =>
+                    updateExtra(i, { number: ev.target.value })
+                  }
+                  onBlur={saveExtras}
+                  placeholder="Number"
+                  className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeExtra(i)}
+                  className="rounded p-1 text-muted hover:text-accent-danger"
+                  aria-label={`Remove ${e.label || "phone"}`}
+                >
+                  <X className="size-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {extras.length < 10 ? (
+          <div className="flex gap-1">
+            <input
+              type="text"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              placeholder="Label"
+              className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+            />
+            <input
+              type="tel"
+              value={newNumber}
+              onChange={(e) => setNewNumber(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addExtra();
+                }
+              }}
+              placeholder="Number"
+              className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={addExtra}
+              disabled={!newLabel.trim() || newNumber.trim().length < 3}
+            >
+              Add
+            </Button>
           </div>
         ) : null}
-      </CardBody>
-    </Card>
+      </div>
+      {mutation.isError ? (
+        <div className="text-[11px] text-accent-danger">
+          {(mutation.error as Error)?.message ?? "save failed"}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
