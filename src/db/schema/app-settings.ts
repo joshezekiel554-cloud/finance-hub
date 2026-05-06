@@ -63,5 +63,11 @@ export const APP_SETTING_KEYS = [
   // refusing to silently issue against a wrong item.
   "rma_shipping_fee_item_id",
   "rma_restocking_fee_item_id",
+  // Sequential counter for damage credit memo DocNumbers (DC#####).
+  // Allocated atomically at approve time via SELECT FOR UPDATE on
+  // this row → increment → save. Default seed "38771" continues the
+  // legacy QBO range. Operator can edit in /settings → Returns to
+  // adjust the seed or recover from an accidental increment.
+  "damage_cm_number_next",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

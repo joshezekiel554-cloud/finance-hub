@@ -40,6 +40,10 @@ export type AppSettingsMap = {
   // relevant id is empty when a deduction is requested.
   rma_shipping_fee_item_id: string;
   rma_restocking_fee_item_id: string;
+  // Next sequential damage CM number. Allocated atomically at approve
+  // time. Stored as a string per the app_settings schema; coerced to
+  // Number when read.
+  damage_cm_number_next: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -59,6 +63,9 @@ const DEFAULTS: AppSettingsMap = {
   warehouse_team_email: "",
   rma_shipping_fee_item_id: "",
   rma_restocking_fee_item_id: "",
+  // Continues the legacy QBO range — operator can adjust via /settings
+  // if they want to start a different sequence.
+  damage_cm_number_next: "38771",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

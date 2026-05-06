@@ -96,8 +96,19 @@ function formatInvoiceDate(date: Date | string): string {
 // resulting Item Ids in app settings before going live.
 //
 // DocNumber:
-//   - damage RMA: use rmaNumber (the DC-... string)
-//   - non-damage: omit (QBO autogenerates, e.g. "42CR")
+//   - damage RMA:        use rmaNumber as-is (DC##### sequential, e.g. DC38771)
+//   - seasonal RMA:      `${rmaNumber}CR` (e.g. 18743CR — Extensiv tx + "CR")
+//   - non_seasonal RMA:  same `${rmaNumber}CR` shape
+//   QBO "Custom transaction numbers" must be ON; otherwise DocNumber is
+//   ignored and QBO autogenerates.
+//
+// CustomerMemo:
+//   - damage:        "damaged items"
+//   - seasonal:      "seasonal returns"
+//   - non_seasonal:  "returns"
+//   Plain-English summary the customer sees on the CM PDF — no internal
+//   identifiers. Operators search QBO by DocNumber if they need to find
+//   a specific CM later.
 // ---------------------------------------------------------------------------
 
 // QBO Item ids used as line refs for the shipping + restocking fee
@@ -201,14 +212,41 @@ export async function buildAndPushCreditMemo(
     }
   }
 
-  // DocNumber: only set for damage RMAs (DC-... format). For seasonal/non-seasonal,
-  // omit and let QBO autogenerate (e.g. "42CR").
+  // DocNumber strategy by return type:
+  //   - damage:        rmaNumber as-is (DC##### sequential, allocated at
+  //                    approve time via the app_settings counter)
+  //   - seasonal:      `${rmaNumber}CR` where rmaNumber is the operator-
+  //                    entered Extensiv warehouse tx number (e.g. 18743CR)
+  //   - non_seasonal:  same `${rmaNumber}CR` shape
+  //
+  // QBO's "Custom transaction numbers" setting must be ON for these to
+  // stick — otherwise QBO ignores DocNumber on the payload and auto-
+  // generates its own. The damage path requires this, so the QBO setting
+  // is assumed enabled. rmaNumber is guaranteed non-null at this point
+  // because the state machine forces approve (damage) or
+  // setWarehouseNumber (seasonal/non_seasonal) before reaching `received`.
+  const rmaNumber = input.rma.rmaNumber;
   const docNumber =
-    input.rma.returnType === "damage" ? (input.rma.rmaNumber ?? undefined) : undefined;
+    input.rma.returnType === "damage"
+      ? (rmaNumber ?? undefined)
+      : rmaNumber
+        ? `${rmaNumber}CR`
+        : undefined;
+
+  // CustomerMemo prints on the QBO CM PDF the customer receives. Plain-
+  // English summary by return type — no rmaNumber so the customer sees
+  // a readable phrase, not an internal id. Operators can grep QBO by
+  // DocNumber if they need to find a specific CM.
+  const customerMemo =
+    input.rma.returnType === "damage"
+      ? "damaged items"
+      : input.rma.returnType === "seasonal"
+        ? "seasonal returns"
+        : "returns";
 
   const payload: Record<string, unknown> = {
     CustomerRef: { value: input.rma.qbCustomerId },
-    CustomerMemo: { value: `RMA ${input.rma.rmaNumber}` },
+    CustomerMemo: { value: customerMemo },
     Line: lines,
   };
 

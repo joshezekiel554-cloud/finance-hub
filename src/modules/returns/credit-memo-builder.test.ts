@@ -238,20 +238,45 @@ describe("buildAndPushCreditMemo", () => {
     return createCreditMemoMock.mock.calls[createCreditMemoMock.mock.calls.length - 1]![0] as T;
   }
 
-  it("sets DocNumber to rmaNumber for damage RMAs", async () => {
+  it("sets DocNumber to rmaNumber for damage RMAs (DC#####)", async () => {
     await buildAndPushCreditMemo({
-      rma: makeRma({ rmaNumber: "DC-20260504-120000", returnType: "damage" }),
+      rma: makeRma({ rmaNumber: "DC38771", returnType: "damage" }),
       items: [makeItem()],
       shippingDeduction: null,
       restockingFee: null,
     });
     const payload = getLastPayload();
-    expect(payload.DocNumber).toBe("DC-20260504-120000");
+    expect(payload.DocNumber).toBe("DC38771");
   });
 
-  it("omits DocNumber for non-damage RMAs (let QBO autogen)", async () => {
+  it("appends 'CR' to rmaNumber for seasonal RMAs", async () => {
     await buildAndPushCreditMemo({
-      rma: makeRma({ returnType: "seasonal" }),
+      rma: makeRma({ rmaNumber: "18743", returnType: "seasonal" }),
+      items: [makeItem()],
+      shippingDeduction: null,
+      restockingFee: null,
+    });
+    const payload = getLastPayload();
+    expect(payload.DocNumber).toBe("18743CR");
+  });
+
+  it("appends 'CR' to rmaNumber for non-seasonal RMAs", async () => {
+    await buildAndPushCreditMemo({
+      rma: makeRma({ rmaNumber: "WH-12345", returnType: "non_seasonal" }),
+      items: [makeItem()],
+      shippingDeduction: null,
+      restockingFee: null,
+    });
+    const payload = getLastPayload();
+    expect(payload.DocNumber).toBe("WH-12345CR");
+  });
+
+  it("omits DocNumber when seasonal/non_seasonal rmaNumber is missing", async () => {
+    // Defence-in-depth: if rmaNumber is somehow null on a non-damage
+    // RMA, fall back to QBO autogen rather than producing the literal
+    // string "nullCR" as the DocNumber.
+    await buildAndPushCreditMemo({
+      rma: makeRma({ rmaNumber: null, returnType: "seasonal" }),
       items: [makeItem()],
       shippingDeduction: null,
       restockingFee: null,
@@ -271,16 +296,42 @@ describe("buildAndPushCreditMemo", () => {
     expect((payload.CustomerRef as { value: string }).value).toBe("QB-999");
   });
 
-  it("sets CustomerMemo to 'RMA {rmaNumber}'", async () => {
+  it("sets CustomerMemo to 'damaged items' for damage RMAs", async () => {
     await buildAndPushCreditMemo({
-      rma: makeRma({ rmaNumber: "DC-20260504-120000" }),
+      rma: makeRma({ rmaNumber: "DC38771", returnType: "damage" }),
       items: [makeItem()],
       shippingDeduction: null,
       restockingFee: null,
     });
     const payload = getLastPayload();
     expect((payload.CustomerMemo as { value: string }).value).toBe(
-      "RMA DC-20260504-120000",
+      "damaged items",
+    );
+  });
+
+  it("sets CustomerMemo to 'seasonal returns' for seasonal RMAs", async () => {
+    await buildAndPushCreditMemo({
+      rma: makeRma({ rmaNumber: "18743", returnType: "seasonal" }),
+      items: [makeItem()],
+      shippingDeduction: null,
+      restockingFee: null,
+    });
+    const payload = getLastPayload();
+    expect((payload.CustomerMemo as { value: string }).value).toBe(
+      "seasonal returns",
+    );
+  });
+
+  it("sets CustomerMemo to 'returns' for non-seasonal RMAs", async () => {
+    await buildAndPushCreditMemo({
+      rma: makeRma({ rmaNumber: "WH-99", returnType: "non_seasonal" }),
+      items: [makeItem()],
+      shippingDeduction: null,
+      restockingFee: null,
+    });
+    const payload = getLastPayload();
+    expect((payload.CustomerMemo as { value: string }).value).toBe(
+      "returns",
     );
   });
 

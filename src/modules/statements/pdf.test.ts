@@ -87,6 +87,7 @@ const SETTINGS: AppSettingsMap = {
   warehouse_team_email: "",
   rma_shipping_fee_item_id: "",
   rma_restocking_fee_item_id: "",
+  damage_cm_number_next: "38771",
 };
 
 describe("renderStatementPdf", () => {
@@ -177,6 +178,7 @@ describe("renderStatementPdf", () => {
         warehouse_team_email: "",
         rma_shipping_fee_item_id: "",
         rma_restocking_fee_item_id: "",
+        damage_cm_number_next: "38771",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

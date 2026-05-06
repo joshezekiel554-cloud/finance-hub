@@ -983,12 +983,16 @@ function ReturnsSection() {
     settingsQuery.data?.settings.rma_shipping_fee_item_id ?? "";
   const initialRestockingFeeItemId =
     settingsQuery.data?.settings.rma_restocking_fee_item_id ?? "";
+  const initialDamageCmNumberNext =
+    settingsQuery.data?.settings.damage_cm_number_next ?? "38771";
 
   const [driveFolderDraft, setDriveFolderDraft] = useState<string>("");
   const [warehouseEmailDraft, setWarehouseEmailDraft] = useState<string>("");
   const [shippingFeeItemIdDraft, setShippingFeeItemIdDraft] =
     useState<string>("");
   const [restockingFeeItemIdDraft, setRestockingFeeItemIdDraft] =
+    useState<string>("");
+  const [damageCmNumberNextDraft, setDamageCmNumberNextDraft] =
     useState<string>("");
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -999,6 +1003,7 @@ function ReturnsSection() {
       setWarehouseEmailDraft(initialWarehouseEmail);
       setShippingFeeItemIdDraft(initialShippingFeeItemId);
       setRestockingFeeItemIdDraft(initialRestockingFeeItemId);
+      setDamageCmNumberNextDraft(initialDamageCmNumberNext);
     }
   }, [
     settingsQuery.data,
@@ -1006,6 +1011,7 @@ function ReturnsSection() {
     initialWarehouseEmail,
     initialShippingFeeItemId,
     initialRestockingFeeItemId,
+    initialDamageCmNumberNext,
   ]);
 
   const driveFolderDirty =
@@ -1016,11 +1022,14 @@ function ReturnsSection() {
     shippingFeeItemIdDraft.trim() !== initialShippingFeeItemId.trim();
   const restockingFeeDirty =
     restockingFeeItemIdDraft.trim() !== initialRestockingFeeItemId.trim();
+  const damageCmNumberNextDirty =
+    damageCmNumberNextDraft.trim() !== initialDamageCmNumberNext.trim();
   const dirty =
     driveFolderDirty ||
     warehouseEmailDirty ||
     shippingFeeDirty ||
-    restockingFeeDirty;
+    restockingFeeDirty ||
+    damageCmNumberNextDirty;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -1034,6 +1043,8 @@ function ReturnsSection() {
         body.rma_shipping_fee_item_id = shippingFeeItemIdDraft.trim();
       if (restockingFeeDirty)
         body.rma_restocking_fee_item_id = restockingFeeItemIdDraft.trim();
+      if (damageCmNumberNextDirty)
+        body.damage_cm_number_next = damageCmNumberNextDraft.trim();
       const res = await fetch("/api/app-settings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -1156,6 +1167,33 @@ function ReturnsSection() {
             placeholder="e.g. 112"
             value={restockingFeeItemIdDraft}
             onChange={(e) => setRestockingFeeItemIdDraft(e.target.value)}
+            className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="damage-cm-number-next"
+            className="block text-sm font-medium text-secondary"
+          >
+            Next damage credit-memo number
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Sequential counter used as the QBO DocNumber for damage CMs
+            (formatted as <code className="rounded bg-elevated px-1">DC#####</code>).
+            Auto-increments at every damage RMA approve. Adjust here if you
+            need to seed a different starting number or correct after an
+            accidental increment. Seasonal + non-seasonal CMs use{" "}
+            <code className="rounded bg-elevated px-1">{"{tx#}CR"}</code>{" "}
+            instead and don't consume this counter.
+          </p>
+          <Input
+            id="damage-cm-number-next"
+            type="number"
+            min={1}
+            placeholder="38771"
+            value={damageCmNumberNextDraft}
+            onChange={(e) => setDamageCmNumberNextDraft(e.target.value)}
             className="mt-2 font-mono text-xs"
           />
         </div>

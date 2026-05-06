@@ -260,17 +260,25 @@ describe("approveRma — damage", () => {
     recordActivityMock.mockClear();
   });
 
-  it("transitions draft → approved, allocates DC-... rma number, fires activity", async () => {
+  it("transitions draft → approved, allocates DC##### rma number, fires activity", async () => {
+    // Select queue:
+    //   1. db.select(rmas) — current draft
+    //   2. tx.select(appSettings).for("update") — counter row (returns
+    //      empty so the allocator falls into the seed-and-insert path)
+    //   3. db.select(rmas) — final updated rma (mock returns the new
+    //      DC##### number that the allocator would have written)
     setSelectResults([
       [{ id: "rma-1", status: "draft", returnType: "damage", customerId: "cust-1" }],
-      [{ id: "rma-1", status: "approved", returnType: "damage", customerId: "cust-1", rmaNumber: "DC-20260504-120000" }],
+      [], // empty appSettings → allocator inserts at fallbackSeed
+      [{ id: "rma-1", status: "approved", returnType: "damage", customerId: "cust-1", rmaNumber: "DC38771" }],
     ]);
     const result = await approveRma("rma-1", { userId: "user-1" });
     expect(result).not.toBeNull();
     expect(result!.ok).toBe(true);
     if (result && result.ok) {
       expect(result.rma.status).toBe("approved");
-      expect(result.rma.rmaNumber).toMatch(/^DC-\d{8}-\d{6}$/);
+      // New format: DC followed by digits, no separators or timestamps.
+      expect(result.rma.rmaNumber).toMatch(/^DC\d+$/);
     }
     expect(recordActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "rma_approved", refType: "rma", refId: "rma-1" }),

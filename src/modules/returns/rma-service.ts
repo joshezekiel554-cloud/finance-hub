@@ -16,6 +16,7 @@ import {
   type RmaStatus,
 } from "../../db/schema/returns.js";
 import { customers } from "../../db/schema/customers.js";
+import { appSettings } from "../../db/schema/app-settings.js";
 import { recordActivity } from "../crm/activity-ingester.js";
 import { validateTransition } from "./rma-state.js";
 import { buildAndPushCreditMemo } from "./credit-memo-builder.js";
@@ -193,10 +194,55 @@ export type ApproveRmaResult =
   | { ok: true; rma: Rma }
   | { ok: false; reason: string; eligibilityBreakdown?: import("./eligibility.js").EligibilityBreakdown };
 
-function generateDamageRmaNumber(): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `DC-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+// Allocate the next sequential damage credit memo number (DC#####).
+// Atomic via SELECT FOR UPDATE on the app_settings row holding the
+// counter — concurrent approves serialise on this row, so two damage
+// RMAs approved at the same instant get different numbers rather than
+// the same one (which would later collide on QBO DocNumber if QBO has
+// custom-transaction-number uniqueness enabled).
+//
+// Returns the allocated number formatted as `DC{n}` (e.g. `DC38771`).
+// The counter row is created on first call if missing — defaults to
+// 38771 to continue the legacy QBO range.
+//
+// Note: the number is allocated at approve time. If the RMA is later
+// reverted to draft and re-approved, a new number is allocated and
+// the previous one is wasted (sequence gets a gap). This matches how
+// QBO itself behaves with its own auto-numbered docs and is the
+// simpler design vs reusing-on-revert.
+async function allocateDamageCmNumber(): Promise<string> {
+  return await db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(appSettings)
+      .where(eq(appSettings.key, "damage_cm_number_next"))
+      .for("update");
+
+    const fallbackSeed = 38771;
+    let next: number;
+    if (rows.length === 0) {
+      // Counter row hasn't been seeded yet — insert it now at the
+      // default seed. The next call sees the row and locks it.
+      next = fallbackSeed;
+      await tx.insert(appSettings).values({
+        key: "damage_cm_number_next",
+        value: String(next + 1),
+        description: "Next sequential damage CM number (DC#####)",
+      });
+    } else {
+      const raw = rows[0]!.value;
+      const parsed = Number.parseInt(raw, 10);
+      // Operator may have typed garbage into the settings UI; fall
+      // back to the seed and overwrite. Loud rather than silent
+      // because a wrong number means a CM with a misleading id.
+      next = Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackSeed;
+      await tx
+        .update(appSettings)
+        .set({ value: String(next + 1) })
+        .where(eq(appSettings.key, "damage_cm_number_next"));
+    }
+    return `DC${next}`;
+  });
 }
 
 export async function approveRma(
@@ -213,9 +259,12 @@ export async function approveRma(
   });
   if (!transition.ok) return { ok: false, reason: transition.reason };
 
-  // For damage: allocate DC-... rma number immediately.
+  // For damage: allocate the next sequential DC##### number atomically
+  // via the app_settings counter. Concurrent approves serialise on the
+  // counter row so they can't collide on the same number.
   // For seasonal/non-seasonal: rmaNumber stays null until set_warehouse_number.
-  const rmaNumber = current.returnType === "damage" ? generateDamageRmaNumber() : null;
+  const rmaNumber =
+    current.returnType === "damage" ? await allocateDamageCmNumber() : null;
 
   // --- Eligibility check for seasonal / non-seasonal ---
   let eligibilityPatch: {
