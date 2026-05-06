@@ -4,8 +4,6 @@ import { Link, getRouteApi } from "@tanstack/react-router";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { InvoicingTodaySearch } from "../lib/search-schemas/invoicing-today";
-
-const invoicingTodayRouteApi = getRouteApi("/invoicing");
 import { AlertCircle, CheckCircle2, Mail, MessageSquare, Package, Truck } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -15,6 +13,8 @@ import ReturnReceiptReviewDialog, {
   type ReceiptRow,
 } from "../components/return-receipt-review-dialog";
 import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
+
+const invoicingTodayRouteApi = getRouteApi("/invoicing");
 
 type ReconcileAction =
   | { type: "set_metadata"; trackingNumber: string; shipVia: string; shipDate: string }
