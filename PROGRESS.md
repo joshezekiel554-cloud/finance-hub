@@ -13,6 +13,65 @@ If you're new to this file:
 
 ## Current phase
 
+**Customer-page chase email + per-invoice tracking. 🟢 SHIPPED**
+(commits `1fa1499` → `f5aa7c5`, 2026-05-06, 2 commits). Operator-
+requested polish: chase emails are now reachable directly from the
+customer page (no need to flip to /chase), AND the Invoices tab
+supports targeted chases on selected subsets — so an operator with
+a customer who has 8 open invoices can chase just the 3 oldest
+without dragging the others into the message.
+
+**Backend** (`1fa1499`):
+- New `invoice_chases` table (migration `0026_faulty_infant_terrible`)
+  — one row per (invoice × chase email send), preserving history
+  rather than just the latest. Composite index on
+  (invoice_id, sent_at) backs the "Last chased" subqueries.
+- `POST /api/chase/send-chase-email` accepts optional `invoiceIds[]`
+  (≤100). Subset filter applied to the open-invoice fetch + the
+  post-send `invoice_chases` insert. After the Gmail send succeeds,
+  best-effort INSERT one row per scoped invoice; failure is logged
+  but doesn't fail the request (the email already went out).
+- Same `invoiceIds` param on `/preview-chase-email` so the dialog's
+  template re-renders with the subset table when the operator
+  switches level mid-review.
+- Both routes gate the invoice fetch on `customers.id` WHERE so a
+  cross-customer id-guess just falls out of the result set —
+  defence-in-depth.
+- `meta.invoiceIds: string[]` written on the chase activity row +
+  `audit_log.after.invoiceIds` so future timeline UIs can show
+  "chased these N invoices" by reading the activity meta.
+- `GET /api/customers/:id/invoices` adds `lastChasedAt` +
+  `lastChasedLevel` per invoice via correlated subqueries.
+
+**Frontend** (`f5aa7c5`):
+- `<ChaseEmailSendDialog>` gets an L1/L2/L3 segmented selector
+  inside the dialog. Switching levels re-fetches the preview and
+  re-snaps form fields. Optional `invoiceIds` prop threaded through
+  to backend calls.
+- Customer page header: new **Send chase email** button next to
+  **Send statement**. Defaults to L1, opens the dialog scoped to
+  "all open." Auto-fading "Chase L1 sent · N invoices chased"
+  pill mirrors the statement-sent pattern.
+- Invoices tab: new sortable **Last chased** column showing
+  "5d ago L1" with tone gradient muted → secondary → warning
+  across <7d / 7-30d / 30d+. Sort by `lastChasedAt` puts
+  never-chased rows at the front in ascending order — directly
+  enables the "show me invoices I haven't chased recently"
+  workflow.
+- Invoices tab bulk-action bar: when 1+ rows selected, **Send
+  chase email** button appears next to "Download N PDFs". Filters
+  to invoice rows (credit memos can't be chased), opens the dialog
+  scoped to the selected ids.
+
+**No backfill.** Pre-existing chase emails (from before this commit)
+have no per-invoice rows in `invoice_chases`. Old invoices show as
+"never chased" — operator can look at the activity timeline if they
+care about historical context. Reconstructing from `activities` would
+be inaccurate (only "all open at the time of send" was the scope, and
+"open at that moment" isn't recoverable from the current schema).
+
+---
+
 **Pre-cutover bug-check + cleanup wave. 🟢 SHIPPED** (commits
 `69c0a62` → `0e3c26f`, 2026-05-06, 10 commits). Five-agent code
 review across the entire `feat/returns-phase-5-7` branch (returns
@@ -605,14 +664,14 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-05-06 (pre-cutover bug-check + cleanup wave committed; fee item IDs moved to settings)
-**Branch**: `feat/returns-phase-5-7` (HEAD `ef9e520`) — not yet merged to `main`
+**Date**: 2026-05-06 (customer-page chase email + per-invoice chase tracking committed)
+**Branch**: `feat/returns-phase-5-7` (HEAD `f5aa7c5`) — not yet merged to `main`
 **Last `main` commit**: `aa7da53` (2026-04-30 home alert)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub
 **Local repo**: `C:\Users\user\Documents\finance-hub`
 **Status**: `npx tsc --noEmit` exits 0 silently · **451/451 tests pass** across 29 files · server + web + worker running via `npm run dev`
 **Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · ~4,842 activities · 509+ emails · 9 email templates (added `rma_approval` / `rma_denial` / `rma_credit_memo` during returns build) · app_settings extended with `drive_root_folder_id`, `statement_bcc_email`, statement-PDF copy
-**Migrations**: latest is `0025_fast_magik` (UNIQUE on `rmas.extensiv_tx_number`). Returns work added `0020-0024` (rmas + rma_items + seasons + seasonal_products + photos + drive_folder_id + extensiv_receipts). `0019` added `customer_memo` on invoices.
+**Migrations**: latest is `0026_faulty_infant_terrible` (`invoice_chases` table for per-invoice chase history). `0025_fast_magik` added UNIQUE on `rmas.extensiv_tx_number`. Returns work added `0020-0024` (rmas + rma_items + seasons + seasonal_products + photos + drive_folder_id + extensiv_receipts). `0019` added `customer_memo` on invoices.
 **New env vars**: `ADMIN_EMAILS` (comma-list of admin operator emails) — required before pre-cutover; empty list = nobody is admin. The RMA fee item IDs are NOT env vars — they're set via `/settings → Returns` (`rma_shipping_fee_item_id`, `rma_restocking_fee_item_id` in app_settings).
 **Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy · Google OAuth scope expanded to `drive` (RMA photo upload + folder rename)
 **Smoke**: per-customer QB sync `POST /api/customers/{id}/sync-qb` → 200 in ~3 calls; `<SyncCustomerButton>` reflects fresh data instantly via React Query cache invalidation
