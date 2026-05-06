@@ -36,6 +36,10 @@ const queryClient = new QueryClient({
   },
 });
 
+// Expose so restoreSearchOnEmpty (which runs in beforeLoad, outside React)
+// can read the cached current user without re-querying.
+(window as unknown as { __FH_QUERY_CLIENT__: typeof queryClient }).__FH_QUERY_CLIENT__ = queryClient;
+
 const rootRoute = createRootRoute({
   component: () => (
     <App>
