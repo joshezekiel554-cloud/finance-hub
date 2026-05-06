@@ -85,6 +85,8 @@ const SETTINGS: AppSettingsMap = {
   statement_bcc_email: "",
   drive_root_folder_id: "",
   warehouse_team_email: "",
+  rma_shipping_fee_item_id: "",
+  rma_restocking_fee_item_id: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -173,6 +175,8 @@ describe("renderStatementPdf", () => {
         statement_bcc_email: "",
         drive_root_folder_id: "",
         warehouse_team_email: "",
+        rma_shipping_fee_item_id: "",
+        rma_restocking_fee_item_id: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

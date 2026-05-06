@@ -56,5 +56,12 @@ export const APP_SETTING_KEYS = [
   // adds tracking. Empty = no email is sent (operator may notify the
   // warehouse out-of-band).
   "warehouse_team_email",
+  // QBO Item ids used as line refs for the shipping + restocking fee
+  // deduction lines on credit memos. Operator creates the service
+  // items in QBO once + pastes the numeric Item.Id here. Empty = the
+  // CM builder throws a clear error if a deduction is requested,
+  // refusing to silently issue against a wrong item.
+  "rma_shipping_fee_item_id",
+  "rma_restocking_fee_item_id",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

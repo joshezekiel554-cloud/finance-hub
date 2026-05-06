@@ -979,9 +979,17 @@ function ReturnsSection() {
     settingsQuery.data?.settings.drive_root_folder_id ?? "";
   const initialWarehouseEmail =
     settingsQuery.data?.settings.warehouse_team_email ?? "";
+  const initialShippingFeeItemId =
+    settingsQuery.data?.settings.rma_shipping_fee_item_id ?? "";
+  const initialRestockingFeeItemId =
+    settingsQuery.data?.settings.rma_restocking_fee_item_id ?? "";
 
   const [driveFolderDraft, setDriveFolderDraft] = useState<string>("");
   const [warehouseEmailDraft, setWarehouseEmailDraft] = useState<string>("");
+  const [shippingFeeItemIdDraft, setShippingFeeItemIdDraft] =
+    useState<string>("");
+  const [restockingFeeItemIdDraft, setRestockingFeeItemIdDraft] =
+    useState<string>("");
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   // Snap drafts to server values on (re)load.
@@ -989,14 +997,30 @@ function ReturnsSection() {
     if (settingsQuery.data) {
       setDriveFolderDraft(initialDriveFolder);
       setWarehouseEmailDraft(initialWarehouseEmail);
+      setShippingFeeItemIdDraft(initialShippingFeeItemId);
+      setRestockingFeeItemIdDraft(initialRestockingFeeItemId);
     }
-  }, [settingsQuery.data, initialDriveFolder, initialWarehouseEmail]);
+  }, [
+    settingsQuery.data,
+    initialDriveFolder,
+    initialWarehouseEmail,
+    initialShippingFeeItemId,
+    initialRestockingFeeItemId,
+  ]);
 
   const driveFolderDirty =
     driveFolderDraft.trim() !== initialDriveFolder.trim();
   const warehouseEmailDirty =
     warehouseEmailDraft.trim() !== initialWarehouseEmail.trim();
-  const dirty = driveFolderDirty || warehouseEmailDirty;
+  const shippingFeeDirty =
+    shippingFeeItemIdDraft.trim() !== initialShippingFeeItemId.trim();
+  const restockingFeeDirty =
+    restockingFeeItemIdDraft.trim() !== initialRestockingFeeItemId.trim();
+  const dirty =
+    driveFolderDirty ||
+    warehouseEmailDirty ||
+    shippingFeeDirty ||
+    restockingFeeDirty;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -1006,6 +1030,10 @@ function ReturnsSection() {
       if (driveFolderDirty) body.drive_root_folder_id = driveFolderDraft.trim();
       if (warehouseEmailDirty)
         body.warehouse_team_email = warehouseEmailDraft.trim();
+      if (shippingFeeDirty)
+        body.rma_shipping_fee_item_id = shippingFeeItemIdDraft.trim();
+      if (restockingFeeDirty)
+        body.rma_restocking_fee_item_id = restockingFeeItemIdDraft.trim();
       const res = await fetch("/api/app-settings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -1081,6 +1109,54 @@ function ReturnsSection() {
             value={warehouseEmailDraft}
             onChange={(e) => setWarehouseEmailDraft(e.target.value)}
             className="mt-2 text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="rma-shipping-fee-item-id"
+            className="block text-sm font-medium text-secondary"
+          >
+            Shipping-deduction QBO Item ID
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            QBO Item id for the negative line on credit memos when an RMA
+            includes a return-shipping deduction. Create a service item in
+            QBO (e.g. "Return shipping deduction" pointed at a contra-revenue
+            account), then paste its numeric Item.Id here. Leave empty to
+            disable shipping deductions — the CM builder will refuse to
+            issue any CM with shipping fees while this is unset.
+          </p>
+          <Input
+            id="rma-shipping-fee-item-id"
+            type="text"
+            placeholder="e.g. 47"
+            value={shippingFeeItemIdDraft}
+            onChange={(e) => setShippingFeeItemIdDraft(e.target.value)}
+            className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="rma-restocking-fee-item-id"
+            className="block text-sm font-medium text-secondary"
+          >
+            Restocking-fee QBO Item ID
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            QBO Item id for the negative line on credit memos when an RMA
+            includes a restocking fee. Same setup as the shipping item:
+            create a service item in QBO, paste its numeric Item.Id. Leave
+            empty to disable restocking deductions.
+          </p>
+          <Input
+            id="rma-restocking-fee-item-id"
+            type="text"
+            placeholder="e.g. 112"
+            value={restockingFeeItemIdDraft}
+            onChange={(e) => setRestockingFeeItemIdDraft(e.target.value)}
+            className="mt-2 font-mono text-xs"
           />
         </div>
 

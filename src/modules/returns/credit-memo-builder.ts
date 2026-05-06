@@ -1,6 +1,6 @@
 import type { Rma, RmaItem } from "../../db/schema/returns.js";
 import { QboClient } from "../../integrations/qb/client.js";
-import { env } from "../../lib/env.js";
+import { loadAppSettings } from "../statements/settings.js";
 
 export type BuildAndPushInput = {
   rma: Rma;
@@ -101,20 +101,19 @@ function formatInvoiceDate(date: Date | string): string {
 // ---------------------------------------------------------------------------
 
 // QBO Item ids used as line refs for the shipping + restocking fee
-// deductions. Configured via RMA_SHIPPING_FEE_QBO_ITEM_ID and
-// RMA_RESTOCKING_FEE_QBO_ITEM_ID env vars. When unset the deduction
-// path throws (see assertFeeItemConfigured below) rather than silently
-// posting a CM against the wrong QBO item — which would either fail
-// noisily ("Item id 1 doesn't exist") or, worse, succeed against an
-// unrelated item if id 1 happens to be populated.
+// deductions. Loaded from app_settings (rma_shipping_fee_item_id,
+// rma_restocking_fee_item_id), set via the /settings UI under the
+// Returns section. When unset the deduction path throws — see
+// assertFeeItemConfigured — rather than silently posting a CM against
+// the wrong QBO item.
 function assertFeeItemConfigured(
   kind: "shipping" | "restocking",
   itemId: string,
 ): asserts itemId is string {
   if (!itemId.trim()) {
     throw new Error(
-      `RMA ${kind}-fee deduction requested but RMA_${kind.toUpperCase()}_FEE_QBO_ITEM_ID is not set. ` +
-        `Create the service item in QBO and set the env var before issuing CMs with ${kind} fees.`,
+      `RMA ${kind}-fee deduction requested but rma_${kind}_fee_item_id is not configured. ` +
+        `Create the service item in QBO and set the id in /settings → Returns before issuing CMs with ${kind} fees.`,
     );
   }
 }
@@ -123,6 +122,11 @@ export async function buildAndPushCreditMemo(
   input: BuildAndPushInput,
   qbo: QboClient = new QboClient(),
 ): Promise<BuildAndPushResult> {
+  // Loaded once per CM build; only the deduction branches read it.
+  // Cheap (single SELECT) — and saves needing to thread settings
+  // through every caller.
+  const settings = await loadAppSettings();
+
   const lines: Array<{
     DetailType: "SalesItemLineDetail";
     Amount: number;
@@ -163,7 +167,7 @@ export async function buildAndPushCreditMemo(
   if (input.shippingDeduction != null) {
     const shippingAmt = parseFloat(input.shippingDeduction);
     if (shippingAmt > 0) {
-      const shippingItemId = env.RMA_SHIPPING_FEE_QBO_ITEM_ID;
+      const shippingItemId = settings.rma_shipping_fee_item_id;
       assertFeeItemConfigured("shipping", shippingItemId);
       lines.push({
         DetailType: "SalesItemLineDetail",
@@ -182,7 +186,7 @@ export async function buildAndPushCreditMemo(
   if (input.restockingFee != null) {
     const restockAmt = parseFloat(input.restockingFee);
     if (restockAmt > 0) {
-      const restockItemId = env.RMA_RESTOCKING_FEE_QBO_ITEM_ID;
+      const restockItemId = settings.rma_restocking_fee_item_id;
       assertFeeItemConfigured("restocking", restockItemId);
       lines.push({
         DetailType: "SalesItemLineDetail",
