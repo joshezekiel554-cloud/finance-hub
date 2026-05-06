@@ -13,6 +13,146 @@ If you're new to this file:
 
 ## Current phase
 
+**Pre-cutover bug-check + cleanup wave. 🟢 SHIPPED** (commits
+`69c0a62` → `0e3c26f`, 2026-05-06, 10 commits). Five-agent code
+review across the entire `feat/returns-phase-5-7` branch (returns
+core backend, returns analysis modules, returns frontend, friction
+polish, plus a synthesis pass) surfaced 17 critical + 15 important
+findings. Six parallel implementation agents + me cleared the
+backlog over a single session.
+
+Top hits — these were real bugs, not nits:
+
+- **Cache-invalidation gap was system-wide.** Every RMA mutation
+  was invalidating only `["rma", id]`, leaving the customer's
+  Returns tab, customers list `hasPendingRma` flag, chase RMA
+  pill, and customer-detail KPI strip stale until hard reload.
+  New helper `src/web/lib/invalidate-rma.ts` applied across 21
+  mutation sites in `rma-action-panel`, all rma-*-dialog/action
+  components, customer-detail RmaRowMenu, chase per-row send,
+  email-list backfill (`69c0a62`, `1da048b`).
+- **Wizard silently dropped operator data.** Items removed from
+  local state never DELETEd on backend; items missing `qbItemId`
+  silently skipped at Approve; `classification` edits on resumed
+  wizards omitted from PATCH body. All three fixed (`c5291b9`).
+- **Credit-memo line `Amount` ≠ `Qty * UnitPrice`** when
+  `receivedQuantity` overrode the original quantity — wrong
+  customer credit. Builder now derives Amount from qty × unitPrice
+  (`7a74c48`).
+- **Receipt-review "Create RMA from receipt" was unreachable** —
+  customer search input had no result list and `setFrCustomer`
+  was never called from any UI. Now wired with the same
+  `CustomerPicker` shape from `return-new.tsx` (`c5291b9`).
+- **`mark_already_credited` didn't verify CustomerRef** — operator
+  paste-typo could silently link another customer's CM. Now
+  cross-checks `cm.CustomerRef.value === current.qbCustomerId`
+  (`d022fc3`).
+- **`eligibility-pdf` GET trusted client-supplied `x-user-id`** for
+  Drive token routing, despite calling `requireAuth(req)` and
+  discarding the result. Auth bypass / IDOR. Now uses `user.id`
+  from auth (`d022fc3`).
+- **`/from-receipt` accepted `customerId`/`qbCustomerId` from body**
+  without verifying the receipt was unconfirmed or that the ids
+  matched. Now cross-checks both (`d022fc3`).
+- **Photo upload + addRmaItem position** assigned via SELECT-then-
+  INSERT, racing under concurrent uploads. Both wrapped in
+  `db.transaction(...).for("update")` on the parent rmas row
+  (`d022fc3`).
+- **Drive folder allocation race** — two concurrent first-uploads
+  on the same RMA both saw `driveFolderId=null` and both called
+  `ensureFolder`, creating duplicate folders. Now atomic via the
+  same FOR UPDATE pattern (`d022fc3`).
+- **`/api/email/send` inherited Fastify's default 1MB bodyLimit**,
+  silently 413-ing any meaningful multi-attachment send. Raised
+  to 25MB + per-attachment Zod cap (`d022fc3`).
+- **Customer-detail KPI dates not normalized** — mysql2 returned
+  subquery TIMESTAMPs as `"YYYY-MM-DD HH:MM:SS"` strings, parsed
+  by browsers as local time → "5h ago" for a 4h-old contact on
+  BST. Wrapped through the same normaliser the list route uses
+  (`7a74c48`).
+- **Extensiv export tab/newline injection** — customer names with
+  embedded `\t` or `\n` (rare but real for QBO data) silently
+  broke warehouse parser column alignment. Now sanitised
+  per-column (`7a74c48`).
+- **Tier-3 fuzzy matcher was dead code** — the receipt classifier
+  never extracted `inferredCustomerName` from the `Ref:` line, so
+  the matcher's tier-3 fuzzy path got `null` for every receipt
+  and never fired. Classifier now strips `\sreturns?$` + leading
+  season token; threaded through `gmail/poller` (`7a74c48`).
+- **Reply-linker fallback was dead code** — the "fallback" query
+  was a strict subset of the first (additionally constrained on
+  customerId) and could never return rows the first didn't. Test
+  passed vacuously. Dropped (`7a74c48`).
+- **Hardcoded `SHIPPING_FEE_ITEM_ID = "1"` placeholder** in the
+  CM builder would either 502 ("Item id 1 doesn't exist") or
+  silently issue CMs against whatever item id 1 happened to be.
+  Now reads from `RMA_SHIPPING_FEE_QBO_ITEM_ID` /
+  `RMA_RESTOCKING_FEE_QBO_ITEM_ID` env vars; throws a clear
+  "configure RMA_*_FEE_QBO_ITEM_ID" error if a deduction is
+  requested without the env var set. **This is a pre-cutover
+  blocker** — both env vars must be set in production before any
+  CM with shipping or restocking deductions can be issued
+  (`0e3c26f`).
+
+Important-tier hardening that landed in the same wave:
+
+- **forceStatus + deleteRma now require admin** — `ADMIN_EMAILS`
+  env var (mirrors existing `ALLOWED_EMAILS` pattern), `isAdmin()`
+  helper checks against it. Empty list = nobody is admin
+  (fail-closed). `deleteRma` also cleans up Drive folder + files
+  best-effort before cascading the row delete (`31bf7a5`).
+- **`confirmExtensivReceipt` now transactional** — receipt
+  confirmation + RMA status advance no longer split-brain on
+  mid-flight failure (`31bf7a5`).
+- **`listRmas` accepts `offset`** — was silently truncating past
+  500 rows (`31bf7a5`).
+- **Matcher tier-3 customer-name match** uses token-overlap with
+  4-char minimum — was bidirectional `includes()` so "Co" matched
+  every "Cohen"/"Corp"/"Company" customer (`fcb03f3`).
+- **AI parser hardened against prompt injection** — email body +
+  attachment now wrapped in `<email>` / `<attachment>` markers
+  with a system-prompt note that those tags are untrusted data.
+  Input also truncated to 32KB to bound cost (`fcb03f3`).
+- **Classifier item-row regex tightened** — SKU now requires ≥3
+  chars + ≥1 letter, stopping false-positive matches on prose
+  like `"1 5"` (`fcb03f3`).
+- **Bulk markGmailAsRead** now bounded to 5-parallel via
+  `mapWithLimit` with per-call error catch — was serial fire-and-
+  forget, lost on process restart (`1d94dff`).
+- **QBO sync upsert** now uses `INSERT ... ON DUPLICATE KEY
+  UPDATE` instead of SELECT-then-decide. Per-customer sync vs
+  global cron no longer noisily 502s on dup-key (`1d94dff`).
+- **`extensivTxNumber` now UNIQUE** (migration `0025_fast_magik`).
+  Schema previously allowed duplicate warehouse tx numbers across
+  RMAs (`1d94dff`).
+- **Compose modal received-qty validation, sync-route nanoid
+  jobId, warehouse-number Enter-key empty guard** — small
+  hygiene wins (`ab4e3e5`).
+
+Test repairs in the same wave fixed 4 pre-existing failures
+caused by mock-chain drift (`leftJoin` mock missing, a stale
+`approveRma` non-seasonal expectation, the Drive `deleteFile`
+test asserting the wrong call shape, and a vacuous
+`excludeRmaId` test that had been passing without actually
+exercising exclusion). 14 new tests added for the new behaviours.
+
+**Final state:** typecheck `npx tsc --noEmit` exits 0. Test
+suite: **451/451 pass across 29 files** (was 437/441 with 4
+pre-existing failures before this wave).
+
+**Deferred:** I14 (extracting nested step-renderer functions in
+`return-receipt-review-dialog.tsx` to fix focus-loss on parent
+re-render). Moderate effort for moderate impact; the file was
+already heavily modified by A2 in the same session and another
+big refactor felt risky. Track for a future polish pass.
+
+**Pre-cutover blocker:** must set `RMA_SHIPPING_FEE_QBO_ITEM_ID`
++ `RMA_RESTOCKING_FEE_QBO_ITEM_ID` env vars to the real QBO
+service-item ids before issuing any CM with shipping/restocking
+deductions. Operator action required.
+
+---
+
 **3-day friction polish + Returns wrap-up. 🟢 SHIPPED** (commits
 `3589642` → `adf53a4`, 2026-05-04 → 2026-05-06, ~11 commits).
 Three back-to-back days of operator-friction fixes after the Returns
@@ -459,14 +599,15 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-05-06 (Day 3 friction polish committed)
-**Branch**: `feat/returns-phase-5-7` (HEAD `adf53a4`) — not yet merged to `main`
+**Date**: 2026-05-06 (pre-cutover bug-check + cleanup wave committed)
+**Branch**: `feat/returns-phase-5-7` (HEAD `0e3c26f`) — not yet merged to `main`
 **Last `main` commit**: `aa7da53` (2026-04-30 home alert)
 **GitHub**: https://github.com/joshezekiel554-cloud/finance-hub
 **Local repo**: `C:\Users\user\Documents\finance-hub`
-**Status**: `npx tsc --noEmit` exits 0 silently · server + web + worker running via `npm run dev`
+**Status**: `npx tsc --noEmit` exits 0 silently · **451/451 tests pass** across 29 files · server + web + worker running via `npm run dev`
 **Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · ~4,842 activities · 509+ emails · 9 email templates (added `rma_approval` / `rma_denial` / `rma_credit_memo` during returns build) · app_settings extended with `drive_root_folder_id`, `statement_bcc_email`, statement-PDF copy
-**Migrations**: latest is `0020` (rmas + rma_items + seasons + seasonal_products). Returns work added `rma_photos`, `drive_folder_id` on rmas, `extensiv_receipts`. `0019` added `customer_memo` on invoices.
+**Migrations**: latest is `0025_fast_magik` (UNIQUE on `rmas.extensiv_tx_number`). Returns work added `0020-0024` (rmas + rma_items + seasons + seasonal_products + photos + drive_folder_id + extensiv_receipts). `0019` added `customer_memo` on invoices.
+**New env vars** (must be set before pre-cutover): `ADMIN_EMAILS` (comma-list of admin operator emails), `RMA_SHIPPING_FEE_QBO_ITEM_ID`, `RMA_RESTOCKING_FEE_QBO_ITEM_ID` (real QBO service-item ids for CM deduction lines).
 **Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy · Google OAuth scope expanded to `drive` (RMA photo upload + folder rename)
 **Smoke**: per-customer QB sync `POST /api/customers/{id}/sync-qb` → 200 in ~3 calls; `<SyncCustomerButton>` reflects fresh data instantly via React Query cache invalidation
 
