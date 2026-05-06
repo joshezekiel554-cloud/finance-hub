@@ -34,7 +34,7 @@ import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { activities, statementSends } from "../../db/schema/crm.js";
-import { invoices } from "../../db/schema/invoices.js";
+import { invoices, invoiceChases } from "../../db/schema/invoices.js";
 import { rmas } from "../../db/schema/returns.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
@@ -435,15 +435,28 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     return reply.send({ results });
   });
 
-  // GET /api/chase/preview-chase-email?customerId=...&level=...
+  // GET /api/chase/preview-chase-email?customerId=...&level=...&invoiceIds=...
   // Returns the rendered subject + body + resolved recipients for
   // the chase L1/L2/L3 send dialog, so the operator can review +
   // edit before firing the send.
+  //
+  // invoiceIds: optional CSV of invoice ids. When provided, the
+  // template's {{open_invoices_table}} renders ONLY those invoices.
+  // When absent, falls back to "all open invoices for the customer".
+  // Each id is verified to belong to the customer; mismatches are
+  // dropped silently (operator could only have selected from this
+  // customer's UI, but defence-in-depth).
   app.get("/preview-chase-email", async (req, reply) => {
     await requireAuth(req);
     const previewSchema = z.object({
       customerId: z.string().min(1).max(64),
       level: z.coerce.number().int().min(1).max(3),
+      // CSV of invoice ids — TanStack Query serialises arrays as
+      // repeated `?invoiceIds=a&invoiceIds=b`, but for a GET we accept
+      // either shape and split on comma if a string slipped through.
+      invoiceIds: z
+        .union([z.string().max(2000), z.array(z.string().max(64))])
+        .optional(),
     });
     const parse = previewSchema.safeParse(req.query);
     if (!parse.success) {
@@ -452,6 +465,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid query", details: parse.error.flatten() });
     }
     const { customerId, level } = parse.data;
+    const invoiceIds = normaliseInvoiceIds(parse.data.invoiceIds);
     const slug = `chase_l${level}`;
 
     const customerRows = await db
@@ -482,11 +496,22 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .code(404)
         .send({ error: `template '${slug}' not found`, code: "no_template" });
     }
+    // Subset filter: when invoiceIds is provided, narrow the query to
+    // those rows AND keep the customer-id constraint (defence-in-depth
+    // against id-guess from a stale UI). The customer-id WHERE means
+    // a wrong id from another customer just falls out of the result
+    // set rather than 403'ing.
     const openInvoices = await db
       .select()
       .from(invoices)
       .where(
-        and(eq(invoices.customerId, customerId), gt(invoices.balance, "0")),
+        and(
+          eq(invoices.customerId, customerId),
+          gt(invoices.balance, "0"),
+          ...(invoiceIds.length > 0
+            ? [inArray(invoices.id, invoiceIds)]
+            : []),
+        ),
       )
       .orderBy(asc(invoices.dueDate));
     const vars = buildTemplateVars({
@@ -548,12 +573,14 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     const {
       customerId,
       level,
+      invoiceIds: invoiceIdsRaw,
       subject: subjectOverride,
       body: bodyOverride,
       to: toOverride,
       cc: ccOverride,
       bcc: bccOverride,
     } = parse.data;
+    const invoiceIds = invoiceIdsRaw ?? [];
     const slug = `chase_l${level}`;
 
     const customerRows = await db
@@ -588,11 +615,20 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .send({ error: `template '${slug}' not found`, code: "no_template" });
     }
 
+    // Subset filter: when invoiceIds set, narrow to those rows
+    // (still gated to this customer to keep the post-send
+    // invoice_chases insert from leaking across customers).
     const openInvoices = await db
       .select()
       .from(invoices)
       .where(
-        and(eq(invoices.customerId, customerId), gt(invoices.balance, "0")),
+        and(
+          eq(invoices.customerId, customerId),
+          gt(invoices.balance, "0"),
+          ...(invoiceIds.length > 0
+            ? [inArray(invoices.id, invoiceIds)]
+            : []),
+        ),
       )
       .orderBy(asc(invoices.dueDate));
 
@@ -695,6 +731,31 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       });
     }
 
+    // Per-invoice chase log — one row per invoice covered by this
+    // chase. Drives the "Last chased" column on the customer detail
+    // Invoices tab. Best-effort: a DB failure here is logged but
+    // doesn't fail the whole request because the email already went
+    // out — the operator already knows the customer received it.
+    const chasedInvoiceIds = openInvoices.map((inv) => inv.id);
+    if (chasedInvoiceIds.length > 0) {
+      try {
+        await db.insert(invoiceChases).values(
+          chasedInvoiceIds.map((invoiceId) => ({
+            id: nanoid(24),
+            invoiceId,
+            level,
+            sentByUserId: user.id,
+            emailMessageId: result.messageId,
+          })),
+        );
+      } catch (err) {
+        log.error(
+          { err, customerId, chasedInvoiceIds, messageId: result.messageId },
+          "invoice_chases insert failed (email already sent)",
+        );
+      }
+    }
+
     await db.insert(auditLog).values({
       id: nanoid(24),
       userId: user.id,
@@ -711,6 +772,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         subject: renderedSubject,
         messageId: result.messageId,
         threadId: result.threadId,
+        invoiceIds: chasedInvoiceIds,
       },
     });
     await recordActivity({
@@ -730,6 +792,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         bcc: bcc ?? null,
         messageId: result.messageId,
         threadId: result.threadId,
+        // Future timeline UI can show "chased these N invoices"
+        // when expanding a chase activity row.
+        invoiceIds: chasedInvoiceIds,
       },
     });
 
@@ -756,6 +821,12 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
 const sendChaseEmailBodySchema = z.object({
   customerId: z.string().min(1).max(64),
   level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  // Optional subset filter — when set, the rendered template covers
+  // only these invoices AND only these get an invoice_chases row
+  // written after send. When absent, the chase covers all the
+  // customer's open invoices (legacy behaviour from chase.tsx).
+  // Capped at 100 to bound the post-send INSERT.
+  invoiceIds: z.array(z.string().min(1).max(64)).max(100).optional(),
   // Optional operator overrides from the send dialog. When set,
   // these replace the template-rendered defaults verbatim. Mirrors
   // the statement-send overrides shape.
@@ -765,6 +836,23 @@ const sendChaseEmailBodySchema = z.object({
   cc: z.string().max(2000).optional(),
   bcc: z.string().max(2000).optional(),
 });
+
+// Normalise the invoiceIds query param shape: it can arrive as a
+// single CSV string (`?invoiceIds=a,b,c`), as repeated params
+// (`?invoiceIds=a&invoiceIds=b`), or undefined. Returns a deduped
+// array of trimmed non-empty strings.
+function normaliseInvoiceIds(
+  raw: string | string[] | undefined,
+): string[] {
+  if (!raw) return [];
+  const arr = Array.isArray(raw)
+    ? raw
+    : raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+  return Array.from(new Set(arr)).slice(0, 100);
+}
 
 // Bounded-concurrency map. Same shape as the helper inside
 // modules/statements/send.ts — replicated here rather than imported

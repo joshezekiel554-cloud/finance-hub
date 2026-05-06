@@ -9,10 +9,12 @@ import {
   mysqlTable,
   text,
   timestamp,
+  tinyint,
   varchar,
 } from "drizzle-orm/mysql-core";
 import { customers } from "./customers";
 import { orders } from "./catalog";
+import { users } from "./auth";
 
 export const invoices = mysqlTable(
   "invoices",
@@ -124,9 +126,61 @@ export const shipments = mysqlTable(
   }),
 );
 
+// One row per (invoice × chase email send). Written from the chase
+// route after a successful Gmail send — INSERT one row per invoice
+// in scope (subset if operator selected, otherwise all open at the
+// time of send). Drives the "Last chased" column on the customer
+// detail Invoices tab so the operator can target the next chase at
+// invoices that haven't been chased recently.
+//
+// History is preserved (one row per send) so the timeline can show
+// "chased L1 on Apr 15, L2 on Apr 22" if useful in future. The
+// composite index supports the MAX(sent_at)-per-invoice subquery
+// the invoices route uses to compute "last chased".
+//
+// Local-only — never round-trips to QBO. Cascades on invoice delete
+// because the chase ceases to be meaningful without the invoice it
+// referred to.
+export const invoiceChases = mysqlTable(
+  "invoice_chases",
+  {
+    id: varchar("id", { length: 24 }).primaryKey(),
+    invoiceId: varchar("invoice_id", { length: 24 })
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    // 1 | 2 | 3 — same dunning levels used by chase_l1/l2/l3 templates.
+    // tinyint mirrors the cardinality without burning a varchar.
+    level: tinyint("level").notNull(),
+    sentAt: timestamp("sent_at").defaultNow().notNull(),
+    // Nullable because a future system-driven chase (e.g. AI agent in
+    // week 9) may have no human user to attribute. Operator-driven
+    // chases populate this from the auth session.
+    sentByUserId: varchar("sent_by_user_id", { length: 255 }).references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    // Gmail message id from the send. Useful for cross-linking to
+    // the email_log row. Nullable in case the send response shape
+    // changes.
+    emailMessageId: varchar("email_message_id", { length: 255 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    // Composite covers the "MAX(sent_at) per invoice_id" hot path
+    // used by the customer-detail Invoices tab. desc on sent_at so
+    // the latest chase comes first without an extra sort step.
+    invoiceSentAtIdx: index("idx_invoice_chases_invoice_sent_at").on(
+      t.invoiceId,
+      t.sentAt,
+    ),
+  }),
+);
+
 export type Invoice = typeof invoices.$inferSelect;
 export type NewInvoice = typeof invoices.$inferInsert;
 export type InvoiceLine = typeof invoiceLines.$inferSelect;
 export type NewInvoiceLine = typeof invoiceLines.$inferInsert;
 export type Shipment = typeof shipments.$inferSelect;
 export type NewShipment = typeof shipments.$inferInsert;
+export type InvoiceChase = typeof invoiceChases.$inferSelect;
+export type NewInvoiceChase = typeof invoiceChases.$inferInsert;

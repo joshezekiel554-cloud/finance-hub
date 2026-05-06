@@ -183,6 +183,13 @@
       "when": 1778025784529,
       "tag": "0025_fast_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1778067371728,
+      "tag": "0026_faulty_infant_terrible",
+      "breakpoints": true
     }
   ]
 }

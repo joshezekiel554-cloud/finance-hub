@@ -30,7 +30,7 @@ import {
   emailLog,
   statementSends,
 } from "../../db/schema/crm.js";
-import { invoices } from "../../db/schema/invoices.js";
+import { invoices, invoiceChases } from "../../db/schema/invoices.js";
 import { rmas } from "../../db/schema/returns.js";
 import { tasks } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
@@ -1074,6 +1074,29 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     }
     const qbCustomerId = cust[0]!.qbCustomerId;
 
+    // Last-chased rollup: most recent (sent_at, level) for each
+    // invoice. Drives the "Last chased" column on the customer
+    // detail Invoices tab so the operator can target the next
+    // chase at invoices that haven't been chased recently.
+    //
+    // The composite index idx_invoice_chases_invoice_sent_at backs
+    // both subqueries. Hand-qualified `invoices.id` is unnecessary
+    // here because Drizzle does the right thing when the outer table
+    // has a single referenced column type — but adding it costs
+    // nothing and matches the pattern used elsewhere on subqueries.
+    const lastChasedAtExpr = sql<Date | string | null>`(
+      SELECT MAX(${invoiceChases.sentAt})
+      FROM ${invoiceChases}
+      WHERE ${invoiceChases.invoiceId} = ${invoices.id}
+    )`;
+    const lastChasedLevelExpr = sql<number | null>`(
+      SELECT ${invoiceChases.level}
+      FROM ${invoiceChases}
+      WHERE ${invoiceChases.invoiceId} = ${invoices.id}
+      ORDER BY ${invoiceChases.sentAt} DESC
+      LIMIT 1
+    )`;
+
     // Local invoices read.
     const invoiceRowsP = db
       .select({
@@ -1088,6 +1111,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: invoices.customerMemo,
         sentAt: invoices.sentAt,
         sentVia: invoices.sentVia,
+        lastChasedAt: lastChasedAtExpr,
+        lastChasedLevel: lastChasedLevelExpr,
       })
       .from(invoices)
       .where(eq(invoices.customerId, id))
@@ -1154,6 +1179,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       customerMemo: string | null;
       sentAt: string | null;
       sentVia: string | null;
+      // Last chase email that touched this invoice — null when never
+      // chased. Always null on credit memos (chase is invoice-only).
+      lastChasedAt: string | null;
+      lastChasedLevel: number | null;
     };
 
     const out: DocRow[] = [];
@@ -1171,6 +1200,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: inv.customerMemo,
         sentAt: inv.sentAt ? inv.sentAt.toISOString() : null,
         sentVia: inv.sentVia,
+        // mysql2 returns the subquery TIMESTAMP as a string; normalise
+        // to ISO so the frontend's relativeTime() doesn't have to
+        // guess. Same pattern used by normalizeDateValue elsewhere.
+        lastChasedAt: normalizeDateValue(inv.lastChasedAt),
+        lastChasedLevel:
+          inv.lastChasedLevel === null || inv.lastChasedLevel === undefined
+            ? null
+            : Number(inv.lastChasedLevel),
       });
     }
     for (const cm of creditMemoRows) {
@@ -1189,6 +1226,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: cm.customerMemo,
         sentAt: cm.emailStatus === "EmailSent" ? "(sent)" : null,
         sentVia: cm.emailStatus === "EmailSent" ? "qbo" : null,
+        // Chase tracking is invoice-only — credit memos can't be
+        // chased.
+        lastChasedAt: null,
+        lastChasedLevel: null,
       });
     }
 
