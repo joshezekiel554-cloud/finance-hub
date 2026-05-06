@@ -283,9 +283,16 @@ function EditDrawerBody({
   });
 
   // Refetch on comment.created for this task (live updates while open).
+  // Invalidate both the single-task query (so the comments thread
+  // shows the new row) AND the list query (so the Activity column on
+  // /tasks or the customer-detail Tasks tab picks up the bumped
+  // commentCount). Without the list invalidate, the icon counters
+  // would only refresh on next page load — operators report seeing
+  // 0 comments in the table even after adding several.
   useEventStream("comment.created", (event) => {
     if (event.parentType !== "task" || event.parentId !== taskId) return;
     queryClient.invalidateQueries({ queryKey: taskQueryKey });
+    queryClient.invalidateQueries({ queryKey: listQueryKey });
   });
 
   // Tracks the timestamp of the last successful patch so the header
@@ -343,6 +350,8 @@ function EditDrawerBody({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: taskQueryKey });
+      // Watcher count is part of the list-row Activity column too.
+      queryClient.invalidateQueries({ queryKey: listQueryKey });
     },
   });
 
