@@ -952,16 +952,26 @@ export default function ReturnReceiptReviewDialog({
           </span>
         </div>
 
-        {/* Top section: receipt review */}
-        <div className="mt-4">
-          <ReceiptReviewSection />
-        </div>
+        {/* Top section: receipt review.
+            Note: invoked as a function call ({ReceiptReviewSection()}),
+            not as a JSX component (<ReceiptReviewSection />). The
+            functions are defined inside this component's body and
+            close over local state — every parent re-render produces a
+            new function reference. As JSX components React would
+            reconcile each as a brand-new element type, unmount + remount
+            the subtree, and inputs would lose focus on every keystroke
+            (operator-reported: "Add unexpected item" needed a click
+            after each character). Calling them as functions keeps the
+            returned JSX inline with the parent's render tree so element
+            identity stays stable. Same fix applies to all four panels.
+        */}
+        <div className="mt-4">{ReceiptReviewSection()}</div>
 
         {/* Manual match / from-receipt panels (unmatched path) */}
         {!isMatched && (
           <div className="mt-4 space-y-3">
-            <ManualMatchPanel />
-            <FromReceiptPanel />
+            {ManualMatchPanel()}
+            {FromReceiptPanel()}
           </div>
         )}
 
@@ -974,7 +984,7 @@ export default function ReturnReceiptReviewDialog({
         )}
 
         <DialogFooter className="mt-6 flex flex-wrap gap-2">
-          <FooterButtons />
+          {FooterButtons()}
         </DialogFooter>
       </DialogContent>
     </Dialog>
