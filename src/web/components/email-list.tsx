@@ -144,11 +144,17 @@ export function EmailList({
   });
 
   const toTaskMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/email-log/${id}/to-task`, {
+    mutationFn: async (input: { id: string; title: string }) => {
+      // Pass the title explicitly rather than relying on server-side
+      // fallback — the API already has a fallback ("Re: <subject>" /
+      // "Follow up on email") but threading the value through the
+      // client side too means the resulting task always has a
+      // meaningful title even if the server falls back to an empty
+      // subject for some reason.
+      const res = await fetch(`/api/email-log/${input.id}/to-task`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ title: input.title }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json() as Promise<{ taskId: string }>;
@@ -573,7 +579,14 @@ export function EmailList({
                           <Button
                             variant="secondary"
                             size="sm"
-                            onClick={() => toTaskMutation.mutate(email.id)}
+                            onClick={() =>
+                              toTaskMutation.mutate({
+                                id: email.id,
+                                title: email.subject
+                                  ? `Re: ${email.subject}`
+                                  : "Follow up on email",
+                              })
+                            }
                             disabled={toTaskMutation.isPending}
                           >
                             <ListChecks className="size-3.5" />

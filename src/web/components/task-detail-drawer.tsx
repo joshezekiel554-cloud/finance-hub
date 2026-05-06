@@ -120,8 +120,15 @@ export function TaskDetailDrawer({
         role="dialog"
         aria-label="Task detail"
         className={cn(
-          "fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l border-default bg-base shadow-xl transition-transform",
-          open ? "translate-x-0" : "translate-x-full",
+          // Centered modal positioning — was a right-side slide-over
+          // (full height, w-max-xl). Operators preferred a popup-style
+          // dialog so the surrounding context stays visible. Width
+          // bumped slightly (max-w-2xl) for the field grid to breathe;
+          // max-h-[90vh] keeps the body scrollable on small screens.
+          "fixed left-1/2 top-1/2 z-50 flex max-h-[90vh] w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-default bg-base shadow-xl transition-opacity",
+          open
+            ? "pointer-events-auto opacity-100"
+            : "pointer-events-none opacity-0",
         )}
       >
         {open && drawer.mode === "edit" && (
@@ -281,6 +288,17 @@ function EditDrawerBody({
     queryClient.invalidateQueries({ queryKey: taskQueryKey });
   });
 
+  // Tracks the timestamp of the last successful patch so the header
+  // can show a "Saved" pill for ~2s. Operators previously had no
+  // feedback that auto-save-on-blur fired (the field just lost focus
+  // silently), and would re-type the value worried it hadn't saved.
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (lastSavedAt === null) return;
+    const t = setTimeout(() => setLastSavedAt(null), 2000);
+    return () => clearTimeout(t);
+  }, [lastSavedAt]);
+
   const patchMutation = useMutation({
     mutationFn: async (patch: Partial<TaskFull>) => {
       const res = await fetch(`/api/tasks/${taskId}`, {
@@ -297,6 +315,7 @@ function EditDrawerBody({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: taskQueryKey });
       queryClient.invalidateQueries({ queryKey: listQueryKey });
+      setLastSavedAt(Date.now());
     },
   });
 
@@ -358,6 +377,16 @@ function EditDrawerBody({
         onClose={onClose}
         right={
           <div className="flex items-center gap-1">
+            {/* Auto-fading "Saved" pill — confirms each auto-save-on-
+                blur landed. Disappears 2s after the last patch. While
+                a save is in flight, "Saving…" replaces it. */}
+            {patchMutation.isPending ? (
+              <span className="mr-1 text-xs text-muted">Saving…</span>
+            ) : lastSavedAt !== null ? (
+              <span className="mr-1 text-xs text-accent-success">
+                ✓ Saved
+              </span>
+            ) : null}
             {currentUser && (
               <Button
                 variant={isWatching ? "secondary" : "ghost"}
@@ -526,7 +555,7 @@ function TitleField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         autoFocus={autoFocus}
-        className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+        className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
       />
     </label>
   );
@@ -575,7 +604,11 @@ function InlineTitleField({
           if (trimmed && trimmed !== value) onSave(trimmed);
           else setDraft(value);
         }}
-        className="w-full rounded-md border border-default bg-base px-3 py-2 text-base font-semibold focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+        // text-primary is required — without it the input inherits a
+        // washed-out color from a parent rule and the existing title
+        // appears blank until the operator clicks in. (Same fix needs
+        // adding wherever inputs lack an explicit colour class.)
+        className="w-full rounded-md border border-default bg-base px-3 py-2 text-base font-semibold text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
       />
     </label>
   );
@@ -600,7 +633,7 @@ function InlineBodyField({
         onBlur={() => {
           if (draft !== value) onSave(draft);
         }}
-        className="w-full resize-y rounded-md border border-default bg-base px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+        className="w-full resize-y rounded-md border border-default bg-base px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
         placeholder="Add a description…"
       />
     </label>
@@ -826,21 +859,45 @@ function CustomerField({
   const [selected, setSelected] = useState<CustomerOption | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Resolve current value once (the list endpoint accepts any id; we match
-  // by id from a small page of results).
+  // Resolve current value via direct GET /api/customers/:id so the
+  // customer name shows regardless of where the customer sits in the
+  // alphabetical list. Earlier version paginated the list endpoint at
+  // limit=20 and only matched-by-id within that page — anyone past the
+  // first 20 alphabetically rendered as "No customer linked" even
+  // though the task had the customer linked correctly in the DB.
   useEffect(() => {
     if (!value) {
       setSelected(null);
       return;
     }
     if (selected?.id === value) return;
-    fetch(`/api/customers?customerType=all&limit=20`)
-      .then((r) => (r.ok ? r.json() : { rows: [] }))
-      .then((b: { rows: CustomerOption[] }) => {
-        const found = b.rows.find((c) => c.id === value);
-        if (found) setSelected(found);
-      })
+    let cancelled = false;
+    fetch(`/api/customers/${encodeURIComponent(value)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          b: {
+            customer?: {
+              id: string;
+              displayName: string;
+              primaryEmail: string | null;
+            };
+          } | null,
+        ) => {
+          if (cancelled) return;
+          if (b?.customer) {
+            setSelected({
+              id: b.customer.id,
+              displayName: b.customer.displayName,
+              primaryEmail: b.customer.primaryEmail,
+            });
+          }
+        },
+      )
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [value, selected?.id]);
 
   useEffect(() => {
