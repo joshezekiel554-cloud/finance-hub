@@ -14,14 +14,19 @@
 // Pagination via Load more — stays out of the way for the common
 // case of "the last few weeks of sends fit on one page."
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, getRouteApi } from "@tanstack/react-router";
 import { FileText, Filter } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/cn";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { StatementsSearch } from "../lib/search-schemas/statements";
+
+const statementsRouteApi = getRouteApi("/statements");
 
 type StatementSendRow = {
   id: string;
@@ -80,9 +85,20 @@ function formatDateTime(iso: string): string {
 const PAGE_SIZE = 100;
 
 export default function StatementsPage() {
-  const [range, setRange] = useState<RangeChip>("30d");
-  const [senderId, setSenderId] = useState<string>("all");
-  const [offset, setOffset] = useState<number>(0);
+  const search = statementsRouteApi.useSearch();
+  const { setFilter, setFilters } = useFilterNavigate<StatementsSearch>("/statements");
+  useFilterPersistence("/statements");
+
+  const range = search.range;
+  const senderId = search.senderId;
+  const offset = search.offset;
+
+  const setRange = (next: StatementsSearch["range"]) =>
+    setFilter("range", next, { history: "push" });
+  const setSenderId = (next: string) =>
+    setFilter("senderId", next, { history: "push" });
+  const setOffset = (next: number) =>
+    setFilter("offset", next, { history: "push" });
 
   const fromDate = useMemo(() => {
     if (range === "all") return undefined;
@@ -128,13 +144,11 @@ export default function StatementsPage() {
   const senders = sendersData?.senders ?? [];
 
   function setRangeAndReset(next: RangeChip) {
-    setRange(next);
-    setOffset(0);
+    setFilters({ range: next, offset: 0 }, { history: "push" });
   }
 
   function setSenderAndReset(next: string) {
-    setSenderId(next);
-    setOffset(0);
+    setFilters({ senderId: next, offset: 0 }, { history: "push" });
   }
 
   return (
