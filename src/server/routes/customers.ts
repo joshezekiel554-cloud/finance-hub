@@ -1080,19 +1080,24 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     // chase at invoices that haven't been chased recently.
     //
     // The composite index idx_invoice_chases_invoice_sent_at backs
-    // both subqueries. Hand-qualified `invoices.id` is unnecessary
-    // here because Drizzle does the right thing when the outer table
-    // has a single referenced column type — but adding it costs
-    // nothing and matches the pattern used elsewhere on subqueries.
+    // both subqueries.
+    //
+    // Hand-qualified `invoices`.`id` is REQUIRED inside the sql tag
+    // — Drizzle's column serializer drops the table prefix on
+    // ${invoices.id} in this context, which makes MySQL resolve `id`
+    // against the inner table (invoice_chases.id, the chase row's
+    // PK) instead of invoices.id. Result: subquery always returns
+    // empty/NULL. Same gotcha applied to lastContactedAt / lastPayment
+    // / etc. in the customers list route.
     const lastChasedAtExpr = sql<Date | string | null>`(
       SELECT MAX(${invoiceChases.sentAt})
       FROM ${invoiceChases}
-      WHERE ${invoiceChases.invoiceId} = ${invoices.id}
+      WHERE ${invoiceChases.invoiceId} = \`invoices\`.\`id\`
     )`;
     const lastChasedLevelExpr = sql<number | null>`(
       SELECT ${invoiceChases.level}
       FROM ${invoiceChases}
-      WHERE ${invoiceChases.invoiceId} = ${invoices.id}
+      WHERE ${invoiceChases.invoiceId} = \`invoices\`.\`id\`
       ORDER BY ${invoiceChases.sentAt} DESC
       LIMIT 1
     )`;
