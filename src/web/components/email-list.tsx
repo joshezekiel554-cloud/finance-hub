@@ -50,10 +50,15 @@ export function EmailList({
   customerId,
   customerName,
   customerEmail,
+  onTaskCreated,
 }: {
   customerId: string;
   customerName?: string;
   customerEmail?: string | null;
+  // Called after "Turn into task" creates a task. The customer-detail
+  // page uses this to open its TaskDetailDrawer in edit mode for the
+  // new task so the operator can fill in title/assignee/due/etc.
+  onTaskCreated?: (taskId: string) => void;
 }) {
   const [direction, setDirection] = useState<DirectionFilter>("all");
   const [actioned, setActioned] = useState<ActionedFilter>("open");
@@ -148,9 +153,16 @@ export function EmailList({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json() as Promise<{ taskId: string }>;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey });
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({
+        queryKey: ["customer-tasks", customerId],
+      });
+      // Hand the task off to the parent so the drawer opens in edit
+      // mode for the operator to fill in title/assignee/due/etc.
+      // Falls through silently when no callback is wired.
+      onTaskCreated?.(result.taskId);
     },
   });
 

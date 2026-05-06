@@ -52,6 +52,7 @@ import {
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
+import { recordActivity } from "../../modules/crm/activity-ingester.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
 import { QboClient } from "../../integrations/qb/client.js";
 
@@ -542,6 +543,52 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         error: err instanceof Error ? err.message : "QB sync failed",
       });
     }
+  });
+
+  // POST /api/customers/:id/notes — create a manual_note activity for
+  // this customer. Used by the Notes tab on the customer-detail page.
+  // Body: { body: string, subject?: string }. The activity-ingester
+  // handles the audit-log row + SSE event so subscribers (the
+  // activity timeline + this customer's note list) refresh
+  // automatically.
+  //
+  // Notes are first-class activities with kind="manual_note" — no
+  // separate notes table. That mirrors how the Notes tab reads them
+  // (filtered from recentActivities) and keeps the timeline view
+  // consistent.
+  app.post("/:id/notes", async (req, reply) => {
+    const user = await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const bodySchema = z.object({
+      body: z.string().min(1).max(10_000),
+      subject: z.string().max(255).optional(),
+    });
+    const parse = bodySchema.safeParse(req.body ?? {});
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    // Verify the customer exists before recording — recordActivity
+    // accepts any customerId but we want a clean 404 on bad ids
+    // rather than orphaned activity rows.
+    const customerRows = await db
+      .select({ id: customers.id })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    if (customerRows.length === 0) {
+      return reply.code(404).send({ error: "customer not found" });
+    }
+    const activityId = await recordActivity({
+      customerId: id,
+      kind: "manual_note",
+      source: "user_action",
+      userId: user.id,
+      subject: parse.data.subject ?? null,
+      body: parse.data.body,
+    });
+    return reply.send({ activityId });
   });
 
   app.post("/:id/sync-emails", async (req, reply) => {

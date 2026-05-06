@@ -15,6 +15,8 @@ import {
   ExternalLink,
   Send,
   RotateCcw,
+  Plus,
+  ClipboardList,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { CollapsibleCard } from "../components/ui/collapsible-card";
@@ -42,6 +44,12 @@ import ChaseEmailSendDialog, {
 import ComposeModal, {
   type ComposeContext,
 } from "../components/compose-modal";
+import {
+  TaskDetailDrawer,
+  type DrawerMode as TaskDrawerMode,
+} from "../components/task-detail-drawer";
+import { TaskList } from "../components/task-list";
+import type { TaskCardData } from "../components/task-card";
 import InvoiceSendDialog, {
   type InvoiceSendSuccess,
 } from "../components/invoice-send-dialog";
@@ -140,6 +148,12 @@ export default function CustomerDetailPage() {
   // inside <EmailList> — this is "operator wants to start a fresh
   // outbound email to the customer with no thread context."
   const [composeOpen, setComposeOpen] = useState(false);
+  // Task drawer state — null when closed, else { mode: "create"|"edit", ...}.
+  // Reused across the header "+ New task" button, the Tasks tab, and
+  // any future entry points (email-row, RMA detail). Always opened
+  // with `customerId` pre-filled in defaults so the resulting task
+  // links back to this customer automatically.
+  const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
   const queryClient = useQueryClient();
 
   // Auto-dismiss the "statement sent" pill after ~6s. We don't have a
@@ -172,6 +186,51 @@ export default function CustomerDetailPage() {
     queryKey: ["shopify-tags", customerId],
     queryFn: async () => {
       const res = await fetch(`/api/customers/${customerId}/shopify-tags`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  // Current authenticated operator — used by TaskDetailDrawer for
+  // mention resolution + watcher self-attribution. Same query the
+  // /tasks page uses; cached for 5 min so hopping between customer
+  // pages doesn't re-fetch /api/me on every nav.
+  const meQuery = useQuery<{
+    user: { id: string; name: string | null; email: string; image: string | null };
+  }>({
+    queryKey: ["me"],
+    queryFn: async () => {
+      const res = await fetch("/api/me");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const currentUser = meQuery.data?.user ?? null;
+
+  // Customer-scoped task list. Used by:
+  //   - The Tasks tab (renders the list + an Add task button)
+  //   - The KPI strip's "open tasks" count (already in customer GET kpi
+  //     rollup but the tasks tab needs the actual rows)
+  //   - The drawer's listQueryKey for invalidation after mutations
+  const tasksQueryKey = useMemo(
+    () => ["customer-tasks", customerId] as const,
+    [customerId],
+  );
+  const tasksQuery = useQuery<{ rows: TaskCardData[]; hasMore: boolean }>({
+    queryKey: tasksQueryKey,
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        customerId,
+        // Default to "all" assignees here — the tasks tab on a customer
+        // page is about the customer, not "my tasks." Operator can
+        // filter inside the drawer if needed.
+        assignee: "all",
+        sort: "position",
+        dir: "asc",
+        limit: "200",
+      });
+      const res = await fetch(`/api/tasks?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -368,6 +427,24 @@ export default function CustomerDetailPage() {
               <Mail className="size-3.5" />
               New email
             </Button>
+            {/* New task — opens the task drawer in create mode with
+                customerId pre-filled. Same drawer the /tasks page
+                uses, so all its features (assignee, watchers, due,
+                priority, tags, mentions) come along automatically. */}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                setTaskDrawer({
+                  mode: "create",
+                  defaults: { customerId },
+                })
+              }
+              title="Create a task linked to this customer"
+            >
+              <Plus className="size-3.5" />
+              New task
+            </Button>
           </div>
         </div>
       </div>
@@ -416,6 +493,22 @@ export default function CustomerDetailPage() {
           === [] → also chase all open (defence-in-depth);
           === [...] → chase that subset (set by the Invoices tab
           bulk action). */}
+      {/* Reusable task drawer — same component the /tasks page uses.
+          Mounted unconditionally so create + edit transitions
+          (post-create the parent flips drawer to edit mode) animate
+          smoothly. The drawer self-handles open/close styling; we
+          just supply mode + defaults + currentUser. */}
+      <TaskDetailDrawer
+        open={taskDrawer !== null}
+        onClose={() => setTaskDrawer(null)}
+        drawer={taskDrawer ?? { mode: "create", defaults: { customerId } }}
+        currentUser={currentUser}
+        listQueryKey={tasksQueryKey}
+        onCreated={(taskId) =>
+          setTaskDrawer({ mode: "edit", taskId })
+        }
+      />
+
       {/* Compose-new email to this customer. ComposeModal already
           handles the no-thread-context branch (title flips to "New
           email"); we just hand it the customer context so TO is
@@ -596,6 +689,9 @@ export default function CustomerDetailPage() {
             customerId={customer.id}
             customerName={customer.displayName}
             customerEmail={customer.primaryEmail}
+            onTaskCreated={(taskId) =>
+              setTaskDrawer({ mode: "edit", taskId })
+            }
           />
         )}
         {tab === "invoices" && (
@@ -606,7 +702,23 @@ export default function CustomerDetailPage() {
           />
         )}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
-        {tab === "tasks" && <PlaceholderPanel label="Tasks" />}
+        {tab === "tasks" && (
+          <TasksPanel
+            tasks={tasksQuery.data?.rows ?? []}
+            isPending={tasksQuery.isPending}
+            isError={tasksQuery.isError}
+            error={tasksQuery.error}
+            onAdd={() =>
+              setTaskDrawer({
+                mode: "create",
+                defaults: { customerId },
+              })
+            }
+            onOpen={(taskId) =>
+              setTaskDrawer({ mode: "edit", taskId })
+            }
+          />
+        )}
         {tab === "returns" && (
           <ReturnsPanel customerId={customer.id} />
         )}
@@ -857,6 +969,78 @@ function PlaceholderPanel({ label }: { label: string }) {
   );
 }
 
+// Tasks tab on the customer-detail page. Renders the customer's open
+// + closed tasks via the shared <TaskList>. Add button opens the same
+// <TaskDetailDrawer> the parent header button does, with customerId
+// already in defaults so the new task links back automatically. Click
+// any row → drawer flips to edit mode for that task.
+function TasksPanel({
+  tasks,
+  isPending,
+  isError,
+  error,
+  onAdd,
+  onOpen,
+}: {
+  tasks: TaskCardData[];
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  onAdd: () => void;
+  onOpen: (taskId: string) => void;
+}) {
+  if (isPending) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-muted">
+          Loading tasks…
+        </CardBody>
+      </Card>
+    );
+  }
+  if (isError) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-accent-danger">
+          {(error as Error)?.message ?? "Failed to load tasks"}
+        </CardBody>
+      </Card>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-secondary">
+          {tasks.length === 0
+            ? "No tasks for this customer yet."
+            : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
+        </div>
+        <Button variant="primary" size="sm" onClick={onAdd}>
+          <Plus className="size-3.5" />
+          Add task
+        </Button>
+      </div>
+      {tasks.length > 0 ? (
+        <TaskList tasks={tasks} onRowClick={onOpen} />
+      ) : (
+        <Card>
+          <CardBody className="flex flex-col items-center gap-2 py-10 text-sm text-muted">
+            <ClipboardList className="size-6 text-muted" />
+            <span>No tasks yet — click "Add task" to create one.</span>
+          </CardBody>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// Notes tab on the customer-detail page. Renders the customer's
+// existing manual_note activities (filtered from recentActivities by
+// the parent) and offers an inline create form. Posts to
+// POST /api/customers/:id/notes which writes a new manual_note
+// activity via the standard recordActivity path; on success we
+// invalidate ["customer", customerId] so the new note appears in
+// recentActivities → flows back into this panel.
 function NotesPanel({
   customerId,
   notes,
@@ -864,33 +1048,106 @@ function NotesPanel({
   customerId: string;
   notes: Activity[];
 }) {
-  // Stubbed for now — full add-note + @mentions land with Task #7
-  // (comments/mentions architecture). For the moment we just render
-  // any existing manual_note activities.
-  const _ = customerId;
-  if (notes.length === 0) {
-    return (
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const createMutation = useMutation({
+    mutationFn: async (body: string) => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/notes`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body }),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{ activityId: string | null }>;
+    },
+    onSuccess: () => {
+      // Customer detail GET returns recentActivities; the new note
+      // appears there. Activity timeline also subscribes to the same
+      // key. SSE event fires from the activity-ingester too, so
+      // anyone with an open page sees it.
+      queryClient.invalidateQueries({
+        queryKey: ["customer", customerId],
+      });
+      setDraft("");
+      setError(null);
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "Failed to save note");
+    },
+  });
+
+  return (
+    <div className="space-y-3">
       <Card>
-        <CardBody className="py-8 text-center text-sm text-muted">
-          No notes yet. Add one — coming next.
+        <CardBody className="space-y-2 py-3">
+          <span className="text-xs font-medium text-secondary">
+            Add a note
+          </span>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            placeholder="Internal note about this customer — visible to the team in the activity timeline."
+            className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+          />
+          {error ? (
+            <div className="text-xs text-accent-danger">{error}</div>
+          ) : null}
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => createMutation.mutate(draft.trim())}
+              disabled={
+                draft.trim().length === 0 || createMutation.isPending
+              }
+              loading={createMutation.isPending}
+            >
+              Save note
+            </Button>
+          </div>
         </CardBody>
       </Card>
-    );
-  }
-  return (
-    <Card>
-      <CardBody className="space-y-3">
-        {notes.map((n) => (
-          <div key={n.id} className="border-b border-default pb-3 last:border-b-0">
-            <div className="text-xs text-muted">
-              {new Date(n.occurredAt).toLocaleString()}
-            </div>
-            {n.subject && <div className="mt-1 font-medium">{n.subject}</div>}
-            {n.body && <p className="mt-1 text-sm text-secondary">{n.body}</p>}
-          </div>
-        ))}
-      </CardBody>
-    </Card>
+
+      {notes.length === 0 ? (
+        <Card>
+          <CardBody className="py-6 text-center text-sm text-muted">
+            No notes yet.
+          </CardBody>
+        </Card>
+      ) : (
+        <Card>
+          <CardBody className="space-y-3">
+            {notes.map((n) => (
+              <div
+                key={n.id}
+                className="border-b border-default pb-3 last:border-b-0"
+              >
+                <div className="text-xs text-muted">
+                  {new Date(n.occurredAt).toLocaleString()}
+                </div>
+                {n.subject ? (
+                  <div className="mt-1 font-medium">{n.subject}</div>
+                ) : null}
+                {n.body ? (
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-secondary">
+                    {n.body}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+          </CardBody>
+        </Card>
+      )}
+    </div>
   );
 }
 
