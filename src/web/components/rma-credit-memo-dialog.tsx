@@ -23,6 +23,7 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { cn } from "../lib/cn";
 import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
 
 // ---- Types ------------------------------------------------------------------
@@ -434,9 +435,17 @@ export default function RmaCreditMemoDialog({
                   </thead>
                   <tbody className="divide-y divide-default">
                     {items.map((item) => {
+                      const ordered = parseFloat(item.quantity) || 0;
                       const rcvd = parseFloat(receivedQty[item.id] ?? item.quantity) || 0;
                       const price = parseFloat(item.unitPrice) || 0;
                       const lineTotal = rcvd * price;
+                      // Over-receipt warning: operator typed a received qty
+                      // larger than what was approved. Soft warning (not a
+                      // block) — there are legitimate reasons (replacement
+                      // sent back as well as the original) but it's almost
+                      // always a typo, and crediting more than approved is
+                      // a real money risk.
+                      const overReceived = rcvd > ordered;
                       return (
                         <tr key={item.id}>
                           <td className="px-3 py-2">
@@ -444,12 +453,13 @@ export default function RmaCreditMemoDialog({
                             <div className="text-xs text-muted">{item.sku}</div>
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-muted">
-                            {parseFloat(item.quantity).toFixed(0)}
+                            {ordered.toFixed(0)}
                           </td>
                           <td className="px-3 py-2 text-right">
                             <input
                               type="number"
                               min="0"
+                              max={ordered}
                               step="0.0001"
                               value={receivedQty[item.id] ?? item.quantity}
                               onChange={(e) =>
@@ -458,8 +468,22 @@ export default function RmaCreditMemoDialog({
                                   [item.id]: e.target.value,
                                 }))
                               }
-                              className="w-20 rounded-md border border-default bg-base px-2 py-1 text-right text-sm"
+                              className={cn(
+                                "w-20 rounded-md border bg-base px-2 py-1 text-right text-sm",
+                                overReceived
+                                  ? "border-accent-warning"
+                                  : "border-default",
+                              )}
+                              aria-invalid={overReceived || undefined}
                             />
+                            {overReceived && (
+                              <div
+                                className="mt-0.5 text-[10px] text-accent-warning text-right"
+                                title={`Received ${rcvd} > approved ${ordered}`}
+                              >
+                                &gt; approved
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">
                             ${price.toFixed(2)}

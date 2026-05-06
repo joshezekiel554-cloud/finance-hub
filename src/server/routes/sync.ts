@@ -15,6 +15,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { desc, eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { syncRuns } from "../../db/schema/audit.js";
 import { getQueues, QB_SYNC_JOB } from "../../jobs/queues.js";
@@ -54,10 +55,14 @@ const syncRoute: FastifyPluginAsync = async (app) => {
   app.post("/qb", async (req, reply) => {
     const user = await requireAuth(req);
     try {
+      // BullMQ deduplicates jobs by jobId. Date.now() collides on
+      // sub-millisecond clicks (two operators firing in the same ms),
+      // silently dropping the second submission. nanoid gives us
+      // enough entropy that a duplicate is effectively impossible.
       const job = await getQueues().sync.add(
         QB_SYNC_JOB,
         { trigger: "manual" },
-        { jobId: `manual-${Date.now()}` },
+        { jobId: `manual-${nanoid(12)}` },
       );
       log.info(
         { userId: user.id, jobId: job.id },

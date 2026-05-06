@@ -81,7 +81,10 @@ export default function RmaSetWarehouseNumberAction({
           onChange={(e) => setTxNumber(e.target.value)}
           placeholder="e.g. 12345678"
           onKeyDown={(e) => {
-            if (e.key === "Enter") setNumberMutation.mutate();
+            if (e.key === "Enter" && txNumber.trim()) {
+              setError(null);
+              setNumberMutation.mutate();
+            }
           }}
           className="w-full rounded-md border border-default bg-base px-2 py-1.5 text-sm"
         />
