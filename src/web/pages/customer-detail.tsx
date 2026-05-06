@@ -35,6 +35,9 @@ import { SyncCustomerButton } from "../components/sync-customer-button";
 import StatementSendDialog, {
   type StatementSendSuccess,
 } from "../components/statement-send-dialog";
+import ChaseEmailSendDialog, {
+  type ChaseSendSuccess,
+} from "../components/chase-email-send-dialog";
 import InvoiceSendDialog, {
   type InvoiceSendSuccess,
 } from "../components/invoice-send-dialog";
@@ -119,6 +122,16 @@ export default function CustomerDetailPage() {
   const [statementDialogOpen, setStatementDialogOpen] = useState(false);
   const [statementSuccess, setStatementSuccess] =
     useState<StatementSendSuccess | null>(null);
+  // Chase email dialog state. invoiceIds is undefined when chasing all
+  // open (the header button); populated when chasing a subset (the
+  // Invoices tab bulk-action button).
+  const [chaseDialog, setChaseDialog] = useState<{
+    invoiceIds?: string[];
+  } | null>(null);
+  const [chaseSuccess, setChaseSuccess] = useState<{
+    level: 1 | 2 | 3;
+    invoiceCount: number;
+  } | null>(null);
   const queryClient = useQueryClient();
 
   // Auto-dismiss the "statement sent" pill after ~6s. We don't have a
@@ -130,6 +143,13 @@ export default function CustomerDetailPage() {
     const t = setTimeout(() => setStatementSuccess(null), 6000);
     return () => clearTimeout(t);
   }, [statementSuccess]);
+
+  // Same auto-dismiss pattern for the chase-sent pill.
+  useEffect(() => {
+    if (!chaseSuccess) return;
+    const t = setTimeout(() => setChaseSuccess(null), 6000);
+    return () => clearTimeout(t);
+  }, [chaseSuccess]);
 
   const { data, isPending, isError, error } = useQuery<DetailResponse>({
     queryKey: ["customer", customerId],
@@ -296,6 +316,25 @@ export default function CustomerDetailPage() {
             <FileText className="size-3.5" />
             Send statement
           </Button>
+          {/* Chase email — same gate as Send statement (need a balance
+              to chase against). Defaults to L1; operator can switch
+              dunning level inside the dialog before sending. To chase
+              a SUBSET of invoices, use the multi-select bulk action
+              on the Invoices tab instead. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setChaseDialog({})}
+            disabled={!(balance > 0)}
+            title={
+              balance > 0
+                ? "Send a chase email covering all open invoices (L1 by default — switch level inside the dialog)"
+                : "No open balance — nothing to chase"
+            }
+          >
+            <Send className="size-3.5" />
+            Send chase email
+          </Button>
           <StatusActions
             holdStatus={customer.holdStatus}
             disabled={holdToggleMutation.isPending}
@@ -324,6 +363,18 @@ export default function CustomerDetailPage() {
           </span>
         </div>
       )}
+      {chaseSuccess && (
+        <div
+          role="status"
+          className="flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+        >
+          <CheckCircle2 className="size-4" />
+          <span>
+            Chase L{chaseSuccess.level} sent · {chaseSuccess.invoiceCount}{" "}
+            invoice{chaseSuccess.invoiceCount === 1 ? "" : "s"} chased
+          </span>
+        </div>
+      )}
 
       <StatementSendDialog
         open={statementDialogOpen}
@@ -332,6 +383,39 @@ export default function CustomerDetailPage() {
         customerName={customer.displayName}
         onSent={(result) => setStatementSuccess(result)}
       />
+
+      {/* Chase email dialog. Mounted conditionally so the
+          previewQuery only fires when the operator opens it.
+          chaseDialog.invoiceIds === undefined → chase all open;
+          === [] → also chase all open (defence-in-depth);
+          === [...] → chase that subset (set by the Invoices tab
+          bulk action). */}
+      {chaseDialog ? (
+        <ChaseEmailSendDialog
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setChaseDialog(null);
+          }}
+          customerId={customer.id}
+          customerName={customer.displayName}
+          level={1}
+          invoiceIds={chaseDialog.invoiceIds}
+          onSent={(_result: ChaseSendSuccess) => {
+            // The dialog already invalidates the right cache keys.
+            // We just stash the success metadata so the auto-fading
+            // pill above renders. invoiceCount is the number of
+            // invoices the dialog scope covered — for "all open"
+            // (undefined invoiceIds) we approximate from the kpi
+            // openInvoiceCount; for a subset we know exactly.
+            const count =
+              chaseDialog.invoiceIds?.length ??
+              kpi?.openInvoiceCount ??
+              0;
+            setChaseSuccess({ level: _result.level, invoiceCount: count });
+            setChaseDialog(null);
+          }}
+        />
+      ) : null}
 
       <Dialog
         open={holdDialogOpen}
@@ -474,6 +558,7 @@ export default function CustomerDetailPage() {
           <InvoicesPanel
             customerId={customer.id}
             customerName={customer.displayName}
+            onBulkChase={(invoiceIds) => setChaseDialog({ invoiceIds })}
           />
         )}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
@@ -1575,19 +1660,36 @@ type InvoiceRow = {
   customerMemo: string | null;
   sentAt: string | null;
   sentVia: string | null;
+  // Last chase email that touched this invoice. Always null for
+  // credit memos (chase tracking is invoice-only). Drives the
+  // sortable "Last chased" column + the bulk-action target picker.
+  lastChasedAt: string | null;
+  lastChasedLevel: number | null;
 };
 
 type StatusFilter = "all" | "open" | "paid" | "overdue" | "sent" | "void";
 type TypeFilter = "all" | "invoice" | "credit_memo";
-type SortKey = "issueDate" | "docNumber" | "total" | "balance";
+type SortKey =
+  | "issueDate"
+  | "docNumber"
+  | "total"
+  | "balance"
+  | "lastChasedAt";
 type SortDir = "asc" | "desc";
 
 function InvoicesPanel({
   customerId,
   customerName,
+  onBulkChase,
 }: {
   customerId: string;
   customerName: string;
+  // Operator clicked "Send chase email" with N invoices selected.
+  // The parent owns the dialog state; we just hand it the ids of
+  // the selected invoice rows (credit memos filtered out — chase is
+  // invoice-only). Chase tracking + invalidation is the dialog's
+  // job after send succeeds.
+  onBulkChase: (invoiceIds: string[]) => void;
 }) {
   const { data, isPending, isError, error } = useQuery<{
     invoices: InvoiceRow[];
@@ -1910,12 +2012,48 @@ function InvoicesPanel({
                 clear
               </button>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {bulkPdfError ? (
                 <span className="text-[11px] text-accent-danger">
                   {bulkPdfError}
                 </span>
               ) : null}
+              {/* Chase only the selected INVOICES (credit memos
+                  excluded — chase tracking is invoice-only and the
+                  template renders invoice rows). When zero invoices
+                  are selected (only CMs), the button is disabled. */}
+              {(() => {
+                const invoiceLocalIds = selectedRows
+                  .filter((r) => r.docType === "invoice" && r.id)
+                  .map((r) => r.id as string);
+                const chaseDisabled = invoiceLocalIds.length === 0;
+                return (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      if (chaseDisabled) return;
+                      onBulkChase(invoiceLocalIds);
+                      // Don't clear selection here — operator can
+                      // cancel the dialog and re-fire. Selection
+                      // clears via the explicit "clear" link or on
+                      // dialog success (parent clears via key).
+                    }}
+                    disabled={chaseDisabled}
+                    title={
+                      chaseDisabled
+                        ? "Select at least one invoice (credit memos can't be chased)"
+                        : `Send a chase email covering the ${invoiceLocalIds.length} selected invoice${invoiceLocalIds.length === 1 ? "" : "s"} (L1 by default — switch level inside the dialog)`
+                    }
+                  >
+                    <Send className="size-3.5" />
+                    Send chase email
+                    {invoiceLocalIds.length > 0
+                      ? ` (${invoiceLocalIds.length})`
+                      : ""}
+                  </Button>
+                );
+              })()}
               <Button
                 size="sm"
                 variant="secondary"
@@ -1991,6 +2129,13 @@ function InvoicesPanel({
                     activeDir={sortDir}
                     onClick={toggleSort}
                     align="right"
+                  />
+                  <SortHeader
+                    label="Last chased"
+                    sortKey="lastChasedAt"
+                    activeKey={sortKey}
+                    activeDir={sortDir}
+                    onClick={toggleSort}
                   />
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 text-right font-medium">Actions</th>
@@ -2101,6 +2246,20 @@ function compareRows(a: InvoiceRow, b: InvoiceRow, key: SortKey): number {
       return Number(a.total) - Number(b.total);
     case "balance":
       return Number(a.balance) - Number(b.balance);
+    case "lastChasedAt": {
+      // Nulls (never-chased) sort to the END in ascending order so
+      // "haven't chased recently" surfaces at the top when the
+      // operator clicks asc → asc means oldest-chase-first AND
+      // never-chased-first share the front of the list, which is
+      // the actionable target. Tiny lie: empty string < anything
+      // non-empty, so we use a guard instead of "".
+      const aVal = a.lastChasedAt ?? "";
+      const bVal = b.lastChasedAt ?? "";
+      if (aVal === bVal) return 0;
+      if (aVal === "") return -1;
+      if (bVal === "") return 1;
+      return aVal.localeCompare(bVal);
+    }
     default:
       return 0;
   }
@@ -2275,6 +2434,13 @@ function InvoiceTableRow({
           <span className="text-muted">—</span>
         )}
       </td>
+      <td className="px-3 py-2 text-xs">
+        <LastChasedCell
+          docType={row.docType}
+          lastChasedAt={row.lastChasedAt}
+          lastChasedLevel={row.lastChasedLevel}
+        />
+      </td>
       <td className="px-3 py-2">
         <InvoiceStatusBadge status={row.status} isPaid={isPaid} />
       </td>
@@ -2324,6 +2490,47 @@ function InvoiceTableRow({
         </div>
       </td>
     </tr>
+  );
+}
+
+// "Chased Nd ago (L1)" cell content. Credit memos always render dash
+// (chase tracking is invoice-only). Never-chased invoices render a
+// muted dash so the column reads clean. Tooltip shows the absolute
+// timestamp for operators who want the exact date.
+function LastChasedCell({
+  docType,
+  lastChasedAt,
+  lastChasedLevel,
+}: {
+  docType: "invoice" | "credit_memo";
+  lastChasedAt: string | null;
+  lastChasedLevel: number | null;
+}) {
+  if (docType === "credit_memo" || !lastChasedAt) {
+    return <span className="text-muted">—</span>;
+  }
+  const ago = detailRelativeTime(lastChasedAt);
+  const absolute = new Date(lastChasedAt).toLocaleString();
+  const level =
+    lastChasedLevel === 1 || lastChasedLevel === 2 || lastChasedLevel === 3
+      ? `L${lastChasedLevel}`
+      : "L?";
+  // Recency tone: < 7d ago = neutral (recently chased — don't re-chase
+  // yet); 7-30d ago = info (chase candidate); 30d+ = warning (long
+  // overdue chase). Same tone vocabulary used by other badges.
+  const diffMs = Date.now() - new Date(lastChasedAt).getTime();
+  const days = diffMs / (1000 * 60 * 60 * 24);
+  const tone =
+    days < 7
+      ? "text-muted"
+      : days < 30
+        ? "text-secondary"
+        : "text-accent-warning";
+  return (
+    <span className={tone} title={`Chased L${lastChasedLevel} on ${absolute}`}>
+      {ago}{" "}
+      <span className="text-[9px] uppercase tracking-wide">{level}</span>
+    </span>
   );
 }
 

@@ -3,8 +3,24 @@
 // statement send: pre-fill from the chase_l{level} template +
 // resolver, then let the operator edit subject / body / TO / CC /
 // BCC before send.
+//
+// Level toggle (L1/L2/L3) lives inside the dialog so an operator
+// who opened "Send chase" from the customer page can flip the
+// dunning tone without dismissing and re-opening. Switching the
+// level re-fetches the rendered preview and (if the operator hasn't
+// edited yet) re-snaps the form fields. Their edits persist when
+// they switch levels — but a level switch resets `edited` afterward
+// so they can opt back into following the new template if they
+// change levels again.
+//
+// Optional invoiceIds prop scopes the chase to a subset of the
+// customer's open invoices instead of "all open" (the legacy
+// chase-row-menu behaviour). Used by the customer-detail Invoices
+// tab when the operator multi-selects rows. The backend renders
+// {{open_invoices_table}} from only those rows AND only writes
+// invoice_chases rows for those invoices.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Send, AlertCircle } from "lucide-react";
 import {
@@ -16,6 +32,15 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { cn } from "../lib/cn";
+
+type ChaseLevel = 1 | 2 | 3;
+
+const LEVEL_LABELS: Record<ChaseLevel, { label: string; tone: string }> = {
+  1: { label: "L1 · gentle", tone: "Friendly first reminder" },
+  2: { label: "L2 · firmer", tone: "Firmer follow-up — please action" },
+  3: { label: "L3 · escalation", tone: "Escalation — final notice" },
+};
 
 type PreviewResponse = {
   subject: string;
@@ -26,7 +51,7 @@ type PreviewResponse = {
 
 export type ChaseSendSuccess = {
   customerId: string;
-  level: 1 | 2 | 3;
+  level: ChaseLevel;
 };
 
 export default function ChaseEmailSendDialog({
@@ -34,24 +59,48 @@ export default function ChaseEmailSendDialog({
   onOpenChange,
   customerId,
   customerName,
-  level,
+  level: defaultLevel,
+  invoiceIds,
   onSent,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
   customerId: string;
   customerName: string;
-  level: 1 | 2 | 3;
+  // Initial level when the dialog mounts. The operator can switch
+  // inside the dialog; this is just the starting point.
+  level: ChaseLevel;
+  // Optional subset of invoice ids to chase. When omitted (or
+  // empty), the chase covers ALL the customer's open invoices —
+  // the legacy chase-row-menu behaviour.
+  invoiceIds?: string[];
   onSent: (result: ChaseSendSuccess) => void;
 }) {
   const queryClient = useQueryClient();
+  const [level, setLevel] = useState<ChaseLevel>(defaultLevel);
+
+  // Stable string-key for the invoice-id list — TanStack Query needs
+  // a deterministic key, and array identity changes per render.
+  const invoiceIdsKey = useMemo(() => {
+    if (!invoiceIds || invoiceIds.length === 0) return "all";
+    return [...invoiceIds].sort().join(",");
+  }, [invoiceIds]);
 
   const previewQuery = useQuery<PreviewResponse>({
     enabled: open,
-    queryKey: ["chase-preview", customerId, level],
+    queryKey: ["chase-preview", customerId, level, invoiceIdsKey],
     queryFn: async () => {
+      const params = new URLSearchParams({
+        customerId,
+        level: String(level),
+      });
+      // Repeated `invoiceIds` params — backend's normaliseInvoiceIds
+      // accepts either repeated or comma-joined.
+      if (invoiceIds && invoiceIds.length > 0) {
+        for (const id of invoiceIds) params.append("invoiceIds", id);
+      }
       const res = await fetch(
-        `/api/chase/preview-chase-email?customerId=${encodeURIComponent(customerId)}&level=${level}`,
+        `/api/chase/preview-chase-email?${params.toString()}`,
       );
       if (!res.ok) {
         const text = await res.text();
@@ -67,8 +116,15 @@ export default function ChaseEmailSendDialog({
   const [to, setTo] = useState<string>("");
   const [cc, setCc] = useState<string>("");
   const [bcc, setBcc] = useState<string>("");
+  // True once the operator has touched any field. Blocks re-snap
+  // from preview re-fetches so we don't clobber their edits when a
+  // background refetch happens (or React Query refocus revalidates).
+  // Reset on level switch so a fresh template body shows.
   const [edited, setEdited] = useState<boolean>(false);
 
+  // Snap form fields to the latest preview, but only when the
+  // operator hasn't started editing. Triggers on initial load AND on
+  // level switch (the queryKey includes level so the data ref changes).
   useEffect(() => {
     if (edited) return;
     const d = previewQuery.data;
@@ -80,6 +136,8 @@ export default function ChaseEmailSendDialog({
     setBcc(d.recipients.bcc);
   }, [previewQuery.data, edited]);
 
+  // Reset everything on close — including level back to the prop
+  // default — so re-opening is a fresh dialog session.
   useEffect(() => {
     if (!open) {
       setSubject("");
@@ -88,8 +146,21 @@ export default function ChaseEmailSendDialog({
       setCc("");
       setBcc("");
       setEdited(false);
+      setLevel(defaultLevel);
     }
-  }, [open]);
+  }, [open, defaultLevel]);
+
+  // Switching level re-fetches the template; reset `edited` so the
+  // re-snap effect above can pull the new template into the form.
+  // This intentionally discards in-progress edits when the operator
+  // changes level — the body is going to be substantially different,
+  // and clobbering tweaks is more recoverable than leaving an L1 tone
+  // in the form labelled "Send L3".
+  function handleLevelChange(next: ChaseLevel): void {
+    if (next === level) return;
+    setLevel(next);
+    setEdited(false);
+  }
 
   const sendMutation = useMutation<unknown, Error, void>({
     mutationFn: async () => {
@@ -100,6 +171,8 @@ export default function ChaseEmailSendDialog({
         body: JSON.stringify({
           customerId,
           level,
+          // invoice subset — undefined when chasing all open
+          ...(invoiceIds && invoiceIds.length > 0 ? { invoiceIds } : {}),
           // Only pass overrides when they diverge from the rendered
           // defaults — keeps the audit log honest about what the
           // operator actually changed.
@@ -123,27 +196,79 @@ export default function ChaseEmailSendDialog({
       return res.json();
     },
     onSuccess: () => {
+      // Chase invalidation set: chase list, customer detail (activity
+      // timeline + KPI strip pick up new email_out + lastContactedAt),
+      // and the customer-invoices query (lastChasedAt now populated for
+      // the chased rows). customers list also reads lastContactedAt
+      // when sorted by it, so include that too.
       queryClient.invalidateQueries({ queryKey: ["chase", "customers"] });
       queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      queryClient.invalidateQueries({
+        queryKey: ["customer-invoices", customerId],
+      });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
       onSent({ customerId, level });
       onOpenChange(false);
     },
   });
+
+  const subsetCount = invoiceIds?.length ?? 0;
+  const isSubset = subsetCount > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            Send chase L{level} to {customerName}
+            Send chase email to {customerName}
           </DialogTitle>
           <DialogDescription>
-            Pre-filled from the chase_l{level} template. Edit subject,
-            body or recipients before sending if needed.
+            {isSubset ? (
+              <>
+                Chasing {subsetCount} selected invoice
+                {subsetCount === 1 ? "" : "s"}. Pre-filled from the
+                chase_l{level} template — switch level or edit the wording
+                before sending.
+              </>
+            ) : (
+              <>
+                Pre-filled from the chase_l{level} template covering all
+                open invoices. Switch level or edit the wording before
+                sending.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
         <div className="mt-2 space-y-3">
+          {/* Level selector — 3 segmented buttons so the active level
+              is one click away. Switching mid-edit drops in-progress
+              tweaks (handleLevelChange resets edited). */}
+          <div>
+            <span className="mb-1 block text-[11px] uppercase tracking-wide text-muted">
+              Dunning level
+            </span>
+            <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
+              {([1, 2, 3] as ChaseLevel[]).map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => handleLevelChange(l)}
+                  disabled={sendMutation.isPending}
+                  className={cn(
+                    "rounded px-3 py-1 transition-colors",
+                    level === l
+                      ? "bg-base font-medium text-primary shadow-sm"
+                      : "text-secondary hover:text-primary disabled:cursor-not-allowed disabled:text-muted",
+                  )}
+                  title={LEVEL_LABELS[l].tone}
+                >
+                  {LEVEL_LABELS[l].label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {previewQuery.isPending ? (
             <div className="text-sm text-muted">Loading preview…</div>
           ) : previewQuery.isError ? (
@@ -275,6 +400,7 @@ export default function ChaseEmailSendDialog({
           >
             <Send className="size-3.5" />
             Send L{level}
+            {isSubset ? ` (${subsetCount} invoice${subsetCount === 1 ? "" : "s"})` : ""}
           </Button>
         </DialogFooter>
       </DialogContent>
