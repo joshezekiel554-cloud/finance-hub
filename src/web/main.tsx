@@ -29,6 +29,7 @@ import SeasonsPage from "./pages/seasons";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { tasksSearchSchema } from "./lib/search-schemas/tasks";
+import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today";
 import { restoreSearchOnEmpty } from "./lib/restore-search-on-empty";
 import "./styles.css";
 
@@ -64,6 +65,8 @@ const invoicingTodayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/invoicing",
   component: InvoicingTodayPage,
+  validateSearch: invoicingTodaySearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/invoicing"),
 });
 
 const customersRoute = createRoute({

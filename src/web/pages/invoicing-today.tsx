@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, getRouteApi } from "@tanstack/react-router";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { InvoicingTodaySearch } from "../lib/search-schemas/invoicing-today";
+
+const invoicingTodayRouteApi = getRouteApi("/invoicing");
 import { AlertCircle, CheckCircle2, Mail, MessageSquare, Package, Truck } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -168,7 +173,14 @@ function classifyRow(
 }
 
 export default function InvoicingTodayPage() {
-  const [tab, setTab] = useState<Tab>("open");
+  const search = invoicingTodayRouteApi.useSearch();
+  const { setFilter } = useFilterNavigate<InvoicingTodaySearch>("/invoicing");
+  useFilterPersistence("/invoicing");
+
+  const tab = search.tab;
+  const setTab = (next: InvoicingTodaySearch["tab"]) =>
+    setFilter("tab", next, { history: "push" });
+
   const queryClient = useQueryClient();
   const [reviewReceipt, setReviewReceipt] = useState<ReceiptRow | null>(null);
   // After the operator clicks "Continue to credit memo" in the receipt
