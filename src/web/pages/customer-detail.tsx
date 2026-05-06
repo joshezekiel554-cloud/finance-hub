@@ -38,6 +38,9 @@ import StatementSendDialog, {
 import ChaseEmailSendDialog, {
   type ChaseSendSuccess,
 } from "../components/chase-email-send-dialog";
+import ComposeModal, {
+  type ComposeContext,
+} from "../components/compose-modal";
 import InvoiceSendDialog, {
   type InvoiceSendSuccess,
 } from "../components/invoice-send-dialog";
@@ -132,6 +135,10 @@ export default function CustomerDetailPage() {
     level: 1 | 2 | 3;
     invoiceCount: number;
   } | null>(null);
+  // Compose-new dialog state. Distinct from the reply path that lives
+  // inside <EmailList> — this is "operator wants to start a fresh
+  // outbound email to the customer with no thread context."
+  const [composeOpen, setComposeOpen] = useState(false);
   const queryClient = useQueryClient();
 
   // Auto-dismiss the "statement sent" pill after ~6s. We don't have a
@@ -335,6 +342,21 @@ export default function CustomerDetailPage() {
             <Send className="size-3.5" />
             Send chase email
           </Button>
+          {/* Compose-new — operator-initiated outbound with no thread
+              context. Distinct from the per-row Reply button on the
+              Email tab. Always enabled — works even if the customer
+              has no balance, no invoices, etc. ComposeModal pre-fills
+              the TO from the customer's primary email. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setComposeOpen(true)}
+            title="Compose a new email to this customer (attachments optional)"
+            disabled={!customer.primaryEmail}
+          >
+            <Mail className="size-3.5" />
+            New email
+          </Button>
           <StatusActions
             holdStatus={customer.holdStatus}
             disabled={holdToggleMutation.isPending}
@@ -390,6 +412,24 @@ export default function CustomerDetailPage() {
           === [] → also chase all open (defence-in-depth);
           === [...] → chase that subset (set by the Invoices tab
           bulk action). */}
+      {/* Compose-new email to this customer. ComposeModal already
+          handles the no-thread-context branch (title flips to "New
+          email"); we just hand it the customer context so TO is
+          pre-filled and the resulting email_log row links back here. */}
+      {composeOpen ? (
+        <ComposeModal
+          open={composeOpen}
+          onOpenChange={setComposeOpen}
+          context={
+            {
+              customerId: customer.id,
+              customerName: customer.displayName,
+              customerEmail: customer.primaryEmail ?? undefined,
+            } satisfies ComposeContext
+          }
+        />
+      ) : null}
+
       {chaseDialog ? (
         <ChaseEmailSendDialog
           open={true}

@@ -409,6 +409,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
             <AttachmentsField
               attachments={attachments}
               onChange={setAttachments}
+              customerId={context?.customerId}
             />
           </div>
         </div>
@@ -466,14 +467,24 @@ function FieldRow({
 // Compact file-picker + chip list for outbound attachments. Backend
 // /api/send caps at 20 files; we don't enforce client-side beyond a
 // reasonable per-file size warning.
+//
+// When a customerId is supplied (compose-modal mode), a second button
+// surfaces the customer's existing QBO docs (invoices, credit memos)
+// + an open-items statement PDF. Picking one fetches the PDF
+// server-side and wraps it in a File object so the existing base64-
+// encode + send pipeline doesn't change shape.
 function AttachmentsField({
   attachments,
   onChange,
+  customerId,
 }: {
   attachments: File[];
   onChange: (next: File[]) => void;
+  customerId?: string;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [docPickerOpen, setDocPickerOpen] = useState(false);
+
   return (
     <div>
       <span className="mb-1 block text-xs font-medium text-secondary">
@@ -517,14 +528,226 @@ function AttachmentsField({
             onChange([...attachments, ...picked]);
           }}
         />
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs text-secondary hover:bg-elevated"
-        >
-          <Paperclip className="size-3" />
-          {attachments.length === 0 ? "Attach files" : "Add more"}
-        </button>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs text-secondary hover:bg-elevated"
+          >
+            <Paperclip className="size-3" />
+            {attachments.length === 0 ? "Attach files" : "Add more"}
+          </button>
+          {customerId ? (
+            <button
+              type="button"
+              onClick={() => setDocPickerOpen((v) => !v)}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border border-default px-2 py-1 text-xs text-secondary hover:bg-elevated",
+                docPickerOpen ? "bg-elevated" : "bg-base",
+              )}
+            >
+              <Paperclip className="size-3" />
+              {docPickerOpen ? "Hide customer docs" : "Attach customer doc"}
+            </button>
+          ) : null}
+        </div>
+        {docPickerOpen && customerId ? (
+          <CustomerDocPicker
+            customerId={customerId}
+            attachedFilenames={new Set(attachments.map((f) => f.name))}
+            onPick={(file) => onChange([...attachments, file])}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Inline picker for attaching the customer's existing QBO docs to a
+// compose-new email. Shows recent invoices + credit memos (from the
+// /api/customers/:id/invoices endpoint already used by the Invoices
+// tab) plus a "Generate statement PDF (open items)" virtual entry
+// that re-renders a fresh statement on demand.
+//
+// Picking fetches the PDF as a Blob, wraps it in a File so the
+// downstream base64-encode + send pipeline doesn't fork by source.
+// Already-attached filenames render as disabled to prevent
+// double-attaching the same doc — the operator can still use the
+// chip's × button to remove it.
+type CustomerDocRow = {
+  docType: "invoice" | "credit_memo";
+  qbId: string;
+  docNumber: string | null;
+  issueDate: string | null;
+  total: string;
+  balance: string;
+};
+
+function CustomerDocPicker({
+  customerId,
+  attachedFilenames,
+  onPick,
+}: {
+  customerId: string;
+  attachedFilenames: Set<string>;
+  onPick: (file: File) => void;
+}) {
+  const docsQuery = useQuery<{
+    invoices: CustomerDocRow[];
+  }>({
+    queryKey: ["customer-invoices", customerId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/invoices`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+
+  async function fetchAsFile(
+    url: string,
+    filename: string,
+  ): Promise<File> {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    return new File([blob], filename, {
+      type: blob.type || "application/pdf",
+    });
+  }
+
+  async function pickInvoiceOrCm(row: CustomerDocRow): Promise<void> {
+    const baseName =
+      row.docType === "credit_memo"
+        ? `CreditMemo-${row.docNumber ?? row.qbId}`
+        : `Invoice-${row.docNumber ?? row.qbId}`;
+    const filename = `${baseName}.pdf`;
+    if (attachedFilenames.has(filename)) return;
+    const key = `${row.docType}:${row.qbId}`;
+    setBusyKey(key);
+    setPickError(null);
+    try {
+      const url = `/api/qb-pdf/${row.docType === "credit_memo" ? "creditmemo" : "invoice"}/${encodeURIComponent(row.qbId)}`;
+      const file = await fetchAsFile(url, filename);
+      onPick(file);
+    } catch (err) {
+      setPickError(
+        err instanceof Error ? err.message : "Failed to fetch PDF",
+      );
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function pickStatement(): Promise<void> {
+    const filename = `Statement-${new Date().toISOString().slice(0, 10)}.pdf`;
+    if (attachedFilenames.has(filename)) return;
+    setBusyKey("statement");
+    setPickError(null);
+    try {
+      const url = `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview`;
+      const file = await fetchAsFile(url, filename);
+      onPick(file);
+    } catch (err) {
+      setPickError(
+        err instanceof Error
+          ? err.message
+          : "Failed to render statement PDF",
+      );
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  const rows = docsQuery.data?.invoices ?? [];
+  // Recent first — backend already orders by issue date desc, but we
+  // cap the picker at the 25 most recent so an old account with
+  // hundreds of invoices doesn't fill the dialog.
+  const visibleRows = rows.slice(0, 25);
+
+  return (
+    <div className="rounded-md border border-default bg-subtle p-2">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          {docsQuery.isPending
+            ? "Loading customer docs…"
+            : `Customer docs (${rows.length})`}
+        </span>
+        {pickError ? (
+          <span className="text-[11px] text-accent-danger">
+            {pickError}
+          </span>
+        ) : null}
+      </div>
+      {/* Statement PDF — always offered (re-renders open items on demand). */}
+      <button
+        type="button"
+        onClick={pickStatement}
+        disabled={busyKey !== null}
+        className="mb-1 flex w-full items-center justify-between rounded border border-default bg-base px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:opacity-50"
+      >
+        <span>
+          <span className="font-medium">Statement (open items)</span>
+          <span className="ml-2 text-muted">
+            generated now from current open invoices
+          </span>
+        </span>
+        <span className="ml-2 shrink-0 text-[10px] text-muted">
+          {busyKey === "statement" ? "fetching…" : "PDF"}
+        </span>
+      </button>
+      {docsQuery.isError ? (
+        <div className="text-xs text-accent-danger">
+          {(docsQuery.error as Error)?.message ?? "Failed to load docs"}
+        </div>
+      ) : null}
+      <div className="max-h-48 space-y-0.5 overflow-y-auto">
+        {visibleRows.map((row) => {
+          const key = `${row.docType}:${row.qbId}`;
+          const filename =
+            row.docType === "credit_memo"
+              ? `CreditMemo-${row.docNumber ?? row.qbId}.pdf`
+              : `Invoice-${row.docNumber ?? row.qbId}.pdf`;
+          const alreadyAttached = attachedFilenames.has(filename);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => pickInvoiceOrCm(row)}
+              disabled={busyKey !== null || alreadyAttached}
+              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-elevated disabled:opacity-50"
+            >
+              <span className="truncate">
+                <span className="font-medium">
+                  {row.docType === "credit_memo" ? "CM" : "Inv"}{" "}
+                  {row.docNumber ?? row.qbId}
+                </span>
+                <span className="ml-2 text-muted">
+                  {row.issueDate ?? "—"} · ${Number(row.total).toFixed(2)}
+                </span>
+              </span>
+              <span className="ml-2 shrink-0 text-[10px] text-muted">
+                {alreadyAttached
+                  ? "attached"
+                  : busyKey === key
+                    ? "fetching…"
+                    : "PDF"}
+              </span>
+            </button>
+          );
+        })}
+        {!docsQuery.isPending && visibleRows.length === 0 ? (
+          <div className="px-2 py-1 text-xs text-muted">
+            No invoices or credit memos for this customer.
+          </div>
+        ) : null}
       </div>
     </div>
   );
