@@ -1021,7 +1021,11 @@ function TasksPanel({
         </Button>
       </div>
       {tasks.length > 0 ? (
-        <TaskList tasks={tasks} onRowClick={onOpen} />
+        <TaskList
+          tasks={tasks}
+          onRowClick={onOpen}
+          hideCustomerColumn
+        />
       ) : (
         <Card>
           <CardBody className="flex flex-col items-center gap-2 py-10 text-sm text-muted">
