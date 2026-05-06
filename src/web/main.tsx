@@ -32,6 +32,7 @@ import { tasksSearchSchema } from "./lib/search-schemas/tasks";
 import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today";
 import { chaseSearchSchema } from "./lib/search-schemas/chase";
 import { statementsSearchSchema } from "./lib/search-schemas/statements";
+import { customerDetailSearchSchema } from "./lib/search-schemas/customer-detail";
 import { restoreSearchOnEmpty } from "./lib/restore-search-on-empty";
 import "./styles.css";
 
@@ -83,6 +84,8 @@ const customerDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/customers/$customerId",
   component: CustomerDetailPage,
+  validateSearch: customerDetailSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/customers/$customerId"),
 });
 
 const tasksRoute = createRoute({
