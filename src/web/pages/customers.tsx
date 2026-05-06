@@ -1,18 +1,24 @@
 import { useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, getRouteApi } from "@tanstack/react-router";
 import {
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
 import { Search, AlertCircle, Pause } from "lucide-react";
-import { useEffect } from "react";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import {
+  type CustomersSearch,
+} from "../lib/search-schemas/customers";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/cn";
 import { SyncQbBadge } from "../components/sync-qb-badge";
+
+const customersRouteApi = getRouteApi("/customers");
 
 type CustomerType = "b2b" | "b2c" | null;
 
@@ -80,26 +86,38 @@ const TAB_LABELS: Record<FilterTab, string> = {
 };
 
 export default function CustomersPage() {
-  const [tab, setTab] = useState<FilterTab>("b2b");
-  const [search, setSearch] = useState("");
-  // Default sort surfaces customers with money on the line first — most
-  // operator visits to this page are about action, not the alphabet.
-  // Click the Customer column header once to flip back to A→Z.
-  const [sort, setSort] = useState<SortKey>("balance");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const search = customersRouteApi.useSearch();
+  const { setFilter, setFilters } = useFilterNavigate<CustomersSearch>("/customers");
+  useFilterPersistence("/customers");
+
+  // Local aliases — minimize downstream changes:
+  const tab = search.tab;
+  const sort = search.sort;
+  const dir = search.dir;
+  const hideZero = search.hideZero;
+  const hasOverdueFilter = search.hasOverdue;
+  const onHoldFilter = search.onHold;
+  const missingTermsFilter = search.missingTerms;
+  const hasUnactionedEmailFilter = search.hasUnactionedEmail;
+
+  // Setters wrap useFilterNavigate. Toggles + tab + sort use push history;
+  // text input + boolean filter chips use replace (default).
+  const setTab = (next: CustomersSearch["tab"]) =>
+    setFilters({ tab: next, hideZero: next === "b2b" }, { history: "push" });
+  const setSort = (next: CustomersSearch["sort"]) =>
+    setFilter("sort", next, { history: "push" });
+  const setDir = (next: CustomersSearch["dir"]) =>
+    setFilter("dir", next, { history: "push" });
+  const setHideZero = (next: boolean) => setFilter("hideZero", next);
+  const setHasOverdueFilter = (next: boolean) => setFilter("hasOverdue", next);
+  const setOnHoldFilter = (next: boolean) => setFilter("onHold", next);
+  const setMissingTermsFilter = (next: boolean) =>
+    setFilter("missingTerms", next);
+  const setHasUnactionedEmailFilter = (next: boolean) =>
+    setFilter("hasUnactionedEmail", next);
+  const setSearchValue = (next: string) => setFilter("search", next);
+
   const [sweepMode, setSweepMode] = useState(false);
-  // Filter chips. hideZero defaults ON for B2B (most chase-relevant view)
-  // and OFF for everything else (Uncategorized has many $0 rows that ARE
-  // the workflow). The effect below flips it on tab switches.
-  const [hideZero, setHideZero] = useState(true);
-  const [hasOverdueFilter, setHasOverdueFilter] = useState(false);
-  const [onHoldFilter, setOnHoldFilter] = useState(false);
-  const [missingTermsFilter, setMissingTermsFilter] = useState(false);
-  const [hasUnactionedEmailFilter, setHasUnactionedEmailFilter] =
-    useState(false);
-  useEffect(() => {
-    setHideZero(tab === "b2b");
-  }, [tab]);
   // Selected gmailIds in sweep mode. When the user toggles "Select all
   // (balance > 0)" we pre-fill with the matching ids; individual checkbox
   // clicks add/remove from this set.
@@ -111,7 +129,7 @@ export default function CustomersPage() {
     "customers",
     {
       tab,
-      search,
+      search: search.search,
       sort,
       dir,
       hideZero,
@@ -133,7 +151,7 @@ export default function CustomersPage() {
         // than the first page. Backend caps at 5000 in the route schema.
         limit: "5000",
       });
-      if (search.trim()) params.set("q", search.trim());
+      if (search.search.trim()) params.set("q", search.search.trim());
       if (hideZero) params.set("hideZeroBalance", "true");
       if (hasOverdueFilter) params.set("hasOverdue", "true");
       if (onHoldFilter) params.set("holdStatus", "hold");
@@ -383,8 +401,8 @@ export default function CustomersPage() {
         <div className="relative ml-auto">
           <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
           <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={search.search}
+            onChange={(e) => setSearchValue(e.target.value)}
             placeholder="Search name or email…"
             className="!pl-8"
             aria-label="Search customers"
@@ -410,27 +428,27 @@ export default function CustomersPage() {
         <FilterChip
           label="Hide $0"
           active={hideZero}
-          onClick={() => setHideZero((v) => !v)}
+          onClick={() => setHideZero(!hideZero)}
         />
         <FilterChip
           label="Has overdue"
           active={hasOverdueFilter}
-          onClick={() => setHasOverdueFilter((v) => !v)}
+          onClick={() => setHasOverdueFilter(!hasOverdueFilter)}
         />
         <FilterChip
           label="On hold"
           active={onHoldFilter}
-          onClick={() => setOnHoldFilter((v) => !v)}
+          onClick={() => setOnHoldFilter(!onHoldFilter)}
         />
         <FilterChip
           label="No terms set"
           active={missingTermsFilter}
-          onClick={() => setMissingTermsFilter((v) => !v)}
+          onClick={() => setMissingTermsFilter(!missingTermsFilter)}
         />
         <FilterChip
           label="Has unactioned email"
           active={hasUnactionedEmailFilter}
-          onClick={() => setHasUnactionedEmailFilter((v) => !v)}
+          onClick={() => setHasUnactionedEmailFilter(!hasUnactionedEmailFilter)}
         />
         {hideZero ||
         hasOverdueFilter ||
