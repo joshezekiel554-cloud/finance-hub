@@ -7,6 +7,7 @@ import {
   createRootRoute,
   createRoute,
   Outlet,
+  ScrollRestoration,
 } from "@tanstack/react-router";
 import App from "./App";
 import HomePage from "./pages/home";
@@ -43,6 +44,7 @@ const queryClient = new QueryClient({
 const rootRoute = createRootRoute({
   component: () => (
     <App>
+      <ScrollRestoration />
       <Outlet />
     </App>
   ),
