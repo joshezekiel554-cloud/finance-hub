@@ -8,6 +8,7 @@
 // Returns: filter state lives inside ReturnsPanel sub-component, not page-level.
 
 import { z } from "zod";
+import { RMA_STATUSES, RMA_RETURN_TYPES } from "../../../db/schema/returns";
 
 export const customerDetailSearchSchema = z.object({
   tab: z
@@ -38,6 +39,10 @@ export const customerDetailSearchSchema = z.object({
   // Types mirror EmailList-private DirectionFilter / ActionedFilter
   emailDirection: z.enum(["all", "inbound", "outbound"]).catch("all"),
   emailActioned: z.enum(["open", "done", "all"]).catch("open"),
+
+  // ---- Returns tab (prefix "rma") ----
+  rmaStatus: z.enum(["all", ...RMA_STATUSES]).catch("all"),
+  rmaType: z.enum(["all", ...RMA_RETURN_TYPES]).catch("all"),
 });
 
 export type CustomerDetailSearch = z.infer<typeof customerDetailSearchSchema>;
