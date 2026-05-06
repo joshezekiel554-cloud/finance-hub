@@ -8,18 +8,8 @@ import { RMA_STATUSES, RMA_RETURN_TYPES } from "../../../db/schema/returns";
 
 export const returnsSearchSchema = z.object({
   view: z.enum(["kanban", "list"]).catch("list"),
-  status: z
-    .enum([
-      ...RMA_STATUSES,
-      "all",
-    ] satisfies [string, ...string[]])
-    .catch("all"),
-  type: z
-    .enum([
-      ...RMA_RETURN_TYPES,
-      "all",
-    ] satisfies [string, ...string[]])
-    .catch("all"),
+  status: z.enum(["all", ...RMA_STATUSES]).catch("all"),
+  type: z.enum(["all", ...RMA_RETURN_TYPES]).catch("all"),
   search: z.string().catch(""),
 });
 
