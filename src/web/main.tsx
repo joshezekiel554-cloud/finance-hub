@@ -26,6 +26,8 @@ import ReturnsListPage from "./pages/returns";
 import ReturnNewPage from "./pages/return-new";
 import ReturnDetailPage from "./pages/return-detail";
 import SeasonsPage from "./pages/seasons";
+import { customersSearchSchema } from "./lib/search-schemas/customers";
+import { restoreSearchOnEmpty } from "./lib/restore-search-on-empty";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -66,6 +68,8 @@ const customersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/customers",
   component: CustomersPage,
+  validateSearch: customersSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/customers"),
 });
 
 const customerDetailRoute = createRoute({
