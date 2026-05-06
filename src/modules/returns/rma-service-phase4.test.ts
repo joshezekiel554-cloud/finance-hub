@@ -33,6 +33,7 @@ const {
     orderBy: (...args: unknown[]) => LazyNode;
     limit: (...args: unknown[]) => LazyNode;
     from: (...args: unknown[]) => LazyNode;
+    for: (...args: unknown[]) => LazyNode;
     leftJoin: (...args: unknown[]) => LazyNode;
     innerJoin: (...args: unknown[]) => LazyNode;
   };
@@ -48,6 +49,10 @@ const {
     orderBy: () => makeNode(),
     limit: () => makeNode(),
     from: () => makeNode(),
+    // FOR UPDATE row lock — used by createRmaFromReceipt's claim check
+    // and confirmExtensivReceipt. Mock just chains another node so the
+    // existing select queue drives it.
+    for: () => makeNode(),
     leftJoin: () => makeNode(),
     innerJoin: () => makeNode(),
   });
@@ -133,26 +138,35 @@ describe("createRmaFromReceipt", () => {
   it("creates an RMA in received state and links the receipt", async () => {
     const newRmaId = "rma-new-123";
 
-    // After insert + items insert + recomputeTotalValue (select items) + extensiv update + activity + final select
+    // Select queue:
+    //   1. tx.select(extensiv_receipts).where(...).for("update") — claim
+    //      check. Returns the receipt with all claim fields null so the
+    //      service proceeds.
+    //   2. Final tx.select(rmas) at the end.
+    // The total is computed inline (no recompute select), so no items
+    // query in the queue.
     setSelectQueue([
-      // recomputeTotalValue: select rma_items
-      [{ lineTotal: "25.00" }, { lineTotal: "15.00" }],
-      // final select rmas
+      [
+        {
+          id: "receipt-001",
+          rmaId: null,
+          confirmedAt: null,
+          dismissedAt: null,
+        },
+      ],
       [
         {
           id: newRmaId,
           customerId: "cust-abc",
           status: "received",
           createdViaReceipt: true,
-          totalValue: "40.00",
+          totalValue: "25.00",
         },
       ],
     ]);
 
-    // mockInsert returns { values: fn } — mock it to capture calls
     const insertValuesMock = vi.fn().mockResolvedValue(undefined);
     mockInsert.mockReturnValue({ values: insertValuesMock });
-    // mockUpdate returns { set: fn } — set returns { where: fn }
     const updateWhereMock = vi.fn().mockResolvedValue(undefined);
     const updateSetMock = vi.fn(() => ({ where: updateWhereMock }));
     mockUpdate.mockReturnValue({ set: updateSetMock });
@@ -195,11 +209,39 @@ describe("createRmaFromReceipt", () => {
       createdViaReceipt: true,
     });
 
-    // The receipt should have been linked
-    expect(mockUpdate).toHaveBeenCalled();
+    // Two updates fire inside the tx: rmas.totalValue rollup + the
+    // receipt link. The receipt link is the load-bearing assertion —
+    // confirms the FOR UPDATE claim path actually links.
     expect(updateSetMock).toHaveBeenCalledWith(
       expect.objectContaining({ matchKind: "exact_tx_number" }),
     );
+  });
+
+  it("refuses to create an RMA when the receipt is already linked to another RMA", async () => {
+    // Concurrency guard — operator's tab was stale; another tab already
+    // claimed the receipt. Lock + null re-check should reject this with
+    // a clear message rather than orphan a duplicate RMA.
+    setSelectQueue([
+      [
+        {
+          id: "receipt-001",
+          rmaId: "rma-already-claimed",
+          confirmedAt: null,
+          dismissedAt: null,
+        },
+      ],
+    ]);
+
+    await expect(
+      createRmaFromReceipt({
+        receiptId: "receipt-001",
+        customerId: "cust-abc",
+        qbCustomerId: "qb-abc",
+        returnType: "damage",
+        items: [],
+        userId: "user-xyz",
+      }),
+    ).rejects.toThrow(/already linked|refresh/i);
   });
 });
 

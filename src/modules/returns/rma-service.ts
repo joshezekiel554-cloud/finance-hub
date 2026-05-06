@@ -851,64 +851,118 @@ export async function issueCreditMemo(
   id: string,
   input: IssueCreditMemoInput,
 ): Promise<IssueCreditMemoResult | null> {
-  const rmaRows = await db.select().from(rmas).where(eq(rmas.id, id));
-  if (rmaRows.length === 0) return null;
-  const current = rmaRows[0] as Rma;
+  // Whole flow runs in a transaction with FOR UPDATE on the rma row.
+  // Two operators clicking "Issue CM" in different tabs would otherwise
+  // both pass the transition check (RMA in `received`), both call QBO,
+  // and the customer ends up with two credit memos for one return. The
+  // lock + post-lock qboCreditMemoId guard ensures only the first call
+  // creates a CM; concurrent retries see the populated qboCreditMemoId
+  // and abort with "already issued."
+  //
+  // The QBO API call runs inside the transaction so the lock is held
+  // until the local DB write commits. If QBO succeeds and the local
+  // commit fails (rare — DB is local), the lock releases and a retry
+  // would call QBO again and duplicate. Acceptable trade for a small-
+  // team app where DB-commit-after-QBO-success failure is vanishingly
+  // rare; a stricter-grade fix would be a pre-flight QBO lookup by
+  // rmaNumber/DocNumber before create, accepting an extra round trip.
+  //
+  // Activity recording happens post-commit (recordActivity opens its
+  // own internal tx, so we'd be nesting otherwise). This matches the
+  // pattern Agent D used for confirmExtensivReceipt.
+  type IssueResult =
+    | {
+        ok: true;
+        rma: Rma;
+        creditMemoDocNumber: string;
+        customerIdForActivity: string;
+      }
+    | { ok: false; reason: string }
+    | null;
+  const txResult: IssueResult = await db.transaction(async (tx) => {
+    const rmaRows = await tx
+      .select()
+      .from(rmas)
+      .where(eq(rmas.id, id))
+      .for("update");
+    if (rmaRows.length === 0) return null;
+    const current = rmaRows[0] as Rma;
 
-  const transition = validateTransition({
-    currentStatus: current.status,
-    returnType: current.returnType,
-    action: "issue_credit_memo",
-  });
-  if (!transition.ok) return { ok: false, reason: transition.reason };
+    // Idempotency guard — if a CM was already issued, refuse rather
+    // than create another one. Operator should refresh the page to see
+    // the existing CM.
+    if (current.qboCreditMemoId) {
+      return {
+        ok: false,
+        reason: `Credit memo ${current.creditMemoDocNumber ?? current.qboCreditMemoId} already issued for this RMA — refresh the page`,
+      };
+    }
 
-  const items = (await db
-    .select()
-    .from(rmaItems)
-    .where(eq(rmaItems.rmaId, id))) as RmaItem[];
+    const transition = validateTransition({
+      currentStatus: current.status,
+      returnType: current.returnType,
+      action: "issue_credit_memo",
+    });
+    if (!transition.ok) return { ok: false, reason: transition.reason };
 
-  const itemsForCm = items.map((item) => {
-    const override = input.itemOverrides?.find((o) => o.itemId === item.id);
-    return override ? { ...item, receivedQuantity: override.receivedQuantity } : item;
-  });
+    const items = (await tx
+      .select()
+      .from(rmaItems)
+      .where(eq(rmaItems.rmaId, id))) as RmaItem[];
 
-  const cmResult = await buildAndPushCreditMemo({
-    rma: current,
-    items: itemsForCm,
-    shippingDeduction: input.shippingDeduction ?? null,
-    restockingFee: input.restockingFee ?? null,
-    applyTax: input.applyTax ?? false,
-    taxCodeRef: input.taxCodeRef ?? null,
-  });
+    const itemsForCm = items.map((item) => {
+      const override = input.itemOverrides?.find((o) => o.itemId === item.id);
+      return override ? { ...item, receivedQuantity: override.receivedQuantity } : item;
+    });
 
-  const now = new Date();
-  await db
-    .update(rmas)
-    .set({
-      status: "completed",
-      completedAt: now,
-      qboCreditMemoId: cmResult.qboCreditMemoId,
+    const cmResult = await buildAndPushCreditMemo({
+      rma: current,
+      items: itemsForCm,
+      shippingDeduction: input.shippingDeduction ?? null,
+      restockingFee: input.restockingFee ?? null,
+      applyTax: input.applyTax ?? false,
+      taxCodeRef: input.taxCodeRef ?? null,
+    });
+
+    const now = new Date();
+    await tx
+      .update(rmas)
+      .set({
+        status: "completed",
+        completedAt: now,
+        qboCreditMemoId: cmResult.qboCreditMemoId,
+        creditMemoDocNumber: cmResult.docNumber,
+        shippingDeductionAmount: input.shippingDeduction ?? null,
+        restockingFeeAmount: input.restockingFee ?? null,
+      })
+      .where(eq(rmas.id, id));
+
+    const updatedRows = await tx.select().from(rmas).where(eq(rmas.id, id));
+    return {
+      ok: true,
+      rma: updatedRows[0] as Rma,
       creditMemoDocNumber: cmResult.docNumber,
-      shippingDeductionAmount: input.shippingDeduction ?? null,
-      restockingFeeAmount: input.restockingFee ?? null,
-    })
-    .where(eq(rmas.id, id));
+      customerIdForActivity: current.customerId,
+    };
+  });
 
-  await recordActivity(
-    {
-      customerId: current.customerId,
-      kind: "rma_credit_memo_issued",
-      source: "user_action",
-      userId: input.userId,
-      refType: "rma",
-      refId: id,
-      meta: { creditMemoDocNumber: cmResult.docNumber },
-    },
-    db,
-  );
+  if (!txResult || txResult.ok === false) {
+    return txResult;
+  }
 
-  const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
-  return { ok: true, rma: updatedRows[0] as Rma };
+  // Post-commit activity write — only fires when the tx above committed
+  // successfully so a rollback won't leave a phantom audit row.
+  await recordActivity({
+    customerId: txResult.customerIdForActivity,
+    kind: "rma_credit_memo_issued",
+    source: "user_action",
+    userId: input.userId,
+    refType: "rma",
+    refId: id,
+    meta: { creditMemoDocNumber: txResult.creditMemoDocNumber },
+  });
+
+  return { ok: true, rma: txResult.rma };
 }
 
 // ---------------------------------------------------------------------------
@@ -1539,64 +1593,120 @@ export async function createRmaFromReceipt(
   const id = nanoid(24);
   const now = new Date();
 
-  const row: NewRma = {
-    id,
-    customerId: input.customerId,
-    qbCustomerId: input.qbCustomerId,
-    returnType: input.returnType,
-    status: "received",
-    seasonId: null,
-    notes: null,
-    originalEmail: null,
-    totalValue: "0",
-    thresholdOverridden: false,
-    createdViaReceipt: true,
-    receivedAtWarehouseAt: now,
-    createdByUserId: input.userId,
-  };
+  // Whole flow runs in a transaction with FOR UPDATE on the receipt row.
+  // The route already checks `rmaId IS NULL && confirmedAt IS NULL &&
+  // dismissedAt IS NULL` before calling, but that check is outside any
+  // lock — two operators with stale tabs can both pass it and both
+  // create RMAs racing to claim the same receipt. The lock plus the
+  // post-lock null re-check ensures only the first claim wins; the
+  // second sees the now-populated rmaId/confirmedAt/dismissedAt and
+  // throws a clear "already claimed" error rather than orphaning a
+  // duplicate RMA.
+  //
+  // Activity recording happens post-commit (recordActivity opens its
+  // own internal transaction; nesting it inside this one would be
+  // savepoint territory) — same pattern as confirmExtensivReceipt.
+  const created = await db.transaction(async (tx) => {
+    const receiptRows = await tx
+      .select()
+      .from(extensivReceipts)
+      .where(eq(extensivReceipts.id, input.receiptId))
+      .for("update");
+    if (receiptRows.length === 0) {
+      throw new Error(`extensiv_receipt not found: ${input.receiptId}`);
+    }
+    const receipt = receiptRows[0] as ExtensivReceipt;
 
-  await db.insert(rmas).values(row);
+    // Re-check claim state under the lock — this is the actual atomic
+    // gate. The route-side pre-check is only a friendly UX gate; this
+    // is the real one. If a concurrent submit beat us to the receipt,
+    // bail with a clear message so the operator refreshes and sees
+    // the existing RMA.
+    if (receipt.rmaId) {
+      throw new Error(
+        `Receipt already linked to RMA ${receipt.rmaId} — refresh the page to see it`,
+      );
+    }
+    if (receipt.confirmedAt) {
+      throw new Error(
+        "Receipt was already confirmed by another operator — refresh the page",
+      );
+    }
+    if (receipt.dismissedAt) {
+      throw new Error(
+        "Receipt was already dismissed — refresh the page",
+      );
+    }
 
-  // Insert items with correct positions.
-  for (let i = 0; i < input.items.length; i++) {
-    const item = input.items[i];
-    if (!item) continue;
-    const qty = parseFloat(String(item.quantity ?? 0));
-    const price = parseFloat(String(item.unitPrice ?? 0));
-    const lineTotal = (qty * price).toFixed(2);
-    await db.insert(rmaItems).values({
-      ...item,
-      id: nanoid(24),
-      rmaId: id,
-      position: i,
-      lineTotal,
-    });
-  }
-
-  // Recompute total from inserted items.
-  await recomputeTotalValue(id);
-
-  // Link the extensiv_receipt to this new RMA.
-  await db
-    .update(extensivReceipts)
-    .set({ rmaId: id, matchKind: "exact_tx_number" })
-    .where(eq(extensivReceipts.id, input.receiptId));
-
-  await recordActivity(
-    {
+    const row: NewRma = {
+      id,
       customerId: input.customerId,
-      kind: "rma_created",
-      source: "user_action",
-      userId: input.userId,
-      refType: "rma",
-      refId: id,
-      meta: { createdViaReceipt: true, receiptId: input.receiptId },
-    },
-    db,
-  );
+      qbCustomerId: input.qbCustomerId,
+      returnType: input.returnType,
+      status: "received",
+      seasonId: null,
+      notes: null,
+      originalEmail: null,
+      totalValue: "0",
+      thresholdOverridden: false,
+      createdViaReceipt: true,
+      receivedAtWarehouseAt: now,
+      createdByUserId: input.userId,
+    };
 
-  const created = await db.select().from(rmas).where(eq(rmas.id, id));
-  return created[0] as Rma;
+    await tx.insert(rmas).values(row);
+
+    // Insert items with correct positions, accumulating the total
+    // inline so we don't need to re-query inside the transaction.
+    let totalSum = 0;
+    for (let i = 0; i < input.items.length; i++) {
+      const item = input.items[i];
+      if (!item) continue;
+      const qty = parseFloat(String(item.quantity ?? 0));
+      const price = parseFloat(String(item.unitPrice ?? 0));
+      const lineTotal = (qty * price).toFixed(2);
+      totalSum += parseFloat(lineTotal);
+      await tx.insert(rmaItems).values({
+        ...item,
+        id: nanoid(24),
+        rmaId: id,
+        position: i,
+        lineTotal,
+      });
+    }
+
+    // Persist the rollup total inside the same tx — replaces the
+    // external recomputeTotalValue call from the pre-tx version.
+    await tx
+      .update(rmas)
+      .set({ totalValue: totalSum.toFixed(2) })
+      .where(eq(rmas.id, id));
+
+    // Link the receipt to this new RMA. The FOR UPDATE lock + the
+    // null re-check above guarantees we're the only writer — no
+    // racing UPDATE from a concurrent claimant.
+    await tx
+      .update(extensivReceipts)
+      .set({ rmaId: id, matchKind: "exact_tx_number" })
+      .where(eq(extensivReceipts.id, input.receiptId));
+
+    const createdRows = await tx.select().from(rmas).where(eq(rmas.id, id));
+    return createdRows[0] as Rma;
+  });
+
+  // Post-commit activity write — only fires when the tx above committed
+  // successfully so a rollback never leaves a phantom audit row.
+  await recordActivity({
+    customerId: input.customerId,
+    kind: "rma_created",
+    source: "user_action",
+    userId: input.userId,
+    refType: "rma",
+    refId: id,
+    meta: { createdViaReceipt: true, receiptId: input.receiptId },
+  });
+
+  return created;
 }
 
 // ---------------------------------------------------------------------------

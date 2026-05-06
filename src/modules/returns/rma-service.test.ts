@@ -343,8 +343,10 @@ describe("issueCreditMemo — damage", () => {
   });
 
   it("approved → completed, QBO CM created, activity logged", async () => {
+    // Select queue: tx FOR UPDATE select rma → items query → final select rma.
+    // Activity recording moved to post-commit so it's a single-arg call now.
     setSelectResults([
-      [{ id: "rma-1", status: "approved", returnType: "damage", customerId: "cust-1", rmaNumber: "DC-20260504-120000", qbCustomerId: "QB-1" }],
+      [{ id: "rma-1", status: "approved", returnType: "damage", customerId: "cust-1", rmaNumber: "DC-20260504-120000", qbCustomerId: "QB-1", qboCreditMemoId: null }],
       [], // items query
       [{ id: "rma-1", status: "completed", qboCreditMemoId: "cm-qbo-1", returnType: "damage", customerId: "cust-1" }],
     ]);
@@ -358,8 +360,29 @@ describe("issueCreditMemo — damage", () => {
     expect(buildAndPushCmMock).toHaveBeenCalled();
     expect(recordActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "rma_credit_memo_issued", refType: "rma", refId: "rma-1" }),
-      expect.anything(),
     );
+  });
+
+  it("refuses to issue a second CM when qboCreditMemoId is already set", async () => {
+    // Idempotency guard — the FOR UPDATE select returns an RMA that
+    // already has qboCreditMemoId populated. Service should bail with
+    // ok:false and never call buildAndPushCm.
+    setSelectResults([
+      [{
+        id: "rma-1",
+        status: "completed",
+        returnType: "damage",
+        customerId: "cust-1",
+        qboCreditMemoId: "cm-existing",
+        creditMemoDocNumber: "DC-EXISTING",
+      }],
+    ]);
+    const result = await issueCreditMemo("rma-1", { userId: "user-1" });
+    expect(result).not.toBeNull();
+    expect(result!.ok).toBe(false);
+    if (result && !result.ok) expect(result.reason).toMatch(/already issued/i);
+    expect(buildAndPushCmMock).not.toHaveBeenCalled();
+    expect(recordActivityMock).not.toHaveBeenCalled();
   });
 
   it("rejects when rma not in approved state", async () => {
