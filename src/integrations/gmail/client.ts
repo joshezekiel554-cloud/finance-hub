@@ -36,7 +36,7 @@ const INITIAL_BACKOFF_MS = 2000;
 // shared queue until the items list is exhausted. Preserves input order
 // in the result. Local utility — no new dep needed for what amounts to
 // 15 lines.
-async function mapWithLimit<T, R>(
+export async function mapWithLimit<T, R>(
   items: T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,

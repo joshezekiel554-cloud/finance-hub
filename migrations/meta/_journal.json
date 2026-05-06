@@ -176,6 +176,13 @@
       "when": 1777989767805,
       "tag": "0024_colorful_molly_hayes",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1778025784529,
+      "tag": "0025_fast_magik",
+      "breakpoints": true
     }
   ]
 }

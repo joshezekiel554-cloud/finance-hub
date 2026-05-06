@@ -134,6 +134,13 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     lastSyncedAt: new Date(),
   };
 
+  // Read existing first so we can decide create-vs-update for the audit
+  // trail and balance_change activity. The actual write below uses
+  // INSERT ... ON DUPLICATE KEY UPDATE so a concurrent global sync racing
+  // with a per-customer Refresh doesn't trip the qb_customer_id UNIQUE
+  // constraint (both reads see no row, both try INSERT, one 502s).
+  // The window between SELECT and the upsert is narrow but not zero —
+  // the upsert covers it.
   const existing = await db
     .select()
     .from(customers)
@@ -161,7 +168,27 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       billingAddressCountry: desired.billingAddressCountry,
       lastSyncedAt: desired.lastSyncedAt,
     };
-    await db.insert(customers).values(inserted);
+    // INSERT ... ON DUPLICATE KEY UPDATE — if a concurrent sync raced
+    // ahead and inserted the row first, fall back to the same UPDATE set
+    // we'd apply on the update path below (sync-owned fields only;
+    // operator-owned fields like paymentTerms, primaryEmail, billingEmails,
+    // phone are intentionally NOT in the ODKU set so manual edits survive).
+    await db
+      .insert(customers)
+      .values(inserted)
+      .onDuplicateKeyUpdate({
+        set: {
+          displayName: desired.displayName,
+          balance: desired.balance,
+          billingAddressLine1: desired.billingAddressLine1,
+          billingAddressLine2: desired.billingAddressLine2,
+          billingAddressCity: desired.billingAddressCity,
+          billingAddressRegion: desired.billingAddressRegion,
+          billingAddressPostal: desired.billingAddressPostal,
+          billingAddressCountry: desired.billingAddressCountry,
+          lastSyncedAt: desired.lastSyncedAt,
+        },
+      });
     await db.insert(auditLog).values({
       id: nanoid(24),
       action: "qb_sync.customer.create",
@@ -204,6 +231,9 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     return "noop";
   }
 
+  // The race is in the create path above (concurrent inserts both trying
+  // to seed the row); UPDATE-by-id is already race-safe — the row's been
+  // observed and the primary key is stable.
   await db
     .update(customers)
     .set({
@@ -360,6 +390,10 @@ async function upsertInvoice(
     lastSyncedAt: new Date(),
   };
 
+  // Read first for create-vs-update branching, then write via
+  // INSERT ... ON DUPLICATE KEY UPDATE. Same race-with-global-sync story
+  // as upsertCustomer: per-customer Refresh + global cron both see no row
+  // and both try INSERT, second one trips qb_invoice_id UNIQUE.
   const existing = await db
     .select()
     .from(invoices)
@@ -368,7 +402,26 @@ async function upsertInvoice(
 
   if (!existing[0]) {
     const id = nanoid(24);
-    await db.insert(invoices).values({ id, ...desired });
+    // ODKU set excludes sent_at / sent_via — those are local fields the
+    // app owns and must not be stomped if a concurrent insert won. Same
+    // exclusion as the plain UPDATE path further down.
+    await db
+      .insert(invoices)
+      .values({ id, ...desired })
+      .onDuplicateKeyUpdate({
+        set: {
+          docNumber: desired.docNumber,
+          customerId: desired.customerId,
+          issueDate: desired.issueDate,
+          dueDate: desired.dueDate,
+          total: desired.total,
+          balance: desired.balance,
+          status: desired.status,
+          customerMemo: desired.customerMemo,
+          syncToken: desired.syncToken,
+          lastSyncedAt: desired.lastSyncedAt,
+        },
+      });
     await syncInvoiceLines(id, qboInvoice.Line ?? []);
 
     // Activity: qbo_invoice_sent — emit when QBO indicates this invoice has
@@ -425,7 +478,9 @@ async function upsertInvoice(
   }
 
   // Crucially do NOT touch sent_at / sentVia — those are local fields the app
-  // owns. The team-lead brief calls this out explicitly.
+  // owns. The team-lead brief calls this out explicitly. The race is in the
+  // create path above (concurrent inserts); UPDATE-by-id is already race-safe
+  // since the row's been seen.
   await db
     .update(invoices)
     .set({

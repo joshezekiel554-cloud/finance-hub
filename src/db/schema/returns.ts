@@ -69,7 +69,7 @@ export const rmas = mysqlTable(
       scale: 2,
     }),
     extensivRef: varchar("extensiv_ref", { length: 255 }),
-    extensivTxNumber: varchar("extensiv_tx_number", { length: 64 }),
+    extensivTxNumber: varchar("extensiv_tx_number", { length: 64 }).unique(),
     extensivExportGeneratedAt: timestamp("extensiv_export_generated_at"),
     // Customer-shipped return tracking. Populated when the operator pastes
     // the tracking# from the customer's reply and saves; saving also fires

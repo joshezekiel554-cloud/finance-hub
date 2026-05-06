@@ -24,6 +24,7 @@ import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 import {
   getMessageRecipients,
+  mapWithLimit,
   markGmailAsRead,
 } from "../../integrations/gmail/client.js";
 import { BUSINESS_EMAILS } from "../../integrations/gmail/business-emails.js";
@@ -186,26 +187,30 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
     );
 
     // Mark each Gmail message as read in the background. Same fire-and-forget
-    // pattern as the single-PATCH route. Run with limited parallelism so we
-    // don't burst the Gmail rate limit on large batches.
+    // pattern as the single-PATCH route. Run with bounded parallelism (5) via
+    // mapWithLimit so we don't burst the Gmail rate limit on large batches.
+    // Per-call errors are caught and logged so one bad message doesn't kill
+    // the rest of the loop.
+    // TODO: durability via a BullMQ job survives process restart; current
+    // best-effort is acceptable.
     if (actioned) {
-      void (async () => {
-        for (const r of beforeRows) {
-          if (!r.gmailMessageId) continue;
-          try {
-            await markGmailAsRead(r.gmailMessageId);
-          } catch (err) {
-            log.warn(
-              {
-                err: err instanceof Error ? err.message : err,
-                emailLogId: r.id,
-                gmailMessageId: r.gmailMessageId,
-              },
-              "failed to mark Gmail message as read (bulk)",
-            );
-          }
+      const targets = beforeRows.filter(
+        (r): r is typeof r & { gmailMessageId: string } => !!r.gmailMessageId,
+      );
+      void mapWithLimit(targets, 5, async (r) => {
+        try {
+          await markGmailAsRead(r.gmailMessageId);
+        } catch (err) {
+          log.warn(
+            {
+              err: err instanceof Error ? err.message : err,
+              emailLogId: r.id,
+              gmailMessageId: r.gmailMessageId,
+            },
+            "failed to mark Gmail message as read (bulk)",
+          );
         }
-      })();
+      });
     }
 
     return reply.send({
