@@ -34,6 +34,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { ActivityTimeline } from "../components/activity-timeline";
+import type { Activity } from "../components/activity-timeline";
 import RmaRowMenu from "../components/rma-row-menu";
 import { EmailList } from "../components/email-list";
 import { HoldBanner } from "../components/hold-banner";
@@ -89,10 +90,6 @@ type Customer = {
   createdAt: string;
   updatedAt: string;
 };
-
-// Activity type imported from the timeline component so the meta shape
-// stays in sync with what it renders (amount, currency, qbId, etc.).
-import type { Activity } from "../components/activity-timeline";
 
 // KPI rollups computed server-side in the customer GET. All counts are
 // numbers and timestamps are ISO strings (mysql2 subquery normalised
