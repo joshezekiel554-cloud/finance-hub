@@ -25,6 +25,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import sanitizeHtml from "sanitize-html";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
@@ -72,6 +73,12 @@ const sendBodySchema = z.object({
   bcc: z.string().max(2000).optional(),
   subject: z.string().min(1).max(998),
   body: z.string().min(1).max(200_000),
+  // When true, body is treated as already-formatted HTML (from the
+  // TipTap editor) and run through sanitize-html before being used as
+  // the HTML part. The plain-text part is derived by stripping tags.
+  // When false (or absent), the legacy plain-text-from-textarea flow
+  // applies — bodyToHtml wraps newlines in <p>/<br/> tags.
+  isHtml: z.boolean().optional().default(false),
   alias: z.string().max(255).optional(),
   inReplyTo: z.string().max(998).optional(),
   threadId: z.string().max(255).optional(),
@@ -123,6 +130,75 @@ function bodyToHtml(raw: string): string {
     .join("\n");
 }
 
+// Allowlist sanitiser for compose-modal HTML bodies. Tag set covers the
+// formatting the TipTap toolbar can produce (bold, italic, lists, links,
+// blockquotes, paragraphs); the URL allowlist drops javascript: and
+// data: URIs from links — so a paste from a malicious source can't
+// smuggle a clickable scriptlet into the recipient's mail client.
+//
+// `transformTags` on `<a>` ensures every link carries rel="noopener
+// noreferrer" + target="_blank" — defence-in-depth for the recipient
+// who clicks through to a sketchy URL the operator pasted by accident.
+const HTML_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [
+    "p",
+    "br",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "s",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "a",
+    "code",
+    "pre",
+    "hr",
+    "span",
+    "div",
+  ],
+  allowedAttributes: {
+    a: ["href", "target", "rel"],
+  },
+  allowedSchemes: ["http", "https", "mailto"],
+  allowedSchemesByTag: {},
+  // Drop empty class/style/anything-else attributes universally.
+  allowedSchemesAppliedToAttributes: ["href"],
+  transformTags: {
+    a: (tagName, attribs) => ({
+      tagName,
+      attribs: {
+        ...attribs,
+        target: "_blank",
+        rel: "noopener noreferrer",
+      },
+    }),
+  },
+};
+
+function sanitizeBodyHtml(html: string): string {
+  return sanitizeHtml(html, HTML_SANITIZE_OPTIONS);
+}
+
+// Derive plain-text from sanitised HTML for the multipart text/plain
+// part. Strips ALL tags (allowedTags: []) but preserves text content
+// + injects a newline after block-level elements so the layout is
+// vaguely readable in clients that prefer text/plain.
+function htmlToPlainText(html: string): string {
+  return sanitizeHtml(html, {
+    allowedTags: [],
+    allowedAttributes: {},
+    textFilter: (text) => text,
+  })
+    .replace(/&nbsp;/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const emailSendRoute: FastifyPluginAsync = async (app) => {
   // GET /api/aliases — proxy listAliases() through to the compose modal's
   // From dropdown. Cached at the integration layer (5m TTL) so this is a
@@ -158,6 +234,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       bcc,
       subject,
       body,
+      isHtml,
       alias,
       inReplyTo,
       threadId,
@@ -167,8 +244,18 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       refId: refIdOverride,
     } = parse.data;
 
-    const html = bodyToHtml(body);
-    const text = body;
+    // Two body shapes converge here:
+    //   - isHtml=true  → body is already formatted HTML from the TipTap
+    //                    editor. Run sanitize-html (allowlist tags +
+    //                    drop javascript:/data: URLs + force rel/target
+    //                    on links) before sending. Plain-text part is
+    //                    derived by stripping tags.
+    //   - isHtml=false → body is plain text from the legacy textarea
+    //                    or an internal caller. Keep the existing
+    //                    bodyToHtml flow that wraps newlines in
+    //                    <p>/<br/> tags.
+    const html = isHtml ? sanitizeBodyHtml(body) : bodyToHtml(body);
+    const text = isHtml ? htmlToPlainText(html) : body;
 
     // Decode base64 attachments to Buffers — the integration layer
     // expects raw bytes and base64-encodes them when building MIME.

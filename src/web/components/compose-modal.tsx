@@ -34,6 +34,7 @@ import {
   renderTemplate,
   type TemplateVars,
 } from "../../modules/email-compose/index.js";
+import { EditorField } from "./editor-field";
 
 type GmailAlias = {
   sendAsEmail: string;
@@ -136,9 +137,40 @@ function pickDefaultAlias(aliases: GmailAlias[]): string | null {
   return aliases[0]?.sendAsEmail ?? null;
 }
 
-function buildReplyQuoteBody(reply: ComposeContext["inReplyTo"]): string {
+// Lightweight HTML escape — used when injecting unescaped strings
+// (reply body excerpts, plain-text template content) into editor HTML.
+function escapeHtmlForEditor(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Convert plain text (e.g. an email_template body, which is stored as
+// plain text) into editor-friendly HTML. Mirrors the server-side
+// bodyToHtml: blank-line-separated chunks → <p>, single newlines →
+// <br/>. Output flows into the TipTap editor as initial content;
+// operators can then format further.
+function plainTextToHtml(raw: string): string {
+  if (!raw) return "";
+  const escaped = escapeHtmlForEditor(raw);
+  const paragraphs = escaped.split(/\n{2,}/);
+  return paragraphs
+    .map((p) => `<p>${p.replace(/\n/g, "<br/>") || "<br/>"}</p>`)
+    .join("");
+}
+
+// Build the reply-quote block as HTML (TipTap-compatible). Renders as
+// a divider line + the original sender header + a <blockquote> with
+// the parent body. Operators can edit inside or outside the quote.
+function buildReplyQuoteHtml(reply: ComposeContext["inReplyTo"]): string {
   if (!reply) return "";
-  return `\n\n----- Original message from ${reply.from} -----\n${reply.bodyExcerpt}`;
+  const fromEsc = escapeHtmlForEditor(reply.from);
+  const bodyEsc = escapeHtmlForEditor(reply.bodyExcerpt).replace(
+    /\n/g,
+    "<br/>",
+  );
+  return `<p></p><p>----- Original message from ${fromEsc} -----</p><blockquote>${bodyEsc}</blockquote>`;
 }
 
 export default function ComposeModal({ open, onOpenChange, context }: Props) {
@@ -204,7 +236,10 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     // so the operator can see + edit before sending.
     setShowCcBcc(Boolean(reply?.cc));
     setSubject(reply ? `Re: ${reply.subject}` : "");
-    setBody(reply ? buildReplyQuoteBody(reply) : "");
+    // Body is now HTML (the editor's native format). Reply mode pre-
+    // fills with a blockquote of the parent message; compose-new opens
+    // empty.
+    setBody(reply ? buildReplyQuoteHtml(reply) : "");
     setSelectedTemplateId("");
     setErrorMessage(null);
     setAttachments([]);
@@ -230,11 +265,13 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     if (!tpl) return;
     const vars = fallbackTemplateVars(context);
     setSubject(renderTemplate(tpl.subject, vars));
-    // Preserve the reply quote on the bottom when applying a template
-    // mid-reply — the quoted parent is informational and shouldn't
-    // disappear when the user picks a template.
-    const replyQuote = buildReplyQuoteBody(reply);
-    setBody(renderTemplate(tpl.body, vars) + replyQuote);
+    // Templates are stored as plain text — convert to HTML for the
+    // editor. Preserve the reply quote on the bottom; the quoted parent
+    // is informational and shouldn't disappear when the user picks a
+    // template.
+    const renderedBodyHtml = plainTextToHtml(renderTemplate(tpl.body, vars));
+    const replyQuote = buildReplyQuoteHtml(reply);
+    setBody(renderedBodyHtml + replyQuote);
   }
 
   const sendMutation = useMutation({
@@ -256,6 +293,10 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
         bcc: bcc || undefined,
         subject,
         body,
+        // Body is HTML from the TipTap editor — server runs sanitize-html
+        // before using as the html part and derives a plain-text version
+        // for the multipart text/plain part.
+        isHtml: true,
         alias: from || undefined,
         inReplyTo: reply?.messageId,
         threadId: reply?.threadId,
@@ -291,8 +332,12 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     },
   });
 
+  // Body is HTML now — an "empty" editor still produces "<p></p>" or
+  // similar whitespace markup. Strip tags + trim to test for actual
+  // content before enabling Send.
+  const bodyHasContent = body.replace(/<[^>]*>/g, "").trim().length > 0;
   const requiredFilled =
-    to.trim().length > 0 && subject.trim().length > 0 && body.trim().length > 0;
+    to.trim().length > 0 && subject.trim().length > 0 && bodyHasContent;
   const canSend =
     requiredFilled && from.length > 0 && !sendMutation.isPending;
 
@@ -392,19 +437,22 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
               </select>
             </FieldRow>
 
-            <label className="block">
+            <div>
               <span className="mb-1 block text-xs font-medium text-secondary">
                 Body
               </span>
-              <textarea
+              {/* TipTap-powered editor — see editor-field.tsx. resetKey
+                  is the formKey + selectedTemplateId so the editor
+                  reloads its content when the operator opens a fresh
+                  compose session OR picks a template (both swap the
+                  body wholesale). Mid-typing edits stay sticky. */}
+              <EditorField
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
-                rows={16}
-                autoFocus
-                className="w-full rounded-md border border-default bg-base px-3 py-2 font-mono text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+                onChange={setBody}
                 placeholder="Write your message…"
+                resetKey={`${formKey}::${selectedTemplateId}`}
               />
-            </label>
+            </div>
 
             <AttachmentsField
               attachments={attachments}
