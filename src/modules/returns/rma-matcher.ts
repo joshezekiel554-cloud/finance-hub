@@ -50,6 +50,25 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 }
 
 // ---------------------------------------------------------------------------
+// Token-based customer-name overlap.
+//
+// Used by tier-3 fuzzy matching. Splits both names on whitespace, lowercases,
+// drops short tokens (< 4 chars), and returns true if at least one survivor
+// token is shared. Replaces a previous bidirectional `.includes()` check
+// that gave a 0.5 score boost when the inferred name was something like
+// "Co" — matching every "Cohen", "Corp", "Company" customer indiscriminately
+// (Bug I5).
+// ---------------------------------------------------------------------------
+function customerNameTokenMatch(inferred: string, rma: string): boolean {
+  const minLen = 4;
+  const tokens = (s: string) =>
+    s.toLowerCase().split(/\s+/).filter((t) => t.length >= minLen);
+  const inferredTokens = new Set(tokens(inferred));
+  if (inferredTokens.size === 0) return false;
+  return tokens(rma).some((t) => inferredTokens.has(t));
+}
+
+// ---------------------------------------------------------------------------
 // matchReceiptToRma
 // ---------------------------------------------------------------------------
 
@@ -147,7 +166,7 @@ export async function matchReceiptToRma(input: {
     (parsedItems ?? []).map((p) => p.sku.toUpperCase()),
   );
 
-  const lowerCustomerInput = (inferredCustomerName ?? "").toLowerCase().trim();
+  const customerInput = (inferredCustomerName ?? "").trim();
 
   type ScoredRma = { rmaId: string; score: number };
   const scored: ScoredRma[] = [];
@@ -155,13 +174,14 @@ export async function matchReceiptToRma(input: {
   for (const rma of candidateRmas) {
     let score = 0;
 
-    // Customer name signal: partial match (contains or prefix)
-    if (lowerCustomerInput) {
-      const rmaCustomerLower = (rma.customerName ?? "").toLowerCase();
-      if (
-        rmaCustomerLower.includes(lowerCustomerInput) ||
-        lowerCustomerInput.includes(rmaCustomerLower)
-      ) {
+    // Customer name signal: token overlap (≥4-char tokens, case-insensitive).
+    // The previous bidirectional `.includes()` check awarded the boost on
+    // tiny substrings (e.g. "Co" matching "Cohen Family Co"); requiring a
+    // shared 4+ char token rules that out while still catching "Acme" vs
+    // "Acme Company".
+    if (customerInput) {
+      const rmaCustomerName = rma.customerName ?? "";
+      if (customerNameTokenMatch(customerInput, rmaCustomerName)) {
         score += 0.5;
       }
     }

@@ -32,7 +32,13 @@ const REF_STRING_RE = /Ref:?\s*([^\n]+)/i;
 // Table rows like:   SKU-001\t5   or   SKU-001\t5.00
 // Also handles a space-separated form: SKU-001  5
 // Skips lines that are obviously headers ("Item", "SKU", "Quantity", etc.)
-const ITEM_ROW_RE = /^([A-Za-z0-9_\-.]+)[\t ]+(\d+(?:\.\d+)?)\s*$/;
+//
+// Bug I11: the SKU half of the regex requires (a) ≥3 characters and (b) at
+// least one alphabetical character. Without these guards trailing prose
+// like "1 5" (page numbers, version markers) was matching as sku="1",
+// qty=5 and polluting the parsed item list. The (?=...) lookahead enforces
+// "must contain a letter" while the {3,} quantifier handles the length.
+const ITEM_ROW_RE = /^((?=[A-Za-z0-9_\-.]*[A-Za-z])[A-Za-z0-9_\-.]{3,})[\t ]+(\d+(?:\.\d+)?)\s*$/;
 const HEADER_WORDS = new Set(["item", "sku", "qty", "quantity", "description", "part"]);
 
 function parseTxNumber(text: string): string | undefined {

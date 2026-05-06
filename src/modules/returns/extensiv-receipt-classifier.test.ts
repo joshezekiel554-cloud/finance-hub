@@ -256,6 +256,58 @@ describe("classifyExtensivEmail", () => {
   });
 
   // ---------------------------------------------------------------------
+  // Bug I11: item-row regex must reject prose-shaped lines like "1 5".
+  // The fix requires SKU to be ≥3 chars AND contain at least one letter.
+  // ---------------------------------------------------------------------
+  describe("item-row regex tightening (Bug I11)", () => {
+    it("does NOT parse '1 5' as an item row (no letter, too short)", () => {
+      const result = classifyExtensivEmail({
+        from: EXTENSIV_FROM,
+        subject: "Receipt (1)",
+        body: "Summary of the receipt.\nRef: Test returns\n1 5",
+      });
+      // No items should have been parsed from the boilerplate "1 5" line.
+      expect(result.parsedItems).toEqual([]);
+    });
+
+    it("does NOT parse 'AB 5' as an item row (only 2 chars)", () => {
+      const result = classifyExtensivEmail({
+        from: EXTENSIV_FROM,
+        subject: "Receipt (1)",
+        body: "Summary of the receipt.\nRef: Test returns\nAB 5",
+      });
+      expect(result.parsedItems).toEqual([]);
+    });
+
+    it("DOES parse 'ABC 5' (≥3 chars + has letter)", () => {
+      const result = classifyExtensivEmail({
+        from: EXTENSIV_FROM,
+        subject: "Receipt (1)",
+        body: "Summary of the receipt.\nRef: Test returns\nABC 5",
+      });
+      expect(result.parsedItems).toEqual([{ sku: "ABC", quantity: 5 }]);
+    });
+
+    it("does NOT parse '123 5' (no letter)", () => {
+      const result = classifyExtensivEmail({
+        from: EXTENSIV_FROM,
+        subject: "Receipt (1)",
+        body: "Summary of the receipt.\nRef: Test returns\n123 5",
+      });
+      expect(result.parsedItems).toEqual([]);
+    });
+
+    it("DOES parse 'AB-CD 5' (4 chars + hyphen + letter)", () => {
+      const result = classifyExtensivEmail({
+        from: EXTENSIV_FROM,
+        subject: "Receipt (1)",
+        body: "Summary of the receipt.\nRef: Test returns\nAB-CD 5",
+      });
+      expect(result.parsedItems).toEqual([{ sku: "AB-CD", quantity: 5 }]);
+    });
+  });
+
+  // ---------------------------------------------------------------------
   // inferCustomerNameFromRef — table-driven unit tests of the helper.
   // ---------------------------------------------------------------------
   describe("inferCustomerNameFromRef helper", () => {

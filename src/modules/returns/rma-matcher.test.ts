@@ -219,4 +219,55 @@ describe("matchReceiptToRma", () => {
       expect(result).toEqual({ kind: "no_match" });
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Bug I5 — token-based customer-name overlap (no bare-substring boosts)
+  // -----------------------------------------------------------------------
+  describe("customer-name token overlap (Bug I5)", () => {
+    it("does NOT score-boost when inferred name is a short token like 'Co'", async () => {
+      // Candidate has "Cohen Family Co" — under the old includes() rule
+      // the lowercase "co" would match and award the 0.5 customer-name
+      // boost. With token-overlap and a 4-char minimum it must not.
+      // SKU Jaccard is 0 here, so the candidate's score stays at 0 and
+      // the matcher returns no_match.
+      setSelectQueue([
+        [
+          { id: "rma_co", customerId: "c1", customerName: "Cohen Family Co" },
+        ],
+        [{ rmaId: "rma_co", sku: "SKU-Z" }],
+      ]);
+
+      const result = await matchReceiptToRma({
+        inferredCustomerName: "Co",
+        parsedItems: [{ sku: "SKU-A" }],
+      });
+
+      expect(result).toEqual({ kind: "no_match" });
+    });
+
+    it("DOES score-boost when inferred name shares a 4+ char token", async () => {
+      // "Cohen" is 5 chars and appears in "Cohen Family Co" → token match.
+      // Combined with a strong SKU overlap the score crosses the 0.5
+      // threshold and we surface a fuzzy match.
+      setSelectQueue([
+        [
+          { id: "rma_co", customerId: "c1", customerName: "Cohen Family Co" },
+        ],
+        [
+          { rmaId: "rma_co", sku: "SKU-A" },
+          { rmaId: "rma_co", sku: "SKU-B" },
+        ],
+      ]);
+
+      const result = await matchReceiptToRma({
+        inferredCustomerName: "Cohen",
+        parsedItems: [{ sku: "SKU-A" }, { sku: "SKU-B" }],
+      });
+
+      expect(result.kind).toBe("fuzzy_customer_sku");
+      if (result.kind === "fuzzy_customer_sku") {
+        expect(result.rmaId).toBe("rma_co");
+      }
+    });
+  });
 });

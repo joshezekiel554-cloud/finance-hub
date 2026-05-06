@@ -11,6 +11,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ---------------------------------------------------------------------------
 
 // DB mock — queue-based select results consumed in order.
+//
+// Option A predicate-awareness (added for the excludeRmaId test): the
+// captured `where` argument is recursively scanned for "<> " operators
+// (drizzle's serialised form for `ne()`) and the trailing operand is
+// collected. Rows tagged with `__rmaId` matching one of the collected
+// "must not equal" values are filtered out before resolving the queue
+// entry. Untagged rows pass through unchanged so existing tests keep
+// working without modification.
 const { mockDb, setSelectResults } = vi.hoisted(() => {
   let selectResultsQueue: unknown[][] = [];
   const setSelectResults = (queue: unknown[][]) => {
@@ -29,21 +37,75 @@ const { mockDb, setSelectResults } = vi.hoisted(() => {
     from: (...args: unknown[]) => LazyNode;
   };
 
-  const makeNode = (): LazyNode => {
+  // Walks a drizzle SQL condition and returns every operand that follows
+  // a "<> " chunk (i.e. the right-hand side of a `ne()` comparison).
+  // Drizzle stores this in nested `queryChunks` arrays; `and()` wraps
+  // multiple conditions in another SQL object with the same shape.
+  function collectExcludedValues(node: unknown): string[] {
+    const out: string[] = [];
+    const walk = (n: unknown): void => {
+      if (!n || typeof n !== "object") return;
+      const obj = n as Record<string, unknown>;
+      const chunks = obj.queryChunks;
+      if (Array.isArray(chunks)) {
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          if (
+            chunk &&
+            typeof chunk === "object" &&
+            Array.isArray((chunk as Record<string, unknown>).value) &&
+            ((chunk as Record<string, unknown>).value as unknown[])[0] === " <> "
+          ) {
+            // The operand may be either:
+            //   - a raw string (drizzle-sql template form), or
+            //   - a Param wrapper object { brand: 'Param', value: <raw>, encoder }
+            //     (drizzle-orm normal form for prepared parameters).
+            // The operand for `ne()` is wrapped as { value, encoder, ... }
+            // (drizzle-orm normal form). When the chunk preceding it is the
+            // " <> " operator we know the value is the right-hand side of
+            // a not-equals comparison, so we collect it.
+            const next = chunks[i + 1];
+            let raw: unknown = next;
+            if (raw && typeof raw === "object" && "value" in raw) {
+              raw = (raw as Record<string, unknown>).value;
+            }
+            if (typeof raw === "string") out.push(raw);
+          }
+          walk(chunk);
+        }
+      }
+      // and()/or() wrappers nest their inner conditions in `chunks` too
+      // but other shapes (e.g. raw values) are safe to ignore.
+    };
+    walk(node);
+    return out;
+  }
+
+  const makeNode = (excluded: string[] = []): LazyNode => {
+    const filterRows = (rows: unknown[]): unknown[] => {
+      if (excluded.length === 0) return rows;
+      return rows.filter((r) => {
+        if (!r || typeof r !== "object") return true;
+        const tag = (r as Record<string, unknown>).__rmaId;
+        return typeof tag !== "string" || !excluded.includes(tag);
+      });
+    };
     const node: LazyNode = {
       then(resolve, reject) {
-        return Promise.resolve(selectResultsQueue.shift() ?? []).then(
-          resolve,
-          reject,
-        );
+        const next = selectResultsQueue.shift() ?? [];
+        return Promise.resolve(filterRows(next)).then(resolve, reject);
       },
       catch(reject) {
-        return Promise.resolve(selectResultsQueue.shift() ?? []).catch(reject);
+        const next = selectResultsQueue.shift() ?? [];
+        return Promise.resolve(filterRows(next)).catch(reject);
       },
-      where: (..._args: unknown[]) => makeNode(),
-      orderBy: (..._args: unknown[]) => makeNode(),
-      limit: (..._args: unknown[]) => makeNode(),
-      from: (..._args: unknown[]) => makeNode(),
+      where: (...args: unknown[]) => {
+        const found = args.flatMap((a) => collectExcludedValues(a));
+        return makeNode([...excluded, ...found]);
+      },
+      orderBy: (..._args: unknown[]) => makeNode(excluded),
+      limit: (..._args: unknown[]) => makeNode(excluded),
+      from: (..._args: unknown[]) => makeNode(excluded),
     };
     return node;
   };
@@ -240,13 +302,18 @@ describe("runEligibility", () => {
 
   // --- Edge: excludeRmaId excludes the draft from already-returned ---
   it("excludes the current draft RMA from alreadyReturnedThisSeason", async () => {
-    // Two existing RMA rows returned, but one is the current draft (excluded)
-    // Only first contributes: $300; propose $100 = 40% → passes
+    // Option A predicate-aware mock: the queue contains BOTH a row that
+    // should be counted ($300) AND a row tagged as the draft RMA being
+    // excluded ($999). The mock's `where()` reads the `ne()` predicate
+    // out of the drizzle condition tree and filters out any row whose
+    // `__rmaId` matches. If the implementation forgot to pass the
+    // exclusion to the WHERE clause, the mock would return both rows
+    // and `alreadyReturnedThisSeason` would be "1299.00" — making the
+    // test fail loudly. Previously the test only enqueued one row, so
+    // it asserted nothing about the exclusion behaviour at all.
     setupStandardDb([
-      { totalValue: "300.00", eligibleAmount: null }, // approved
-      // NOTE: excludeRmaId is passed so DB mock won't return the excluded row
-      // (the WHERE ne() in the real implementation handles this; our mock
-      // just returns whatever we enqueue)
+      { totalValue: "300.00", eligibleAmount: null }, // counted
+      { __rmaId: "rma-draft-1", totalValue: "999.00", eligibleAmount: null }, // excluded
     ]);
     findInvoicesForCustomerMock.mockResolvedValue([
       makeQboInvoice("18001", "2026-03-15", 1000),
@@ -262,6 +329,7 @@ describe("runEligibility", () => {
       excludeRmaId: "rma-draft-1",
     });
 
+    // alreadyReturnedThisSeason must NOT include the $999 draft row.
     expect(result.alreadyReturnedThisSeason).toBe("300.00");
     expect(result.totalReturnsThisSeason).toBe("400.00");
     expect(result.cumulativeReturnPct).toBe("40.00");

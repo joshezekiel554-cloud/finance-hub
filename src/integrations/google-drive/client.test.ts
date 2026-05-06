@@ -208,7 +208,12 @@ describe("deleteFile", () => {
   it("calls drive.files.delete with the given fileId", async () => {
     driveFilesDeleteMock.mockResolvedValue({});
     await deleteFile({ userId: "u", fileId: "file-to-delete" });
-    expect(driveFilesDeleteMock).toHaveBeenCalledWith({ fileId: "file-to-delete" });
+    // The implementation also passes `supportsAllDrives: true` so that
+    // shared-drive files can be deleted; assert against that exact shape.
+    expect(driveFilesDeleteMock).toHaveBeenCalledWith({
+      fileId: "file-to-delete",
+      supportsAllDrives: true,
+    });
   });
 
   it("silently ignores 404 (file already deleted)", async () => {
