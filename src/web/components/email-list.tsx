@@ -51,6 +51,10 @@ export function EmailList({
   customerName,
   customerEmail,
   onTaskCreated,
+  direction: directionProp,
+  actioned: actionedProp,
+  onDirectionChange,
+  onActionedChange,
 }: {
   customerId: string;
   customerName?: string;
@@ -59,9 +63,28 @@ export function EmailList({
   // page uses this to open its TaskDetailDrawer in edit mode for the
   // new task so the operator can fill in title/assignee/due/etc.
   onTaskCreated?: (taskId: string) => void;
+  // Optional controlled filter props. When provided, the component is
+  // controlled by the parent (URL state). When omitted, internal state
+  // is used as a fallback so existing callers continue to work.
+  direction?: DirectionFilter;
+  actioned?: ActionedFilter;
+  onDirectionChange?: (v: DirectionFilter) => void;
+  onActionedChange?: (v: ActionedFilter) => void;
 }) {
-  const [direction, setDirection] = useState<DirectionFilter>("all");
-  const [actioned, setActioned] = useState<ActionedFilter>("open");
+  const [directionInternal, setDirectionInternal] = useState<DirectionFilter>("all");
+  const [actionedInternal, setActionedInternal] = useState<ActionedFilter>("open");
+
+  // Use controlled props if provided, otherwise fall back to internal state.
+  const direction = directionProp !== undefined ? directionProp : directionInternal;
+  const actioned = actionedProp !== undefined ? actionedProp : actionedInternal;
+  const setDirection = (v: DirectionFilter) => {
+    if (onDirectionChange) onDirectionChange(v);
+    else setDirectionInternal(v);
+  };
+  const setActioned = (v: ActionedFilter) => {
+    if (onActionedChange) onActionedChange(v);
+    else setActionedInternal(v);
+  };
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Bulk-action selection. Independent of the per-row "actioned" toggle
   // — selection is which rows the next bulk action applies to. Cleared

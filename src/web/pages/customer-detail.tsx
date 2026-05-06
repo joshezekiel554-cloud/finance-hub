@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams, Link } from "@tanstack/react-router";
+import { useParams, Link, getRouteApi } from "@tanstack/react-router";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { CustomerDetailSearch } from "../lib/search-schemas/customer-detail";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -57,6 +60,8 @@ import InvoiceReminderDialog, {
   type InvoiceReminderSuccess,
 } from "../components/invoice-reminder-dialog";
 import { cn } from "../lib/cn";
+
+const customerDetailRouteApi = getRouteApi("/customers/$customerId");
 
 type Customer = {
   id: string;
@@ -129,7 +134,28 @@ type ShopifyTagsResponse = {
 
 export default function CustomerDetailPage() {
   const { customerId } = useParams({ from: "/customers/$customerId" });
-  const [tab, setTab] = useState<TabKey>("activity");
+  const search = customerDetailRouteApi.useSearch();
+  const { setFilter } = useFilterNavigate<CustomerDetailSearch>("/customers/$customerId");
+  useFilterPersistence("/customers/$customerId");
+
+  const tab = search.tab;
+  const setTab = (next: CustomerDetailSearch["tab"]) =>
+    setFilter("tab", next, { history: "push" });
+
+  // Invoices tab filter aliases
+  const invStatus = search.invStatus;
+  const invType = search.invType;
+  const invSearch = search.invSearch;
+  const invSort = search.invSort;
+  const invDir = search.invDir;
+
+  // Emails tab filter aliases
+  const emailDirection = search.emailDirection;
+  const emailActioned = search.emailActioned;
+
+  // Returns tab filter aliases
+  const rmaStatus = search.rmaStatus;
+  const rmaType = search.rmaType;
   const [holdDialogOpen, setHoldDialogOpen] = useState(false);
   const [statementDialogOpen, setStatementDialogOpen] = useState(false);
   const [statementSuccess, setStatementSuccess] =
@@ -692,6 +718,10 @@ export default function CustomerDetailPage() {
             onTaskCreated={(taskId) =>
               setTaskDrawer({ mode: "edit", taskId })
             }
+            direction={emailDirection}
+            actioned={emailActioned}
+            onDirectionChange={(v) => setFilter("emailDirection", v, { history: "push" })}
+            onActionedChange={(v) => setFilter("emailActioned", v, { history: "push" })}
           />
         )}
         {tab === "invoices" && (
@@ -699,6 +729,16 @@ export default function CustomerDetailPage() {
             customerId={customer.id}
             customerName={customer.displayName}
             onBulkChase={(invoiceIds) => setChaseDialog({ invoiceIds })}
+            invStatus={invStatus}
+            invType={invType}
+            invSearch={invSearch}
+            invSort={invSort}
+            invDir={invDir}
+            onSetInvStatus={(v) => setFilter("invStatus", v, { history: "push" })}
+            onSetInvType={(v) => setFilter("invType", v, { history: "push" })}
+            onSetInvSearch={(v) => setFilter("invSearch", v)}
+            onSetInvSort={(v) => setFilter("invSort", v, { history: "push" })}
+            onSetInvDir={(v) => setFilter("invDir", v, { history: "push" })}
           />
         )}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
@@ -720,7 +760,13 @@ export default function CustomerDetailPage() {
           />
         )}
         {tab === "returns" && (
-          <ReturnsPanel customerId={customer.id} />
+          <ReturnsPanel
+            customerId={customer.id}
+            rmaStatus={rmaStatus}
+            rmaType={rmaType}
+            onRmaStatusChange={(v) => setFilter("rmaStatus", v, { history: "push" })}
+            onRmaTypeChange={(v) => setFilter("rmaType", v, { history: "push" })}
+          />
         )}
         {tab === "notes" && (
           <NotesPanel
@@ -2050,6 +2096,16 @@ function InvoicesPanel({
   customerId,
   customerName,
   onBulkChase,
+  invStatus,
+  invType,
+  invSearch,
+  invSort,
+  invDir,
+  onSetInvStatus,
+  onSetInvType,
+  onSetInvSearch,
+  onSetInvSort,
+  onSetInvDir,
 }: {
   customerId: string;
   customerName: string;
@@ -2059,6 +2115,16 @@ function InvoicesPanel({
   // invoice-only). Chase tracking + invalidation is the dialog's
   // job after send succeeds.
   onBulkChase: (invoiceIds: string[]) => void;
+  invStatus: StatusFilter;
+  invType: TypeFilter;
+  invSearch: string;
+  invSort: SortKey;
+  invDir: SortDir;
+  onSetInvStatus: (v: StatusFilter) => void;
+  onSetInvType: (v: TypeFilter) => void;
+  onSetInvSearch: (v: string) => void;
+  onSetInvSort: (v: SortKey) => void;
+  onSetInvDir: (v: SortDir) => void;
 }) {
   const { data, isPending, isError, error } = useQuery<{
     invoices: InvoiceRow[];
@@ -2080,11 +2146,12 @@ function InvoicesPanel({
   const [reminding, setReminding] = useState<InvoiceRow | null>(null);
   const [reminderSuccess, setReminderSuccess] =
     useState<InvoiceReminderSuccess | null>(null);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [search, setSearch] = useState<string>("");
-  const [sortKey, setSortKey] = useState<SortKey>("issueDate");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // filter state lifted to page-level URL params (invStatus, invType, invSearch, invSort, invDir)
+  const statusFilter = invStatus;
+  const typeFilter = invType;
+  const search = invSearch;
+  const sortKey = invSort;
+  const sortDir = invDir;
   // Selection — keyed by docType:qbId so invoices and credit memos
   // with overlapping QBO ids don't collide.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -2161,10 +2228,10 @@ function InvoicesPanel({
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
+      onSetInvDir(sortDir === "asc" ? "desc" : "asc");
     } else {
-      setSortKey(key);
-      setSortDir("desc");
+      onSetInvSort(key);
+      onSetInvDir("desc");
     }
   }
 
@@ -2306,54 +2373,54 @@ function InvoicesPanel({
           <FilterChip
             label="All"
             active={statusFilter === "all"}
-            onClick={() => setStatusFilter("all")}
+            onClick={() => onSetInvStatus("all")}
           />
           <FilterChip
             label="Open"
             active={statusFilter === "open"}
-            onClick={() => setStatusFilter("open")}
+            onClick={() => onSetInvStatus("open")}
           />
           <FilterChip
             label="Paid"
             active={statusFilter === "paid"}
-            onClick={() => setStatusFilter("paid")}
+            onClick={() => onSetInvStatus("paid")}
           />
           <FilterChip
             label="Overdue"
             active={statusFilter === "overdue"}
-            onClick={() => setStatusFilter("overdue")}
+            onClick={() => onSetInvStatus("overdue")}
           />
           <FilterChip
             label="Sent"
             active={statusFilter === "sent"}
-            onClick={() => setStatusFilter("sent")}
+            onClick={() => onSetInvStatus("sent")}
           />
           <FilterChip
             label="Void"
             active={statusFilter === "void"}
-            onClick={() => setStatusFilter("void")}
+            onClick={() => onSetInvStatus("void")}
           />
           <span className="mx-1 h-4 w-px bg-default" />
           <FilterChip
             label="All types"
             active={typeFilter === "all"}
-            onClick={() => setTypeFilter("all")}
+            onClick={() => onSetInvType("all")}
           />
           <FilterChip
             label="Invoices"
             active={typeFilter === "invoice"}
-            onClick={() => setTypeFilter("invoice")}
+            onClick={() => onSetInvType("invoice")}
           />
           <FilterChip
             label="Credit memos"
             active={typeFilter === "credit_memo"}
-            onClick={() => setTypeFilter("credit_memo")}
+            onClick={() => onSetInvType("credit_memo")}
           />
           <div className="ml-auto">
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => onSetInvSearch(e.target.value)}
               placeholder="search doc#…"
               className="w-40 rounded-md border border-default bg-base px-2 py-1 text-xs"
             />
@@ -3018,9 +3085,21 @@ function stuckDays(r: {
   return Math.max(0, Math.floor(ms / 86_400_000));
 }
 
-function ReturnsPanel({ customerId }: { customerId: string }) {
-  const [statusFilter, setStatusFilter] = useState<RmaStatus | "all">("all");
-  const [typeFilter, setTypeFilter] = useState<RmaReturnType | "all">("all");
+function ReturnsPanel({
+  customerId,
+  rmaStatus,
+  rmaType,
+  onRmaStatusChange,
+  onRmaTypeChange,
+}: {
+  customerId: string;
+  rmaStatus: RmaStatus | "all";
+  rmaType: RmaReturnType | "all";
+  onRmaStatusChange: (v: RmaStatus | "all") => void;
+  onRmaTypeChange: (v: RmaReturnType | "all") => void;
+}) {
+  const statusFilter = rmaStatus;
+  const typeFilter = rmaType;
 
   const { data, isPending, isError, error } = useQuery<RmaListResponse>({
     queryKey: ["customer-rmas", customerId],
@@ -3107,7 +3186,7 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
           <ReturnFilterChip
             label="All"
             active={statusFilter === "all"}
-            onClick={() => setStatusFilter("all")}
+            onClick={() => onRmaStatusChange("all")}
           />
           {(Object.keys(RMA_STATUS_LABELS) as RmaStatus[]).map((s) => (
             <ReturnFilterChip
@@ -3115,7 +3194,7 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
               label={RMA_STATUS_LABELS[s]}
               active={statusFilter === s}
               onClick={() =>
-                setStatusFilter((prev) => (prev === s ? "all" : s))
+                onRmaStatusChange(statusFilter === s ? "all" : s)
               }
             />
           ))}
@@ -3125,7 +3204,7 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
           <ReturnFilterChip
             label="All"
             active={typeFilter === "all"}
-            onClick={() => setTypeFilter("all")}
+            onClick={() => onRmaTypeChange("all")}
           />
           {(Object.keys(RMA_TYPE_LABELS) as RmaReturnType[]).map((t) => (
             <ReturnFilterChip
@@ -3133,7 +3212,7 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
               label={RMA_TYPE_LABELS[t]}
               active={typeFilter === t}
               onClick={() =>
-                setTypeFilter((prev) => (prev === t ? "all" : t))
+                onRmaTypeChange(typeFilter === t ? "all" : t)
               }
             />
           ))}
@@ -3142,8 +3221,8 @@ function ReturnsPanel({ customerId }: { customerId: string }) {
           <button
             type="button"
             onClick={() => {
-              setStatusFilter("all");
-              setTypeFilter("all");
+              onRmaStatusChange("all");
+              onRmaTypeChange("all");
             }}
             className="text-xs text-muted hover:text-primary"
           >
