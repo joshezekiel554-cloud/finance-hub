@@ -30,6 +30,7 @@ import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { tasksSearchSchema } from "./lib/search-schemas/tasks";
 import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today";
+import { chaseSearchSchema } from "./lib/search-schemas/chase";
 import { restoreSearchOnEmpty } from "./lib/restore-search-on-empty";
 import "./styles.css";
 
@@ -101,6 +102,8 @@ const chaseRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/chase",
   component: ChasePage,
+  validateSearch: chaseSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/chase"),
 });
 
 const statementsRoute = createRoute({

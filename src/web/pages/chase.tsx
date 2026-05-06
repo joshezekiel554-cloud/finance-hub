@@ -29,6 +29,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { getRouteApi } from "@tanstack/react-router";
 import { Mail, Pause, Send, AlertCircle, CheckCircle2 } from "lucide-react";
 import ChaseEmailSendDialog, {
   type ChaseSendSuccess,
@@ -46,6 +47,11 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { cn } from "../lib/cn";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { ChaseSearch } from "../lib/search-schemas/chase";
+
+const chaseRouteApi = getRouteApi("/chase");
 
 // API result types — kept local because the chase page is the only
 // consumer. If a second consumer turns up, lift these into a shared
@@ -106,15 +112,32 @@ const CUSTOMER_TYPE_LABELS: Record<CustomerTypeFilter, string> = {
 };
 
 export default function ChasePage() {
-  const [customerTypeFilter, setCustomerTypeFilter] =
-    useState<CustomerTypeFilter>("b2b");
-  const [holdFilter, setHoldFilter] = useState<HoldFilter>("all");
-  // Boolean filter chips. Both default off → matches the legacy
-  // server defaults so the page first-loads with the same set as before.
-  const [missingTermsFilter, setMissingTermsFilter] = useState(false);
-  const [hasPendingRmaFilter, setHasPendingRmaFilter] = useState(false);
-  const [sort, setSort] = useState<SortKey>("overdueBalance");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const search = chaseRouteApi.useSearch();
+  const { setFilter, setFilters } = useFilterNavigate<ChaseSearch>("/chase");
+  useFilterPersistence("/chase");
+
+  // Local aliases (preserve old variable names so JSX/queryKey changes are minimal):
+  const customerTypeFilter = search.customerType;
+  const holdFilter = search.holdStatus;
+  const missingTermsFilter = search.missingTerms;
+  const hasPendingRmaFilter = search.hasPendingRma;
+  const sort = search.sort;
+  const dir = search.dir;
+
+  // Setters:
+  const setCustomerTypeFilter = (next: ChaseSearch["customerType"]) =>
+    setFilter("customerType", next, { history: "push" });
+  const setHoldFilter = (next: ChaseSearch["holdStatus"]) =>
+    setFilter("holdStatus", next, { history: "push" });
+  const setMissingTermsFilter = (next: boolean) =>
+    setFilter("missingTerms", next);
+  const setHasPendingRmaFilter = (next: boolean) =>
+    setFilter("hasPendingRma", next);
+  const setSort = (next: ChaseSearch["sort"]) =>
+    setFilter("sort", next, { history: "push" });
+  const setDir = (next: ChaseSearch["dir"]) =>
+    setFilter("dir", next, { history: "push" });
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Per-customer outcome map indexed by customerId. Populated when a
@@ -345,6 +368,10 @@ export default function ChasePage() {
         hasPendingRmaFilter={hasPendingRmaFilter}
         onHasPendingRmaChange={(v) => {
           setHasPendingRmaFilter(v);
+          setSelectedIds(new Set());
+        }}
+        onClearToggles={() => {
+          setFilters({ missingTerms: false, hasPendingRma: false }, { history: "push" });
           setSelectedIds(new Set());
         }}
       />
@@ -656,6 +683,7 @@ function FilterBar({
   onMissingTermsChange,
   hasPendingRmaFilter,
   onHasPendingRmaChange,
+  onClearToggles,
 }: {
   customerTypeFilter: CustomerTypeFilter;
   onCustomerTypeChange: (v: CustomerTypeFilter) => void;
@@ -665,6 +693,7 @@ function FilterBar({
   onMissingTermsChange: (v: boolean) => void;
   hasPendingRmaFilter: boolean;
   onHasPendingRmaChange: (v: boolean) => void;
+  onClearToggles: () => void;
 }) {
   const anyToggleActive = missingTermsFilter || hasPendingRmaFilter;
   return (
@@ -708,10 +737,7 @@ function FilterBar({
           {anyToggleActive ? (
             <button
               type="button"
-              onClick={() => {
-                onMissingTermsChange(false);
-                onHasPendingRmaChange(false);
-              }}
+              onClick={onClearToggles}
               className="ml-1 text-xs text-muted hover:text-primary"
             >
               Clear
