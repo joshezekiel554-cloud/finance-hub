@@ -46,6 +46,16 @@ const schema = z.object({
         .join(","),
     ),
 
+  // QBO Item ids used as line-item refs for credit-memo deductions.
+  // Optional at boot (the credit-memo flow only fails if a deduction
+  // is actually used and the relevant id is missing — see
+  // src/modules/returns/credit-memo-builder.ts). Production go-live
+  // requires both to be set to real QBO Item ids; falsy values force
+  // the builder to throw a clear "configure RMA_*_QBO_ITEM_ID" error
+  // rather than silently issuing a CM against a placeholder item.
+  RMA_SHIPPING_FEE_QBO_ITEM_ID: z.string().default(""),
+  RMA_RESTOCKING_FEE_QBO_ITEM_ID: z.string().default(""),
+
   CRYPTO_KEY: z
     .string()
     .regex(/^[0-9a-f]{64}$/i, "CRYPTO_KEY must be 64 hex chars (32 bytes)"),

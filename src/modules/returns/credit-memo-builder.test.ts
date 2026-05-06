@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Stub the deduction-fee env vars so the assertion in the builder
+// passes — these are set by the operator in real env. Test-only ids;
+// the QBO mock doesn't validate them.
+vi.stubEnv("RMA_SHIPPING_FEE_QBO_ITEM_ID", "test-shipping-item");
+vi.stubEnv("RMA_RESTOCKING_FEE_QBO_ITEM_ID", "test-restocking-item");
+
 // ---------------------------------------------------------------------------
 // Hoisted mock for QboClient — mock just the createCreditMemo method
 // ---------------------------------------------------------------------------

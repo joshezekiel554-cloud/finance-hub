@@ -1,5 +1,6 @@
 import type { Rma, RmaItem } from "../../db/schema/returns.js";
 import { QboClient } from "../../integrations/qb/client.js";
+import { env } from "../../lib/env.js";
 
 export type BuildAndPushInput = {
   rma: Rma;
@@ -99,12 +100,24 @@ function formatInvoiceDate(date: Date | string): string {
 //   - non-damage: omit (QBO autogenerates, e.g. "42CR")
 // ---------------------------------------------------------------------------
 
-// Placeholder IDs for deduction service items. Replace with real QBO Item
-// IDs once the operator creates these in QBO.
-// TODO: configure shipping fee item id in settings
-const SHIPPING_FEE_ITEM_ID = "1";
-// TODO: configure restocking fee item id in settings
-const RESTOCKING_FEE_ITEM_ID = "1";
+// QBO Item ids used as line refs for the shipping + restocking fee
+// deductions. Configured via RMA_SHIPPING_FEE_QBO_ITEM_ID and
+// RMA_RESTOCKING_FEE_QBO_ITEM_ID env vars. When unset the deduction
+// path throws (see assertFeeItemConfigured below) rather than silently
+// posting a CM against the wrong QBO item — which would either fail
+// noisily ("Item id 1 doesn't exist") or, worse, succeed against an
+// unrelated item if id 1 happens to be populated.
+function assertFeeItemConfigured(
+  kind: "shipping" | "restocking",
+  itemId: string,
+): asserts itemId is string {
+  if (!itemId.trim()) {
+    throw new Error(
+      `RMA ${kind}-fee deduction requested but RMA_${kind.toUpperCase()}_FEE_QBO_ITEM_ID is not set. ` +
+        `Create the service item in QBO and set the env var before issuing CMs with ${kind} fees.`,
+    );
+  }
+}
 
 export async function buildAndPushCreditMemo(
   input: BuildAndPushInput,
@@ -150,12 +163,14 @@ export async function buildAndPushCreditMemo(
   if (input.shippingDeduction != null) {
     const shippingAmt = parseFloat(input.shippingDeduction);
     if (shippingAmt > 0) {
+      const shippingItemId = env.RMA_SHIPPING_FEE_QBO_ITEM_ID;
+      assertFeeItemConfigured("shipping", shippingItemId);
       lines.push({
         DetailType: "SalesItemLineDetail",
         Amount: -shippingAmt,
         Description: "Return shipping costs deducted",
         SalesItemLineDetail: {
-          ItemRef: { value: SHIPPING_FEE_ITEM_ID },
+          ItemRef: { value: shippingItemId },
           Qty: 1,
           UnitPrice: -shippingAmt,
         },
@@ -167,12 +182,14 @@ export async function buildAndPushCreditMemo(
   if (input.restockingFee != null) {
     const restockAmt = parseFloat(input.restockingFee);
     if (restockAmt > 0) {
+      const restockItemId = env.RMA_RESTOCKING_FEE_QBO_ITEM_ID;
+      assertFeeItemConfigured("restocking", restockItemId);
       lines.push({
         DetailType: "SalesItemLineDetail",
         Amount: -restockAmt,
         Description: "Restocking fee",
         SalesItemLineDetail: {
-          ItemRef: { value: RESTOCKING_FEE_ITEM_ID },
+          ItemRef: { value: restockItemId },
           Qty: 1,
           UnitPrice: -restockAmt,
         },
