@@ -458,11 +458,13 @@ export default function CustomersPage() {
           <button
             type="button"
             onClick={() => {
-              setHideZero(false);
-              setHasOverdueFilter(false);
-              setOnHoldFilter(false);
-              setMissingTermsFilter(false);
-              setHasUnactionedEmailFilter(false);
+              setFilters({
+                hideZero: false,
+                hasOverdue: false,
+                onHold: false,
+                missingTerms: false,
+                hasUnactionedEmail: false,
+              });
             }}
             className="ml-1 text-muted hover:text-primary"
           >
