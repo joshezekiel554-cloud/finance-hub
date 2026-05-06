@@ -30,6 +30,22 @@ const schema = z.object({
         .join(","),
     ),
 
+  // Comma-separated allow-list of emails with elevated (admin) privileges.
+  // Used to gate destructive routes like force-status overrides and hard
+  // deletes. Lowercased + de-duplicated. Empty = no admins (those routes
+  // 403 for everyone). Distinct from ALLOWED_EMAILS — that's the sign-in
+  // gate; this is the role gate within the app.
+  ADMIN_EMAILS: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .join(","),
+    ),
+
   CRYPTO_KEY: z
     .string()
     .regex(/^[0-9a-f]{64}$/i, "CRYPTO_KEY must be 64 hex chars (32 bytes)"),

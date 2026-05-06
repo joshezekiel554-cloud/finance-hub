@@ -281,6 +281,33 @@ export async function deleteFile(input: {
 }
 
 /**
+ * Delete a folder from Drive. Folders in Drive are themselves files with a
+ * folder MIME type, so this is a thin wrapper around the same `files.delete`
+ * call as `deleteFile` — kept as a separate export for caller readability.
+ *
+ * Drive treats folder delete as a recursive trash by default — children are
+ * deleted along with the folder. Silently swallows 404 (folder already gone)
+ * so callers can call this best-effort during RMA cleanup.
+ */
+export async function deleteFolder(input: {
+  userId: string;
+  folderId: string;
+}): Promise<void> {
+  const drive = await getDriveClient(input.userId);
+  try {
+    await drive.files.delete({ fileId: input.folderId, supportsAllDrives: true });
+  } catch (err) {
+    const status = (err as { code?: number; response?: { status?: number } })?.response?.status
+      ?? (err as { code?: number })?.code;
+    if (status === 404) {
+      log.warn({ folderId: input.folderId }, "Drive folder already deleted — ignoring 404");
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
  * Ensure a folder exists inside `parentId` with the given `name`.
  * If the folder already exists, return its ID. Otherwise create it.
  */

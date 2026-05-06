@@ -4,6 +4,7 @@ import { db } from "../../db/index.js";
 import {
   extensivReceipts,
   rmaItems,
+  rmaPhotos,
   rmas,
   seasons,
   type ExtensivReceipt,
@@ -93,6 +94,9 @@ export type ListRmasFilters = {
   customerId?: string;
   q?: string;
   limit?: number;
+  // 0-based offset for pagination. Once an org has more than `limit` RMAs the
+  // list silently truncates without one — operators can't reach older rows.
+  offset?: number;
 };
 
 // List rows include the customer's display name as a denormalised field so
@@ -121,6 +125,7 @@ export async function listRmas(
   }
   const where = wheres.length ? and(...wheres) : undefined;
   const limit = filters.limit ?? 200;
+  const offset = filters.offset ?? 0;
 
   const rows = await db
     .select({
@@ -131,7 +136,8 @@ export async function listRmas(
     .leftJoin(customers, eq(customers.id, rmas.customerId))
     .where(where as SQL | undefined)
     .orderBy(desc(rmas.createdAt))
-    .limit(limit);
+    .limit(limit)
+    .offset(offset);
 
   return rows.map((r) => ({
     ...(r.rma as Rma),
@@ -1619,57 +1625,144 @@ export async function dismissExtensivReceipt(input: {
 // ---------------------------------------------------------------------------
 // Sets confirmedAt on the receipt. If the linked RMA is in
 // `sent_to_warehouse`, also advances it to `received`.
+//
+// Transactional: the whole flow runs inside `db.transaction` so the receipt
+// confirmation + RMA advance land atomically. Without the transaction, a
+// failure in the RMA advance leaves the receipt confirmed but the RMA still
+// in `sent_to_warehouse` — split-brain that the operator can't recover from
+// (the receipt review queue no longer surfaces it). recordActivity opens
+// its own internal tx, so we leave it outside the main transaction — the
+// activity log is informational, not part of the state-correctness invariant.
 
 export type ConfirmExtensivReceiptResult = {
   receipt: ExtensivReceipt;
   rma?: Rma;
 };
 
+// Transactional twin of `manualMarkReceived` — accepts a tx handle so it can
+// be composed with other transactional work. Skips activity recording (the
+// caller handles that post-commit so the audit row only lands when the state
+// change actually committed). Returns the updated RMA, or `null`/{ok:false}
+// in the same shape as the public function for caller convenience.
+async function advanceRmaStatusToReceived(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  rmaId: string,
+  _userId: string,
+): Promise<ManualMarkReceivedResult | null> {
+  const existing = await tx.select().from(rmas).where(eq(rmas.id, rmaId));
+  if (existing.length === 0) return null;
+  const current = existing[0] as Rma;
+
+  const transition = validateTransition({
+    currentStatus: current.status,
+    returnType: current.returnType,
+    action: "mark_received",
+  });
+  if (!transition.ok) return { ok: false, reason: transition.reason };
+
+  const now = new Date();
+  await tx
+    .update(rmas)
+    .set({ status: "received", receivedAtWarehouseAt: now })
+    .where(eq(rmas.id, rmaId));
+
+  const updated = await tx.select().from(rmas).where(eq(rmas.id, rmaId));
+  return { ok: true, rma: updated[0] as Rma };
+}
+
 export async function confirmExtensivReceipt(input: {
   receiptId: string;
   userId: string;
 }): Promise<ConfirmExtensivReceiptResult> {
-  const receiptRows = await db
-    .select()
-    .from(extensivReceipts)
-    .where(eq(extensivReceipts.id, input.receiptId))
-    .limit(1);
-  if (receiptRows.length === 0)
-    throw new Error(`extensiv_receipt not found: ${input.receiptId}`);
-
-  const receipt = receiptRows[0] as ExtensivReceipt;
-
-  await db
-    .update(extensivReceipts)
-    .set({ confirmedAt: new Date(), confirmedByUserId: input.userId })
-    .where(eq(extensivReceipts.id, input.receiptId));
-
-  const updatedReceiptRows = await db
-    .select()
-    .from(extensivReceipts)
-    .where(eq(extensivReceipts.id, input.receiptId))
-    .limit(1);
-  const updatedReceipt = updatedReceiptRows[0] as ExtensivReceipt;
-
-  // If linked RMA is still in sent_to_warehouse, auto-advance to received.
-  if (receipt.rmaId) {
-    const rmaRows = await db
+  // Whole flow runs in a transaction so the receipt confirm + RMA advance
+  // are atomic. A failure mid-flight rolls back the receipt update too,
+  // avoiding a confirmed-receipt-with-unadvanced-RMA split-brain that the
+  // operator can't recover from.
+  const txResult = await db.transaction(async (tx) => {
+    const receiptRows = await tx
       .select()
-      .from(rmas)
-      .where(eq(rmas.id, receipt.rmaId))
+      .from(extensivReceipts)
+      .where(eq(extensivReceipts.id, input.receiptId))
       .limit(1);
-    const rma = rmaRows[0] as Rma | undefined;
-    if (rma?.status === "sent_to_warehouse") {
-      const result = await manualMarkReceived({ rmaId: receipt.rmaId, userId: input.userId });
-      if (result?.ok) {
-        return { receipt: updatedReceipt, rma: result.rma };
+    if (receiptRows.length === 0)
+      throw new Error(`extensiv_receipt not found: ${input.receiptId}`);
+
+    const receipt = receiptRows[0] as ExtensivReceipt;
+
+    await tx
+      .update(extensivReceipts)
+      .set({ confirmedAt: new Date(), confirmedByUserId: input.userId })
+      .where(eq(extensivReceipts.id, input.receiptId));
+
+    const updatedReceiptRows = await tx
+      .select()
+      .from(extensivReceipts)
+      .where(eq(extensivReceipts.id, input.receiptId))
+      .limit(1);
+    const updatedReceipt = updatedReceiptRows[0] as ExtensivReceipt;
+
+    // If a linked RMA is still in sent_to_warehouse, advance it to received
+    // inside the same tx so a failure here rolls back the receipt update too.
+    let advancedRma: Rma | undefined;
+    let needsActivity = false;
+    let customerIdForActivity: string | null = null;
+    if (receipt.rmaId) {
+      const rmaRows = await tx
+        .select()
+        .from(rmas)
+        .where(eq(rmas.id, receipt.rmaId))
+        .limit(1);
+      const rma = rmaRows[0] as Rma | undefined;
+      if (rma?.status === "sent_to_warehouse") {
+        const result = await advanceRmaStatusToReceived(
+          tx,
+          receipt.rmaId,
+          input.userId,
+        );
+        if (result?.ok) {
+          advancedRma = result.rma;
+          needsActivity = true;
+          customerIdForActivity = result.rma.customerId;
+        }
+      } else if (rma) {
+        advancedRma = rma;
       }
-    } else if (rma) {
-      return { receipt: updatedReceipt, rma };
     }
+
+    return {
+      updatedReceipt,
+      advancedRma,
+      needsActivity,
+      customerIdForActivity,
+      rmaIdForActivity: receipt.rmaId,
+    };
+  });
+
+  // Record activity only after the tx commits — recordActivity opens its own
+  // internal transaction so we keep it outside the main one. If this throws,
+  // the state change already landed; we log and surface the error.
+  if (
+    txResult.needsActivity &&
+    txResult.customerIdForActivity &&
+    txResult.rmaIdForActivity
+  ) {
+    await recordActivity(
+      {
+        customerId: txResult.customerIdForActivity,
+        kind: "rma_received_at_warehouse",
+        source: "user_action",
+        userId: input.userId,
+        refType: "rma",
+        refId: txResult.rmaIdForActivity,
+        meta: { source: "extensiv_receipt_confirm" },
+      },
+      db,
+    );
   }
 
-  return { receipt: updatedReceipt };
+  return txResult.advancedRma
+    ? { receipt: txResult.updatedReceipt, rma: txResult.advancedRma }
+    : { receipt: txResult.updatedReceipt };
 }
 
 // ---------------------------------------------------------------------------
@@ -1750,14 +1843,31 @@ export async function revertToDraft(
 //
 // Other statuses preserve their audit trail in the DB. Operators who want to
 // "remove" an in-flight RMA should cancel it first, then delete if needed.
-// rma_items rows cascade via the FK ON DELETE CASCADE constraint.
+// rma_items + rma_photos rows cascade via the FK ON DELETE CASCADE constraint.
+//
+// Drive side: rma_photos rows hold the only handles to the Drive blobs, so
+// once they cascade-delete, the Drive folder + files are orphaned. We list
+// the photos up-front, attempt best-effort `deleteFile` for each, then
+// `deleteFolder` for the parent folder, BEFORE cascading the row delete.
+// All Drive calls are wrapped in try/catch so a Drive failure leaks the
+// blob but doesn't block the DB delete (better than the alternative of
+// orphaning the row + the blob).
+//
+// userId is required for the Drive client — it routes to the user's OAuth
+// token. Caller (the route handler) supplies it from `requireAuth`.
 
-export async function deleteRma(id: string): Promise<
+export type DeleteRmaInput = {
+  rmaId: string;
+  userId: string;
+};
+
+export async function deleteRma(input: DeleteRmaInput): Promise<
   | { ok: true }
   | { ok: false; reason: string }
   | null
 > {
-  const rows = await db.select().from(rmas).where(eq(rmas.id, id)).limit(1);
+  const { rmaId, userId } = input;
+  const rows = await db.select().from(rmas).where(eq(rmas.id, rmaId)).limit(1);
   if (rows.length === 0) return null;
   const current = rows[0] as Rma;
   if (current.status !== "draft" && current.status !== "cancelled") {
@@ -1767,6 +1877,46 @@ export async function deleteRma(id: string): Promise<
         "RMAs in this state cannot be deleted — cancel it first to preserve audit history.",
     };
   }
-  await db.delete(rmas).where(eq(rmas.id, id));
+
+  // Best-effort Drive cleanup. We list photos before the cascade delete so
+  // we still have driveFileId handles. Any Drive call failure is logged and
+  // swallowed — leaking a Drive file is preferable to leaving an orphaned
+  // DB row that the operator can't retry-delete.
+  try {
+    const photos = await db
+      .select({ driveFileId: rmaPhotos.driveFileId })
+      .from(rmaPhotos)
+      .where(eq(rmaPhotos.rmaId, rmaId));
+    if (photos.length > 0 || current.driveFolderId) {
+      const { deleteFile, deleteFolder } = await import(
+        "../../integrations/google-drive/client.js"
+      );
+      for (const p of photos) {
+        try {
+          await deleteFile({ userId, fileId: p.driveFileId });
+        } catch (err) {
+          console.error(
+            "[deleteRma] Drive file delete failed (continuing):",
+            { rmaId, fileId: p.driveFileId, err },
+          );
+        }
+      }
+      if (current.driveFolderId) {
+        try {
+          await deleteFolder({ userId, folderId: current.driveFolderId });
+        } catch (err) {
+          console.error(
+            "[deleteRma] Drive folder delete failed (continuing):",
+            { rmaId, folderId: current.driveFolderId, err },
+          );
+        }
+      }
+    }
+  } catch (err) {
+    // Listing or import failure — log and proceed with DB delete.
+    console.error("[deleteRma] Drive cleanup setup failed (continuing):", err);
+  }
+
+  await db.delete(rmas).where(eq(rmas.id, rmaId));
   return { ok: true };
 }

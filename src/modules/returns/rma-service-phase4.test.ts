@@ -15,6 +15,7 @@ const {
   mockUpdate,
   resetMocks,
   setSelectQueue,
+  mockTransaction,
 } = vi.hoisted(() => {
   let selectQueue: unknown[][] = [];
 
@@ -59,7 +60,14 @@ const {
     set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
   }));
 
-  return { mockSelect, mockInsert, mockUpdate, resetMocks, setSelectQueue };
+  // Transactional surface — service code that uses `db.transaction(async tx
+  // => ...)` calls these the same way as the bare `db.*` methods. Reuse the
+  // same mock fns so the existing select/update queues drive both paths.
+  const mockTransaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+    fn({ select: mockSelect, insert: mockInsert, update: mockUpdate }),
+  );
+
+  return { mockSelect, mockInsert, mockUpdate, resetMocks, setSelectQueue, mockTransaction };
 });
 
 vi.mock("~/db/index.js", () => ({
@@ -67,6 +75,7 @@ vi.mock("~/db/index.js", () => ({
     select: mockSelect,
     insert: mockInsert,
     update: mockUpdate,
+    transaction: mockTransaction,
   },
 }));
 

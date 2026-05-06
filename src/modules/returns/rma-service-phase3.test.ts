@@ -310,9 +310,10 @@ describe("approveRma — non_seasonal", () => {
       perInvoice: [],
     });
 
+    // Non-seasonal skips the eligibility branch (no items fetch), so the
+    // queue only needs the initial RMA fetch + the post-update re-fetch.
     setSelectResults([
       [makeDraftRma({ returnType: "non_seasonal" })],
-      [], // items
       [{ id: "rma-100", status: "approved", returnType: "non_seasonal", customerId: "cust-1" }],
     ]);
 

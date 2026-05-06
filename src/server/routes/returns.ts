@@ -51,7 +51,7 @@ import { emailTemplates } from "../../db/schema/email-templates.js";
 import { db } from "../../db/index.js";
 import { renderTemplate } from "../../modules/email-compose/index.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, isAdmin } from "../lib/auth.js";
 import { runEligibility } from "../../modules/returns/eligibility.js";
 import { buildExtensivExportFile } from "../../modules/returns/extensiv-export.js";
 
@@ -78,6 +78,9 @@ const listQuerySchema = z.object({
   customerId: z.string().max(24).optional(),
   q: z.string().max(100).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
+  // Pagination offset. 0-based. Without this the route silently truncates
+  // past `limit` rows; with it, operators can scroll backwards in time.
+  offset: z.coerce.number().int().min(0).default(0).optional(),
 });
 
 const createBodySchema = z.object({
@@ -458,6 +461,12 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     "/:id/force-status",
     async (req, reply) => {
       const user = await requireAuth(req);
+      // Force-status bypasses the state machine — restrict to admins so a
+      // regular operator can't flip an RMA to any arbitrary status.
+      if (!isAdmin(user)) {
+        reply.code(403);
+        return { error: "admin only" };
+      }
       const parse = forceStatusBodySchema.safeParse(req.body);
       if (!parse.success) {
         reply.code(400);
@@ -1023,8 +1032,15 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
   // Hard-delete an RMA. Only allowed for `draft` or `cancelled` — anything
   // in-flight needs to be cancelled first to preserve audit trail.
   app.delete<{ Params: { id: string } }>("/:id", async (req, reply) => {
-    await requireAuth(req);
-    const result = await deleteRma(req.params.id);
+    const user = await requireAuth(req);
+    // Hard delete is destructive (rma + items + photos cascade). Restrict to
+    // admins so a regular operator can't permanently remove an RMA — even
+    // ones in draft/cancelled — without elevated privilege.
+    if (!isAdmin(user)) {
+      reply.code(403);
+      return { error: "admin only" };
+    }
+    const result = await deleteRma({ rmaId: req.params.id, userId: user.id });
     if (!result) {
       reply.code(404);
       return { error: "RMA not found" };

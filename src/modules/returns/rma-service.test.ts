@@ -24,8 +24,11 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
     where: (...args: unknown[]) => LazyNode;
     orderBy: (...args: unknown[]) => LazyNode;
     limit: (...args: unknown[]) => LazyNode;
+    offset: (...args: unknown[]) => LazyNode;
     from: (...args: unknown[]) => LazyNode;
     for: (...args: unknown[]) => LazyNode;
+    leftJoin: (...args: unknown[]) => LazyNode;
+    innerJoin: (...args: unknown[]) => LazyNode;
   };
 
   const makeNode = (): LazyNode => {
@@ -42,8 +45,11 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
       where: (..._args: unknown[]) => makeNode(),
       orderBy: (..._args: unknown[]) => makeNode(),
       limit: (..._args: unknown[]) => makeNode(),
+      offset: (..._args: unknown[]) => makeNode(),
       from: (..._args: unknown[]) => makeNode(),
       for: (..._args: unknown[]) => makeNode(),
+      leftJoin: (..._args: unknown[]) => makeNode(),
+      innerJoin: (..._args: unknown[]) => makeNode(),
     };
     return node;
   };

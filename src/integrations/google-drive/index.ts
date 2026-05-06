@@ -5,6 +5,7 @@ export type { DriveUploadResult } from "./client.js";
 export {
   uploadFile,
   deleteFile,
+  deleteFolder,
   ensureFolder,
   renameFolder,
   makeViewable,
