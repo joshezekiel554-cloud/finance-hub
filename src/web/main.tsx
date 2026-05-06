@@ -27,6 +27,7 @@ import ReturnNewPage from "./pages/return-new";
 import ReturnDetailPage from "./pages/return-detail";
 import SeasonsPage from "./pages/seasons";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
+import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { restoreSearchOnEmpty } from "./lib/restore-search-on-empty";
 import "./styles.css";
 
@@ -130,6 +131,8 @@ const returnsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/returns",
   component: ReturnsListPage,
+  validateSearch: returnsSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/returns"),
 });
 
 const returnNewRoute = createRoute({

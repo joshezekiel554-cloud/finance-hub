@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { useMemo } from "react";
+import { Link, getRouteApi } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { LayoutGrid, List as ListIcon, Search } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
@@ -8,6 +8,9 @@ import { Input } from "../components/ui/input";
 import { cn } from "../lib/cn";
 import RmaRowMenu from "../components/rma-row-menu";
 import { ReturnsKanban } from "../components/returns-kanban";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { ReturnsSearch } from "../lib/search-schemas/returns";
 
 type RmaStatus =
   | "draft"
@@ -37,7 +40,6 @@ type RmaRow = {
 };
 
 type View = "list" | "kanban";
-const VIEW_STORAGE_KEY = "returns-view";
 
 type ListResponse = { rmas: RmaRow[] };
 
@@ -74,29 +76,35 @@ const TYPE_LABELS: Record<RmaReturnType, string> = {
   non_seasonal: "Non-seasonal",
 };
 
-export default function ReturnsListPage() {
-  const [statusFilter, setStatusFilter] = useState<RmaStatus | "all">("all");
-  const [typeFilter, setTypeFilter] = useState<RmaReturnType | "all">("all");
-  const [search, setSearch] = useState("");
-  // View preference is sticky across reloads — operators tend to favour
-  // either list or board; switching every visit is friction.
-  const [view, setView] = useState<View>(() => {
-    if (typeof window === "undefined") return "list";
-    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY);
-    return stored === "kanban" ? "kanban" : "list";
-  });
-  useEffect(() => {
-    window.localStorage.setItem(VIEW_STORAGE_KEY, view);
-  }, [view]);
+const returnsRouteApi = getRouteApi("/returns");
 
-  const queryKey = ["rmas", { statusFilter, typeFilter, search }] as const;
+export default function ReturnsListPage() {
+  const search = returnsRouteApi.useSearch();
+  const { setFilter } = useFilterNavigate<ReturnsSearch>("/returns");
+  useFilterPersistence("/returns");
+
+  // Local aliases:
+  const view = search.view;
+  const statusFilter = search.status;
+  const typeFilter = search.type;
+
+  // Setters:
+  const setView = (next: ReturnsSearch["view"]) =>
+    setFilter("view", next, { history: "push" });
+  const setStatusFilter = (next: ReturnsSearch["status"]) =>
+    setFilter("status", next, { history: "push" });
+  const setTypeFilter = (next: ReturnsSearch["type"]) =>
+    setFilter("type", next, { history: "push" });
+  const setSearchValue = (next: string) => setFilter("search", next);
+
+  const queryKey = ["rmas", { statusFilter, typeFilter, search: search.search }] as const;
   const { data, isPending, isError, error } = useQuery<ListResponse>({
     queryKey,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (statusFilter !== "all") params.set("status", statusFilter);
       if (typeFilter !== "all") params.set("type", typeFilter);
-      if (search.trim()) params.set("q", search.trim());
+      if (search.search.trim()) params.set("q", search.search.trim());
       const res = await fetch(`/api/rmas?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -140,7 +148,7 @@ export default function ReturnsListPage() {
               label={STATUS_LABELS[s]}
               active={statusFilter === s}
               onClick={() =>
-                setStatusFilter((prev) => (prev === s ? "all" : s))
+                setStatusFilter(statusFilter === s ? "all" : s)
               }
             />
           ))}
@@ -159,7 +167,7 @@ export default function ReturnsListPage() {
               label={TYPE_LABELS[t]}
               active={typeFilter === t}
               onClick={() =>
-                setTypeFilter((prev) => (prev === t ? "all" : t))
+                setTypeFilter(typeFilter === t ? "all" : t)
               }
             />
           ))}
@@ -168,8 +176,8 @@ export default function ReturnsListPage() {
         <div className="relative ml-auto">
           <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
           <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={search.search}
+            onChange={(e) => setSearchValue(e.target.value)}
             placeholder="Search RMA #, customer, or notes…"
             className="!pl-8"
             aria-label="Search returns"
