@@ -81,7 +81,8 @@ export async function getRmaById(id: string): Promise<RmaWithItems | null> {
   const items = await db
     .select()
     .from(rmaItems)
-    .where(eq(rmaItems.rmaId, id));
+    .where(eq(rmaItems.rmaId, id))
+    .orderBy(rmaItems.position);
   return { ...(rows[0] as Rma), items: items as RmaItem[] };
 }
 
@@ -288,7 +289,8 @@ export async function approveRma(
     const itemRows = (await db
       .select()
       .from(rmaItems)
-      .where(eq(rmaItems.rmaId, id))) as RmaItem[];
+      .where(eq(rmaItems.rmaId, id))
+      .orderBy(rmaItems.position)) as RmaItem[];
 
     const breakdown = await runEligibility({
       customerId: current.customerId,
@@ -415,7 +417,8 @@ export async function denyRma(
       const itemRows = (await db
         .select()
         .from(rmaItems)
-        .where(eq(rmaItems.rmaId, id))) as RmaItem[];
+        .where(eq(rmaItems.rmaId, id))
+        .orderBy(rmaItems.position)) as RmaItem[];
 
       const breakdown = await runEligibility({
         customerId: current.customerId,
@@ -535,7 +538,8 @@ export async function generateWarehouseExport(
   const itemRows = (await db
     .select()
     .from(rmaItems)
-    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+    .where(eq(rmaItems.rmaId, rmaId))
+    .orderBy(rmaItems.position)) as RmaItem[];
 
   // Fetch customer
   const customerRows = await db
@@ -957,7 +961,8 @@ export async function issueCreditMemo(
     const items = (await tx
       .select()
       .from(rmaItems)
-      .where(eq(rmaItems.rmaId, id))) as RmaItem[];
+      .where(eq(rmaItems.rmaId, id))
+      .orderBy(rmaItems.position)) as RmaItem[];
 
     const itemsForCm = items.map((item) => {
       const override = input.itemOverrides?.find((o) => o.itemId === item.id);
@@ -1390,7 +1395,8 @@ async function recomputeTotalValue(rmaId: string): Promise<void> {
   const items = (await db
     .select()
     .from(rmaItems)
-    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+    .where(eq(rmaItems.rmaId, rmaId))
+    .orderBy(rmaItems.position)) as RmaItem[];
   const total = items
     .reduce((sum, item) => sum + parseFloat(item.lineTotal), 0)
     .toFixed(2);
@@ -1444,7 +1450,8 @@ export async function addRmaItem(
     const existingItems = (await tx
       .select()
       .from(rmaItems)
-      .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+      .where(eq(rmaItems.rmaId, rmaId))
+      .orderBy(rmaItems.position)) as RmaItem[];
 
     const maxPosition = existingItems.reduce(
       (max, item) => Math.max(max, item.position),
@@ -1484,7 +1491,8 @@ export async function addRmaItem(
   const updatedItems = (await db
     .select()
     .from(rmaItems)
-    .where(eq(rmaItems.rmaId, rmaId))) as RmaItem[];
+    .where(eq(rmaItems.rmaId, rmaId))
+    .orderBy(rmaItems.position)) as RmaItem[];
 
   return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
 }
@@ -1579,7 +1587,8 @@ export async function updateRmaItem(
   const updatedItems = (await db
     .select()
     .from(rmaItems)
-    .where(eq(rmaItems.rmaId, item.rmaId))) as RmaItem[];
+    .where(eq(rmaItems.rmaId, item.rmaId))
+    .orderBy(rmaItems.position)) as RmaItem[];
 
   return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
 }
@@ -1615,7 +1624,8 @@ export async function removeRmaItem(itemId: string): Promise<RmaWithItems | null
   const updatedItems = (await db
     .select()
     .from(rmaItems)
-    .where(eq(rmaItems.rmaId, item.rmaId))) as RmaItem[];
+    .where(eq(rmaItems.rmaId, item.rmaId))
+    .orderBy(rmaItems.position)) as RmaItem[];
 
   return { ...(updatedRmaRows[0] as Rma), items: updatedItems };
 }

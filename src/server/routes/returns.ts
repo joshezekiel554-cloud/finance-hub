@@ -771,7 +771,8 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       const items = await db
         .select()
         .from(rmaItems)
-        .where(eq(rmaItems.rmaId, rma.id));
+        .where(eq(rmaItems.rmaId, rma.id))
+        .orderBy(rmaItems.position);
 
       // Fetch customer
       const customerRows = await db

@@ -295,6 +295,8 @@ export default function RmaItemsTable({
               </tr>
             </thead>
             <tbody className="divide-y divide-default">
+              {/* Preserve insertion order — server reads use orderBy(position) so this
+                  round-trips correctly across save/reload. */}
               {items.map((row) => (
                 <ItemRow
                   key={row.localKey}
