@@ -9,10 +9,12 @@ import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/cn";
+// ReturnReceiptReviewDialog intentionally NOT removed here — Phase 5 (Task 5.1) handles deletion.
 import ReturnReceiptReviewDialog, {
   type ReceiptRow,
 } from "../components/return-receipt-review-dialog";
 import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
+import { ReturnReceiptCard } from "../components/return-receipt-card";
 
 const invoicingTodayRouteApi = getRouteApi("/invoicing");
 
@@ -182,11 +184,32 @@ export default function InvoicingTodayPage() {
     setFilter("tab", next, { history: "push" });
 
   const queryClient = useQueryClient();
-  const [reviewReceipt, setReviewReceipt] = useState<ReceiptRow | null>(null);
-  // After the operator clicks "Continue to credit memo" in the receipt
-  // dialog, the receipt closes and we open the shared RmaCreditMemoDialog
-  // for the matched RMA. Stored as { rmaId, customerId } so the dialog has
-  // what it needs without an extra fetch.
+
+  // Task 2.2: dismiss mutation for ReturnReceiptCard — uses new /dismiss-with-reason endpoint.
+  const dismissMutation = useMutation({
+    mutationFn: async (input: {
+      receiptId: string;
+      reason: "done" | "not_return" | "other";
+      reasonText?: string;
+    }) => {
+      const res = await fetch(
+        `/api/rmas/extensiv-receipts/${input.receiptId}/dismiss-with-reason`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: input.reason, reasonText: input.reasonText }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+    },
+  });
+
+  // Legacy state kept in place — dialog is NOT deleted until Task 5.1.
+  // setCreditMemoTarget is still wired to RmaCreditMemoDialog below.
   const [creditMemoTarget, setCreditMemoTarget] = useState<{
     rmaId: string;
     customerId: string;
@@ -368,35 +391,34 @@ export default function InvoicingTodayPage() {
               </CardBody>
             </Card>
           ) : (
+            // Task 2.2: render ReturnReceiptCard list. No inline review dialog.
+            // The server ReceiptRow has only `emailBody` (plain text); no HTML body
+            // field is returned from the API — emailBodyHtml is left undefined so
+            // ReturnReceiptCard falls back to rendering plain text in a <pre>.
             (data.receiptRows ?? []).map((receipt) => (
-              <ReceiptRowCard
+              <ReturnReceiptCard
                 key={receipt.receiptId}
-                receipt={receipt}
-                onReview={() => setReviewReceipt(receipt)}
+                receipt={{
+                  receiptId: receipt.receiptId,
+                  gmailMessageId: receipt.gmailMessageId,
+                  emailSubject: receipt.emailSubject,
+                  emailFrom: receipt.emailFrom,
+                  emailBodyHtml: undefined,
+                  emailBodyText: receipt.emailBody,
+                  classifiedAt: receipt.classifiedAt,
+                }}
+                linkedRmas={receipt.linkedRmas ?? []}
+                onDismiss={(reason, reasonText) =>
+                  dismissMutation.mutate({ receiptId: receipt.receiptId, reason, reasonText })
+                }
               />
             ))
           )}
         </section>
       )}
 
-      {/* Receipt review dialog */}
-      {reviewReceipt && (
-        <ReturnReceiptReviewDialog
-          open={reviewReceipt !== null}
-          onOpenChange={(next) => {
-            if (!next) setReviewReceipt(null);
-          }}
-          receipt={reviewReceipt}
-          onDone={() => {
-            setReviewReceipt(null);
-            void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
-          }}
-          onContinueToCreditMemo={(target) => {
-            setReviewReceipt(null);
-            setCreditMemoTarget(target);
-          }}
-        />
-      )}
+      {/* ReturnReceiptReviewDialog intentionally NOT rendered — deprecated by Task 2.2.
+          The file itself is preserved until Task 5.1 (Phase 5 cutover). */}
 
       {/* Credit memo dialog — opened after the receipt review hands off.
           Uses the same shared dialog the wizard does, so sales tax checkbox
