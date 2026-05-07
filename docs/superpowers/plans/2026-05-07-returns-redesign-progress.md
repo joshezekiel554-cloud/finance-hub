@@ -8,7 +8,7 @@
 **Spec:** `docs/superpowers/specs/2026-05-07-returns-redesign.md`
 **Branch:** `feat/returns-phase-5-7`
 **Execution mode:** Subagent-driven, sequential for Wave 0 (Phase 0), then parallel worktrees for Wave 1+
-**Model split:** sonnet for most tasks, opus for 4.2 / 4.3 / 4.4 + their reviewers
+**Model split:** sonnet for most implementers, opus for 4.2 / 4.3 / 4.4 implementers, **opus for ALL code-quality reviewers** (per user policy update on 2026-05-07). Spec-compliance reviewers stay sonnet.
 
 ## Wave plan
 
@@ -29,8 +29,8 @@
 |---|---|---|---|---|
 | 265 (0.1) | Schema migration | sonnet | ✅ completed | `16771d8` |
 | 266 (0.2) | RMA# regex module | sonnet | ✅ completed | `579c5f0` then fix `8eb829d` |
-| 267 (0.3) | Email linker module | sonnet | in_progress | — |
-| 268 (0.4) | Wire into Gmail poll | sonnet | pending | — |
+| 267 (0.3) | Email linker module | sonnet | ✅ completed | `5353ccc` |
+| 268 (0.4) | Wire into Gmail poll | sonnet | in_progress | — |
 | 269 (0.5) | Server endpoints | sonnet | pending | — |
 | 270 (1.1) | SKU order bug | sonnet | pending | — |
 | 271 (1.2) | Invoice recipients | sonnet | pending | — |
@@ -53,6 +53,8 @@
 - `579c5f0` — `feat(returns-redesign): add RMA number format module for email auto-linking`
 - `7800a04` — `docs(returns-redesign): add live progress tracker for autocompact recovery`
 - `8eb829d` — `fix(returns-redesign): mask DC matches before sequential regex to avoid duplicate refs`
+- `64773b2` — `docs(returns-redesign): progress update — 0.2 done, 0.3 next`
+- `5353ccc` — `feat(returns-redesign): email linker module with poll-time + backfill entry points`
 
 ## Known issues
 
