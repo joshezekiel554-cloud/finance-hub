@@ -451,10 +451,7 @@ export default function ReturnDetailPage() {
 
           {/* Process return panel — visible while awaiting or processing receipt */}
           {(rma.status === "sent_to_warehouse" || rma.status === "received") && (
-            <ProcessReturnPanel
-              rmaId={rma.id}
-              damagesNote={rma.damagesNote ?? null}
-            />
+            <ProcessReturnPanel rmaId={rma.id} />
           )}
         </div>
 

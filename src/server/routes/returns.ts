@@ -188,6 +188,11 @@ const processReturnBodySchema = z.object({
     .min(1),
   notes: z.string().max(2000).optional(),
   memo: z.string().max(2000),
+  // Free-text damages note from the create page. Appended to memo
+  // server-side so CustomerMemo on the QBO CM ends up as
+  // `${memo}\n\nDamages: ${damagesNote}`. Also persisted to
+  // rmas.damages_note in the same tx so it survives reloads.
+  damagesNote: z.string().max(2000).optional(),
   sendEmail: z.boolean(),
   emailTo: z.string().max(500),
   emailCc: z.string().max(500).optional(),
@@ -660,11 +665,20 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
             ? `${rmaNumber}CR`
             : undefined;
 
+      // Compose CustomerMemo: base memo plus optional damages note.
+      // The create page splits damages into its own field; the operator
+      // is not expected to merge them by hand.
+      const damagesTrimmed = body.damagesNote?.trim();
+      const memoComposed = damagesTrimmed
+        ? `${body.memo}\n\nDamages: ${damagesTrimmed}`
+        : body.memo;
+
       const payload: Record<string, unknown> = {
         CustomerRef: { value: rma.qbCustomerId },
         // CustomerMemo prints on the QBO CM PDF + appears on the customer
-        // statement. Operator-supplied (from the create page memo field).
-        CustomerMemo: { value: body.memo },
+        // statement. Operator-supplied (from the create page memo field +
+        // damages textarea, joined above).
+        CustomerMemo: { value: memoComposed },
         Line: qboLines,
       };
 
@@ -755,6 +769,13 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
               completedAt: now,
               qboCreditMemoId,
               creditMemoDocNumber: cmDocNumber,
+              // Persist the damages note from the create page so a
+              // reload after submit shows the same context. Falls back
+              // to whatever was already there when the operator left
+              // the field empty.
+              ...(damagesTrimmed
+                ? { damagesNote: damagesTrimmed }
+                : {}),
             })
             .where(eq(rmas.id, rma.id));
 

@@ -252,14 +252,18 @@ export default function CreditMemoCreatePage() {
     const rmaLines: Line[] = rma.items.map((item) => {
       const parsedQty = parsedBySku.get(item.sku);
       if (parsedQty !== undefined) matchedSkus.add(item.sku);
-      // Precedence for receivedQty:
-      //   1. operator's prior receivedQuantity edit (legacy review-dialog
-      //      flow may already have populated it),
-      //   2. parsed receipt quantity if the warehouse classified it,
-      //   3. approved qty as the safest fallback.
+      // Precedence for receivedQty (updated 2026-05):
+      //   1. freshly parsed receipt quantity — operator's most recent
+      //      signal about what the warehouse actually scanned. When they
+      //      re-paste a receipt on this page the new qty must win, even
+      //      if a prior receivedQuantity was set by the legacy review
+      //      dialog or a desktop import.
+      //   2. operator's prior receivedQuantity edit (legacy / desktop).
+      //   3. approved RMA qty as the safest fallback.
       const receivedQty =
-        item.receivedQuantity ??
-        (parsedQty !== undefined ? String(parsedQty) : item.quantity);
+        parsedQty !== undefined
+          ? String(parsedQty)
+          : (item.receivedQuantity ?? item.quantity);
       return {
         key: `rma-${item.id}`,
         qbItemId: item.qbItemId,
@@ -297,19 +301,37 @@ export default function CreditMemoCreatePage() {
   }, [rmaQuery.data, parsedReceiptsQuery.data]);
 
   const [lines, setLines] = useState<Line[]>([]);
-  // Seed-once pattern: react-query may refetch the RMA / parsed receipts
-  // in the background (focus, mutation invalidations from Task 4.3). If
-  // we re-ran setLines on every initialLines identity change, the
-  // operator's mid-edit description / unit-price tweaks would be wiped.
-  // We therefore only seed when local state is empty — subsequent
-  // refetches are observable via the queries' loading flags but don't
-  // clobber edits.
+  // Re-seed strategy. Two cases must seed:
+  //   (a) first load — `lines` empty and `initialLines` has rows.
+  //   (b) operator pastes a fresh receipt on this page — the parsed-
+  //       receipts query is invalidated, refetched, dataUpdatedAt
+  //       advances, and we must replace local state so the new qty
+  //       (and any new unexpected SKUs) reflect on the table.
+  // Background refetches that return identical data don't bump
+  // dataUpdatedAt's relevance — we record the last-seen value and only
+  // re-seed when it advances past a non-null baseline (i.e., not the
+  // very first arrival of parsed data, which is already covered by (a)).
+  // This means an operator's mid-edit description / unit-price tweaks
+  // survive idle refetches but get clobbered on a deliberate paste —
+  // which is what they asked for by re-pasting.
+  const [lastParsedSeen, setLastParsedSeen] = useState<number | null>(null);
   useEffect(() => {
-    if (lines.length === 0 && initialLines.length > 0) {
+    const dataUpdatedAt = parsedReceiptsQuery.dataUpdatedAt ?? 0;
+    const isFirstSeed = lines.length === 0 && initialLines.length > 0;
+    const isFreshPaste =
+      lastParsedSeen !== null && dataUpdatedAt > lastParsedSeen;
+
+    if (isFirstSeed || isFreshPaste) {
       setLines(initialLines);
+      if (dataUpdatedAt > 0) setLastParsedSeen(dataUpdatedAt);
+    } else if (lastParsedSeen === null && dataUpdatedAt > 0) {
+      // First arrival of parsed data — record the baseline without
+      // re-seeding (initial seed already happened or will happen via
+      // (a) when initialLines becomes non-empty).
+      setLastParsedSeen(dataUpdatedAt);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialLines]);
+  }, [initialLines, parsedReceiptsQuery.dataUpdatedAt]);
 
   // Issue date defaults to today. Stored as YYYY-MM-DD so the date
   // <input> binds cleanly without timezone surprises.
@@ -339,8 +361,69 @@ export default function CreditMemoCreatePage() {
   const [emailCc, setEmailCc] = useState("");
   const [emailBcc, setEmailBcc] = useState("");
 
+  // Paste-receipt UI state (moved from ProcessReturnPanel). Operator
+  // pastes the warehouse email body, server parses + persists, parsed-
+  // receipts query is invalidated, and the line table re-seeds via the
+  // re-seed effect above.
+  const [showPasteForm, setShowPasteForm] = useState(false);
+  const [pasteDraft, setPasteDraft] = useState("");
+  const [pasteResult, setPasteResult] = useState<{
+    receiptId: string;
+    parsedItemCount: number;
+  } | null>(null);
+
+  // Damages note (moved from ProcessReturnPanel). Free-text field
+  // composed into CustomerMemo server-side at submit, and persisted to
+  // rmas.damages_note in the same DB transaction so the value sticks
+  // across reloads even before submit (via a separate save path TBD).
+  const [damagesDraft, setDamagesDraft] = useState("");
+
+  // Seed damages-draft once from rma.damagesNote on initial load.
+  useEffect(() => {
+    if (damagesDraft !== "") return;
+    if (rmaQuery.data?.damagesNote) {
+      setDamagesDraft(rmaQuery.data.damagesNote);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rmaQuery.data?.damagesNote]);
+
+  const pasteMutation = useMutation({
+    mutationFn: async (pastedText: string) => {
+      const res = await fetch(`/api/rmas/${rmaId}/paste-receipt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pastedText }),
+      });
+      if (!res.ok) {
+        const body = (await res
+          .json()
+          .catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{
+        receiptId: string;
+        parsedItemCount: number;
+      }>;
+    },
+    onSuccess: (data) => {
+      setPasteResult(data);
+      setPasteDraft("");
+      setShowPasteForm(false);
+      // Invalidating parsed-receipts triggers the re-seed effect above
+      // so the line table refreshes with the freshly parsed quantities.
+      queryClient.invalidateQueries({
+        queryKey: ["rma", rmaId, "parsed-receipts"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["rma", rmaId, "linked-emails"],
+      });
+    },
+  });
+
   // Memo seed-once. We don't react to subsequent rma refetches because
   // the operator may have edited the memo mid-flow and we'd clobber it.
+  // The damages note is now its own field on this page (composed into
+  // CustomerMemo server-side at submit), so we no longer append it here.
   useEffect(() => {
     const rma = rmaQuery.data;
     if (!rma) return;
@@ -351,10 +434,7 @@ export default function CreditMemoCreatePage() {
         : rma.returnType === "seasonal"
           ? "seasonal returns"
           : "returns";
-    const initial = [standardMemo, rma.damagesNote]
-      .filter((s) => s && s.trim().length > 0)
-      .join("\n");
-    setMemo(initial);
+    setMemo(standardMemo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rmaQuery.data]);
 
@@ -489,6 +569,7 @@ export default function CreditMemoCreatePage() {
           })),
           notes,
           memo,
+          damagesNote: damagesDraft.trim() || undefined,
           sendEmail: send,
           emailTo,
           emailCc,
@@ -606,6 +687,95 @@ export default function CreditMemoCreatePage() {
               />
             </div>
           </div>
+        </CardBody>
+      </Card>
+
+      {/* Parse warehouse receipt (paste). Sits above the table because
+          a paste re-seeds the table — operator's mental model is
+          "drop receipt in here, then review the lines below." */}
+      <Card>
+        <CardBody className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Parse warehouse receipt</h3>
+            {!showPasteForm && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowPasteForm(true)}
+              >
+                Paste receipt
+              </Button>
+            )}
+          </div>
+          {showPasteForm && (
+            <>
+              <p className="text-xs text-secondary">
+                Paste the warehouse receipt body. We'll extract SKU + qty
+                entries and merge them into the lines below.
+              </p>
+              <textarea
+                value={pasteDraft}
+                onChange={(e) => setPasteDraft(e.target.value)}
+                placeholder="Paste the email body or transaction report..."
+                rows={6}
+                className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm font-mono"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!pasteDraft.trim() || pasteMutation.isPending}
+                  onClick={() => pasteMutation.mutate(pasteDraft)}
+                >
+                  {pasteMutation.isPending ? "Parsing…" : "Parse + merge"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShowPasteForm(false);
+                    setPasteDraft("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                {pasteMutation.isError && (
+                  <span className="text-xs text-accent-danger">
+                    {(pasteMutation.error as Error).message}
+                  </span>
+                )}
+                {pasteResult && (
+                  <span className="text-xs text-secondary">
+                    Parsed {pasteResult.parsedItemCount} item(s) — merged
+                    into lines.
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Damages note. Placed directly under the paste card per
+          operator request — paste, then describe what was wrong, then
+          review the lines. Composed into CustomerMemo server-side at
+          submit. */}
+      <Card>
+        <CardBody className="space-y-1">
+          <label className="text-sm font-semibold">
+            Damages reported by warehouse
+          </label>
+          <p className="text-xs text-secondary">
+            Free-text — appears on the credit memo memo. Mention damaged
+            SKUs and reason.
+          </p>
+          <textarea
+            value={damagesDraft}
+            onChange={(e) => setDamagesDraft(e.target.value)}
+            placeholder="e.g., MMCSL03G x2 cracked"
+            rows={3}
+            className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+          />
         </CardBody>
       </Card>
 

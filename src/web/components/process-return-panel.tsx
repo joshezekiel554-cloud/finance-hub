@@ -1,9 +1,12 @@
-// ProcessReturnPanel — manages the "process return" workflow for a single RMA.
-// Four sections:
-//   1. Linked emails (read-only ReturnReceiptCard list)
-//   2. Action buttons (check for emails, navigate to credit-memo page)
-//   3. Paste warehouse receipt (manual fallback when auto-classify misses)
-//   4. Damages note textarea (PATCH on blur)
+// ProcessReturnPanel — slim "process return" entry point on the RMA detail page.
+// Three things only:
+//   1. Linked emails list (read-only ReturnReceiptCard)
+//   2. "Check for emails" button (refresh Gmail link scan)
+//   3. "Parse warehouse return" button (navigate to credit-memo create page)
+//
+// Paste-receipt UI and damages-note textarea moved to CreditMemoCreatePage so
+// the operator drives both from a single screen — paste, then damages, then
+// review the line table. See src/web/pages/credit-memo-create.tsx.
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,17 +31,12 @@ type LinkedEmail = {
 
 type ProcessReturnPanelProps = {
   rmaId: string;
-  damagesNote: string | null;
 };
 
-export function ProcessReturnPanel({ rmaId, damagesNote }: ProcessReturnPanelProps) {
+export function ProcessReturnPanel({ rmaId }: ProcessReturnPanelProps) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [draft, setDraft] = useState(damagesNote ?? "");
   const [scanResult, setScanResult] = useState<string | null>(null);
-  const [showPasteForm, setShowPasteForm] = useState(false);
-  const [pasteDraft, setPasteDraft] = useState("");
-  const [pasteResult, setPasteResult] = useState<{ receiptId: string; parsedItemCount: number } | null>(null);
 
   const linkedQuery = useQuery<{ emails: LinkedEmail[] }>({
     queryKey: ["rma", rmaId, "linked-emails"],
@@ -63,39 +61,6 @@ export function ProcessReturnPanel({ rmaId, damagesNote }: ProcessReturnPanelPro
     },
     onError: (err: Error) => {
       setScanResult(`Scan failed: ${err.message}`);
-    },
-  });
-
-  const damagesMutation = useMutation({
-    mutationFn: async (next: string) => {
-      const res = await fetch(`/api/rmas/${rmaId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ damagesNote: next || null }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-  });
-
-  const pasteMutation = useMutation({
-    mutationFn: async (pastedText: string) => {
-      const res = await fetch(`/api/rmas/${rmaId}/paste-receipt`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pastedText }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      return res.json() as Promise<{ receiptId: string; parsedItemCount: number }>;
-    },
-    onSuccess: (data) => {
-      setPasteResult(data);
-      setPasteDraft("");
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId, "linked-emails"] });
-      queryClient.invalidateQueries({ queryKey: ["rma", rmaId, "parsed-receipts"] });
     },
   });
 
@@ -136,63 +101,6 @@ export function ProcessReturnPanel({ rmaId, damagesNote }: ProcessReturnPanelPro
           <p className="text-xs text-secondary">{scanResult}</p>
         )}
 
-        {/* Paste receipt manually */}
-        <div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowPasteForm(true)}
-          >
-            Paste receipt manually
-          </Button>
-
-          {showPasteForm && (
-            <div className="mt-2 space-y-2 rounded-md border border-default bg-subtle/30 p-3">
-              <p className="text-xs font-medium text-secondary">
-                Paste the warehouse receipt body here. We'll extract SKU + qty entries
-                and link them to this RMA.
-              </p>
-              <textarea
-                value={pasteDraft}
-                onChange={(e) => setPasteDraft(e.target.value)}
-                placeholder="Paste the email body or transaction report text..."
-                rows={8}
-                className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm font-mono"
-              />
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={!pasteDraft.trim() || pasteMutation.isPending}
-                  onClick={() => pasteMutation.mutate(pasteDraft)}
-                >
-                  {pasteMutation.isPending ? "Parsing…" : "Parse + save"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setShowPasteForm(false);
-                    setPasteDraft("");
-                  }}
-                >
-                  Cancel
-                </Button>
-                {pasteMutation.isError && (
-                  <span className="text-xs text-accent-danger">
-                    {(pasteMutation.error as Error).message}
-                  </span>
-                )}
-                {pasteResult && (
-                  <span className="text-xs text-secondary">
-                    Parsed {pasteResult.parsedItemCount} item(s).
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
         {/* Linked emails */}
         <div className="space-y-2">
           {linkedQuery.isPending ? (
@@ -219,28 +127,6 @@ export function ProcessReturnPanel({ rmaId, damagesNote }: ProcessReturnPanelPro
                 // No onDismiss → read-only mode
               />
             ))
-          )}
-        </div>
-
-        {/* Damages note */}
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-secondary">
-            Damages reported by warehouse — appears on credit memo memo
-          </label>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => {
-              if (draft !== (damagesNote ?? "")) {
-                damagesMutation.mutate(draft);
-              }
-            }}
-            placeholder="Items the warehouse reported as damaged, e.g., MMCSL03G ×2 cracked"
-            rows={3}
-            className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm text-primary"
-          />
-          {damagesMutation.isPending && (
-            <p className="text-xs text-muted">Saving…</p>
           )}
         </div>
       </CardBody>
