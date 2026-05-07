@@ -7,7 +7,8 @@
 import { redirect } from "@tanstack/react-router";
 import { readFilterStorage } from "./filter-storage";
 
-type CurrentUser = { id: string };
+// Mirrors the actual /api/me response shape — wrapped in `user`, not flat.
+type MeResponse = { user: { id: string } };
 
 // Reads the current user from the same query cache the rest of the app
 // uses so we don't introduce a new auth dependency. The `me` query is
@@ -17,13 +18,13 @@ function getCurrentUserId(): string | null {
   // queryClient is the same singleton used app-wide.
   const win = window as unknown as {
     __FH_QUERY_CLIENT__?: {
-      getQueryData: (key: readonly unknown[]) => CurrentUser | undefined;
+      getQueryData: (key: readonly unknown[]) => MeResponse | undefined;
     };
   };
   const qc = win.__FH_QUERY_CLIENT__;
   if (!qc) return null;
   const me = qc.getQueryData(["me"]);
-  return me?.id ?? null;
+  return me?.user?.id ?? null;
 }
 
 export function restoreSearchOnEmpty(routePath: string) {
