@@ -46,17 +46,22 @@ import {
   extensivReceipts,
   emailRmaLinks,
   rmaItems,
+  rmas,
   seasons,
 } from "../../db/schema/returns.js";
 import { emailLog } from "../../db/schema/crm.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
+import { auditLog } from "../../db/schema/audit.js";
 import { db } from "../../db/index.js";
 import { renderTemplate } from "../../modules/email-compose/index.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
+import { recordActivity } from "../../modules/crm/activity-ingester.js";
 import { requireAuth, isAdmin } from "../lib/auth.js";
 import { runEligibility } from "../../modules/returns/eligibility.js";
 import { buildExtensivExportFile } from "../../modules/returns/extensiv-export.js";
+import { QboClient } from "../../integrations/qb/client.js";
+import { nanoid } from "nanoid";
 
 // ---------------------------------------------------------------------------
 // Shared schema fragments
@@ -157,6 +162,43 @@ const dismissWithReasonBodySchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Process-return schema (Task 4.4)
+//
+// Single-call orchestration: validate, build QBO credit memo payload from
+// operator-edited lines, POST to QBO, persist locally, mark RMA completed,
+// dismiss linked receipts, optionally email. Lines are operator-supplied
+// (the CM create page lets them edit description/qty/price/tax) so we do
+// NOT rely on rmaItems for the line shape — only for the customer + RMA
+// metadata (return type, rmaNumber for DocNumber derivation, etc).
+// ---------------------------------------------------------------------------
+
+const processReturnBodySchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        qbItemId: z.string().min(1),
+        sku: z.string().min(1).max(64),
+        description: z.string().max(2000),
+        quantity: z.string().min(1),
+        unitPrice: z.string().min(1),
+        taxable: z.boolean(),
+      }),
+    )
+    .min(1),
+  notes: z.string().max(2000).optional(),
+  memo: z.string().max(2000),
+  sendEmail: z.boolean(),
+  emailTo: z.string().max(500),
+  emailCc: z.string().max(500).optional(),
+  emailBcc: z.string().max(500).optional(),
+  // Optional issue date (YYYY-MM-DD). If omitted, QBO uses today.
+  issueDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Phase 3 warehouse + eligibility + override schemas
 // ---------------------------------------------------------------------------
 
@@ -245,6 +287,29 @@ function mapServiceResult<T>(
     return { error: result.reason };
   }
   return result.rma;
+}
+
+// Split a comma- or semicolon-separated recipient string into a deduped list
+// of trimmed, non-empty addresses. Used by /:id/process-return when the
+// operator types email recipients into the create-CM page (the page seeds
+// from invoice recipients but allows freeform edits).
+function splitRecipients(value: string | undefined | null): string[] {
+  if (!value) return [];
+  const parts = value
+    .split(/[,;]/g)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  // Preserve operator-typed order while removing duplicates (case-insensitive).
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of parts) {
+    const key = p.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(p);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -471,6 +536,392 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         taxCodeRef: parse.data.taxCodeRef,
       });
       return mapServiceResult(result, reply);
+    },
+  );
+
+  // ---- POST /:id/process-return --------------------------------------------
+  // Single-call orchestration for the redesigned credit-memo create page
+  // (Task 4.4). The page lets the operator edit lines freely (description,
+  // qty, price, taxable) so we don't go through buildAndPushCreditMemo —
+  // that helper rebuilds lines from rmaItems. Instead we mirror the same
+  // DocNumber + CustomerMemo conventions inline here.
+  //
+  // Flow:
+  //   1. Validate body + load RMA + idempotency-guard on qboCreditMemoId
+  //   2. Build the QBO CreditMemo payload from operator-supplied lines
+  //   3. POST to QBO (createCreditMemo) — outside the DB tx so QBO call
+  //      latency doesn't pin a row lock; we re-check idempotency inside
+  //      the tx after the QBO id comes back
+  //   4. Tx: update RMA → completed + qboCreditMemoId + audit_log row +
+  //      auto-dismiss linked extensiv_receipts
+  //   5. Optionally PATCH BillEmail/Cc/Bcc onto the QBO CM and call
+  //      QBO's /send endpoint (the same path the legacy CM dialog uses
+  //      via /:id/invoices/:qbInvoiceId/send in customers.ts)
+  //   6. Post-commit: recordActivity for the timeline
+  //
+  // Partial-success: if email sending fails AFTER the CM is in QBO and the
+  // local DB is committed, we DO NOT roll back. The CM exists; the operator
+  // just needs to retry the send (legacy "Send" button in customer detail
+  // covers this). Response carries `emailSent: false, emailError: "..."` so
+  // the page can surface the issue without claiming the whole flow failed.
+  app.post<{ Params: { id: string } }>(
+    "/:id/process-return",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const parse = processReturnBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "invalid body", details: parse.error.flatten() };
+      }
+      const body = parse.data;
+
+      // 1. Load the RMA + customer
+      const rma = await getRmaById(req.params.id);
+      if (!rma) {
+        reply.code(404);
+        return { error: "RMA not found" };
+      }
+      if (!rma.qbCustomerId) {
+        reply.code(409);
+        return { error: "RMA has no QBO customer ID" };
+      }
+
+      // Idempotency: if a CM was already issued for this RMA refuse rather
+      // than create a duplicate. Operator should refresh the page.
+      if (rma.qboCreditMemoId) {
+        reply.code(409);
+        return {
+          error: `Credit memo ${rma.creditMemoDocNumber ?? rma.qboCreditMemoId} already issued for this RMA — refresh the page`,
+        };
+      }
+
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, rma.customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        reply.code(404);
+        return { error: "Customer not found" };
+      }
+
+      // 2. Build the QBO CreditMemo payload.
+      //
+      // Per-line: SalesItemLineDetail with ItemRef, Qty, UnitPrice. Amount
+      // is recomputed server-side as Qty * UnitPrice — we still send it so
+      // QBO doesn't reject the line, but it's the source-of-truth for what
+      // we want, derived from the operator-supplied numbers.
+      //
+      // Per-line TaxCodeRef: TAX/NON drives whether the line participates in
+      // sales tax. The txn-level TxnTaxCodeRef (when any line is taxable) is
+      // pulled from the source-invoice tax lookup so the CM mirrors the rate
+      // QBO used on the original sale.
+      type CreditMemoLine = {
+        DetailType: "SalesItemLineDetail";
+        Amount: number;
+        Description: string;
+        SalesItemLineDetail: {
+          ItemRef: { value: string };
+          Qty: number;
+          UnitPrice: number;
+          TaxCodeRef?: { value: string };
+        };
+      };
+      const qboLines: CreditMemoLine[] = body.lines.map((line) => {
+        const qty = parseFloat(line.quantity);
+        const unitPrice = parseFloat(line.unitPrice);
+        const amount = Math.round(qty * unitPrice * 100) / 100;
+        return {
+          DetailType: "SalesItemLineDetail",
+          Amount: amount,
+          Description: line.description,
+          SalesItemLineDetail: {
+            ItemRef: { value: line.qbItemId },
+            Qty: qty,
+            UnitPrice: unitPrice,
+            TaxCodeRef: { value: line.taxable ? "TAX" : "NON" },
+          },
+        };
+      });
+
+      // DocNumber strategy by return type — same convention as
+      // buildAndPushCreditMemo so CMs created via either path land with
+      // matching numbering. damage = rmaNumber as-is (DC#####); seasonal
+      // / non_seasonal = `${rmaNumber}CR`. QBO's "Custom transaction
+      // numbers" must be ON.
+      const rmaNumber = rma.rmaNumber;
+      const docNumber =
+        rma.returnType === "damage"
+          ? (rmaNumber ?? undefined)
+          : rmaNumber
+            ? `${rmaNumber}CR`
+            : undefined;
+
+      const payload: Record<string, unknown> = {
+        CustomerRef: { value: rma.qbCustomerId },
+        // CustomerMemo prints on the QBO CM PDF + appears on the customer
+        // statement. Operator-supplied (from the create page memo field).
+        CustomerMemo: { value: body.memo },
+        Line: qboLines,
+      };
+
+      if (docNumber !== undefined) {
+        payload.DocNumber = docNumber;
+      }
+
+      // PrivateNote = internal notes (not visible to the customer). Used
+      // by the operator for context only.
+      if (body.notes && body.notes.trim().length > 0) {
+        payload.PrivateNote = body.notes;
+      }
+
+      // Issue date — when the operator picks one. Otherwise QBO defaults
+      // to today. yyyy-MM-dd is the QBO TxnDate format.
+      if (body.issueDate) {
+        payload.TxnDate = body.issueDate;
+      }
+
+      // Sales tax. If ANY line is taxable, look up the source-invoice tax
+      // code and set TxnTaxCodeRef so QBO recomputes tax server-side from
+      // the actual rate on the customer's original sale. When no line is
+      // taxable we omit the block entirely → CM is non-taxable.
+      const anyTaxable = body.lines.some((l) => l.taxable);
+      let taxStatusError: string | null = null;
+      if (anyTaxable) {
+        try {
+          const taxStatus = await getSourceInvoiceTaxStatus(rma.id);
+          if (taxStatus.taxCodeRef) {
+            payload.TxnTaxDetail = {
+              TxnTaxCodeRef: { value: taxStatus.taxCodeRef },
+            };
+          }
+        } catch (err) {
+          // Don't block CM creation on a tax-lookup failure — we keep
+          // taxable lines flagged and let QBO compute from defaults. Log
+          // it on the response so the operator knows.
+          taxStatusError =
+            err instanceof Error ? err.message : "tax lookup failed";
+        }
+      }
+
+      // 3. POST to QBO (outside the DB transaction — see header comment).
+      const qbo = new QboClient();
+      let cmResponse;
+      try {
+        cmResponse = await qbo.createCreditMemo(payload);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "QBO create failed";
+        reply.code(502);
+        return { error: `QBO credit memo create failed: ${msg}` };
+      }
+
+      const qboCreditMemoId = cmResponse.Id;
+      const cmDocNumber = cmResponse.DocNumber ?? docNumber ?? "";
+
+      // 4. Tx: persist CM link on RMA → completed; audit_log; dismiss
+      //    linked receipts. Re-check idempotency inside the tx so a
+      //    concurrent submit that beat us to the QBO call is detected.
+      try {
+        await db.transaction(async (tx) => {
+          const recheckRows = await tx
+            .select({
+              id: rmas.id,
+              qboCreditMemoId: rmas.qboCreditMemoId,
+              status: rmas.status,
+            })
+            .from(rmas)
+            .where(eq(rmas.id, rma.id))
+            .for("update");
+          const fresh = recheckRows[0];
+          if (!fresh) {
+            throw new Error("RMA disappeared mid-flight");
+          }
+          if (fresh.qboCreditMemoId && fresh.qboCreditMemoId !== qboCreditMemoId) {
+            // Another submit beat us to it. We just created a duplicate
+            // CM in QBO — surface this so the operator can void one.
+            throw new Error(
+              `Concurrent credit memo issued (${fresh.qboCreditMemoId}). Just created ${qboCreditMemoId} — void one in QBO.`,
+            );
+          }
+
+          const now = new Date();
+          await tx
+            .update(rmas)
+            .set({
+              status: "completed",
+              completedAt: now,
+              qboCreditMemoId,
+              creditMemoDocNumber: cmDocNumber,
+            })
+            .where(eq(rmas.id, rma.id));
+
+          // Auto-dismiss linked Today receipts so they fall off the
+          // operator's queue. Mirrors the dismiss-with-reason endpoint
+          // (Task 0.5) — `done` is the reason that means "RMA processed."
+          await tx
+            .update(extensivReceipts)
+            .set({
+              dismissedAt: now,
+              dismissedReason: "done",
+              dismissedByUserId: user.id,
+            })
+            .where(
+              and(
+                eq(extensivReceipts.rmaId, rma.id),
+                isNull(extensivReceipts.dismissedAt),
+              ),
+            );
+
+          // Audit row for the rma → completed transition. Other returns
+          // endpoints write activities (via recordActivity) for the
+          // customer timeline; we mirror that pattern post-commit. The
+          // explicit audit_log row here is the system-of-record for the
+          // status transition (the issueCreditMemo service path doesn't
+          // currently write one either, but for the redesigned single
+          // endpoint we want a clean trail since this is the only place
+          // a damage RMA can complete in the new flow).
+          await tx.insert(auditLog).values({
+            id: nanoid(24),
+            userId: user.id,
+            action: "rma.completed",
+            entityType: "rma",
+            entityId: rma.id,
+            before: { status: rma.status },
+            after: {
+              status: "completed",
+              qboCreditMemoId,
+              creditMemoDocNumber: cmDocNumber,
+            },
+          });
+        });
+      } catch (err) {
+        // Local DB write failed AFTER the QBO CM landed. Surface a 500
+        // with a pointer to the orphan CM so the operator can reconcile
+        // — the markAlreadyCredited endpoint can pick it up by doc#.
+        const msg = err instanceof Error ? err.message : "DB write failed";
+        reply.code(500);
+        return {
+          error: `Credit memo ${qboCreditMemoId} created in QBO but local update failed: ${msg}. Use "Mark already credited" with doc# ${cmDocNumber} to reconcile.`,
+          qboCreditMemoId,
+          creditMemoDocNumber: cmDocNumber,
+        };
+      }
+
+      // Post-commit: timeline activity. Failure here is non-fatal —
+      // matches issueCreditMemo's pattern (recordActivity is idempotent
+      // enough that a one-off flake won't corrupt anything).
+      try {
+        await recordActivity({
+          customerId: rma.customerId,
+          kind: "rma_credit_memo_issued",
+          source: "user_action",
+          userId: user.id,
+          refType: "rma",
+          refId: rma.id,
+          meta: {
+            creditMemoDocNumber: cmDocNumber,
+            qboCreditMemoId,
+          },
+        });
+      } catch (err) {
+        // Activity write failed; don't fail the whole call. Log only.
+        req.log.warn(
+          { err, rmaId: rma.id, qboCreditMemoId },
+          "process-return: activity write failed",
+        );
+      }
+
+      // 5. Optional email send. We mirror the legacy CM-send path in
+      //    customers.ts: PATCH BillEmail/Cc/Bcc onto the QBO CM, then
+      //    POST /v3/.../creditmemo/{id}/send. Failure here is reported
+      //    as partial success — the CM exists in QBO and the RMA is
+      //    marked completed; the operator can retry from the customer
+      //    detail page using the existing "Send credit memo" button.
+      let emailSent = false;
+      let emailError: string | null = null;
+      if (body.sendEmail) {
+        const toList = splitRecipients(body.emailTo);
+        const ccList = splitRecipients(body.emailCc);
+        const bccList = splitRecipients(body.emailBcc);
+        if (toList.length === 0) {
+          emailError =
+            "no TO address — type one in the email field before sending";
+        } else {
+          try {
+            const cm = await qbo.getCreditMemoById(qboCreditMemoId);
+            if (!cm) {
+              throw new Error("credit memo not found in QBO after create");
+            }
+            await qbo.updateCreditMemo({
+              Id: cm.Id,
+              SyncToken: cm.SyncToken,
+              sparse: true,
+              BillEmail: { Address: toList.join(", ") },
+              BillEmailCc:
+                ccList.length > 0 ? { Address: ccList.join(", ") } : null,
+              BillEmailBcc:
+                bccList.length > 0 ? { Address: bccList.join(", ") } : null,
+            });
+            await qbo.sendCreditMemoEmail(cm.Id);
+            emailSent = true;
+
+            // Activity for the email send — separate from the CM-issued
+            // activity so the timeline shows distinct rows.
+            try {
+              await recordActivity({
+                customerId: rma.customerId,
+                kind: "qbo_credit_memo",
+                source: "user_action",
+                userId: user.id,
+                refType: "credit_memo",
+                refId: cm.Id,
+                subject: cmDocNumber
+                  ? `Credit memo ${cmDocNumber} sent`
+                  : "Credit memo sent",
+                body: [
+                  `TO: ${toList.join(", ")}`,
+                  ccList.length > 0 ? `CC: ${ccList.join(", ")}` : null,
+                  bccList.length > 0 ? `BCC: ${bccList.join(", ")}` : null,
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+                meta: {
+                  qbCreditMemoId: cm.Id,
+                  docNumber: cmDocNumber || null,
+                  to: toList,
+                  cc: ccList,
+                  bcc: bccList,
+                  rmaId: rma.id,
+                },
+              });
+            } catch (activityErr) {
+              req.log.warn(
+                { err: activityErr, rmaId: rma.id, qboCreditMemoId },
+                "process-return: email-send activity write failed",
+              );
+            }
+          } catch (err) {
+            emailError =
+              err instanceof Error ? err.message : "email send failed";
+            req.log.warn(
+              { err, rmaId: rma.id, qboCreditMemoId },
+              "process-return: email send failed",
+            );
+          }
+        }
+      }
+
+      // 6. Return. Caller (the credit-memo-create page) navigates back
+      //    to the RMA detail page on success.
+      return {
+        creditMemoId: qboCreditMemoId, // local + QBO id are the same here
+        qboCreditMemoId,
+        creditMemoDocNumber: cmDocNumber,
+        emailSent,
+        ...(emailError ? { emailError } : {}),
+        ...(taxStatusError ? { taxStatusError } : {}),
+      };
     },
   );
 
