@@ -220,7 +220,9 @@ export default function TasksPage() {
         dir: "asc",
         limit: "200",
       });
-      if (assignee === "me") params.set("assignee", "me");
+      // Always send assignee — server defaults to "me" when unset, which
+      // would silently hide unassigned tasks even after the user picks "All".
+      params.set("assignee", assignee);
       if (statusFilter.size > 0) {
         params.set("status", Array.from(statusFilter).join(","));
       }
