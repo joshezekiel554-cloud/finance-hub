@@ -14,8 +14,8 @@
 
 | Wave | Tasks | Status |
 |---|---|---|
-| W0 (sequential) | 0.1 → 0.2 → 0.3 → 0.4 → 0.5 | in progress |
-| W1 (parallel ×3) | 1.1, 1.2, 1.3 | not started |
+| W0 (sequential) | 0.1 → 0.2 → 0.3 → 0.4 → 0.5 | ✅ done |
+| W1 (parallel ×3) | 1.1, 1.2, 1.3 | in progress (worktree fan-out) |
 | W2 (parallel ×2) | 2.1, 4.1 | not started |
 | W3 (parallel ×2) | 2.2, 4.2 | not started |
 | W4 (parallel ×2) | 3.1 (component only), 4.3 | not started |
@@ -30,11 +30,11 @@
 | 265 (0.1) | Schema migration | sonnet | ✅ completed | `16771d8` |
 | 266 (0.2) | RMA# regex module | sonnet | ✅ completed | `579c5f0` then fix `8eb829d` |
 | 267 (0.3) | Email linker module | sonnet | ✅ completed | `5353ccc` |
-| 268 (0.4) | Wire into Gmail poll | sonnet | in_progress | — |
-| 269 (0.5) | Server endpoints | sonnet | pending | — |
-| 270 (1.1) | SKU order bug | sonnet | pending | — |
-| 271 (1.2) | Invoice recipients | sonnet | pending | — |
-| 272 (1.3) | CustomerMemo field | sonnet | pending | — |
+| 268 (0.4) | Wire into Gmail poll | sonnet | ✅ completed | `4e9d773` |
+| 269 (0.5) | Server endpoints | sonnet | ✅ completed | `1f20a4b` + fix `b9844dd` |
+| 270 (1.1) | SKU order bug | sonnet | in_progress (worktree A) | — |
+| 271 (1.2) | Invoice recipients | sonnet | in_progress (worktree B) | — |
+| 272 (1.3) | CustomerMemo field | sonnet | in_progress (worktree C) | — |
 | 273 (2.1) | ReturnReceiptCard | sonnet | pending | — |
 | 274 (2.2) | Today tab card list | sonnet | pending | — |
 | 275 (3.1) | ProcessReturnPanel | sonnet | pending | — |
@@ -55,6 +55,10 @@
 - `8eb829d` — `fix(returns-redesign): mask DC matches before sequential regex to avoid duplicate refs`
 - `64773b2` — `docs(returns-redesign): progress update — 0.2 done, 0.3 next`
 - `5353ccc` — `feat(returns-redesign): email linker module with poll-time + backfill entry points`
+- `3f0d0c0` — `docs(returns-redesign): progress update — 0.3 done, opus reviewers policy set`
+- `4e9d773` — `feat(returns-redesign): call email linker on every Gmail poll classify`
+- `1f20a4b` — `feat(returns-redesign): refresh-email-links + dismiss-with-reason endpoints + linked RMAs in Today`
+- `b9844dd` — `fix(returns-redesign): tighten dismiss-with-reason text cap to fit varchar(64)`
 
 ## Known issues
 
