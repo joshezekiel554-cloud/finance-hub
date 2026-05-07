@@ -1,8 +1,9 @@
 // ProcessReturnPanel — manages the "process return" workflow for a single RMA.
-// Three sections:
+// Four sections:
 //   1. Linked emails (read-only ReturnReceiptCard list)
 //   2. Action buttons (check for emails, navigate to credit-memo page)
-//   3. Damages note textarea (PATCH on blur)
+//   3. Paste warehouse receipt (manual fallback when auto-classify misses)
+//   4. Damages note textarea (PATCH on blur)
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -35,6 +36,9 @@ export function ProcessReturnPanel({ rmaId, damagesNote }: ProcessReturnPanelPro
   const navigate = useNavigate();
   const [draft, setDraft] = useState(damagesNote ?? "");
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [showPasteForm, setShowPasteForm] = useState(false);
+  const [pasteDraft, setPasteDraft] = useState("");
+  const [pasteResult, setPasteResult] = useState<{ receiptId: string; parsedItemCount: number } | null>(null);
 
   const linkedQuery = useQuery<{ emails: LinkedEmail[] }>({
     queryKey: ["rma", rmaId, "linked-emails"],
@@ -74,6 +78,27 @@ export function ProcessReturnPanel({ rmaId, damagesNote }: ProcessReturnPanelPro
     },
   });
 
+  const pasteMutation = useMutation({
+    mutationFn: async (pastedText: string) => {
+      const res = await fetch(`/api/rmas/${rmaId}/paste-receipt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pastedText }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{ receiptId: string; parsedItemCount: number }>;
+    },
+    onSuccess: (data) => {
+      setPasteResult(data);
+      setPasteDraft("");
+      queryClient.invalidateQueries({ queryKey: ["rma", rmaId, "linked-emails"] });
+      queryClient.invalidateQueries({ queryKey: ["rma", rmaId, "parsed-receipts"] });
+    },
+  });
+
   const emails = linkedQuery.data?.emails ?? [];
 
   return (
@@ -110,6 +135,63 @@ export function ProcessReturnPanel({ rmaId, damagesNote }: ProcessReturnPanelPro
         {scanResult && (
           <p className="text-xs text-secondary">{scanResult}</p>
         )}
+
+        {/* Paste receipt manually */}
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowPasteForm(true)}
+          >
+            Paste receipt manually
+          </Button>
+
+          {showPasteForm && (
+            <div className="mt-2 space-y-2 rounded-md border border-default bg-subtle/30 p-3">
+              <p className="text-xs font-medium text-secondary">
+                Paste the warehouse receipt body here. We'll extract SKU + qty entries
+                and link them to this RMA.
+              </p>
+              <textarea
+                value={pasteDraft}
+                onChange={(e) => setPasteDraft(e.target.value)}
+                placeholder="Paste the email body or transaction report text..."
+                rows={8}
+                className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm font-mono"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!pasteDraft.trim() || pasteMutation.isPending}
+                  onClick={() => pasteMutation.mutate(pasteDraft)}
+                >
+                  {pasteMutation.isPending ? "Parsing…" : "Parse + save"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShowPasteForm(false);
+                    setPasteDraft("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                {pasteMutation.isError && (
+                  <span className="text-xs text-accent-danger">
+                    {(pasteMutation.error as Error).message}
+                  </span>
+                )}
+                {pasteResult && (
+                  <span className="text-xs text-secondary">
+                    Parsed {pasteResult.parsedItemCount} item(s).
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Linked emails */}
         <div className="space-y-2">

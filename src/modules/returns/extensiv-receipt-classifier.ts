@@ -108,7 +108,7 @@ function stripHtmlForParse(html: string): string {
     .replace(/&#39;/g, "'");
 }
 
-function parseItems(body: string): Array<{ sku: string; quantity: number }> {
+export function parseItems(body: string): Array<{ sku: string; quantity: number }> {
   // Run the line regex on both the raw body (catches plain-text formats)
   // and the HTML-stripped variant (catches table-cell formats). Dedupe
   // on SKU so we don't double-count when both forms match.

@@ -60,6 +60,7 @@ import { recordActivity } from "../../modules/crm/activity-ingester.js";
 import { requireAuth, isAdmin } from "../lib/auth.js";
 import { runEligibility } from "../../modules/returns/eligibility.js";
 import { buildExtensivExportFile } from "../../modules/returns/extensiv-export.js";
+import { parseItems as parseExtensivItems } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { nanoid } from "nanoid";
 
@@ -2508,6 +2509,53 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     }));
 
     return { receiptCount: receipts.length, items };
+  });
+
+  // ---- POST /:id/paste-receipt -----------------------------------------------
+  // Accepts pasted warehouse email body (plain text or HTML) from the operator,
+  // runs the Extensiv item parser on it, and inserts a synthetic
+  // extensiv_receipts row linked to this RMA. The credit-memo page reads
+  // parsed_items_json via GET /:id/parsed-receipts, so it picks up pasted
+  // receipts without any extra plumbing.
+  app.post<{ Params: { id: string } }>("/:id/paste-receipt", async (req, reply) => {
+    await requireAuth(req);
+
+    const parse = z
+      .object({ pastedText: z.string().min(1).max(50_000) })
+      .safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "Invalid body", details: parse.error.flatten() };
+    }
+
+    const rma = await getRmaById(req.params.id);
+    if (!rma) {
+      reply.code(404);
+      return { error: "RMA not found" };
+    }
+
+    const parsedItems = parseExtensivItems(parse.data.pastedText);
+    if (parsedItems.length === 0) {
+      reply.code(400);
+      return {
+        error:
+          "Could not extract any SKU/quantity entries from the pasted text. Make sure you copied the receipt's table.",
+      };
+    }
+
+    const receiptId = nanoid();
+    const syntheticGmailId = `paste-${nanoid()}`;
+
+    await db.insert(extensivReceipts).values({
+      id: receiptId,
+      gmailMessageId: syntheticGmailId,
+      rmaId: req.params.id,
+      matchKind: "no_match",
+      parsedItemsJson: parsedItems,
+      classifiedAt: new Date(),
+    });
+
+    return { receiptId, parsedItemCount: parsedItems.length };
   });
 
   // ---- POST /:id/refresh-email-links ----------------------------------------
