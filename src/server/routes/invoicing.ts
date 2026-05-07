@@ -39,6 +39,7 @@ import { customers } from "../../db/schema/customers.js";
 import { emailLog } from "../../db/schema/crm.js";
 import {
   extensivReceipts,
+  emailRmaLinks,
   rmas,
   type ExtensivReceiptMatchKind,
 } from "../../db/schema/returns.js";
@@ -170,6 +171,14 @@ export type ReturnReceiptTodayRow = {
     customerId: string | null;
     customerName: string | null;
   } | null;
+  // RMAs linked to this receipt's source email via email_rma_links.
+  // Populated from the email linker's auto-scan + manual links.
+  // Empty array when no links exist.
+  linkedRmas: Array<{
+    rmaId: string;
+    rmaNumber: string | null;
+    customerName: string | null;
+  }>;
 };
 
 const sendBodySchema = z.object({
@@ -470,7 +479,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
         for (const c of cRows) customerNameById.set(c.id, c.displayName);
       }
 
-      receiptRows = rawReceipts.map((r): ReturnReceiptTodayRow => {
+      const mappedReceipts = rawReceipts.map((r): Omit<ReturnReceiptTodayRow, "linkedRmas"> => {
         let parsedItems: Array<{ sku: string; quantity: number }> = [];
         if (Array.isArray(r.parsedItemsJson)) {
           parsedItems = (r.parsedItemsJson as Array<{ sku?: string; quantity?: number }>)
@@ -508,6 +517,43 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
             : null,
         };
       });
+
+      // Batch-load linked RMAs for all receipt gmailMessageIds in one query,
+      // then group in JS. Option B with batching — simpler than SQL aggregation
+      // and fine for the bounded < 100 receipts in Today.
+      const gmailMessageIds = mappedReceipts.map((r) => r.gmailMessageId);
+      const links = gmailMessageIds.length
+        ? await db
+            .select({
+              gmailMessageId: emailRmaLinks.gmailMessageId,
+              rmaId: rmas.id,
+              rmaNumber: rmas.rmaNumber,
+              customerName: customers.displayName,
+            })
+            .from(emailRmaLinks)
+            .innerJoin(rmas, eq(rmas.id, emailRmaLinks.rmaId))
+            .leftJoin(customers, eq(customers.id, rmas.customerId))
+            .where(inArray(emailRmaLinks.gmailMessageId, gmailMessageIds))
+        : [];
+
+      const linksByReceipt = new Map<
+        string,
+        Array<{ rmaId: string; rmaNumber: string | null; customerName: string | null }>
+      >();
+      for (const link of links) {
+        const list = linksByReceipt.get(link.gmailMessageId) ?? [];
+        list.push({
+          rmaId: link.rmaId,
+          rmaNumber: link.rmaNumber ?? null,
+          customerName: link.customerName ?? null,
+        });
+        linksByReceipt.set(link.gmailMessageId, list);
+      }
+
+      receiptRows = mappedReceipts.map((r) => ({
+        ...r,
+        linkedRmas: linksByReceipt.get(r.gmailMessageId) ?? [],
+      }));
     } catch (receiptErr) {
       log.error({ err: receiptErr }, "failed to load extensiv receipt rows for /today");
       // Non-fatal: return shipment rows without receipt rows.

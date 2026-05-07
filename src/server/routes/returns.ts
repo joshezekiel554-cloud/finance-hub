@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { backfillLinksForRma } from "../modules/rma/email-linker.js";
 import {
   createRma,
   getRmaById,
@@ -141,6 +142,15 @@ const setTrackingBodySchema = z.object({
   trackingNumber: z.string().min(1).max(128),
   trackingCarrier: z.string().max(64).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Receipt dismiss-with-reason schema
+// ---------------------------------------------------------------------------
+
+const dismissWithReasonBodySchema = z.object({
+  reason: z.enum(["done", "not_return", "other"]),
+  reasonText: z.string().max(500).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -1901,6 +1911,61 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       }
     },
   );
+
+  // ---- POST /extensiv-receipts/:receiptId/dismiss-with-reason --------------
+  // Soft-dismisses a receipt with a structured reason. Distinct from the
+  // legacy `/dismiss` endpoint (which sets only dismissedAt/dismissedByUserId)
+  // in that it also sets dismissedReason. The legacy endpoint is left intact
+  // for backwards compatibility — both paths soft-dismiss.
+  app.post<{ Params: { receiptId: string } }>(
+    "/extensiv-receipts/:receiptId/dismiss-with-reason",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const parse = dismissWithReasonBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "invalid body", details: parse.error.flatten() };
+      }
+      const { reason, reasonText } = parse.data;
+      const composedReason =
+        reason === "other" && reasonText ? `other: ${reasonText}` : reason;
+
+      const rows = await db
+        .select({ id: extensivReceipts.id })
+        .from(extensivReceipts)
+        .where(eq(extensivReceipts.id, req.params.receiptId))
+        .limit(1);
+      if (rows.length === 0) {
+        reply.code(404);
+        return { error: "Receipt not found" };
+      }
+
+      await db
+        .update(extensivReceipts)
+        .set({
+          dismissedAt: new Date(),
+          dismissedReason: composedReason,
+          dismissedByUserId: user.id,
+        })
+        .where(eq(extensivReceipts.id, req.params.receiptId));
+      return { ok: true };
+    },
+  );
+
+  // ---- POST /:id/refresh-email-links ----------------------------------------
+  // On-demand backfill: re-scans Gmail for emails that mention this RMA's
+  // number and inserts missing email_rma_links rows. Called from the
+  // "Check for emails" button on the RMA detail page.
+  app.post<{ Params: { id: string } }>("/:id/refresh-email-links", async (req, reply) => {
+    await requireAuth(req);
+    try {
+      const result = await backfillLinksForRma(req.params.id);
+      return result;
+    } catch (err) {
+      reply.code(500);
+      return { error: err instanceof Error ? err.message : "Backfill failed" };
+    }
+  });
 };
 
 export default returnsRoute;
