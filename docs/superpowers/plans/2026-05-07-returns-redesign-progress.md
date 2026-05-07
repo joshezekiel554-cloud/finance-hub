@@ -28,8 +28,8 @@
 | Task ID | Subject | Model | Status | Commit |
 |---|---|---|---|---|
 | 265 (0.1) | Schema migration | sonnet | ✅ completed | `16771d8` |
-| 266 (0.2) | RMA# regex module | sonnet | ⚠️ in_progress (bug fix needed) | `579c5f0` (has bug, fix pending) |
-| 267 (0.3) | Email linker module | sonnet | pending | — |
+| 266 (0.2) | RMA# regex module | sonnet | ✅ completed | `579c5f0` then fix `8eb829d` |
+| 267 (0.3) | Email linker module | sonnet | in_progress | — |
 | 268 (0.4) | Wire into Gmail poll | sonnet | pending | — |
 | 269 (0.5) | Server endpoints | sonnet | pending | — |
 | 270 (1.1) | SKU order bug | sonnet | pending | — |
@@ -50,27 +50,17 @@
 (See `git log` for full history; below are the ones from this plan.)
 
 - `16771d8` — `feat(returns-redesign): schema for email_rma_links + damages_note + receipt dismiss`
-- `579c5f0` — `feat(returns-redesign): add RMA number format module for email auto-linking` (⚠️ has bug, see Known Issues)
+- `579c5f0` — `feat(returns-redesign): add RMA number format module for email auto-linking`
+- `7800a04` — `docs(returns-redesign): add live progress tracker for autocompact recovery`
+- `8eb829d` — `fix(returns-redesign): mask DC matches before sequential regex to avoid duplicate refs`
 
 ## Known issues
 
-### Task 0.2 — sequential regex captures digits embedded in DC matches
+_(none currently)_
 
-**Found:** Task 0.2 implementer self-report.
+### Resolved
 
-**What's wrong:** `extractRmaNumbers("DC38771 damage credit issued")` returns BOTH `{DC38771, damage}` AND `{38771, sequential}` because the dedup `seen` set keys on the full match string (`DC38771` ≠ `38771`).
-
-**Fix plan:** before running `SEASONAL_RE`, replace DC matches with whitespace of equal length so the embedded digit runs are masked. Single-line change in `src/server/modules/rma/rma-number-format.ts`:
-
-```ts
-// Strip DC matches first so the embedded 5-digit run doesn't get re-captured by SEASONAL_RE
-const cleanedForSeasonal = cleaned.replace(DAMAGE_RE, (m) => " ".repeat(m.length));
-for (const m of cleanedForSeasonal.matchAll(SEASONAL_RE)) {
-  // ...
-}
-```
-
-**Status:** dispatching fix subagent next.
+**Task 0.2 — sequential regex captured embedded digits in DC matches** — fixed in `8eb829d`. DC matches are masked with whitespace before SEASONAL_RE runs. Re-reviewed and approved.
 
 ## How to resume after autocompact
 
