@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, like } from "drizzle-orm";
 import { z } from "zod";
 import { backfillLinksForRma } from "../modules/rma/email-linker.js";
 import {
@@ -2563,6 +2563,21 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           "Could not extract any SKU/quantity entries from the pasted text. Make sure you copied the receipt's table.",
       };
     }
+
+    // Re-paste replaces prior paste rows for this RMA. Without this, a
+    // second paste accumulates: GET /:id/parsed-receipts sums quantities
+    // across all undismissed receipts, so two pastes of the same receipt
+    // double the received quantities. Auto-detected Gmail-poll rows
+    // (real gmail_message_ids) are left alone — they're a separate
+    // signal we don't want to clobber from this endpoint.
+    await db
+      .delete(extensivReceipts)
+      .where(
+        and(
+          eq(extensivReceipts.rmaId, req.params.id),
+          like(extensivReceipts.gmailMessageId, "paste-%"),
+        ),
+      );
 
     const receiptId = nanoid();
     const syntheticGmailId = `paste-${nanoid()}`;

@@ -243,6 +243,7 @@ export default function CreditMemoCreatePage() {
     const rma = rmaQuery.data;
     if (!rma) return [];
     const parsedItems = parsedReceiptsQuery.data?.items ?? [];
+    const hasParsedData = parsedItems.length > 0;
 
     // Lookup table by SKU for quick override + match-tracking.
     const parsedBySku = new Map<string, number>();
@@ -258,12 +259,20 @@ export default function CreditMemoCreatePage() {
       //      re-paste a receipt on this page the new qty must win, even
       //      if a prior receivedQuantity was set by the legacy review
       //      dialog or a desktop import.
-      //   2. operator's prior receivedQuantity edit (legacy / desktop).
-      //   3. approved RMA qty as the safest fallback.
+      //   2. parsed data exists but THIS sku is not in it — the warehouse
+      //      didn't return this item, so received is 0. (Without this
+      //      branch we'd fall through to the legacy receivedQuantity or
+      //      the approved qty, which would silently credit items the
+      //      warehouse never received.)
+      //   3. no parsed data at all — fall back to the operator's prior
+      //      receivedQuantity edit, then the approved RMA qty as the
+      //      safest seed.
       const receivedQty =
         parsedQty !== undefined
           ? String(parsedQty)
-          : (item.receivedQuantity ?? item.quantity);
+          : hasParsedData
+            ? "0"
+            : (item.receivedQuantity ?? item.quantity);
       return {
         key: `rma-${item.id}`,
         qbItemId: item.qbItemId,
@@ -802,6 +811,7 @@ export default function CreditMemoCreatePage() {
                     <th className="px-3 py-2">Description</th>
                     <th className="px-3 py-2 w-20 text-right">Expected</th>
                     <th className="px-3 py-2 w-24 text-right">Received</th>
+                    <th className="px-3 py-2 w-24 text-right">Discrepancy</th>
                     <th className="px-3 py-2 w-28 text-right">Unit price</th>
                     <th className="px-3 py-2 w-12 text-center">Tax</th>
                     <th className="px-3 py-2 w-28 text-right">Total</th>
@@ -1146,6 +1156,31 @@ function LineRow({
           className={cn("w-full text-right tabular-nums", receivedTone)}
         />
       </td>
+
+      {/* Discrepancy — received minus expected. Negative (short ship)
+          is the common case and renders danger; positive (over ship)
+          renders warning so the operator notices a likely typo or a
+          co-shipped item that should be its own line. Manual lines
+          have no expectedQty, so they render an em-dash. */}
+      {(() => {
+        const exp = parseFloat(line.expectedQty ?? "0");
+        const rec = parseFloat(line.receivedQty);
+        const delta =
+          Number.isFinite(exp) && Number.isFinite(rec) ? rec - exp : 0;
+        return (
+          <td className="px-3 py-2 text-right align-top tabular-nums">
+            {line.expectedQty == null ? (
+              <span className="text-muted">—</span>
+            ) : delta < 0 ? (
+              <span className="text-accent-danger font-medium">{delta}</span>
+            ) : delta > 0 ? (
+              <span className="text-accent-warning font-medium">+{delta}</span>
+            ) : (
+              <span className="text-muted">0</span>
+            )}
+          </td>
+        );
+      })()}
 
       {/* Unit price — editable, 4dp to match QBO precision. */}
       <td className="px-3 py-2 align-top">
