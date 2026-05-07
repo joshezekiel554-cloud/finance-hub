@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { backfillLinksForRma } from "../modules/rma/email-linker.js";
 import {
@@ -44,9 +44,11 @@ import {
   RMA_STATUSES,
   RMA_ITEM_CLASSIFICATIONS,
   extensivReceipts,
+  emailRmaLinks,
   rmaItems,
   seasons,
 } from "../../db/schema/returns.js";
+import { emailLog } from "../../db/schema/crm.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
 import { db } from "../../db/index.js";
@@ -97,6 +99,7 @@ const patchBodySchema = z.object({
   notes: z.string().max(5000).nullable().optional(),
   totalValue: z.string().optional(),
   seasonId: z.string().max(24).nullable().optional(),
+  damagesNote: z.string().max(2000).nullable().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -325,6 +328,33 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       }
     },
   );
+
+  // ---- GET /:id/linked-emails ----------------------------------------------
+  // Returns all emails linked to this RMA via email_rma_links, joining
+  // email_log for message metadata and extensiv_receipts for dismiss state.
+  app.get<{ Params: { id: string } }>("/:id/linked-emails", async (req, reply) => {
+    await requireAuth(req);
+    const rows = await db
+      .select({
+        gmailMessageId: emailRmaLinks.gmailMessageId,
+        subject: emailLog.subject,
+        fromAddress: emailLog.fromAddress,
+        bodyText: emailLog.body,
+        receivedAt: emailLog.emailDate,
+        receiptId: extensivReceipts.id,
+        dismissedAt: extensivReceipts.dismissedAt,
+        linkSource: emailRmaLinks.source,
+      })
+      .from(emailRmaLinks)
+      .innerJoin(emailLog, eq(emailLog.gmailMessageId, emailRmaLinks.gmailMessageId))
+      .leftJoin(
+        extensivReceipts,
+        eq(extensivReceipts.gmailMessageId, emailRmaLinks.gmailMessageId),
+      )
+      .where(eq(emailRmaLinks.rmaId, req.params.id))
+      .orderBy(desc(emailLog.emailDate));
+    return { emails: rows };
+  });
 
   // ---- POST / --------------------------------------------------------------
   app.post("/", async (req, reply) => {
