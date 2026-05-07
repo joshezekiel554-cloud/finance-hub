@@ -1,12 +1,17 @@
 // src/web/pages/credit-memo-create.tsx
 //
 // Task 4.2 — unified Credit Memo create screen, line-items table.
+// Task 4.3 — totals strip, notes/memo textareas, recipients block,
+//            action buttons (Send + create / Save without sending /
+//            Cancel), submit mutation against
+//            POST /api/rmas/:id/process-return (endpoint ships Task 4.4).
 //
 // Replaces the inline RmaCreditMemoDialog flow with a full-page editor.
 // Operator lands here from "Continue to credit memo" on the receipt-review
 // card, or from a direct deep link (`/returns/$rmaId/credit-memo`). The
 // page is the QBO-mirror form: header strip with customer + issue date,
-// editable items table, and "Add line" / "Add blank line" controls.
+// editable items table, totals strip, notes + memo textareas, recipients,
+// and three action buttons.
 //
 // Scope of this task (4.2):
 //   - Fetch RMA detail (items in RMA order via orderBy(position) on the
@@ -23,13 +28,27 @@
 //   - "Add blank line" — empty row with isUnexpected=true so Task 4.3 /
 //     Task 4.4 can reject submission until the operator picks an item.
 //
-// Out of scope (Task 4.3): memo textarea, recipients chips, totals
-// strip with sales-tax/shipping/restocking, action buttons, submit.
+// Scope added in Task 4.3:
+//   - Subtotal / Tax / Total strip (rate driven by the existing
+//     /api/rmas/:id/source-invoice-tax lookup, same module the legacy
+//     RmaCreditMemoDialog used).
+//   - Notes textarea (internal, persisted via process-return endpoint;
+//     never appears on the credit memo).
+//   - Memo textarea, seeded once from a returnType phrase + the RMA's
+//     damages_note (per Task 1.3 — CustomerMemo is what shows up on the
+//     statement).
+//   - Email recipients (To / CC / BCC), seeded once from the customer's
+//     invoice* JSON arrays (Task 1.2 finding: returns flow uses the
+//     invoice channel, not chase). A warning banner shows when the
+//     customer has no invoice TO addresses configured.
+//   - Three action buttons. "Send + create in QB" is disabled while
+//     emailTo is empty or any line is unexpected without a qbItemId
+//     (QBO requires Item ref on every line).
 
 import { useEffect, useMemo, useState } from "react";
-import { getRouteApi, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, AlertCircle, Plus, Trash2 } from "lucide-react";
+import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, AlertCircle, Plus, Send, Trash2 } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -63,6 +82,11 @@ type RmaDetailDto = {
   returnType: "damage" | "seasonal" | "non_seasonal";
   status: string;
   totalValue: string;
+  // damages_note is the operator's free-text "what was wrong" written in
+  // the damage wizard. Used to seed the memo textarea (CustomerMemo on
+  // the credit memo) so the customer/statement reader sees context
+  // without the operator having to re-type.
+  damagesNote: string | null;
   items: RmaItemDto[];
 };
 
@@ -70,10 +94,29 @@ type CustomerDto = {
   id: string;
   displayName: string;
   primaryEmail: string | null;
+  // Per-channel recipient lists. The returns flow uses the invoice
+  // channel (Task 1.2 finding) — credit memos are billing docs, so
+  // they're sent to the same inbox as the original invoice, not the
+  // chase BCC list.
+  invoiceToEmails: string[] | null;
+  invoiceCcEmails: string[] | null;
+  invoiceBccEmails: string[] | null;
 };
 
 type CustomerDetailResponse = {
   customer: CustomerDto;
+};
+
+// /api/rmas/:id/source-invoice-tax response — the same endpoint the
+// legacy RmaCreditMemoDialog uses. `hadTax` reflects whether any of the
+// original invoices for this RMA's items were taxed; `ratePercent` is
+// the rate to apply (e.g. 11 for 11%). QBO recomputes the exact tax
+// server-side from the tax code at submit time, so this rate is for the
+// totals-strip preview only.
+type SourceInvoiceTaxDto = {
+  hadTax: boolean;
+  ratePercent: number;
+  taxCodeRef: string | null;
 };
 
 // One row of the editable table. `key` is a stable React identity even
@@ -126,6 +169,8 @@ function lineTotal(line: Line): number {
 
 export default function CreditMemoCreatePage() {
   const { rmaId } = creditMemoCreateRouteApi.useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // ---- Data fetching ------------------------------------------------------
 
@@ -144,6 +189,20 @@ export default function CreditMemoCreatePage() {
     queryKey: ["customer", rmaQuery.data?.customerId],
     queryFn: async () => {
       const res = await fetch(`/api/customers/${rmaQuery.data!.customerId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  // Source-invoice tax lookup. Drives the totals strip's tax rate. The
+  // server reads the tax code off each line's original invoice in QBO
+  // and reports `hadTax=true` when any of them were taxed. Cached for a
+  // minute since invoice tax codes don't change.
+  const taxStatusQuery = useQuery<SourceInvoiceTaxDto>({
+    queryKey: ["rma-source-invoice-tax", rmaId],
+    queryFn: async () => {
+      const res = await fetch(`/api/rmas/${rmaId}/source-invoice-tax`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -262,6 +321,61 @@ export default function CreditMemoCreatePage() {
     return `${yyyy}-${mm}-${dd}`;
   });
 
+  // ---- Memo / notes / recipients state -----------------------------------
+  //
+  // Notes — internal-only commentary for the activity timeline. Never
+  // appears on the credit memo or the email body.
+  const [notes, setNotes] = useState("");
+  // Memo — becomes CustomerMemo on the QBO credit memo (per Task 1.3,
+  // CustomerMemo is the field that surfaces on customer statements,
+  // unlike PrivateNote which only appears in QBO's UI). Seeded once
+  // from a returnType phrase + the RMA's damages_note.
+  const [memo, setMemo] = useState("");
+  // Recipients are independent inputs (comma-separated). Seeded once
+  // from the customer's invoice* arrays, then operator-editable. The
+  // submit mutation forwards them as-is — the server splits and
+  // validates.
+  const [emailTo, setEmailTo] = useState("");
+  const [emailCc, setEmailCc] = useState("");
+  const [emailBcc, setEmailBcc] = useState("");
+
+  // Memo seed-once. We don't react to subsequent rma refetches because
+  // the operator may have edited the memo mid-flow and we'd clobber it.
+  useEffect(() => {
+    const rma = rmaQuery.data;
+    if (!rma) return;
+    if (memo !== "") return;
+    const standardMemo =
+      rma.returnType === "damage"
+        ? "damaged items"
+        : rma.returnType === "seasonal"
+          ? "seasonal returns"
+          : "returns";
+    const initial = [standardMemo, rma.damagesNote]
+      .filter((s) => s && s.trim().length > 0)
+      .join("\n");
+    setMemo(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rmaQuery.data]);
+
+  // Recipients seed-once. Same rationale as memo: only fill while the
+  // field is empty so an operator who already typed isn't reset by a
+  // background customer refetch.
+  useEffect(() => {
+    const customer = customerQuery.data?.customer;
+    if (!customer) return;
+    if (!emailTo) {
+      setEmailTo((customer.invoiceToEmails ?? []).join(", "));
+    }
+    if (!emailCc) {
+      setEmailCc((customer.invoiceCcEmails ?? []).join(", "));
+    }
+    if (!emailBcc) {
+      setEmailBcc((customer.invoiceBccEmails ?? []).join(", "));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerQuery.data?.customer]);
+
   // ---- Line editors -------------------------------------------------------
 
   function updateLine(idx: number, patch: Partial<Line>) {
@@ -311,6 +425,94 @@ export default function CreditMemoCreatePage() {
       },
     ]);
   }
+
+  // ---- Totals -------------------------------------------------------------
+  //
+  // Subtotal sums every line; taxableTotal sums only the lines the
+  // operator marked taxable. The rate from source-invoice-tax is used
+  // for preview math only — QBO recomputes from the actual TaxCode at
+  // submit time, so a rounding delta vs. what QBO posts is expected.
+  const subtotal = useMemo(
+    () => lines.reduce((sum, l) => sum + lineTotal(l), 0),
+    [lines],
+  );
+  const taxableTotal = useMemo(
+    () =>
+      lines
+        .filter((l) => l.taxable)
+        .reduce((sum, l) => sum + lineTotal(l), 0),
+    [lines],
+  );
+  const taxRatePercent = taxStatusQuery.data?.ratePercent ?? 0;
+  const tax = useMemo(
+    () => taxableTotal * (taxRatePercent / 100),
+    [taxableTotal, taxRatePercent],
+  );
+  const total = subtotal + tax;
+
+  // ---- Submit guards ------------------------------------------------------
+  //
+  // QBO requires an Item ref on every credit memo line. Unexpected
+  // lines (operator added via "Add blank line" or via the QboItemPicker
+  // and never picked an item) are flagged with isUnexpected=true and
+  // qbItemId="". They block "Send + create in QB" until resolved —
+  // either pick an item or delete the line.
+  const incompleteLines = lines.filter((l) => l.isUnexpected && !l.qbItemId);
+  const canSend =
+    emailTo.trim().length > 0 &&
+    incompleteLines.length === 0 &&
+    lines.length > 0;
+  const noInvoiceRecipients =
+    !!customerQuery.data?.customer &&
+    (customerQuery.data.customer.invoiceToEmails ?? []).length === 0;
+
+  // ---- Submit mutation ---------------------------------------------------
+  //
+  // POST /api/rmas/:id/process-return is the single endpoint that
+  // creates the QBO credit memo, optionally sends the email, writes
+  // activities, and advances the RMA status. Body shape lines up with
+  // the Task 4.4 server contract — kept narrow (only what the server
+  // needs) so a contract drift surfaces here as a 400.
+  const submitMutation = useMutation({
+    mutationFn: async ({ send }: { send: boolean }) => {
+      const res = await fetch(`/api/rmas/${rmaId}/process-return`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          lines: lines.map((l) => ({
+            qbItemId: l.qbItemId,
+            sku: l.sku,
+            description: l.description,
+            quantity: l.receivedQty,
+            unitPrice: l.unitPrice,
+            taxable: l.taxable,
+          })),
+          notes,
+          memo,
+          sendEmail: send,
+          emailTo,
+          emailCc,
+          emailBcc,
+          issueDate,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res
+          .json()
+          .catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      // Invalidate everything that may now show this RMA in a new
+      // status: detail page, Today tab, the RMA list itself.
+      queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
+      queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+      queryClient.invalidateQueries({ queryKey: ["rmas"] });
+      void navigate({ to: "/returns/$rmaId", params: { rmaId } });
+    },
+  });
 
   // ---- Render: loading / error gates --------------------------------------
 
@@ -452,10 +654,242 @@ export default function CreditMemoCreatePage() {
         </CardBody>
       </Card>
 
-      {/* Totals strip + memo + recipients + action buttons land in Task 4.3. */}
-      <p className="text-xs text-muted">
-        Memo, recipients, totals, and submit land in Task 4.3.
-      </p>
+      {/* Totals strip — sits below the items table, right-aligned in
+          the QBO credit-memo footer style. The tax row notes that QBO
+          recomputes server-side, so the operator knows this number is
+          a preview, not the authoritative figure. */}
+      <Card>
+        <CardBody>
+          <div className="flex justify-end">
+            <div className="w-full max-w-xs space-y-1.5 text-sm">
+              <TotalRow
+                label="Subtotal"
+                value={`$${subtotal.toFixed(2)}`}
+              />
+              <TotalRow
+                label={
+                  taxRatePercent > 0
+                    ? `Tax (≈${taxRatePercent.toFixed(2)}%)`
+                    : "Tax"
+                }
+                value={`$${tax.toFixed(2)}`}
+                hint={
+                  taxStatusQuery.isPending
+                    ? "Looking up source-invoice tax…"
+                    : taxRatePercent === 0
+                      ? "QBO will compute server-side"
+                      : null
+                }
+              />
+              <div className="border-t border-default pt-1.5">
+                <TotalRow
+                  label="Total"
+                  value={`$${total.toFixed(2)}`}
+                  bold
+                />
+              </div>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Notes (internal) + memo (CustomerMemo on QBO). Two textareas
+          stacked so the difference is obvious to the operator. */}
+      <Card>
+        <CardBody className="space-y-4">
+          <div className="space-y-1.5">
+            <label
+              htmlFor="cm-notes"
+              className="text-xs font-medium text-secondary"
+            >
+              Notes
+            </label>
+            <textarea
+              id="cm-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Internal notes — not on credit memo"
+              className="w-full rounded-md border border-default bg-elevated px-3 py-2 text-sm text-primary placeholder:text-muted focus:border-strong focus:outline-none"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label
+              htmlFor="cm-memo"
+              className="text-xs font-medium text-secondary"
+            >
+              Memo
+            </label>
+            <textarea
+              id="cm-memo"
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              rows={3}
+              placeholder="Memo — appears on credit memo + customer statement"
+              className="w-full rounded-md border border-default bg-elevated px-3 py-2 text-sm text-primary placeholder:text-muted focus:border-strong focus:outline-none"
+            />
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Email recipients block. Comma-separated strings — server
+          splits + validates. Pre-filled from the customer's invoice*
+          arrays since CMs are billing docs (Task 1.2). */}
+      <Card>
+        <CardBody className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Email recipients</h2>
+            <span className="text-xs text-muted">
+              Comma-separated; the credit memo PDF is attached
+            </span>
+          </div>
+
+          {noInvoiceRecipients && (
+            <div className="flex items-start gap-2 rounded-md border border-accent-warning/40 bg-accent-warning/5 px-3 py-2 text-xs text-secondary">
+              <AlertCircle className="mt-0.5 size-4 shrink-0 text-accent-warning" />
+              <div>
+                No invoice recipients set on this customer. Add To
+                addresses below before sending, or set them on the
+                customer profile to avoid this every time.
+              </div>
+            </div>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-[80px_1fr] sm:gap-x-3 sm:gap-y-2 sm:items-center">
+            <label
+              htmlFor="cm-email-to"
+              className="text-xs font-medium text-secondary sm:text-right"
+            >
+              To
+            </label>
+            <Input
+              id="cm-email-to"
+              type="text"
+              value={emailTo}
+              onChange={(e) => setEmailTo(e.target.value)}
+              placeholder="recipient@example.com"
+            />
+            <label
+              htmlFor="cm-email-cc"
+              className="text-xs font-medium text-secondary sm:text-right"
+            >
+              CC
+            </label>
+            <Input
+              id="cm-email-cc"
+              type="text"
+              value={emailCc}
+              onChange={(e) => setEmailCc(e.target.value)}
+              placeholder="optional"
+            />
+            <label
+              htmlFor="cm-email-bcc"
+              className="text-xs font-medium text-secondary sm:text-right"
+            >
+              BCC
+            </label>
+            <Input
+              id="cm-email-bcc"
+              type="text"
+              value={emailBcc}
+              onChange={(e) => setEmailBcc(e.target.value)}
+              placeholder="optional"
+            />
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Action buttons. "Send + create in QB" is the primary action;
+          "Save without sending" is the escape hatch when the operator
+          wants the credit memo in QBO but isn't ready to email yet
+          (e.g. wants to attach a hand-written note in QBO first). */}
+      <div className="space-y-2">
+        {submitMutation.isError && (
+          <p className="text-right text-sm text-accent-danger">
+            {(submitMutation.error as Error).message}
+          </p>
+        )}
+        {incompleteLines.length > 0 && (
+          <p className="text-right text-xs text-accent-warning">
+            {incompleteLines.length}{" "}
+            {incompleteLines.length === 1 ? "line is" : "lines are"}{" "}
+            missing a QBO item — pick one or delete the line before
+            sending.
+          </p>
+        )}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            variant="ghost"
+            disabled={submitMutation.isPending}
+            onClick={() =>
+              navigate({ to: "/returns/$rmaId", params: { rmaId } })
+            }
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="secondary"
+            loading={
+              submitMutation.isPending && submitMutation.variables?.send === false
+            }
+            disabled={
+              submitMutation.isPending ||
+              lines.length === 0 ||
+              incompleteLines.length > 0
+            }
+            onClick={() => submitMutation.mutate({ send: false })}
+          >
+            Save without sending
+          </Button>
+          <Button
+            variant="primary"
+            loading={
+              submitMutation.isPending && submitMutation.variables?.send === true
+            }
+            disabled={submitMutation.isPending || !canSend}
+            onClick={() => submitMutation.mutate({ send: true })}
+          >
+            <Send className="size-4" />
+            Send + create in QB
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Totals row -------------------------------------------------------------
+//
+// Small helper so the strip stays terse. `hint` renders as a smaller
+// muted line under the value — used for the "QBO will compute
+// server-side" note when no source-invoice tax was found.
+function TotalRow({
+  label,
+  value,
+  bold,
+  hint,
+}: {
+  label: string;
+  value: string;
+  bold?: boolean;
+  hint?: string | null;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-baseline justify-between gap-3 tabular-nums",
+        bold && "font-semibold",
+      )}
+    >
+      <span className={cn("text-secondary", bold && "text-primary")}>
+        {label}
+      </span>
+      <div className="text-right">
+        <div className={cn(bold ? "text-base text-primary" : "text-primary")}>
+          {value}
+        </div>
+        {hint && <div className="text-xs text-muted">{hint}</div>}
+      </div>
     </div>
   );
 }
