@@ -20,7 +20,7 @@
 | W3 (parallel ×2) | 2.2, 4.2 | ✅ done |
 | W4 (parallel ×2) | 3.1 full + 4.3 | ✅ done |
 | W5 (parallel ×2) | 4.4 + 3.2 | ✅ done |
-| Task 2.3 (added) | HTML body capture | in progress |
+| Task 2.3 (added) | HTML body capture | ✅ done |
 | Phase 5 | 5.1 cutover (operator-gated) | blocked on operator validation |
 
 ## Task status
@@ -37,7 +37,7 @@
 | 272 (1.3) | CustomerMemo field | sonnet | ✅ completed (no code) | empty branch deleted; QBO action required |
 | 273 (2.1) | ReturnReceiptCard | sonnet | ✅ completed | `9cc5aa7` + `4f63278`, merged `37dea2a` |
 | 274 (2.2) | Today tab card list | sonnet | ✅ completed | `6eb8412` + `49cac02`, merged `c560cc4` |
-| 282 (2.3) | **(added)** HTML email body capture | sonnet | pending | — |
+| 282 (2.3) | **(added)** HTML email body capture | sonnet | ✅ completed | `cbef66f` |
 | 275 (3.1) | ProcessReturnPanel | sonnet | ✅ completed | `9e0eac7`, merged `3c6b2b5` |
 | 276 (3.2) | Wire to RMA detail | sonnet | ✅ completed | `b6a7c00`, merged `e22627f` |
 | 277 (4.1) | Register CM route | haiku | ✅ completed | `0ae2f1f`, merged `5812b9f` |
