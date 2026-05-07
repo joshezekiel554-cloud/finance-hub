@@ -78,6 +78,12 @@ const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
 // Helpers
 // ---------------------------------------------------------------------------
 
+function looksLikeHtml(s: string | null | undefined): boolean {
+  if (!s) return false;
+  // Quick check: any common HTML tag signature
+  return /<\/?(?:br|p|div|span|table|tr|td|th|html|body|a|img|h[1-6]|ul|ol|li|strong|em|b|i)[\s/>]/i.test(s);
+}
+
 function formatClassifiedAt(iso: string): string {
   try {
     return new Date(iso).toLocaleString(undefined, {
@@ -110,10 +116,13 @@ export function ReturnReceiptCard({
   const readOnly = onDismiss === undefined;
 
   // Prepare sanitized body HTML once (avoids re-sanitizing on every render).
-  // Prefer HTML body; fall back to plain text in a <pre>.
-  const hasHtml = Boolean(receipt.emailBodyHtml);
-  const sanitizedHtml = hasHtml
-    ? sanitizeHtml(receipt.emailBodyHtml!, SANITIZE_OPTIONS)
+  // Prefer explicit HTML body; for legacy emails where body_html is NULL but
+  // the body column contains raw HTML markup, detect and treat it as HTML too.
+  const effectiveHtml =
+    receipt.emailBodyHtml ??
+    (looksLikeHtml(receipt.emailBodyText) ? receipt.emailBodyText : null);
+  const sanitizedHtml = effectiveHtml
+    ? sanitizeHtml(effectiveHtml, SANITIZE_OPTIONS)
     : null;
 
   return (
