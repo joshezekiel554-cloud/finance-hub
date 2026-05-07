@@ -15,7 +15,7 @@
 | Wave | Tasks | Status |
 |---|---|---|
 | W0 (sequential) | 0.1 → 0.2 → 0.3 → 0.4 → 0.5 | ✅ done |
-| W1 (parallel ×3) | 1.1, 1.2, 1.3 | in progress (worktree fan-out) |
+| W1 (parallel ×3) | 1.1, 1.2, 1.3 | ✅ done |
 | W2 (parallel ×2) | 2.1, 4.1 | not started |
 | W3 (parallel ×2) | 2.2, 4.2 | not started |
 | W4 (parallel ×2) | 3.1 (component only), 4.3 | not started |
@@ -32,9 +32,9 @@
 | 267 (0.3) | Email linker module | sonnet | ✅ completed | `5353ccc` |
 | 268 (0.4) | Wire into Gmail poll | sonnet | ✅ completed | `4e9d773` |
 | 269 (0.5) | Server endpoints | sonnet | ✅ completed | `1f20a4b` + fix `b9844dd` |
-| 270 (1.1) | SKU order bug | sonnet | in_progress (worktree A) | — |
-| 271 (1.2) | Invoice recipients | sonnet | in_progress (worktree B) | — |
-| 272 (1.3) | CustomerMemo field | sonnet | in_progress (worktree C) | — |
+| 270 (1.1) | SKU order bug | sonnet | ✅ completed | `dbec032` + `74bcc95` (real fix), merged `764ae2b` |
+| 271 (1.2) | Invoice recipients | sonnet | ✅ completed | `bc1578b`, merged `60bff51` |
+| 272 (1.3) | CustomerMemo field | sonnet | ✅ completed (no code) | empty branch deleted; QBO action required |
 | 273 (2.1) | ReturnReceiptCard | sonnet | pending | — |
 | 274 (2.2) | Today tab card list | sonnet | pending | — |
 | 275 (3.1) | ProcessReturnPanel | sonnet | pending | — |
@@ -59,10 +59,20 @@
 - `4e9d773` — `feat(returns-redesign): call email linker on every Gmail poll classify`
 - `1f20a4b` — `feat(returns-redesign): refresh-email-links + dismiss-with-reason endpoints + linked RMAs in Today`
 - `b9844dd` — `fix(returns-redesign): tighten dismiss-with-reason text cap to fit varchar(64)`
+- `db3375c` — progress update before Wave 1
+- (Wave 1 worktree commits) `dbec032` + `bc1578b` + `74bcc95`
+- `764ae2b` — Merge task/sku-order
+- `60bff51` — Merge task/invoice-recipients
 
 ## Known issues
 
-_(none currently)_
+### Operator action required (NOT a code bug)
+
+**Task 1.3 — `CustomerMemo` not showing on QBO statements**
+- Code is correct (`CustomerMemo: { value: ... }` already set in `credit-memo-builder.ts:249`)
+- Bug is in QBO statement template configuration
+- **Operator action:** QBO web UI → Settings (gear) → Custom Form Styles → Edit your statement template → Content tab → enable "Customer message" / "Message on statement"
+- Until enabled, CustomerMemo is sent correctly via API but invisible on rendered statements
 
 ### Resolved
 
