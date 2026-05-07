@@ -150,7 +150,7 @@ const setTrackingBodySchema = z.object({
 
 const dismissWithReasonBodySchema = z.object({
   reason: z.enum(["done", "not_return", "other"]),
-  reasonText: z.string().max(500).optional(),
+  reasonText: z.string().max(50).optional(), // 50 chars + "other: " prefix fits in dismissed_reason varchar(64)
 });
 
 // ---------------------------------------------------------------------------
