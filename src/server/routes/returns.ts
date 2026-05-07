@@ -2459,18 +2459,19 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
   );
 
   // ---- GET /:id/parsed-receipts -------------------------------------------
-  // Aggregates parsed-items entries from every undismissed extensiv_receipt
-  // linked to this RMA. The credit-memo create page calls this to merge
-  // warehouse-reported quantities into Line[] without depending on the
-  // legacy receipt-review-dialog flow having ever run for this RMA.
+  // Returns the parsed-items entries from the LATEST undismissed
+  // extensiv_receipt linked to this RMA. "Latest" = max classifiedAt.
+  //
+  // Why latest-only (one-sweep semantics): an RMA may end up with both an
+  // auto-detected Gmail-poll receipt AND an operator-pasted receipt for
+  // the same warehouse email. Summing across them double-counts. Each
+  // parse is treated as a snapshot that supersedes prior ones — if the
+  // warehouse genuinely sends multi-batch receipts, the operator pastes
+  // a combined version.
   //
   // Response shape:
-  //   { receiptCount: number,
+  //   { receiptCount: number,  // 0 or 1
   //     items: Array<{ sku: string; quantity: number }> }
-  //
-  // Items are deduplicated by SKU, summed across receipts, and ordered
-  // by first-seen position so the credit memo page can append "unexpected"
-  // SKUs (those not on the RMA) deterministically.
   app.get<{ Params: { id: string } }>("/:id/parsed-receipts", async (req, reply) => {
     await requireAuth(req);
 
@@ -2480,9 +2481,6 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       return { error: "RMA not found" };
     }
 
-    // Stable ordering across receipts: classifiedAt asc → first arrival wins
-    // first-seen position. Without this, the order across multi-receipt RMAs
-    // depends on row-id collation, which is fine but less obvious to debug.
     const receipts = await db
       .select({
         id: extensivReceipts.id,
@@ -2497,7 +2495,8 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           isNull(extensivReceipts.dismissedAt),
         ),
       )
-      .orderBy(asc(extensivReceipts.classifiedAt));
+      .orderBy(desc(extensivReceipts.classifiedAt))
+      .limit(1);
 
     // parsedItemsJson is a JSON column — Drizzle deserialises it for us.
     // Defensive coercion mirrors the Today-tab read in invoicing.ts:
