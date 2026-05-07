@@ -11,8 +11,16 @@ import { Button } from "../components/ui/button";
 import { cn } from "../lib/cn";
 // ReturnReceiptReviewDialog intentionally NOT removed here — Phase 5 (Task 5.1) handles deletion.
 import ReturnReceiptReviewDialog, {
-  type ReceiptRow,
+  type ReceiptRow as BaseReceiptRow,
 } from "../components/return-receipt-review-dialog";
+
+type ReceiptRow = BaseReceiptRow & {
+  linkedRmas?: Array<{
+    rmaId: string;
+    rmaNumber: string | null;
+    customerName: string | null;
+  }>;
+};
 import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
 import { ReturnReceiptCard } from "../components/return-receipt-card";
 
@@ -205,6 +213,11 @@ export default function InvoicingTodayPage() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+    },
+    onError: (err: Error) => {
+      // Surface the failure to the operator — they need to know dismissal didn't stick.
+      console.error("Dismiss failed:", err);
+      alert(`Dismiss failed: ${err.message}`);
     },
   });
 
@@ -440,112 +453,6 @@ export default function InvoicingTodayPage() {
         />
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ReceiptRowCard — compact card for a return_receipt row on /today
-// ---------------------------------------------------------------------------
-
-function ReceiptRowCard({
-  receipt,
-  onReview,
-}: {
-  receipt: ReceiptRow;
-  onReview: () => void;
-}) {
-  const [showBody, setShowBody] = useState(false);
-  const matchBadgeTone =
-    receipt.matchKind === "exact_tx_number" || receipt.matchKind === "exact_ref_string"
-      ? ("success" as const)
-      : receipt.matchKind === "fuzzy_customer_sku"
-        ? ("high" as const)
-        : ("neutral" as const);
-
-  return (
-    <Card>
-      <CardBody className="space-y-2">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 space-y-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-medium text-sm">
-                {receipt.rma?.customerName ?? receipt.inferredCustomerName ?? "Unmatched receipt"}
-              </span>
-              <Badge tone={matchBadgeTone} className="text-xs">
-                {receipt.matchKind === "no_match"
-                  ? "Unmatched"
-                  : receipt.rma?.rmaNumber ?? "Matched"}
-              </Badge>
-            </div>
-            {receipt.emailSubject && (
-              <div className="text-xs text-secondary truncate">
-                {receipt.emailSubject}
-              </div>
-            )}
-            <div className="text-xs text-secondary space-x-2">
-              {receipt.txNumber && <span>TX# {receipt.txNumber}</span>}
-              {receipt.refString && <span>Ref: {receipt.refString}</span>}
-              <span>{receipt.parsedItems.length} item(s)</span>
-              <span>
-                Received {new Date(receipt.classifiedAt).toLocaleDateString()}
-              </span>
-            </div>
-            {receipt.parsedItems.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {receipt.parsedItems.slice(0, 5).map((p) => (
-                  <span
-                    key={p.sku}
-                    className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-xs font-mono"
-                  >
-                    {p.sku} ×{p.quantity}
-                  </span>
-                ))}
-                {receipt.parsedItems.length > 5 && (
-                  <span className="text-xs text-secondary">
-                    +{receipt.parsedItems.length - 5} more
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="flex items-start gap-2 shrink-0">
-            {receipt.emailBody && (
-              <button
-                type="button"
-                onClick={() => setShowBody((v) => !v)}
-                className="text-xs text-accent-primary hover:underline"
-              >
-                {showBody ? "Hide email" : "View email"}
-              </button>
-            )}
-            <Button variant="secondary" size="sm" onClick={onReview}>
-              Review
-            </Button>
-          </div>
-        </div>
-        {showBody && receipt.emailBody && (
-          <div className="rounded-md border border-default bg-subtle/40 px-3 py-2">
-            {receipt.emailFrom && (
-              <div className="text-[11px] text-muted mb-1">
-                From: {receipt.emailFrom}
-              </div>
-            )}
-            <pre className="whitespace-pre-wrap break-words text-xs text-secondary font-sans leading-relaxed">
-              {receipt.emailBody}
-            </pre>
-            <a
-              href={`https://mail.google.com/mail/u/0/#all/${receipt.gmailMessageId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-[11px] text-accent-primary hover:underline"
-            >
-              <Mail className="size-3" />
-              Open in Gmail
-            </a>
-          </div>
-        )}
-      </CardBody>
-    </Card>
   );
 }
 
