@@ -46,44 +46,30 @@ export type ReturnReceiptCardProps = {
 };
 
 // ---------------------------------------------------------------------------
-// sanitize-html config — mirrors HTML_SANITIZE_OPTIONS in email-send.ts
+// sanitize-html config — broadened for inbound warehouse emails
 // ---------------------------------------------------------------------------
 
 const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
-  allowedTags: [
-    "p",
-    "br",
-    "strong",
-    "b",
-    "em",
-    "i",
-    "u",
-    "s",
-    "ul",
-    "ol",
-    "li",
-    "blockquote",
-    "a",
-    "code",
-    "pre",
-    "hr",
-    "span",
-    "div",
-  ],
+  // Inbound warehouse emails are table-heavy with logos. We start from
+  // the sanitize-html defaults (which include tables, headings, blockquote,
+  // pre, code, br, etc.) and add img + style on a small safelist.
+  allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img", "style"]),
   allowedAttributes: {
-    a: ["href", "target", "rel"],
+    ...sanitizeHtml.defaults.allowedAttributes,
+    img: ["src", "alt", "title", "width", "height"],
+    "*": ["class", "style"],
   },
-  allowedSchemes: ["http", "https", "mailto"],
-  allowedSchemesByTag: {},
-  allowedSchemesAppliedToAttributes: ["href"],
+  // Only allow https + data URLs for images (no http, no javascript, no file).
+  allowedSchemes: ["http", "https", "mailto", "tel"],
+  allowedSchemesByTag: {
+    img: ["https", "data"],
+  },
+  allowedSchemesAppliedToAttributes: ["href", "src"],
+  // Strip class attributes that look like JS handlers (paranoid).
   transformTags: {
     a: (tagName, attribs) => ({
       tagName,
-      attribs: {
-        ...attribs,
-        target: "_blank",
-        rel: "noopener noreferrer",
-      },
+      attribs: { ...attribs, target: "_blank", rel: "noopener noreferrer" },
     }),
   },
 };
@@ -103,17 +89,6 @@ function formatClassifiedAt(iso: string): string {
   } catch {
     return iso;
   }
-}
-
-// Escape plain text for safe injection into the DOM via innerHTML —
-// but we render plain text as a <pre> via React, not innerHTML, so
-// this is just a safety belt in case usage changes.
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +164,7 @@ export function ReturnReceiptCard({
             />
           ) : receipt.emailBodyText ? (
             <pre className="whitespace-pre-wrap break-words text-sm text-primary">
-              {escapeHtml(receipt.emailBodyText)}
+              {receipt.emailBodyText}
             </pre>
           ) : (
             <p className="text-sm text-muted">(No email body)</p>
