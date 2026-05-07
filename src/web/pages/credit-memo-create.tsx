@@ -195,6 +195,19 @@ export default function CreditMemoCreatePage() {
     staleTime: 60_000,
   });
 
+  const resolvedRecipientsQuery = useQuery<{ to: string[]; cc: string[]; bcc: string[] }>({
+    queryKey: ["customer", rmaQuery.data?.customerId, "resolved-recipients", "invoice"],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/customers/${rmaQuery.data!.customerId}/resolved-recipients?channel=invoice`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled: !!rmaQuery.data?.customerId,
+    staleTime: 5 * 60 * 1000,
+  });
+
   // Source-invoice tax lookup. Drives the totals strip's tax rate. The
   // server reads the tax code off each line's original invoice in QBO
   // and reports `hadTax=true` when any of them were taxed. Cached for a
@@ -447,23 +460,18 @@ export default function CreditMemoCreatePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rmaQuery.data]);
 
-  // Recipients seed-once. Same rationale as memo: only fill while the
-  // field is empty so an operator who already typed isn't reset by a
-  // background customer refetch.
+  // Recipients seed-once via the resolved-recipients endpoint so that
+  // tag-based rules (e.g. auto-BCC sales@feldart.com for "yiddy"-tagged
+  // customers) are applied. Only fill while the field is empty so an
+  // operator who already typed isn't reset by a background refetch.
   useEffect(() => {
-    const customer = customerQuery.data?.customer;
-    if (!customer) return;
-    if (!emailTo) {
-      setEmailTo((customer.invoiceToEmails ?? []).join(", "));
-    }
-    if (!emailCc) {
-      setEmailCc((customer.invoiceCcEmails ?? []).join(", "));
-    }
-    if (!emailBcc) {
-      setEmailBcc((customer.invoiceBccEmails ?? []).join(", "));
-    }
+    const data = resolvedRecipientsQuery.data;
+    if (!data) return;
+    if (!emailTo) setEmailTo(data.to.join(", "));
+    if (!emailCc) setEmailCc(data.cc.join(", "));
+    if (!emailBcc) setEmailBcc(data.bcc.join(", "));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerQuery.data?.customer]);
+  }, [resolvedRecipientsQuery.data]);
 
   // ---- Line editors -------------------------------------------------------
 
@@ -709,8 +717,8 @@ export default function CreditMemoCreatePage() {
     incompleteLines.length === 0 &&
     lines.length > 0;
   const noInvoiceRecipients =
-    !!customerQuery.data?.customer &&
-    (customerQuery.data.customer.invoiceToEmails ?? []).length === 0;
+    !!resolvedRecipientsQuery.data &&
+    resolvedRecipientsQuery.data.to.length === 0;
 
   // ---- Submit mutation ---------------------------------------------------
   //

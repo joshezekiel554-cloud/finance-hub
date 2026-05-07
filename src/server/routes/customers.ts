@@ -1333,6 +1333,47 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // GET /api/customers/:id/resolved-recipients?channel=invoice|statement
+  // Returns { to, cc, bcc } after applying tag-based rules via resolveRecipients.
+  // Used by the credit-memo create page (and any other page) to seed
+  // recipient fields correctly — bypassing raw invoiceToEmails/etc. arrays
+  // which don't apply tag rules (e.g. auto-BCC for "yiddy"-tagged customers).
+  const recipientsQuerySchema = z.object({
+    channel: z.enum(["invoice", "statement"]).default("invoice"),
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/:id/resolved-recipients",
+    async (req, reply) => {
+      await requireAuth(req);
+      const parse = recipientsQuerySchema.safeParse(req.query);
+      if (!parse.success) {
+        return reply.code(400).send({ error: "Invalid query", details: parse.error.flatten() });
+      }
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, req.params.id))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        return reply.code(404).send({ error: "customer not found" });
+      }
+      const resolved = await resolveRecipients(parse.data.channel, {
+        primaryEmail: customer.primaryEmail,
+        billingEmails: customer.billingEmails,
+        invoiceToEmails: customer.invoiceToEmails,
+        invoiceCcEmails: customer.invoiceCcEmails,
+        invoiceBccEmails: customer.invoiceBccEmails,
+        statementToEmails: customer.statementToEmails,
+        statementCcEmails: customer.statementCcEmails,
+        statementBccEmails: customer.statementBccEmails,
+        tags: customer.tags,
+      });
+      return reply.send({ to: resolved.to, cc: resolved.cc, bcc: resolved.bcc });
+    },
+  );
+
   // POST /api/customers/:id/invoices/:qbInvoiceId/send — send the
   // invoice via QBO using the resolved (or operator-overridden)
   // recipients. Pattern: PATCH BillEmail/Cc/Bcc on the QBO Invoice,
