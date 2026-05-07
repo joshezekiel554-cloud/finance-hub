@@ -38,7 +38,13 @@ const REF_STRING_RE = /Ref:?\s*([^\n]+)/i;
 // like "1 5" (page numbers, version markers) was matching as sku="1",
 // qty=5 and polluting the parsed item list. The (?=...) lookahead enforces
 // "must contain a letter" while the {3,} quantifier handles the length.
-const ITEM_ROW_RE = /^((?=[A-Za-z0-9_\-.]*[A-Za-z])[A-Za-z0-9_\-.]{3,})[\t ]+(\d+(?:\.\d+)?)\s*$/;
+//
+// Operator shortcuts: after the required whitespace, an optional separator
+// token is consumed before the quantity. Supported separators:
+//   x / X / × (multiplication-style), - / – / — (dashes), : = * (punctuation)
+// Examples: "KPLR01G x 1", "KPLR01G - 1", "KPLR01G: 1", "KPLR-01G x 1"
+// The whitespace-only form ("SKU<spaces>QTY") remains valid.
+const ITEM_ROW_RE = /^((?=[A-Za-z0-9_\-.]*[A-Za-z])[A-Za-z0-9_\-.]{3,})[\t ]+(?:(?:x|×|\*|:|=|[-–—])[\t ]*)?(\d+(?:\.\d+)?)\s*$/i;
 const HEADER_WORDS = new Set(["item", "sku", "qty", "quantity", "description", "part"]);
 
 function parseTxNumber(text: string): string | undefined {
@@ -109,6 +115,10 @@ function stripHtmlForParse(html: string): string {
 }
 
 export function parseItems(body: string): Array<{ sku: string; quantity: number }> {
+  // Accepts:
+  //   - Warehouse-table format: "SKU<spaces>QTY" (after HTML strip)
+  //   - Operator shortcuts: "SKU x N", "SKU - N", "SKU: N", "SKU = N", etc.
+  //
   // Run the line regex on both the raw body (catches plain-text formats)
   // and the HTML-stripped variant (catches table-cell formats). Dedupe
   // on SKU so we don't double-count when both forms match.
