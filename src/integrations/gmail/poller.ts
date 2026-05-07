@@ -10,6 +10,7 @@ import { recordActivity } from "~/modules/crm/index.js";
 import { classifyExtensivEmail } from "~/modules/returns/extensiv-receipt-classifier.js";
 import { matchReceiptToRma } from "~/modules/returns/rma-matcher.js";
 import { linkCustomerReplyIfRmaThread } from "~/modules/returns/rma-customer-reply-linker.js";
+import { linkEmailToRmas } from "~/server/modules/rma/email-linker.js";
 import { BUSINESS_EMAILS } from "./business-emails.js";
 import { searchEmails } from "./client.js";
 import type {
@@ -351,6 +352,19 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
         "failed to insert email_log row",
       );
       continue;
+    }
+
+    // Auto-link this email to any RMAs whose number appears in subject/body.
+    // Fire-and-forget at log level — link insert failures shouldn't break the
+    // classifier's main flow.
+    try {
+      await linkEmailToRmas(
+        email.id ?? "",
+        email.subject ?? "",
+        email.body ?? "",
+      );
+    } catch (err) {
+      log.warn({ err, gmailMessageId: email.id }, "email-linker failed");
     }
 
     // Side-channel: classify Extensiv emails and persist return receipts for
