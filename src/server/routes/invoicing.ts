@@ -165,6 +165,7 @@ export type ReturnReceiptTodayRow = {
   emailSubject: string;
   emailFrom: string;
   emailBody: string;
+  emailBodyHtml: string | null;
   rma: {
     id: string;
     rmaNumber: string | null;
@@ -452,6 +453,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           emailSubject: emailLog.subject,
           emailFromAddress: emailLog.fromAddress,
           emailBody: emailLog.body,
+          emailBodyHtml: emailLog.bodyHtml,
         })
         .from(extensivReceipts)
         .leftJoin(rmas, eq(extensivReceipts.rmaId, rmas.id))
@@ -507,6 +509,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           // larger almost certainly isn't valuable preview content; the
           // Open-in-Gmail link still works for full inspection.
           emailBody: (r.emailBody ?? "").slice(0, 8 * 1024),
+          emailBodyHtml: r.emailBodyHtml ?? null,
           rma: r.rmaId
             ? {
                 id: r.rmaId,

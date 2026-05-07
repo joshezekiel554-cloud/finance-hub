@@ -275,6 +275,7 @@ export const emailLog = mysqlTable(
     // mediumtext (16 MB) — Gmail bodies of 64 KB+ are routine for long
     // threads with quoted replies + signatures + base64 inline images.
     body: mediumtext("body"),
+    bodyHtml: mediumtext("body_html"),
     snippet: varchar("snippet", { length: 512 }),
     classification: varchar("classification", { length: 64 }),
     emailDate: timestamp("email_date").notNull(),

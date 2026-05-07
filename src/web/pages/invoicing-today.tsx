@@ -20,6 +20,7 @@ type ReceiptRow = BaseReceiptRow & {
     rmaNumber: string | null;
     customerName: string | null;
   }>;
+  emailBodyHtml?: string | null;
 };
 import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
 import { ReturnReceiptCard } from "../components/return-receipt-card";
@@ -405,9 +406,7 @@ export default function InvoicingTodayPage() {
             </Card>
           ) : (
             // Task 2.2: render ReturnReceiptCard list. No inline review dialog.
-            // The server ReceiptRow has only `emailBody` (plain text); no HTML body
-            // field is returned from the API — emailBodyHtml is left undefined so
-            // ReturnReceiptCard falls back to rendering plain text in a <pre>.
+            // Task 2.3: emailBodyHtml now populated from email_log.body_html.
             (data.receiptRows ?? []).map((receipt) => (
               <ReturnReceiptCard
                 key={receipt.receiptId}
@@ -416,7 +415,7 @@ export default function InvoicingTodayPage() {
                   gmailMessageId: receipt.gmailMessageId,
                   emailSubject: receipt.emailSubject,
                   emailFrom: receipt.emailFrom,
-                  emailBodyHtml: undefined,
+                  emailBodyHtml: receipt.emailBodyHtml ?? undefined,
                   emailBodyText: receipt.emailBody,
                   classifiedAt: receipt.classifiedAt,
                 }}

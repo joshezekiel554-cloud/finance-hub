@@ -405,6 +405,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         subject: emailLog.subject,
         fromAddress: emailLog.fromAddress,
         bodyText: emailLog.body,
+        bodyHtml: emailLog.bodyHtml,
         receivedAt: emailLog.emailDate,
         receiptId: extensivReceipts.id,
         dismissedAt: extensivReceipts.dismissedAt,
