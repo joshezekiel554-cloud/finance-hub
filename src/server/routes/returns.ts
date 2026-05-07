@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { backfillLinksForRma } from "../modules/rma/email-linker.js";
 import {
@@ -1953,6 +1953,80 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       return { ok: true };
     },
   );
+
+  // ---- GET /:id/parsed-receipts -------------------------------------------
+  // Aggregates parsed-items entries from every undismissed extensiv_receipt
+  // linked to this RMA. The credit-memo create page calls this to merge
+  // warehouse-reported quantities into Line[] without depending on the
+  // legacy receipt-review-dialog flow having ever run for this RMA.
+  //
+  // Response shape:
+  //   { receiptCount: number,
+  //     items: Array<{ sku: string; quantity: number }> }
+  //
+  // Items are deduplicated by SKU, summed across receipts, and ordered
+  // by first-seen position so the credit memo page can append "unexpected"
+  // SKUs (those not on the RMA) deterministically.
+  app.get<{ Params: { id: string } }>("/:id/parsed-receipts", async (req, reply) => {
+    await requireAuth(req);
+
+    const rma = await getRmaById(req.params.id);
+    if (!rma) {
+      reply.code(404);
+      return { error: "RMA not found" };
+    }
+
+    // Stable ordering across receipts: classifiedAt asc → first arrival wins
+    // first-seen position. Without this, the order across multi-receipt RMAs
+    // depends on row-id collation, which is fine but less obvious to debug.
+    const receipts = await db
+      .select({
+        id: extensivReceipts.id,
+        gmailMessageId: extensivReceipts.gmailMessageId,
+        classifiedAt: extensivReceipts.classifiedAt,
+        parsedItemsJson: extensivReceipts.parsedItemsJson,
+      })
+      .from(extensivReceipts)
+      .where(
+        and(
+          eq(extensivReceipts.rmaId, req.params.id),
+          isNull(extensivReceipts.dismissedAt),
+        ),
+      )
+      .orderBy(asc(extensivReceipts.classifiedAt));
+
+    // parsedItemsJson is a JSON column — Drizzle deserialises it for us.
+    // Defensive coercion mirrors the Today-tab read in invoicing.ts:
+    // tolerate null / non-array shapes (legacy rows, partial parses) and
+    // coerce quantity to Number rather than 500ing.
+    const merged = new Map<string, number>();
+    const orderedSkus: string[] = [];
+    const seen = new Set<string>();
+
+    for (const r of receipts) {
+      const raw = r.parsedItemsJson;
+      if (!Array.isArray(raw)) continue;
+      const parsed = (raw as Array<{ sku?: unknown; quantity?: unknown }>)
+        .filter((item): item is { sku: string; quantity: unknown } =>
+          !!item && typeof item === "object" && typeof (item as { sku?: unknown }).sku === "string",
+        )
+        .map((item) => ({ sku: item.sku, quantity: Number(item.quantity ?? 0) }));
+      for (const item of parsed) {
+        if (!seen.has(item.sku)) {
+          seen.add(item.sku);
+          orderedSkus.push(item.sku);
+        }
+        merged.set(item.sku, (merged.get(item.sku) ?? 0) + item.quantity);
+      }
+    }
+
+    const items = orderedSkus.map((sku) => ({
+      sku,
+      quantity: merged.get(sku) ?? 0,
+    }));
+
+    return { receiptCount: receipts.length, items };
+  });
 
   // ---- POST /:id/refresh-email-links ----------------------------------------
   // On-demand backfill: re-scans Gmail for emails that mention this RMA's
