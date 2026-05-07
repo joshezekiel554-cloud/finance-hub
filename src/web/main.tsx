@@ -25,6 +25,7 @@ import RosterTagImportPage from "./pages/roster-tag-import";
 import ReturnsListPage from "./pages/returns";
 import ReturnNewPage from "./pages/return-new";
 import ReturnDetailPage from "./pages/return-detail";
+import CreditMemoCreatePage from "./pages/credit-memo-create";
 import SeasonsPage from "./pages/seasons";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
@@ -33,6 +34,7 @@ import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today
 import { chaseSearchSchema } from "./lib/search-schemas/chase";
 import { statementsSearchSchema } from "./lib/search-schemas/statements";
 import { customerDetailSearchSchema } from "./lib/search-schemas/customer-detail";
+import { creditMemoCreateSearchSchema } from "./lib/search-schemas/credit-memo-create";
 import { restoreSearchOnEmpty } from "./lib/restore-search-on-empty";
 import "./styles.css";
 
@@ -162,6 +164,13 @@ const returnDetailRoute = createRoute({
   component: ReturnDetailPage,
 });
 
+const creditMemoCreateRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns/$rmaId/credit-memo",
+  component: CreditMemoCreatePage,
+  validateSearch: creditMemoCreateSearchSchema,
+});
+
 const seasonsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/seasons",
@@ -184,6 +193,7 @@ const routeTree = rootRoute.addChildren([
   returnsRoute,
   returnNewRoute,
   returnDetailRoute,
+  creditMemoCreateRoute,
   seasonsRoute,
 ]);
 
