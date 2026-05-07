@@ -13,6 +13,7 @@ import { Button } from "../components/ui/button";
 import RmaActionPanel from "../components/rma-action-panel";
 import type { RmaStatus, RmaReturnType } from "../components/rma-action-panel";
 import { PhotoUploadZone } from "../components/photo-upload-zone";
+import { ProcessReturnPanel } from "../components/process-return-panel";
 import {
   TaskDetailDrawer,
   type DrawerMode as TaskDrawerMode,
@@ -50,6 +51,7 @@ type RmaDetail = {
   shippingDeductionAmount: string | null;
   restockingFeeAmount: string | null;
   notes: string | null;
+  damagesNote: string | null;
   resolutionType: string | null;
   trackingNumber: string | null;
   trackingCarrier: string | null;
@@ -445,6 +447,14 @@ export default function ReturnDetailPage() {
           {/* Photos — damage RMAs only */}
           {rma.returnType === "damage" && (
             <PhotoUploadZone rmaId={rma.id} />
+          )}
+
+          {/* Process return panel — visible while awaiting or processing receipt */}
+          {(rma.status === "sent_to_warehouse" || rma.status === "received") && (
+            <ProcessReturnPanel
+              rmaId={rma.id}
+              damagesNote={rma.damagesNote ?? null}
+            />
           )}
         </div>
 
