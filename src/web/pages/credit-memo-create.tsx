@@ -150,39 +150,106 @@ export default function CreditMemoCreatePage() {
     staleTime: 60_000,
   });
 
+  // Pulls aggregated parsed-items rows across every undismissed
+  // extensiv_receipt linked to this RMA. The server returns SKUs in
+  // first-seen order with quantities summed across receipts, so we can
+  // (a) override receivedQty for matching RMA items and (b) append
+  // unexpected SKUs as new lines.
+  const parsedReceiptsQuery = useQuery<{
+    receiptCount: number;
+    items: Array<{ sku: string; quantity: number }>;
+  }>({
+    queryKey: ["rma", rmaId, "parsed-receipts"],
+    queryFn: async () => {
+      const res = await fetch(`/api/rmas/${rmaId}/parsed-receipts`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
   // ---- Initial line-state derivation --------------------------------------
 
-  // Lines derive from the RMA items in server order (position-based).
-  // The merge with parsed-receipt entries lands in Task 4.3 once the
-  // linked-emails endpoint exists — for now, RMA items are authoritative.
+  // Lines derive from RMA items (in server position order) merged with
+  // parsed-receipt aggregates per Section 4 of the returns-redesign spec:
+  //   1. RMA items first, in RMA order.
+  //   2. receivedQty for matching SKUs is overridden by the parsed
+  //      receipt quantity (sum across all undismissed receipts), so the
+  //      column reflects what the warehouse actually scanned even when
+  //      the operator never opened the legacy review dialog.
+  //   3. Parsed SKUs not on the RMA append as new lines marked
+  //      isUnexpected — Task 4.4's submit validator must reject these
+  //      until the operator picks a QBO item and sets a unit price.
   const initialLines = useMemo<Line[]>(() => {
-    if (!rmaQuery.data) return [];
-    return rmaQuery.data.items.map((item) => ({
-      key: `rma-${item.id}`,
-      qbItemId: item.qbItemId,
-      sku: item.sku,
-      description: formatDescription(item),
-      expectedQty: item.quantity,
-      // Default to receivedQuantity when the warehouse already filed a
-      // receipt; fall back to the approved qty otherwise. Operator can
-      // still adjust before submit.
-      receivedQty: item.receivedQuantity ?? item.quantity,
-      unitPrice: item.unitPrice,
-      // Spec default: tax OFF. The decision lives on the totals strip
-      // (Task 4.3) — per-line taxable is a hint that flows into the
-      // server-side credit memo build.
-      taxable: false,
-      isUnexpected: false,
-    }));
-  }, [rmaQuery.data]);
+    const rma = rmaQuery.data;
+    if (!rma) return [];
+    const parsedItems = parsedReceiptsQuery.data?.items ?? [];
+
+    // Lookup table by SKU for quick override + match-tracking.
+    const parsedBySku = new Map<string, number>();
+    for (const p of parsedItems) parsedBySku.set(p.sku, p.quantity);
+    const matchedSkus = new Set<string>();
+
+    const rmaLines: Line[] = rma.items.map((item) => {
+      const parsedQty = parsedBySku.get(item.sku);
+      if (parsedQty !== undefined) matchedSkus.add(item.sku);
+      // Precedence for receivedQty:
+      //   1. operator's prior receivedQuantity edit (legacy review-dialog
+      //      flow may already have populated it),
+      //   2. parsed receipt quantity if the warehouse classified it,
+      //   3. approved qty as the safest fallback.
+      const receivedQty =
+        item.receivedQuantity ??
+        (parsedQty !== undefined ? String(parsedQty) : item.quantity);
+      return {
+        key: `rma-${item.id}`,
+        qbItemId: item.qbItemId,
+        sku: item.sku,
+        description: formatDescription(item),
+        expectedQty: item.quantity,
+        receivedQty,
+        unitPrice: item.unitPrice,
+        // Spec default: tax OFF. The decision lives on the totals strip
+        // (Task 4.3) — per-line taxable is a hint that flows into the
+        // server-side credit memo build.
+        taxable: false,
+        isUnexpected: false,
+      };
+    });
+
+    // Unexpected lines — parsed SKUs that don't match any RMA item.
+    // qbItemId="" and unitPrice="0" are explicit "operator must touch
+    // these" markers; Task 4.4's submit guard rejects them.
+    const unexpectedLines: Line[] = parsedItems
+      .filter((p) => !matchedSkus.has(p.sku))
+      .map((p, idx) => ({
+        key: `unexpected-${p.sku}-${idx}`,
+        qbItemId: "",
+        sku: p.sku,
+        description: p.sku,
+        expectedQty: null,
+        receivedQty: String(p.quantity),
+        unitPrice: "0",
+        taxable: false,
+        isUnexpected: true,
+      }));
+
+    return [...rmaLines, ...unexpectedLines];
+  }, [rmaQuery.data, parsedReceiptsQuery.data]);
 
   const [lines, setLines] = useState<Line[]>([]);
-  // Sync local state once the RMA loads. We deliberately don't merge
-  // against any prior local edits — this page is an edit session, not a
-  // form-with-draft-recovery, and the route loader already guarantees a
-  // fresh detail per visit.
+  // Seed-once pattern: react-query may refetch the RMA / parsed receipts
+  // in the background (focus, mutation invalidations from Task 4.3). If
+  // we re-ran setLines on every initialLines identity change, the
+  // operator's mid-edit description / unit-price tweaks would be wiped.
+  // We therefore only seed when local state is empty — subsequent
+  // refetches are observable via the queries' loading flags but don't
+  // clobber edits.
   useEffect(() => {
-    setLines(initialLines);
+    if (lines.length === 0 && initialLines.length > 0) {
+      setLines(initialLines);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLines]);
 
   // Issue date defaults to today. Stored as YYYY-MM-DD so the date
