@@ -26,6 +26,7 @@ export function extractRmaNumbers(text: string): ExtractedRmaRef[] {
   // Strip CM doc number patterns first so they don't show up as bare digits
   const cleaned = text.replace(CR_SUFFIX_RE, "");
 
+  // Capture damage refs first
   for (const m of cleaned.matchAll(DAMAGE_RE)) {
     if (!seen.has(m[0])) {
       seen.add(m[0]);
@@ -33,8 +34,11 @@ export function extractRmaNumbers(text: string): ExtractedRmaRef[] {
     }
   }
 
-  for (const m of cleaned.matchAll(SEASONAL_RE)) {
-    // Skip if already captured as a damage number (DC##### contains a 5-digit run)
+  // Mask DC matches so SEASONAL_RE doesn't re-capture the embedded digit run.
+  // Replace with spaces of equal length to preserve word boundaries.
+  const cleanedForSeasonal = cleaned.replace(DAMAGE_RE, (m) => " ".repeat(m.length));
+
+  for (const m of cleanedForSeasonal.matchAll(SEASONAL_RE)) {
     if (!seen.has(m[0])) {
       seen.add(m[0]);
       refs.push({ number: m[0], kind: "sequential" });
