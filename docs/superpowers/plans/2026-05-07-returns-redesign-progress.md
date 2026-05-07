@@ -17,7 +17,7 @@
 | W0 (sequential) | 0.1 → 0.2 → 0.3 → 0.4 → 0.5 | ✅ done |
 | W1 (parallel ×3) | 1.1, 1.2, 1.3 | ✅ done |
 | W2 (parallel ×2) | 2.1, 4.1 | ✅ done |
-| W3 (parallel ×2) | 2.2, 4.2 | in progress (worktree fan-out) |
+| W3 (parallel ×2) | 2.2, 4.2 | ✅ done |
 | W4 (parallel ×2) | 3.1 (component only), 4.3 | not started |
 | W5 (sequential) | 3.1 endpoint + 4.4 | not started |
 | W6 (parallel) | 3.2, ... | not started |
@@ -36,11 +36,12 @@
 | 271 (1.2) | Invoice recipients | sonnet | ✅ completed | `bc1578b`, merged `60bff51` |
 | 272 (1.3) | CustomerMemo field | sonnet | ✅ completed (no code) | empty branch deleted; QBO action required |
 | 273 (2.1) | ReturnReceiptCard | sonnet | ✅ completed | `9cc5aa7` + `4f63278`, merged `37dea2a` |
-| 274 (2.2) | Today tab card list | sonnet | in_progress (worktree A) | — |
+| 274 (2.2) | Today tab card list | sonnet | ✅ completed | `6eb8412` + `49cac02`, merged `c560cc4` |
+| 282 (2.3) | **(added)** HTML email body capture | sonnet | pending | — |
 | 275 (3.1) | ProcessReturnPanel | sonnet | pending | — |
 | 276 (3.2) | Wire to RMA detail | sonnet | pending | — |
 | 277 (4.1) | Register CM route | haiku | ✅ completed | `0ae2f1f`, merged `5812b9f` |
-| 278 (4.2) | CM line items table | **opus** | in_progress (worktree B) | — |
+| 278 (4.2) | CM line items table | **opus** | ✅ completed | `4314699` + `d7b2d22` (parsed-receipts merge), merged `d10d9e7` |
 | 279 (4.3) | CM memo + recipients | **opus** | pending | — |
 | 280 (4.4) | process-return endpoint | **opus** | pending | — |
 | 281 (5.1) | Cutover (operator-gated) | sonnet | blocked | — |
