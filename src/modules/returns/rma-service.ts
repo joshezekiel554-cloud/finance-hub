@@ -162,6 +162,7 @@ export type UpdateRmaInput = {
   // land in the DB before approve fires, not just in the wizard's local
   // state.
   seasonId?: string | null;
+  damagesNote?: string | null;
 };
 
 export async function updateRma(
