@@ -1690,7 +1690,8 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       const subject = renderTemplate(template.subject, vars);
       const body = renderTemplate(template.body, vars);
 
-      const resolved = await resolveRecipients("statement", {
+      // Credit memos go to invoice recipients (not chase) — invoice billing is the customer-facing relationship for these.
+      const resolved = await resolveRecipients("invoice", {
         primaryEmail: customer.primaryEmail,
         billingEmails: customer.billingEmails,
         invoiceToEmails: customer.invoiceToEmails,
