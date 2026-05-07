@@ -106,6 +106,7 @@ function makeRma(overrides: Partial<Rma> = {}): Rma {
     originalEmail: null,
     parsedConfidence: null,
     notes: null,
+    damagesNote: null,
     resolutionType: null,
     createdByUserId: "user-1",
     approvedByUserId: "user-1",

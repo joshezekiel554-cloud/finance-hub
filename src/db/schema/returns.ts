@@ -8,6 +8,7 @@ import {
   json,
   mysqlEnum,
   mysqlTable,
+  primaryKey,
   text,
   timestamp,
   varchar,
@@ -82,6 +83,7 @@ export const rmas = mysqlTable(
     originalEmail: text("original_email"),
     parsedConfidence: decimal("parsed_confidence", { precision: 3, scale: 2 }),
     notes: text("notes"),
+    damagesNote: text("damages_note"),
     resolutionType: mysqlEnum("resolution_type", RMA_RESOLUTION_TYPES),
     createdByUserId: varchar("created_by_user_id", { length: 255 })
       .notNull()
@@ -256,6 +258,7 @@ export const extensivReceipts = mysqlTable(
     inferredCustomerName: varchar("inferred_customer_name", { length: 255 }),
     gmailMessageId: varchar("gmail_message_id", { length: 255 }).unique().notNull(),
     dismissedAt: timestamp("dismissed_at"),
+    dismissedReason: varchar("dismissed_reason", { length: 64 }),
     dismissedByUserId: varchar("dismissed_by_user_id", { length: 255 }).references(
       () => users.id,
     ),
@@ -273,3 +276,24 @@ export const extensivReceipts = mysqlTable(
 
 export type ExtensivReceipt = typeof extensivReceipts.$inferSelect;
 export type NewExtensivReceipt = typeof extensivReceipts.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// email_rma_links — maps Gmail message IDs to RMA IDs (auto-linked or manual).
+// ---------------------------------------------------------------------------
+
+export const emailRmaLinks = mysqlTable(
+  "email_rma_links",
+  {
+    gmailMessageId: varchar("gmail_message_id", { length: 64 }).notNull(),
+    rmaId: varchar("rma_id", { length: 24 }).notNull(),
+    source: mysqlEnum("source", ["auto", "manual"]).notNull().default("auto"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.gmailMessageId, t.rmaId] }),
+    rmaIdx: index("email_rma_links_rma_idx").on(t.rmaId),
+    gmailIdx: index("email_rma_links_gmail_idx").on(t.gmailMessageId),
+  }),
+);
+
+export type EmailRmaLink = typeof emailRmaLinks.$inferSelect;
