@@ -504,12 +504,28 @@ export default function CreditMemoCreatePage() {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: {
+      creditMemoId: string;
+      qboCreditMemoId: string;
+      emailSent?: boolean;
+      emailError?: string;
+    }) => {
       // Invalidate everything that may now show this RMA in a new
       // status: detail page, Today tab, the RMA list itself.
       queryClient.invalidateQueries({ queryKey: ["rma", rmaId] });
       queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
       queryClient.invalidateQueries({ queryKey: ["rmas"] });
+
+      // Partial success: credit memo created in QBO but email send failed.
+      // Don't auto-navigate away — surface the error so the operator can
+      // retry the send from the customer detail page.
+      if (data.emailSent === false && data.emailError) {
+        // eslint-disable-next-line no-alert
+        alert(
+          `Credit memo created in QBO (doc# ${data.qboCreditMemoId}), but the email failed to send:\n\n${data.emailError}\n\nYou can retry the send from the customer detail page.`,
+        );
+      }
+
       void navigate({ to: "/returns/$rmaId", params: { rmaId } });
     },
   });
