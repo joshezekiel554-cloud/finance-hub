@@ -479,10 +479,11 @@ export default function CreditMemoCreatePage() {
 
   function addPickedLine(hit: QbItemHit) {
     const seedPrice = hit.unitPrice != null ? hit.unitPrice.toFixed(4) : "0";
+    const newKey = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setLines((prev) => [
       ...prev,
       {
-        key: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        key: newKey,
         qbItemId: hit.id,
         sku: hit.sku ?? hit.id,
         description: hit.name || (hit.sku ?? hit.id),
@@ -493,9 +494,165 @@ export default function CreditMemoCreatePage() {
         isUnexpected: true,
       },
     ]);
-    // TODO Task 4.3: optionally fire /api/rmas/:id/lookup-prices to
-    // auto-fill price + invoice info, mirroring receipt-review's
-    // unexpected-item flow.
+    // Auto-fire lookup-prices to fill customer-specific price + invoice
+    // info, mirroring the RMA wizard's per-line flow. Silent on failure
+    // — operator can still use the bulk button to retry.
+    void lookupPricesForLine(newKey, hit.id);
+  }
+
+  // Shared price/invoice payload from /api/rmas/:id/lookup-prices.
+  type LookupPriceResult = {
+    unitPrice: string | null;
+    listUnitPrice: string | null;
+    invoiceDiscountPct: string | null;
+    originalInvoiceDocNumber: string | null;
+    originalInvoiceDate: string | null;
+  };
+
+  // Per-line auto lookup. Used by addPickedLine — fires immediately
+  // after the QboItemPicker resolves an item so the operator gets the
+  // customer-specific price + original-invoice reference without a
+  // second click. Errors are swallowed; the bulk "Lookup all" button
+  // is the documented retry path.
+  async function lookupPricesForLine(lineKey: string, qbItemId: string) {
+    try {
+      const res = await fetch(`/api/rmas/${rmaId}/lookup-prices`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ qbItemId }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as LookupPriceResult;
+      setLines((prev) =>
+        prev.map((l) => {
+          if (l.key !== lineKey) return l;
+          return {
+            ...l,
+            unitPrice: data.unitPrice ?? l.unitPrice,
+            description: data.originalInvoiceDocNumber
+              ? `${l.sku} (invoice ${data.originalInvoiceDocNumber}${
+                  data.originalInvoiceDate ? `, ${data.originalInvoiceDate}` : ""
+                })`
+              : l.description,
+          };
+        }),
+      );
+    } catch {
+      // Silent — operator can use the bulk button to retry.
+    }
+  }
+
+  // ---- Bulk "Lookup all prices + invoices" -------------------------------
+  //
+  // Two-phase resolver mirroring the RMA wizard's bulkLookupAll. Phase 1
+  // searches QBO for every line missing qbItemId (paste-receipt
+  // unexpected SKUs land with qbItemId="") and adopts the top hit.
+  // Phase 2 calls lookup-prices for every line that now has qbItemId
+  // and overwrites unitPrice + description with the customer-specific
+  // price and original-invoice reference. Throttled to 3 concurrent —
+  // QBO API rate limits punish bursts above that.
+  const [bulkPending, setBulkPending] = useState(false);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
+
+  async function lookupAll() {
+    setBulkPending(true);
+    setBulkResult(null);
+    try {
+      const CONCURRENCY = 3;
+
+      // Phase 1: resolve qbItemId for unmatched lines via SKU search.
+      const unresolved = lines.filter((l) => !l.qbItemId && l.sku.trim());
+      const resolveMap = new Map<string, QbItemHit>();
+      const queue1 = [...unresolved];
+      async function resolveWorker() {
+        while (queue1.length > 0) {
+          const l = queue1.shift();
+          if (!l) break;
+          try {
+            const res = await fetch(
+              `/api/invoicing/items/search?q=${encodeURIComponent(l.sku)}`,
+            );
+            if (!res.ok) continue;
+            const body = (await res.json()) as { items: QbItemHit[] };
+            if (body.items[0]) resolveMap.set(l.key, body.items[0]);
+          } catch {
+            // skip
+          }
+        }
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, unresolved.length) }, () =>
+          resolveWorker(),
+        ),
+      );
+
+      // Apply phase-1 results to a working snapshot of lines so phase 2
+      // can iterate over the post-resolution qbItemIds without waiting
+      // on a setLines round-trip.
+      const afterResolve = lines.map((l) => {
+        if (l.qbItemId) return l;
+        const hit = resolveMap.get(l.key);
+        if (!hit) return l;
+        return {
+          ...l,
+          qbItemId: hit.id,
+          unitPrice:
+            hit.unitPrice != null ? hit.unitPrice.toFixed(4) : l.unitPrice,
+        };
+      });
+
+      // Phase 2: lookup-prices for every line with qbItemId.
+      const priceCandidates = afterResolve.filter((l) => l.qbItemId);
+      const queue2 = [...priceCandidates];
+      const priceMap = new Map<string, LookupPriceResult>();
+      async function priceWorker() {
+        while (queue2.length > 0) {
+          const l = queue2.shift();
+          if (!l) break;
+          try {
+            const res = await fetch(`/api/rmas/${rmaId}/lookup-prices`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ qbItemId: l.qbItemId }),
+            });
+            if (!res.ok) continue;
+            const data = (await res.json()) as LookupPriceResult;
+            priceMap.set(l.key, data);
+          } catch {
+            // skip
+          }
+        }
+      }
+      await Promise.all(
+        Array.from(
+          { length: Math.min(CONCURRENCY, priceCandidates.length) },
+          () => priceWorker(),
+        ),
+      );
+
+      // Apply phase-2 results.
+      setLines(
+        afterResolve.map((l) => {
+          const data = priceMap.get(l.key);
+          if (!data) return l;
+          return {
+            ...l,
+            unitPrice: data.unitPrice ?? l.unitPrice,
+            description: data.originalInvoiceDocNumber
+              ? `${l.sku} (invoice ${data.originalInvoiceDocNumber}${
+                  data.originalInvoiceDate ? `, ${data.originalInvoiceDate}` : ""
+                })`
+              : l.description,
+          };
+        }),
+      );
+
+      setBulkResult(
+        `Resolved ${resolveMap.size}/${unresolved.length} item(s); priced ${priceMap.size}/${priceCandidates.length}.`,
+      );
+    } finally {
+      setBulkPending(false);
+    }
   }
 
   function addBlankLine() {
@@ -797,6 +954,26 @@ export default function CreditMemoCreatePage() {
               {lines.length} {lines.length === 1 ? "line" : "lines"}
             </span>
           </div>
+
+          {/* Bulk lookup — phase 1 resolves qbItemId via SKU search for
+              every paste-receipt unexpected line; phase 2 fills
+              customer-specific price + original-invoice reference for
+              every priced line. Mirrors the RMA wizard's pattern. */}
+          {lines.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={bulkPending}
+                onClick={() => void lookupAll()}
+              >
+                {bulkPending ? "Looking up…" : "Lookup all prices + invoices"}
+              </Button>
+              {bulkResult && (
+                <span className="text-xs text-secondary">{bulkResult}</span>
+              )}
+            </div>
+          )}
 
           {lines.length === 0 ? (
             <p className="rounded-md border border-dashed border-default px-3 py-4 text-center text-sm text-muted">
