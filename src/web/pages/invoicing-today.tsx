@@ -212,13 +212,30 @@ export default function InvoicingTodayPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+    // Optimistic: remove the receipt from the cached list immediately so
+    // the card disappears on click.
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: ["invoicing", "today"] });
+      const prev = queryClient.getQueryData<ApiResponse>(["invoicing", "today"]);
+      if (prev) {
+        queryClient.setQueryData<ApiResponse>(["invoicing", "today"], {
+          ...prev,
+          receiptRows: prev.receiptRows?.filter((r) => r.receiptId !== input.receiptId),
+        });
+      }
+      return { prev };
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _input, ctx) => {
+      // Restore on failure
+      if (ctx?.prev) {
+        queryClient.setQueryData(["invoicing", "today"], ctx.prev);
+      }
       // Surface the failure to the operator — they need to know dismissal didn't stick.
       console.error("Dismiss failed:", err);
       alert(`Dismiss failed: ${err.message}`);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
     },
   });
 
