@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Search, AlertCircle, Pause } from "lucide-react";
+import { Search, AlertCircle, Pause, Plus } from "lucide-react";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import {
@@ -17,6 +17,10 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/cn";
 import { SyncQbBadge } from "../components/sync-qb-badge";
+import {
+  TaskDetailDrawer,
+  type DrawerMode as TaskDrawerMode,
+} from "../components/task-detail-drawer";
 
 const customersRouteApi = getRouteApi("/customers");
 
@@ -42,6 +46,8 @@ type CustomerRow = {
   unactionedEmailCount: number;
   hasPendingRma: boolean;
   tags: string[] | null;
+  openTaskCount: number;
+  mostUrgentTaskDueAt: string | null;
 };
 
 type ListResponse = {
@@ -59,7 +65,8 @@ type SortKey =
   | "lastSyncedAt"
   | "lastPaymentAt"
   | "lastStatementSentAt"
-  | "lastContactedAt";
+  | "lastContactedAt"
+  | "openTaskCount";
 
 const SORT_LABELS: Record<SortKey, string> = {
   displayName: "Name",
@@ -69,6 +76,7 @@ const SORT_LABELS: Record<SortKey, string> = {
   lastPaymentAt: "Last payment",
   lastStatementSentAt: "Last statement",
   lastContactedAt: "Last contacted",
+  openTaskCount: "Tasks",
 };
 
 const HOLD_LABELS: Record<HoldFilter, string> = {
@@ -123,6 +131,25 @@ export default function CustomersPage() {
   // clicks add/remove from this set.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // Single TaskDetailDrawer mounted once on this page (Item 1).
+  // null = closed; setting a DrawerMode opens it.
+  const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
+
+  // Current operator — required by TaskDetailDrawer for mention resolution
+  // and watcher self-attribution. Same query/staleTime as customer-detail.
+  const meQuery = useQuery<{
+    user: { id: string; name: string | null; email: string; image: string | null };
+  }>({
+    queryKey: ["me"],
+    queryFn: async () => {
+      const res = await fetch("/api/me");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const currentUser = meQuery.data?.user ?? null;
+
   const queryClient = useQueryClient();
 
   const queryKey = [
@@ -139,11 +166,17 @@ export default function CustomersPage() {
       hasUnactionedEmailFilter,
     },
   ] as const;
+  // When the search box has 2+ chars, ignore tab + filter chips so the
+  // operator gets matches across ALL customers regardless of which tab
+  // or chips are active (Item 3).
+  const searchIsActive = search.search.trim().length >= 2;
+
   const { data, isPending, isError, error } = useQuery<ListResponse>({
     queryKey,
     queryFn: async () => {
       const params = new URLSearchParams({
-        customerType: tab,
+        // When search is active, send "all" so the backend ignores customerType.
+        customerType: searchIsActive ? "all" : tab,
         sort,
         dir,
         // 5000 covers the full customer table (~2,400 today) so the
@@ -152,12 +185,14 @@ export default function CustomersPage() {
         limit: "5000",
       });
       if (search.search.trim()) params.set("q", search.search.trim());
-      if (hideZero) params.set("hideZeroBalance", "true");
-      if (hasOverdueFilter) params.set("hasOverdue", "true");
-      if (onHoldFilter) params.set("holdStatus", "hold");
-      if (missingTermsFilter) params.set("missingTerms", "true");
-      if (hasUnactionedEmailFilter)
-        params.set("hasUnactionedEmail", "true");
+      // Filter chips are suppressed when search is active.
+      if (!searchIsActive) {
+        if (hideZero) params.set("hideZeroBalance", "true");
+        if (hasOverdueFilter) params.set("hasOverdue", "true");
+        if (onHoldFilter) params.set("holdStatus", "hold");
+        if (missingTermsFilter) params.set("missingTerms", "true");
+        if (hasUnactionedEmailFilter) params.set("hasUnactionedEmail", "true");
+      }
       const res = await fetch(`/api/customers?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -398,15 +433,22 @@ export default function CustomersPage() {
             ))}
         </div>
 
-        <div className="relative ml-auto">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
-          <Input
-            value={search.search}
-            onChange={(e) => setSearchValue(e.target.value)}
-            placeholder="Search name or email…"
-            className="!pl-8"
-            aria-label="Search customers"
-          />
+        <div className="relative ml-auto flex flex-col items-end gap-1">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
+            <Input
+              value={search.search}
+              onChange={(e) => setSearchValue(e.target.value)}
+              placeholder="Search name or email…"
+              className="!pl-8"
+              aria-label="Search customers"
+            />
+          </div>
+          {searchIsActive && (
+            <p className="text-[11px] text-muted">
+              Filters ignored — searching all customers
+            </p>
+          )}
         </div>
 
         {tab === "uncategorized" && (
@@ -599,8 +641,17 @@ export default function CustomersPage() {
                     toggleSort("lastContactedAt", sort, setSort, dir, setDir)
                   }
                 />
+                <SortableTh
+                  label="Tasks"
+                  active={sort === "openTaskCount"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("openTaskCount", sort, setSort, dir, setDir)
+                  }
+                />
                 <th className="px-3 py-2">Terms</th>
                 <th className="px-3 py-2">Status</th>
+                <th className="w-10 px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
@@ -613,7 +664,7 @@ export default function CustomersPage() {
                   <tr
                     key={row.id}
                     className={cn(
-                      "border-b border-default last:border-b-0",
+                      "group border-b border-default last:border-b-0",
                       onHold
                         ? "bg-accent-danger/10 hover:bg-accent-danger/15"
                         : "hover:bg-elevated",
@@ -704,11 +755,34 @@ export default function CustomersPage() {
                     <td className="px-3 py-2 text-secondary">
                       {relativeShortDate(row.lastContactedAt)}
                     </td>
+                    <td className="px-3 py-2">
+                      <TaskCountBadge
+                        count={row.openTaskCount}
+                        mostUrgentDueAt={row.mostUrgentTaskDueAt}
+                      />
+                    </td>
                     <td className="px-3 py-2 text-secondary">
                       {row.paymentTerms ?? "—"}
                     </td>
                     <td className="px-3 py-2">
                       <StatusBadge status={row.holdStatus} />
+                    </td>
+                    <td className="px-1 py-2">
+                      <button
+                        type="button"
+                        title="Add task for this customer"
+                        aria-label={`Add task for ${row.displayName}`}
+                        onClick={() =>
+                          setTaskDrawer({
+                            mode: "create",
+                            defaults: { customerId: row.id },
+                          })
+                        }
+                        className="flex items-center gap-0.5 rounded px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:bg-elevated hover:text-primary group-hover:opacity-100"
+                      >
+                        <Plus className="size-3" />
+                        Task
+                      </button>
                     </td>
                   </tr>
                 );
@@ -717,7 +791,7 @@ export default function CustomersPage() {
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={sweepMode ? 11 : 10}
+                    colSpan={sweepMode ? 13 : 12}
                   >
                     No customers match.
                   </td>
@@ -727,6 +801,18 @@ export default function CustomersPage() {
           </table>
         </CardBody>
       </Card>
+
+      {/* Single TaskDetailDrawer — opened by the per-row "+ Task" buttons (Item 1) */}
+      <TaskDetailDrawer
+        open={taskDrawer !== null}
+        onClose={() => setTaskDrawer(null)}
+        drawer={taskDrawer ?? { mode: "create" }}
+        currentUser={currentUser}
+        listQueryKey={queryKey}
+        onCreated={() => {
+          queryClient.invalidateQueries({ queryKey: ["customers"] });
+        }}
+      />
     </div>
   );
 }
@@ -753,6 +839,36 @@ function StatusBadge({ status }: { status: HoldStatus }) {
     return <Badge tone="high">Payment upfront</Badge>;
   }
   return <Badge tone="success">Active</Badge>;
+}
+
+// Tasks column cell — shows count with urgency colour coding (Item 2).
+// overdue (mostUrgentDueAt < now) → critical (red)
+// due soon (≤7 days) → high (amber)
+// has tasks, no due pressure → neutral
+// no tasks → muted dash
+function TaskCountBadge({
+  count,
+  mostUrgentDueAt,
+}: {
+  count: number;
+  mostUrgentDueAt: string | null;
+}) {
+  if (count === 0) return <span className="text-muted">—</span>;
+
+  const now = Date.now();
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+
+  if (mostUrgentDueAt) {
+    const due = new Date(mostUrgentDueAt).getTime();
+    if (due < now) {
+      return <Badge tone="critical">{count}</Badge>;
+    }
+    if (due - now <= sevenDays) {
+      return <Badge tone="high">{count}</Badge>;
+    }
+  }
+
+  return <Badge tone="neutral">{count}</Badge>;
 }
 
 function FilterChip({
@@ -852,6 +968,7 @@ function toggleSort(
       "lastStatementSentAt",
       "lastContactedAt",
       "lastSyncedAt",
+      "openTaskCount",
     ];
     setDir(descByDefault.includes(col) ? "desc" : "asc");
   }

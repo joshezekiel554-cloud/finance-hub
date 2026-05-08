@@ -19,6 +19,7 @@ export const customersSearchSchema = z.object({
       "lastPaymentAt",
       "lastStatementSentAt",
       "lastContactedAt",
+      "openTaskCount",
     ])
     .catch("balance"),
   dir: z.enum(["asc", "desc"]).catch("desc"),
