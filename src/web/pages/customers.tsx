@@ -170,6 +170,13 @@ export default function CustomersPage() {
   // operator gets matches across ALL customers regardless of which tab
   // or chips are active (Item 3).
   const searchIsActive = search.search.trim().length >= 2;
+  const hasActiveFilters =
+    tab !== "all" ||
+    hideZero ||
+    hasOverdueFilter ||
+    onHoldFilter ||
+    missingTermsFilter ||
+    hasUnactionedEmailFilter;
 
   const { data, isPending, isError, error } = useQuery<ListResponse>({
     queryKey,
@@ -184,7 +191,7 @@ export default function CustomersPage() {
         // than the first page. Backend caps at 5000 in the route schema.
         limit: "5000",
       });
-      if (search.search.trim()) params.set("q", search.search.trim());
+      if (searchIsActive) params.set("q", search.search.trim());
       // Filter chips are suppressed when search is active.
       if (!searchIsActive) {
         if (hideZero) params.set("hideZeroBalance", "true");
@@ -444,7 +451,7 @@ export default function CustomersPage() {
               aria-label="Search customers"
             />
           </div>
-          {searchIsActive && (
+          {searchIsActive && hasActiveFilters && (
             <p className="text-[11px] text-muted">
               Filters ignored — searching all customers
             </p>
@@ -778,7 +785,7 @@ export default function CustomersPage() {
                             defaults: { customerId: row.id },
                           })
                         }
-                        className="flex items-center gap-0.5 rounded px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:bg-elevated hover:text-primary group-hover:opacity-100"
+                        className="flex items-center gap-0.5 rounded px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:bg-elevated hover:text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-primary"
                       >
                         <Plus className="size-3" />
                         Task
