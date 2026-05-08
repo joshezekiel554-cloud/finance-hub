@@ -95,6 +95,7 @@ const listQuerySchema = z.object({
       "lastPaymentAt",
       "lastStatementSentAt",
       "lastContactedAt",
+      "openTaskCount",
     ])
     .default("displayName"),
   dir: z.enum(["asc", "desc"]).default("asc"),
@@ -264,6 +265,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       WHERE ${statementSends.customerId} = \`customers\`.\`id\`
     )`;
 
+    // Separate expr for sort because it's declared before the SELECT exprs
+    // but needs to match the same subquery shape.
+    const openTaskCountExprForSort = sql<number>`(
+      SELECT COUNT(*) FROM ${tasks}
+      WHERE ${tasks.customerId} = \`customers\`.\`id\`
+        AND ${tasks.status} IN ('open', 'in_progress', 'blocked')
+    )`;
+
     const sortCol = {
       displayName: customers.displayName,
       balance: customers.balance,
@@ -272,6 +281,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       lastPaymentAt: lastPaymentExprForSort,
       lastStatementSentAt: lastStatementExprForSort,
       lastContactedAt: lastContactedAtExpr,
+      openTaskCount: openTaskCountExprForSort,
     }[sort];
     const orderFn = dir === "asc" ? asc : desc;
 
@@ -323,6 +333,22 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       )
     )`;
 
+    // Open task count — tasks in an actionable status for this customer.
+    const openTaskCountExpr = sql<number>`(
+      SELECT COUNT(*) FROM ${tasks}
+      WHERE ${tasks.customerId} = \`customers\`.\`id\`
+        AND ${tasks.status} IN ('open', 'in_progress', 'blocked')
+    )`;
+
+    // Earliest due date among open tasks — drives urgency colour in the UI.
+    // NULL means no open tasks have a due date set.
+    const mostUrgentTaskDueAtExpr = sql<Date | string | null>`(
+      SELECT MIN(${tasks.dueAt}) FROM ${tasks}
+      WHERE ${tasks.customerId} = \`customers\`.\`id\`
+        AND ${tasks.status} IN ('open', 'in_progress', 'blocked')
+        AND ${tasks.dueAt} IS NOT NULL
+    )`;
+
     const rowsPromise = db
       .select({
         id: customers.id,
@@ -343,6 +369,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         lastContactedAt: lastContactedAtExpr,
         unactionedEmailCount: unactionedEmailCountExpr,
         hasPendingRma: hasPendingRmaExpr,
+        openTaskCount: openTaskCountExpr,
+        mostUrgentTaskDueAt: mostUrgentTaskDueAtExpr,
       })
       .from(customers)
       .where(where)
@@ -376,6 +404,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       lastStatementSentAt: normalizeDateValue(r.lastStatementSentAt),
       // COUNT(*) comes back as a string in some mysql2 modes — coerce.
       unactionedEmailCount: Number(r.unactionedEmailCount ?? 0),
+      openTaskCount: Number(r.openTaskCount ?? 0),
+      mostUrgentTaskDueAt: normalizeDateValue(r.mostUrgentTaskDueAt),
     }));
     const hasMore = rowsRaw.length > limit;
     const totals = totalsRaw[0] ?? { b2b: 0, b2c: 0, uncategorized: 0, all: 0 };
