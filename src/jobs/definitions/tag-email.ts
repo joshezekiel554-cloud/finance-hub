@@ -44,8 +44,9 @@ export type TagEmailJobResult = {
     recipientEmail: string;
     sent: boolean;
     customerCount: number;
-    reason: "shadow_mode" | "sent" | "skipped_empty";
+    reason: "shadow_mode" | "sent" | "skipped_empty" | "failed";
     messageId?: string;
+    errorMessage?: string;
   }>;
 };
 
@@ -280,7 +281,8 @@ export async function processTagEmail(
         recipientEmail: schedule.recipientEmail,
         sent: false,
         customerCount: 0,
-        reason: "skipped_empty",
+        reason: "failed",
+        errorMessage: err instanceof Error ? err.message : String(err),
       });
     }
   }
