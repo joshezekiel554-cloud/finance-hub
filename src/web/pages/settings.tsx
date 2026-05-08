@@ -6,6 +6,7 @@ import {
   Download,
   ExternalLink,
   Eye,
+  Pencil,
   Plus,
   Save,
   Trash2,
@@ -76,6 +77,7 @@ export default function SettingsPage() {
       <StatementPdfSection />
       <ReturnsSection />
       <RoutingRulesSection />
+      <TagEmailSchedulesSection />
       <ImportsSection />
     </div>
   );
@@ -274,6 +276,454 @@ function RoutingRulesSection() {
             {(createMutation.error as Error)?.message ?? "create failed"}
           </div>
         ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+// ─────────────────────── Scheduled tag emails ────────────────────────────
+
+type TagEmailFrequency = "daily" | "weekly" | "monthly";
+type TagEmailContentType = "hold_or_upfront_summary";
+
+type TagEmailSchedule = {
+  id: string;
+  tag: string;
+  recipientEmail: string;
+  frequency: TagEmailFrequency;
+  contentType: TagEmailContentType;
+  enabled: boolean;
+  lastSentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const FREQUENCY_LABELS: Record<TagEmailFrequency, string> = {
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+};
+
+const CONTENT_TYPE_LABELS: Record<TagEmailContentType, string> = {
+  hold_or_upfront_summary: "Hold/upfront summary",
+};
+
+const TAG_EMAIL_FREQUENCIES: TagEmailFrequency[] = ["daily", "weekly", "monthly"];
+const TAG_EMAIL_CONTENT_TYPES: TagEmailContentType[] = [
+  "hold_or_upfront_summary",
+];
+
+const EMPTY_FORM = {
+  tag: "",
+  recipientEmail: "",
+  frequency: "weekly" as TagEmailFrequency,
+  contentType: "hold_or_upfront_summary" as TagEmailContentType,
+  enabled: true,
+};
+
+function validateScheduleForm(f: typeof EMPTY_FORM): string[] {
+  const errs: string[] = [];
+  if (!f.tag.trim()) errs.push("Tag is required.");
+  else if (f.tag.trim().length > 64) errs.push("Tag must be ≤ 64 characters.");
+  if (!f.recipientEmail.trim()) errs.push("Recipient email is required.");
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.recipientEmail.trim()))
+    errs.push("Recipient email must be a valid email address.");
+  return errs;
+}
+
+function TagEmailSchedulesSection() {
+  const queryClient = useQueryClient();
+
+  const { data, isPending } = useQuery<{ schedules: TagEmailSchedule[] }>({
+    queryKey: ["tag-email-schedules"],
+    queryFn: async () => {
+      const res = await fetch("/api/tag-email-schedules");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  // form state — null = closed, "new" = add mode, string id = edit mode
+  const [formMode, setFormMode] = useState<null | "new" | string>(null);
+  const [form, setForm] = useState<typeof EMPTY_FORM>({ ...EMPTY_FORM });
+  const [formErrors, setFormErrors] = useState<string[]>([]);
+
+  function openAdd() {
+    setForm({ ...EMPTY_FORM });
+    setFormErrors([]);
+    setFormMode("new");
+  }
+
+  function openEdit(s: TagEmailSchedule) {
+    setForm({
+      tag: s.tag,
+      recipientEmail: s.recipientEmail,
+      frequency: s.frequency,
+      contentType: s.contentType,
+      enabled: s.enabled,
+    });
+    setFormErrors([]);
+    setFormMode(s.id);
+  }
+
+  function closeForm() {
+    setFormMode(null);
+    setFormErrors([]);
+  }
+
+  const createMutation = useMutation({
+    mutationFn: async (input: typeof EMPTY_FORM) => {
+      const res = await fetch("/api/tag-email-schedules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+      closeForm();
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: Partial<typeof EMPTY_FORM> }) => {
+      const res = await fetch(
+        `/api/tag-email-schedules/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+      closeForm();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(
+        `/api/tag-email-schedules/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+    },
+  });
+
+  // Optimistic enabled toggle — PATCH just the enabled field.
+  const toggleMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      const res = await fetch(
+        `/api/tag-email-schedules/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ enabled }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onMutate: async ({ id, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ["tag-email-schedules"] });
+      const prev = queryClient.getQueryData<{ schedules: TagEmailSchedule[] }>(
+        ["tag-email-schedules"],
+      );
+      queryClient.setQueryData<{ schedules: TagEmailSchedule[] }>(
+        ["tag-email-schedules"],
+        (old) =>
+          old
+            ? {
+                schedules: old.schedules.map((s) =>
+                  s.id === id ? { ...s, enabled } : s,
+                ),
+              }
+            : old,
+      );
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev)
+        queryClient.setQueryData(["tag-email-schedules"], ctx.prev);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+    },
+  });
+
+  function handleSubmit() {
+    const errs = validateScheduleForm(form);
+    if (errs.length) {
+      setFormErrors(errs);
+      return;
+    }
+    setFormErrors([]);
+    const payload = {
+      ...form,
+      tag: form.tag.trim().toLowerCase(),
+      recipientEmail: form.recipientEmail.trim().toLowerCase(),
+    };
+    if (formMode === "new") {
+      createMutation.mutate(payload);
+    } else if (formMode) {
+      updateMutation.mutate({ id: formMode, input: payload });
+    }
+  }
+
+  const schedules = data?.schedules ?? [];
+  const isMutating =
+    createMutation.isPending || updateMutation.isPending;
+  const mutationError =
+    (createMutation.isError
+      ? (createMutation.error as Error)?.message
+      : null) ??
+    (updateMutation.isError
+      ? (updateMutation.error as Error)?.message
+      : null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-medium">Scheduled tag emails</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Recurring digests sent to a fixed recipient when customers tagged
+              X have a specific status. E.g., a weekly summary of customers
+              tagged &ldquo;yiddy&rdquo; on hold or payment-upfront.
+            </p>
+          </div>
+          {formMode === null && (
+            <Button variant="secondary" size="sm" onClick={openAdd}>
+              <Plus className="size-3.5" />
+              Add schedule
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-3">
+        {isPending ? (
+          <div className="text-xs text-muted">Loading…</div>
+        ) : schedules.length === 0 && formMode === null ? (
+          <div className="rounded-md border border-dashed border-default p-4 text-center text-xs text-muted">
+            No schedules yet. Configure recurring digests sent to a fixed
+            recipient when customers tagged X have specific status. E.g., a
+            weekly summary of customers tagged &ldquo;yiddy&rdquo; on hold or
+            payment-upfront.
+          </div>
+        ) : schedules.length > 0 ? (
+          <>
+          <table className="w-full text-xs">
+            <thead className="border-b border-default text-[10px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-2 py-1 text-left">Tag</th>
+                <th className="px-2 py-1 text-left">Recipient</th>
+                <th className="px-2 py-1 text-left">Frequency</th>
+                <th className="px-2 py-1 text-left">Content</th>
+                <th className="px-2 py-1 text-left">Last sent</th>
+                <th className="px-2 py-1 text-left">On</th>
+                <th className="px-2 py-1"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedules.map((s) => (
+                <tr key={s.id} className="border-b border-default">
+                  <td className="px-2 py-1 font-mono">{s.tag}</td>
+                  <td className="px-2 py-1">{s.recipientEmail}</td>
+                  <td className="px-2 py-1">{FREQUENCY_LABELS[s.frequency]}</td>
+                  <td className="px-2 py-1">{CONTENT_TYPE_LABELS[s.contentType]}</td>
+                  <td className="px-2 py-1 text-muted">
+                    {formatRelative(s.lastSentAt)}
+                  </td>
+                  <td className="px-2 py-1">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={s.enabled}
+                      disabled={toggleMutation.isPending}
+                      onClick={() =>
+                        toggleMutation.mutate({ id: s.id, enabled: !s.enabled })
+                      }
+                      className={cn(
+                        "relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+                        s.enabled ? "bg-accent-brand" : "bg-default",
+                      )}
+                      aria-label={s.enabled ? "Disable schedule" : "Enable schedule"}
+                    >
+                      <span
+                        className={cn(
+                          "pointer-events-none block h-3 w-3 rounded-full bg-white shadow-sm ring-0 transition-transform",
+                          s.enabled ? "translate-x-3" : "translate-x-0",
+                        )}
+                      />
+                    </button>
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(s)}
+                        className="text-muted hover:text-primary"
+                        aria-label="Edit schedule"
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deleteMutation.isPending}
+                        onClick={() => {
+                          if (
+                            confirm(
+                              `Delete schedule "${s.tag} → ${s.recipientEmail} (${FREQUENCY_LABELS[s.frequency]})"?`,
+                            )
+                          ) {
+                            deleteMutation.mutate(s.id);
+                          }
+                        }}
+                        className="text-muted hover:text-accent-danger"
+                        aria-label="Delete schedule"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 text-xs text-muted">
+            Note: default schedules are re-inserted on worker restart unless their seeder is also removed.
+          </p>
+          </>
+        ) : null}
+
+        {/* Inline add/edit form */}
+        {formMode !== null && (
+          <div className="flex flex-wrap items-end gap-2 rounded-md border border-default bg-subtle p-3">
+            <label className="block text-xs">
+              <span className="mb-0.5 block text-muted">Tag</span>
+              <Input
+                value={form.tag}
+                onChange={(e) => setForm((f) => ({ ...f, tag: e.target.value }))}
+                placeholder="yiddy"
+                className="w-28 text-xs"
+              />
+            </label>
+            <label className="block flex-1 text-xs">
+              <span className="mb-0.5 block text-muted">Recipient email</span>
+              <Input
+                type="email"
+                value={form.recipientEmail}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, recipientEmail: e.target.value }))
+                }
+                placeholder="sales@feldart.com"
+                className="text-xs"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="mb-0.5 block text-muted">Frequency</span>
+              <select
+                value={form.frequency}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    frequency: e.target.value as TagEmailFrequency,
+                  }))
+                }
+                className="rounded-md border border-default bg-base px-2 py-1 text-xs"
+              >
+                {TAG_EMAIL_FREQUENCIES.map((f) => (
+                  <option key={f} value={f}>
+                    {FREQUENCY_LABELS[f]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs">
+              <span className="mb-0.5 block text-muted">Content type</span>
+              <select
+                value={form.contentType}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    contentType: e.target.value as TagEmailContentType,
+                  }))
+                }
+                className="rounded-md border border-default bg-base px-2 py-1 text-xs"
+              >
+                {TAG_EMAIL_CONTENT_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {CONTENT_TYPE_LABELS[ct]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs">
+              <input
+                type="checkbox"
+                checked={form.enabled}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, enabled: e.target.checked }))
+                }
+                className="rounded"
+              />
+              <span className="text-muted">Enabled</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={closeForm}
+                disabled={isMutating}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSubmit}
+                disabled={isMutating}
+              >
+                <Save className="size-3.5" />
+                {isMutating
+                  ? "Saving…"
+                  : formMode === "new"
+                    ? "Create"
+                    : "Save"}
+              </Button>
+            </div>
+            {formErrors.length > 0 && (
+              <div className="w-full space-y-0.5">
+                {formErrors.map((e) => (
+                  <div key={e} className="text-xs text-accent-danger">
+                    {e}
+                  </div>
+                ))}
+              </div>
+            )}
+            {mutationError && (
+              <div className="w-full text-xs text-accent-danger">
+                {mutationError}
+              </div>
+            )}
+          </div>
+        )}
       </CardBody>
     </Card>
   );
@@ -1218,6 +1668,15 @@ function ReturnsSection() {
       </CardBody>
     </Card>
   );
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return "Never";
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 5) return "Just now";
+  if (seconds < 86400) return formatSecondsAgo(seconds);
+  const days = Math.floor(seconds / 86400);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 function formatSecondsAgo(secs: number): string {
