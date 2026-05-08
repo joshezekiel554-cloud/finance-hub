@@ -3,11 +3,12 @@
 // enqueue ad-hoc jobs) and the consumer (the worker process) talk to the
 // same Redis client and don't fight over connection limits.
 //
-// Four queues, one per concern:
+// Five queues, one per concern:
 //   - SYNC_QUEUE          — QuickBooks pulls (every 30 min, repeatable)
 //   - GMAIL_QUEUE         — Gmail polls (every 15 min, repeatable)
 //   - CHASE_QUEUE         — Daily chase digest (17:00 Europe/London)
 //   - NOTIFICATIONS_QUEUE — Daily task-overdue scan (08:00 Europe/London)
+//   - TAG_EMAIL_QUEUE     — Tag-driven digest emails (daily/weekly/monthly)
 //
 // Defaults are conservative: 3 attempts with exponential backoff, completed
 // jobs trimmed at 100 to keep Redis memory bounded; failed jobs trimmed at
@@ -24,11 +25,15 @@ export const SYNC_QUEUE = "sync";
 export const GMAIL_QUEUE = "gmail";
 export const CHASE_QUEUE = "chase";
 export const NOTIFICATIONS_QUEUE = "notifications";
+export const TAG_EMAIL_QUEUE = "tag-email";
 
 export const QB_SYNC_JOB = "qb-sync";
 export const GMAIL_POLL_JOB = "gmail-poll";
 export const CHASE_DIGEST_JOB = "chase-digest";
 export const TASK_OVERDUE_SCAN_JOB = "task-overdue-scan";
+export const TAG_EMAIL_DAILY_JOB = "tag-email-daily";
+export const TAG_EMAIL_WEEKLY_JOB = "tag-email-weekly";
+export const TAG_EMAIL_MONTHLY_JOB = "tag-email-monthly";
 
 let cachedConnection: Redis | undefined;
 
@@ -70,6 +75,7 @@ let cachedQueues:
       gmail: Queue;
       chase: Queue;
       notifications: Queue;
+      tagEmail: Queue;
     }
   | undefined;
 
@@ -78,6 +84,7 @@ export type Queues = {
   gmail: Queue;
   chase: Queue;
   notifications: Queue;
+  tagEmail: Queue;
 };
 
 export function getQueues(): Queues {
@@ -91,6 +98,7 @@ export function getQueues(): Queues {
       connection,
       defaultJobOptions,
     }),
+    tagEmail: new Queue(TAG_EMAIL_QUEUE, { connection, defaultJobOptions }),
   };
   return cachedQueues;
 }
@@ -104,6 +112,7 @@ export async function closeQueues(): Promise<void> {
       cachedQueues.gmail.close(),
       cachedQueues.chase.close(),
       cachedQueues.notifications.close(),
+      cachedQueues.tagEmail.close(),
     ]);
     cachedQueues = undefined;
   }
