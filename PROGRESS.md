@@ -13,6 +13,37 @@ If you're new to this file:
 
 ## Current phase
 
+**Returns workflow redesign — RMA-page-centric flow + QBO-mirror credit memo. 🟢 SHIPPED (in operator-validation period)**
+(spec + plan: `docs/superpowers/specs/2026-05-07-returns-redesign.md` + `docs/superpowers/plans/2026-05-07-returns-redesign.md`. ~40 commits 2026-05-07/08. Live progress tracker: `docs/superpowers/plans/2026-05-07-returns-redesign-progress.md`.)
+
+Operator complained the existing returns flow "felt like we'd gone backwards from the desktop software." Brainstorming → spec → plan → subagent-driven execution with worktree-based parallelism produced a complete restructure across 16 plan tasks + 9 post-plan polish fixes after operator started using it on real data.
+
+**The new flow:**
+- Today tab is now a **triage inbox** of warehouse emails as collapsible HTML cards (sender / subject / full sanitized HTML body). Three dismiss actions: `Dismiss — done` (auto-fires when CM created) / `not return` / `other (with reason)`.
+- **Email-RMA auto-linking**: every Gmail-poll'd email is regex-scanned for RMA# patterns (`DC#####`, 5-7 digit sequential) against the new `email_rma_links` table. Manual "Check for emails" button on the RMA page does on-demand backfill.
+- **RMA detail page** has a new **Process Return panel** showing all linked emails for that RMA, plus a "Parse warehouse return" button that navigates to the credit memo create page.
+- **Credit memo create page** at `/returns/$rmaId/credit-memo` is a QBO-mirror full-page editor: SKU / Description / Expected / Received / Discrepancy / Unit price / Tax / Total / Delete columns, paste-receipt textarea + damages-note textarea at the top, totals strip, memo (auto-seeded), recipients (resolved via tag rules — `yiddy → bcc sales@feldart.com` etc.), Send + create / Save / Cancel.
+- **Process-return endpoint** orchestrates QBO POST → mark RMA completed → auto-dismiss linked Today receipts → optional email send. Concurrency-safe via `FOR UPDATE` re-check; partial-success path returns `emailSent: false` with QBO doc# for retry.
+
+**Bugs fixed along the way:**
+- SKU order randomly reordering on RMA hydrate (11 server reads missing `orderBy(rmaItems.position)` — caught by opus reviewer)
+- Credit memo emails going to chase recipients instead of invoice recipients (preview endpoint had wrong channel)
+- Credit memo `CustomerMemo` not on QBO statements (operator action: enable "Customer message" in QBO statement template; code was always correct)
+- Re-pasting accumulated quantities (now wipes prior `paste-%` rows; `parsed-receipts` returns latest only)
+- Items missing from parse showed approved qty (now show 0 — warehouse didn't return them)
+- Today tab dismiss had no optimistic update (cards now disappear instantly on click)
+- Permissive parser accepts operator shortcuts (`SKU x N`, `SKU - N`, `SKU: N`, etc.)
+
+**Process notes** (worth carrying forward):
+- Used **opus for all code-quality reviewers** — caught real bugs sonnet implementers missed (the orderBy bug being the standout)
+- **Worktree-based parallel execution** for non-conflicting tasks gave ~2× speedup with zero merge conflicts across 5 waves
+- The **post-plan polish loop** (after operator hit real data) found 9 more bugs/UX gaps beyond what spec/plan/review caught
+- `.env` updated: `ADMIN_EMAILS=joshezekiel554@gmail.com,info@feldart.com`
+
+**Status:** All 16 plan tasks shipped + post-plan polish done. Phase 5 cutover (delete `ReturnReceiptReviewDialog` + `RmaCreditMemoDialog`) is **operator-gated** — pending real-world validation before deleting legacy dialogs.
+
+---
+
 **Customer-page chase email + per-invoice tracking. 🟢 SHIPPED**
 (commits `1fa1499` → `f5aa7c5`, 2026-05-06, 2 commits). Operator-
 requested polish: chase emails are now reachable directly from the

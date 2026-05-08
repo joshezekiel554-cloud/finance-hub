@@ -21,6 +21,7 @@
 | W4 (parallel ×2) | 3.1 full + 4.3 | ✅ done |
 | W5 (parallel ×2) | 4.4 + 3.2 | ✅ done |
 | Task 2.3 (added) | HTML body capture | ✅ done |
+| Post-plan polish (operator feedback loop) | 9 fixes/features after live testing | ✅ done |
 | Phase 5 | 5.1 cutover (operator-gated) | blocked on operator validation |
 
 ## Task status
@@ -65,6 +66,24 @@
 - `764ae2b` — Merge task/sku-order
 - `60bff51` — Merge task/invoice-recipients
 
+### Post-plan polish (after operator started using it on real data — 2026-05-07/08)
+
+These are refinements that came out of the operator's live-data feedback loop. Each one is a real bug or UX gap surfaced by trying the flow on production RMAs:
+
+- `5a10d1e` — `fix: detect HTML markup in legacy email bodies + render rich` — pre-Task-2.3 emails had HTML markup stored in the text body field; component now detects HTML and routes through sanitize-html instead of `<pre>`
+- `062d70f` — `feat: paste warehouse receipt for manual parse + link` — when auto-classifier misses a receipt, operator pastes the email body, server runs `parseItems` on it and inserts an `extensiv_receipts` row linked to the RMA
+- `e95ff6f` — `refactor: paste + damages move to CM page; fix re-seed on paste; prefer parsed qty` — operator wanted paste UI on the credit memo page itself, with damages directly underneath. Also fixed the seed-once guard that blocked re-merge after paste, and flipped qty precedence to prefer fresh parsed data over stale `receivedQuantity`
+- `f500255` — `fix: re-parse replaces prior paste; missing-from-parse shows 0; add Discrepancy column` — re-pasting a receipt now wipes prior `paste-%` rows for that RMA before inserting (so it's a fresh sweep, not accumulation). RMA items not in the receipt now show received=0 (correct: warehouse didn't return them). New Discrepancy column shows signed delta in red/amber/muted to match the desktop UI
+- `edc8c75` — `fix: parsed-receipts returns only latest receipt to avoid double-counting` — when both an auto-detected Gmail receipt AND a paste exist for the same email, summing across them double-counted. Endpoint now returns max(classifiedAt) only — "one sweep" semantics
+- `16b7fd1` — `feat: credit memo page price + invoice lookup (per-line auto + bulk button)` — added the wizard-style lookup pattern: QboItemPicker pick auto-fires `/lookup-prices` for the new line; bulk button does a two-phase sweep (resolve missing qbItemIds via SKU search → fetch price + invoice for every line) so unexpected lines from paste get prices + invoice refs in one click
+- `bca367d` — `fix: credit memo recipients use resolveRecipients (tag rules apply)` — page was reading raw `customer.invoiceToEmails`/`CcEmails`/`BccEmails` arrays directly, bypassing the tag-rules layer. Added `GET /api/customers/:id/resolved-recipients?channel=invoice` endpoint that runs the same `resolveRecipients` function the legacy preview uses. Tag rules (e.g., `yiddy → bcc sales@feldart.com`) now apply
+- `bd9bea9` — `fix: dismiss receipt cards optimistically — disappear immediately` — Today-tab dismiss buttons now do optimistic removal via `onMutate` + rollback on error, so cards disappear on click instead of after refetch
+- `bb4d045` — `feat: permissive parser accepts operator shortcuts (SKU x N, SKU - N, etc.)` — extended `ITEM_ROW_RE` to accept `x`/`×`/`-`/`–`/`—`/`:`/`=`/`*` separators between SKU and qty, so operator-typed lines parse alongside the warehouse table format
+
+### Operator setup change
+
+- `.env` updated: `ADMIN_EMAILS=joshezekiel554@gmail.com,info@feldart.com` (allows RMA delete + force-status overrides for these two emails)
+
 ## Known issues
 
 ### Operator action required (NOT a code bug)
@@ -77,7 +96,20 @@
 
 ### Resolved
 
-**Task 0.2 — sequential regex captured embedded digits in DC matches** — fixed in `8eb829d`. DC matches are masked with whitespace before SEASONAL_RE runs. Re-reviewed and approved.
+- **Task 0.2 — sequential regex captured embedded digits in DC matches** — fixed in `8eb829d`. DC matches are masked with whitespace before SEASONAL_RE runs.
+- **Task 0.5 — `dismissed_reason` column-length crash risk** — fixed in `b9844dd`. Zod cap on `reasonText` tightened from 500 to 50 to fit `varchar(64)` after the `"other: "` prefix.
+- **Task 1.1 — SKU order on RMA hydrate** — initial fix added documentation comments but missed the real bug. Opus reviewer caught it: 11 server reads of `rma_items` lacked `orderBy(position)`. Fixed in `74bcc95`.
+- **Task 2.2 — `emailSent: false` partial-success silent** — fixed in `485dfc3`. CM create page now alerts operator when QBO succeeded but email send failed.
+- **Tasks 2.3 + post-plan rendering** — captured HTML body in poller (`cbef66f`) and added legacy-fallback HTML detection (`5a10d1e`). Warehouse emails now render with tables + formatting in both Today tab and RMA detail panel.
+
+## Lessons learned (worth carrying into future plans)
+
+- **The opus reviewer earned its keep on Task 1.1.** The sonnet implementer found "no sort issues" in the audit scope and reported done. Opus dug deeper, traced the actual hydrate path, found the missing `orderBy(position)`. Cost a 2nd round of work but caught a real bug.
+- **Plan-stub regex defaults are dangerous.** Task 0.2's plan template had a `seen`-based dedup approach that would have shipped with the embedded-digit bug. The implementer caught it in self-trace but it's the kind of thing that's easy to miss. Worth running mental traces on regex examples BEFORE writing the implementer brief.
+- **"Punted to next task" is sticky.** Task 4.2 punted parsed-receipts merge claiming `received_quantity` already reflected the warehouse data. The reviewer dug into the actual data flow and proved that wasn't true — only the legacy receipt-review-dialog updates that column. The punt nearly shipped a non-functional credit memo page. Reviewers should challenge punted scope, not accept it.
+- **Live-data testing surfaces a different set of bugs than spec compliance.** The spec was thorough; the plan was thorough; reviews caught real issues. But the operator's first 30 minutes on real RMAs found 9 more bugs/UX gaps that nothing in the spec/plan/review process would have caught. The post-plan polish loop is where the system actually got usable.
+- **Worktree-based parallelism worked.** ~2× speedup on Wave 1 (3 parallel tasks). Merge conflicts: zero across all 5 waves with disjoint-file analysis upfront.
+- **The window-global query-client trick is fragile but functional.** `restoreSearchOnEmpty` reads `me` user from a window global because `beforeLoad` runs outside React. If we ever move auth context to a different mechanism, this needs updating.
 
 ## How to resume after autocompact
 
