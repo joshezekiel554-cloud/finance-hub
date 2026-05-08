@@ -8,6 +8,9 @@
 //   gmail-poll          */15 * * * *     every 15 minutes
 //   task-overdue-scan   0 8 * * *        08:00 daily, Europe/London
 //   chase-digest        0 17 * * *       17:00 daily, Europe/London
+//   tag-email-daily     0 9 * * *        09:00 daily, Europe/London
+//   tag-email-weekly    0 9 * * 1        09:00 Monday, Europe/London
+//   tag-email-monthly   0 9 1 * *        09:00 1st of month, Europe/London
 //
 // Timezone handling: BullMQ's `repeat.tz` applies the cron in that zone, so
 // "0 17 * * *" with tz="Europe/London" fires at 17:00 BST in summer and
@@ -19,6 +22,9 @@ import {
   CHASE_DIGEST_JOB,
   GMAIL_POLL_JOB,
   QB_SYNC_JOB,
+  TAG_EMAIL_DAILY_JOB,
+  TAG_EMAIL_MONTHLY_JOB,
+  TAG_EMAIL_WEEKLY_JOB,
   TASK_OVERDUE_SCAN_JOB,
 } from "./queues.js";
 import { createLogger } from "../lib/logger.js";
@@ -84,6 +90,39 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
     cron: "0 8 * * *",
     tz: "Europe/London",
   });
+
+  // Tag-email daily — 09:00 Europe/London every day.
+  await queues.tagEmail.add(
+    TAG_EMAIL_DAILY_JOB,
+    { frequency: "daily" },
+    {
+      jobId: `repeat:${TAG_EMAIL_DAILY_JOB}`,
+      repeat: { pattern: "0 9 * * *", tz: "Europe/London" },
+    },
+  );
+  registered.push({ name: TAG_EMAIL_DAILY_JOB, cron: "0 9 * * *", tz: "Europe/London" });
+
+  // Tag-email weekly — 09:00 Monday Europe/London.
+  await queues.tagEmail.add(
+    TAG_EMAIL_WEEKLY_JOB,
+    { frequency: "weekly" },
+    {
+      jobId: `repeat:${TAG_EMAIL_WEEKLY_JOB}`,
+      repeat: { pattern: "0 9 * * 1", tz: "Europe/London" },
+    },
+  );
+  registered.push({ name: TAG_EMAIL_WEEKLY_JOB, cron: "0 9 * * 1", tz: "Europe/London" });
+
+  // Tag-email monthly — 09:00 on the 1st of each month, Europe/London.
+  await queues.tagEmail.add(
+    TAG_EMAIL_MONTHLY_JOB,
+    { frequency: "monthly" },
+    {
+      jobId: `repeat:${TAG_EMAIL_MONTHLY_JOB}`,
+      repeat: { pattern: "0 9 1 * *", tz: "Europe/London" },
+    },
+  );
+  registered.push({ name: TAG_EMAIL_MONTHLY_JOB, cron: "0 9 1 * *", tz: "Europe/London" });
 
   log.info({ jobs: registered }, "repeatable jobs registered");
   return registered;

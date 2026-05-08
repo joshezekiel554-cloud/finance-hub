@@ -17,15 +17,18 @@ import { processChaseDigest } from "./definitions/chase-digest.js";
 import { processGmailPoll } from "./definitions/gmail-poll.js";
 import { processQbSync } from "./definitions/qb-sync.js";
 import { processTaskOverdueScan } from "./definitions/task-overdue-scan.js";
+import { processTagEmail } from "./definitions/tag-email.js";
 import {
   CHASE_QUEUE,
   GMAIL_QUEUE,
   NOTIFICATIONS_QUEUE,
   SYNC_QUEUE,
+  TAG_EMAIL_QUEUE,
   closeQueues,
   connectionOptions,
   getQueues,
 } from "./queues.js";
+import { seedDefaultTagEmailSchedules } from "../modules/tag-email/seed.js";
 import { registerSchedules } from "./schedule.js";
 import { env } from "../lib/env.js";
 import { createLogger } from "../lib/logger.js";
@@ -39,6 +42,7 @@ const QB_CONCURRENCY = 1;
 const GMAIL_CONCURRENCY = 1;
 const CHASE_CONCURRENCY = 1;
 const NOTIFICATIONS_CONCURRENCY = 1;
+const TAG_EMAIL_CONCURRENCY = 1;
 
 function buildWorkers(): Worker[] {
   const connection = connectionOptions();
@@ -67,7 +71,13 @@ function buildWorkers(): Worker[] {
     { connection, concurrency: NOTIFICATIONS_CONCURRENCY },
   );
 
-  for (const w of [qbWorker, gmailWorker, chaseWorker, notificationsWorker]) {
+  const tagEmailWorker = new Worker(
+    TAG_EMAIL_QUEUE,
+    async (job: Job) => processTagEmail(job),
+    { connection, concurrency: TAG_EMAIL_CONCURRENCY },
+  );
+
+  for (const w of [qbWorker, gmailWorker, chaseWorker, notificationsWorker, tagEmailWorker]) {
     w.on("failed", (job, err) => {
       log.error(
         {
@@ -91,7 +101,7 @@ function buildWorkers(): Worker[] {
     });
   }
 
-  return [qbWorker, gmailWorker, chaseWorker, notificationsWorker];
+  return [qbWorker, gmailWorker, chaseWorker, notificationsWorker, tagEmailWorker];
 }
 
 async function shutdown(workers: Worker[], signal: string): Promise<void> {
@@ -116,6 +126,9 @@ async function main(): Promise<void> {
   );
 
   const workers = buildWorkers();
+
+  // Seed default tag-email schedule rows (idempotent).
+  await seedDefaultTagEmailSchedules();
 
   // Register repeatable schedules. Idempotent: re-running on every boot just
   // updates the same jobIds in Redis. Done after workers start so jobs that

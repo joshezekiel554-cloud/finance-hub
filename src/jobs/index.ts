@@ -9,6 +9,10 @@ export {
   GMAIL_QUEUE,
   QB_SYNC_JOB,
   SYNC_QUEUE,
+  TAG_EMAIL_DAILY_JOB,
+  TAG_EMAIL_MONTHLY_JOB,
+  TAG_EMAIL_QUEUE,
+  TAG_EMAIL_WEEKLY_JOB,
   closeQueues,
   getConnection,
   getQueues,
@@ -29,3 +33,7 @@ export type {
   ChaseDigestJobData,
   ChaseDigestJobResult,
 } from "./definitions/chase-digest.js";
+export type {
+  TagEmailJobData,
+  TagEmailJobResult,
+} from "./definitions/tag-email.js";
