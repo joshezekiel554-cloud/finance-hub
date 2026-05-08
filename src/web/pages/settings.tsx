@@ -527,6 +527,7 @@ function TagEmailSchedulesSection() {
             payment-upfront.
           </div>
         ) : schedules.length > 0 ? (
+          <>
           <table className="w-full text-xs">
             <thead className="border-b border-default text-[10px] uppercase tracking-wide text-muted">
               <tr>
@@ -547,9 +548,7 @@ function TagEmailSchedulesSection() {
                   <td className="px-2 py-1">{FREQUENCY_LABELS[s.frequency]}</td>
                   <td className="px-2 py-1">{CONTENT_TYPE_LABELS[s.contentType]}</td>
                   <td className="px-2 py-1 text-muted">
-                    {s.lastSentAt
-                      ? new Date(s.lastSentAt).toLocaleDateString()
-                      : "Never"}
+                    {formatRelative(s.lastSentAt)}
                   </td>
                   <td className="px-2 py-1">
                     <button
@@ -607,6 +606,10 @@ function TagEmailSchedulesSection() {
               ))}
             </tbody>
           </table>
+          <p className="mt-1 text-xs text-muted">
+            Note: default schedules are re-inserted on worker restart unless their seeder is also removed.
+          </p>
+          </>
         ) : null}
 
         {/* Inline add/edit form */}
@@ -1665,6 +1668,15 @@ function ReturnsSection() {
       </CardBody>
     </Card>
   );
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return "Never";
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 5) return "Just now";
+  if (seconds < 86400) return formatSecondsAgo(seconds);
+  const days = Math.floor(seconds / 86400);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 function formatSecondsAgo(secs: number): string {

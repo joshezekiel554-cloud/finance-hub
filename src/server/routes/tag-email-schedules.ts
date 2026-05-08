@@ -13,7 +13,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import {
@@ -95,6 +95,23 @@ const tagEmailSchedulesRoute: FastifyPluginAsync = async (app) => {
 
     const { tag, recipientEmail, frequency, contentType, enabled } =
       parse.data;
+
+    const duplicate = await db
+      .select({ id: tagEmailSchedules.id })
+      .from(tagEmailSchedules)
+      .where(
+        and(
+          eq(tagEmailSchedules.tag, tag.trim().toLowerCase()),
+          eq(tagEmailSchedules.recipientEmail, recipientEmail.trim().toLowerCase()),
+          eq(tagEmailSchedules.frequency, frequency),
+        ),
+      )
+      .limit(1);
+    if (duplicate.length > 0) {
+      reply.code(409);
+      return { error: "A schedule with the same tag, recipient, and frequency already exists" };
+    }
+
     const id = nanoid(24);
 
     await db.insert(tagEmailSchedules).values({
@@ -144,6 +161,29 @@ const tagEmailSchedulesRoute: FastifyPluginAsync = async (app) => {
     if (frequency !== undefined) updates.frequency = frequency;
     if (contentType !== undefined) updates.contentType = contentType;
     if (enabled !== undefined) updates.enabled = enabled;
+
+    // Duplicate check: only when at least one of the uniqueness fields is changing.
+    if (tag !== undefined || recipientEmail !== undefined || frequency !== undefined) {
+      const nextTag = updates.tag ?? existing[0]!.tag;
+      const nextRecipient = updates.recipientEmail ?? existing[0]!.recipientEmail;
+      const nextFrequency = updates.frequency ?? existing[0]!.frequency;
+      const patchDuplicate = await db
+        .select({ id: tagEmailSchedules.id })
+        .from(tagEmailSchedules)
+        .where(
+          and(
+            eq(tagEmailSchedules.tag, nextTag),
+            eq(tagEmailSchedules.recipientEmail, nextRecipient),
+            eq(tagEmailSchedules.frequency, nextFrequency),
+            ne(tagEmailSchedules.id, id),
+          ),
+        )
+        .limit(1);
+      if (patchDuplicate.length > 0) {
+        reply.code(409);
+        return { error: "A schedule with the same tag, recipient, and frequency already exists" };
+      }
+    }
 
     await db
       .update(tagEmailSchedules)
