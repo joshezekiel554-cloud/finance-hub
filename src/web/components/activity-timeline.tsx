@@ -25,6 +25,17 @@ import {
   ChevronDown,
   ChevronRight,
   FileDown,
+  RotateCcw,
+  CheckCircle,
+  XCircle,
+  ShieldCheck,
+  PackageX,
+  Truck,
+  PackageCheck,
+  Receipt,
+  CheckCircle2,
+  MessageCircle,
+  Ban,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
@@ -45,7 +56,20 @@ export type ActivityKind =
   | "terms_changed"
   | "manual_note"
   | "task_created"
-  | "task_completed";
+  | "task_completed"
+  // RMA kinds (Phase 1)
+  | "rma_created"
+  | "rma_approved"
+  | "rma_denied"
+  | "rma_override_approved"
+  | "rma_warehouse_export_generated"
+  | "rma_warehouse_export_cancelled"
+  | "rma_sent_to_warehouse"
+  | "rma_received_at_warehouse"
+  | "rma_credit_memo_issued"
+  | "rma_completed"
+  | "rma_customer_reply"
+  | "rma_cancelled";
 
 export type Activity = {
   id: string;
@@ -59,15 +83,18 @@ export type Activity = {
   source: string;
   refType: string | null;
   refId: string | null;
-  // Normalized payload written by the QB sync. Present on qbo_invoice_sent,
-  // qbo_payment, qbo_credit_memo activities and used to render an amount
-  // pill + an inline PDF link when applicable.
+  // Normalized payload. Written by the QB sync for QBO events; written by
+  // the returns service for RMA events. Extended fields are optional so
+  // old rows without them still render cleanly.
   meta: {
     qbId?: string;
     docNumber?: string | null;
     amount?: number;
     currency?: string | null;
     txnDate?: string | null;
+    // RMA-specific meta fields
+    creditMemoDocNumber?: string | null;
+    rmaNumber?: string | null;
   } | null;
 };
 
@@ -88,6 +115,19 @@ const KIND_META: Record<
   manual_note: { icon: MessageSquare, label: "Note", tone: "neutral" },
   task_created: { icon: CheckSquare, label: "Task created", tone: "neutral" },
   task_completed: { icon: CheckSquare, label: "Task completed", tone: "success" },
+  // RMA event kinds
+  rma_created: { icon: RotateCcw, label: "RMA created", tone: "neutral" },
+  rma_approved: { icon: CheckCircle, label: "RMA approved", tone: "success" },
+  rma_denied: { icon: XCircle, label: "RMA denied", tone: "medium" },
+  rma_override_approved: { icon: ShieldCheck, label: "RMA override approved", tone: "success" },
+  rma_warehouse_export_generated: { icon: FileDown, label: "Warehouse export generated", tone: "info" },
+  rma_warehouse_export_cancelled: { icon: PackageX, label: "Warehouse export cancelled", tone: "medium" },
+  rma_sent_to_warehouse: { icon: Truck, label: "Sent to warehouse", tone: "info" },
+  rma_received_at_warehouse: { icon: PackageCheck, label: "Received at warehouse", tone: "info" },
+  rma_credit_memo_issued: { icon: Receipt, label: "Credit memo issued", tone: "success" },
+  rma_completed: { icon: CheckCircle2, label: "RMA completed", tone: "success" },
+  rma_customer_reply: { icon: MessageCircle, label: "Customer reply", tone: "info" },
+  rma_cancelled: { icon: Ban, label: "RMA cancelled", tone: "medium" },
 };
 
 function metaFor(kind: string) {
@@ -271,6 +311,7 @@ export function ActivityTimeline({
                           </span>
                         )}
                         <PdfLink kind={activity.kind} qbId={activity.meta?.qbId} />
+                        <RmaLink refType={activity.refType} refId={activity.refId} />
                         <span className="text-muted">via {activity.source}</span>
                       </div>
                       {hasBody && isExpanded && (
@@ -278,6 +319,13 @@ export function ActivityTimeline({
                           {activity.body}
                         </div>
                       )}
+                      {/* Expanded RMA meta — e.g. credit memo doc number */}
+                      {activity.kind === "rma_credit_memo_issued" &&
+                        activity.meta?.creditMemoDocNumber && (
+                          <div className="mt-1 text-xs text-muted">
+                            CM #{activity.meta.creditMemoDocNumber}
+                          </div>
+                        )}
                     </div>
                   </div>
                 </li>
@@ -292,6 +340,28 @@ export function ActivityTimeline({
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+// RMA link — renders a "View RMA" anchor whenever refType === "rma" and
+// refId is set. Uses a plain <a> so this component has no dependency on
+// the TanStack Router param types.
+function RmaLink({
+  refType,
+  refId,
+}: {
+  refType: string | null;
+  refId: string | null;
+}) {
+  if (refType !== "rma" || !refId) return null;
+  return (
+    <a
+      href={`/returns/${encodeURIComponent(refId)}`}
+      className="inline-flex items-center gap-1 text-accent-primary hover:underline"
+    >
+      <RotateCcw className="size-3" />
+      View RMA
+    </a>
   );
 }
 

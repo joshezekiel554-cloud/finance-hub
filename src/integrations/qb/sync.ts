@@ -134,6 +134,13 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     lastSyncedAt: new Date(),
   };
 
+  // Read existing first so we can decide create-vs-update for the audit
+  // trail and balance_change activity. The actual write below uses
+  // INSERT ... ON DUPLICATE KEY UPDATE so a concurrent global sync racing
+  // with a per-customer Refresh doesn't trip the qb_customer_id UNIQUE
+  // constraint (both reads see no row, both try INSERT, one 502s).
+  // The window between SELECT and the upsert is narrow but not zero —
+  // the upsert covers it.
   const existing = await db
     .select()
     .from(customers)
@@ -161,7 +168,27 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
       billingAddressCountry: desired.billingAddressCountry,
       lastSyncedAt: desired.lastSyncedAt,
     };
-    await db.insert(customers).values(inserted);
+    // INSERT ... ON DUPLICATE KEY UPDATE — if a concurrent sync raced
+    // ahead and inserted the row first, fall back to the same UPDATE set
+    // we'd apply on the update path below (sync-owned fields only;
+    // operator-owned fields like paymentTerms, primaryEmail, billingEmails,
+    // phone are intentionally NOT in the ODKU set so manual edits survive).
+    await db
+      .insert(customers)
+      .values(inserted)
+      .onDuplicateKeyUpdate({
+        set: {
+          displayName: desired.displayName,
+          balance: desired.balance,
+          billingAddressLine1: desired.billingAddressLine1,
+          billingAddressLine2: desired.billingAddressLine2,
+          billingAddressCity: desired.billingAddressCity,
+          billingAddressRegion: desired.billingAddressRegion,
+          billingAddressPostal: desired.billingAddressPostal,
+          billingAddressCountry: desired.billingAddressCountry,
+          lastSyncedAt: desired.lastSyncedAt,
+        },
+      });
     await db.insert(auditLog).values({
       id: nanoid(24),
       action: "qb_sync.customer.create",
@@ -204,6 +231,9 @@ async function upsertCustomer(qboCustomer: QboCustomer): Promise<UpsertResult> {
     return "noop";
   }
 
+  // The race is in the create path above (concurrent inserts both trying
+  // to seed the row); UPDATE-by-id is already race-safe — the row's been
+  // observed and the primary key is stable.
   await db
     .update(customers)
     .set({
@@ -360,6 +390,10 @@ async function upsertInvoice(
     lastSyncedAt: new Date(),
   };
 
+  // Read first for create-vs-update branching, then write via
+  // INSERT ... ON DUPLICATE KEY UPDATE. Same race-with-global-sync story
+  // as upsertCustomer: per-customer Refresh + global cron both see no row
+  // and both try INSERT, second one trips qb_invoice_id UNIQUE.
   const existing = await db
     .select()
     .from(invoices)
@@ -368,7 +402,26 @@ async function upsertInvoice(
 
   if (!existing[0]) {
     const id = nanoid(24);
-    await db.insert(invoices).values({ id, ...desired });
+    // ODKU set excludes sent_at / sent_via — those are local fields the
+    // app owns and must not be stomped if a concurrent insert won. Same
+    // exclusion as the plain UPDATE path further down.
+    await db
+      .insert(invoices)
+      .values({ id, ...desired })
+      .onDuplicateKeyUpdate({
+        set: {
+          docNumber: desired.docNumber,
+          customerId: desired.customerId,
+          issueDate: desired.issueDate,
+          dueDate: desired.dueDate,
+          total: desired.total,
+          balance: desired.balance,
+          status: desired.status,
+          customerMemo: desired.customerMemo,
+          syncToken: desired.syncToken,
+          lastSyncedAt: desired.lastSyncedAt,
+        },
+      });
     await syncInvoiceLines(id, qboInvoice.Line ?? []);
 
     // Activity: qbo_invoice_sent — emit when QBO indicates this invoice has
@@ -425,7 +478,9 @@ async function upsertInvoice(
   }
 
   // Crucially do NOT touch sent_at / sentVia — those are local fields the app
-  // owns. The team-lead brief calls this out explicitly.
+  // owns. The team-lead brief calls this out explicitly. The race is in the
+  // create path above (concurrent inserts); UPDATE-by-id is already race-safe
+  // since the row's been seen.
   await db
     .update(invoices)
     .set({
@@ -593,6 +648,134 @@ async function activityAlreadyEmitted(
     .where(and(eq(activities.refType, refType), eq(activities.refId, refId)))
     .limit(1);
   return rows.length > 0;
+}
+
+// -------- syncOneCustomer --------
+//
+// Per-customer fast-path. Pulls just the customer's QBO record, their
+// invoices, and their payments — ~3 QBO calls vs the global sync's
+// hundreds. Used by the "Refresh from QB" button on the customer
+// detail page so an operator can freshen one record before sending a
+// statement without paying the 30-second full-sync cost.
+//
+// Caveat the UI flags: this only refreshes the named customer. A
+// payment that landed on someone else's invoice won't show up here —
+// global sync still runs every 30 min and is the safety net.
+
+export type OneCustomerSyncResult = {
+  customer: SyncStats;
+  invoices: SyncStats;
+  payments: SyncStats;
+};
+
+export async function syncOneCustomer(
+  qbCustomerId: string,
+  client?: QboClient,
+): Promise<OneCustomerSyncResult> {
+  const qb = client ?? new QboClient();
+  const customerStats = emptyStats();
+  const invoiceStats = emptyStats();
+  const paymentStats = emptyStats();
+
+  // 1. Customer
+  customerStats.fetched = 1;
+  const qboCustomer = await qb.getCustomerById(qbCustomerId);
+  if (!qboCustomer) {
+    customerStats.failed = 1;
+    log.warn(
+      { qb_customer_id: qbCustomerId },
+      "syncOneCustomer: customer not found in QBO",
+    );
+    return {
+      customer: customerStats,
+      invoices: invoiceStats,
+      payments: paymentStats,
+    };
+  }
+  try {
+    const r = await upsertCustomer(qboCustomer);
+    if (r === "created") customerStats.created++;
+    else if (r === "updated") customerStats.updated++;
+    else customerStats.skipped++;
+  } catch (err) {
+    customerStats.failed++;
+    log.warn(
+      { qb_customer_id: qbCustomerId, err: (err as Error).message },
+      "syncOneCustomer: customer upsert failed",
+    );
+  }
+
+  // Customer-id map (just this one entry is enough but reusing the helper
+  // is cheaper than inlining the lookup).
+  const customerIdMap = await loadCustomerIdMap();
+
+  // 2. Invoices for this customer
+  const qboInvoices = await qb.findInvoicesForCustomer(qbCustomerId);
+  invoiceStats.fetched = qboInvoices.length;
+  for (const qboInvoice of qboInvoices) {
+    try {
+      const r = await upsertInvoice(qboInvoice, customerIdMap);
+      if (r === "created") invoiceStats.created++;
+      else if (r === "updated") invoiceStats.updated++;
+      else invoiceStats.skipped++;
+    } catch (err) {
+      invoiceStats.failed++;
+      log.warn(
+        { qb_invoice_id: qboInvoice.Id, err: (err as Error).message },
+        "syncOneCustomer: invoice upsert failed",
+      );
+    }
+  }
+
+  // 3. Payments for this customer (activities only — no payments table)
+  const qboPayments = await qb.getPaymentsForCustomer(qbCustomerId);
+  paymentStats.fetched = qboPayments.length;
+  try {
+    await emitPaymentActivities(qboPayments);
+    paymentStats.created = qboPayments.length;
+  } catch (err) {
+    paymentStats.failed++;
+    log.warn(
+      { qb_customer_id: qbCustomerId, err: (err as Error).message },
+      "syncOneCustomer: payment activity emit failed",
+    );
+  }
+
+  // 4. Recompute overdue_balance for this customer only. Tighter than
+  //    the global recompute and keeps the customer's denormalised field
+  //    in step with the freshly-upserted invoices.
+  const financeHubId = customerIdMap.get(qbCustomerId);
+  if (financeHubId) {
+    await db.execute(sql`
+      UPDATE customers c
+      LEFT JOIN (
+        SELECT customer_id, SUM(balance) AS overdue
+        FROM invoices
+        WHERE balance > 0
+          AND due_date IS NOT NULL
+          AND due_date < CURRENT_DATE
+          AND customer_id = ${financeHubId}
+        GROUP BY customer_id
+      ) i ON i.customer_id = c.id
+      SET c.overdue_balance = COALESCE(i.overdue, 0)
+      WHERE c.id = ${financeHubId}
+    `);
+  }
+
+  log.info(
+    {
+      qb_customer_id: qbCustomerId,
+      customer: customerStats,
+      invoices: invoiceStats,
+      payments: paymentStats,
+    },
+    "syncOneCustomer complete",
+  );
+  return {
+    customer: customerStats,
+    invoices: invoiceStats,
+    payments: paymentStats,
+  };
 }
 
 // -------- helpers --------

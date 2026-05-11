@@ -48,5 +48,26 @@ export const APP_SETTING_KEYS = [
   // string = no BCC. Defaults to accounts@feldart.com so existing
   // behaviour is preserved on a fresh install.
   "statement_bcc_email",
+  // Google Drive folder ID that is the root for all RMA photo subfolders.
+  // Set via Settings UI or direct API call. If empty, photo upload returns 412.
+  "drive_root_folder_id",
+  // Email address (or comma-separated list) that gets the "customer is
+  // shipping back RMA X with tracking Y" notification when the operator
+  // adds tracking. Empty = no email is sent (operator may notify the
+  // warehouse out-of-band).
+  "warehouse_team_email",
+  // QBO Item ids used as line refs for the shipping + restocking fee
+  // deduction lines on credit memos. Operator creates the service
+  // items in QBO once + pastes the numeric Item.Id here. Empty = the
+  // CM builder throws a clear error if a deduction is requested,
+  // refusing to silently issue against a wrong item.
+  "rma_shipping_fee_item_id",
+  "rma_restocking_fee_item_id",
+  // Sequential counter for damage credit memo DocNumbers (DC#####).
+  // Allocated atomically at approve time via SELECT FOR UPDATE on
+  // this row → increment → save. Default seed "38771" continues the
+  // legacy QBO range. Operator can edit in /settings → Returns to
+  // adjust the seed or recover from an accidental increment.
+  "damage_cm_number_next",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

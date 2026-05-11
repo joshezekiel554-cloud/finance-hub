@@ -7,6 +7,7 @@ import {
   createRootRoute,
   createRoute,
   Outlet,
+  ScrollRestoration,
 } from "@tanstack/react-router";
 import App from "./App";
 import HomePage from "./pages/home";
@@ -21,6 +22,20 @@ import MondayTermsImportPage from "./pages/monday-terms-import";
 import ShopifyB2bAuditPage from "./pages/shopify-b2b-audit";
 import ShopifyLinkPage from "./pages/shopify-link";
 import RosterTagImportPage from "./pages/roster-tag-import";
+import ReturnsListPage from "./pages/returns";
+import ReturnNewPage from "./pages/return-new";
+import ReturnDetailPage from "./pages/return-detail";
+import CreditMemoCreatePage from "./pages/credit-memo-create";
+import SeasonsPage from "./pages/seasons";
+import { customersSearchSchema } from "./lib/search-schemas/customers";
+import { returnsSearchSchema } from "./lib/search-schemas/returns";
+import { tasksSearchSchema } from "./lib/search-schemas/tasks";
+import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today";
+import { chaseSearchSchema } from "./lib/search-schemas/chase";
+import { statementsSearchSchema } from "./lib/search-schemas/statements";
+import { customerDetailSearchSchema } from "./lib/search-schemas/customer-detail";
+import { creditMemoCreateSearchSchema } from "./lib/search-schemas/credit-memo-create";
+import { restoreSearchOnEmpty } from "./lib/restore-search-on-empty";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -32,9 +47,14 @@ const queryClient = new QueryClient({
   },
 });
 
+// Expose so restoreSearchOnEmpty (which runs in beforeLoad, outside React)
+// can read the cached current user without re-querying.
+(window as unknown as { __FH_QUERY_CLIENT__: typeof queryClient }).__FH_QUERY_CLIENT__ = queryClient;
+
 const rootRoute = createRootRoute({
   component: () => (
     <App>
+      <ScrollRestoration />
       <Outlet />
     </App>
   ),
@@ -50,24 +70,32 @@ const invoicingTodayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/invoicing",
   component: InvoicingTodayPage,
+  validateSearch: invoicingTodaySearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/invoicing"),
 });
 
 const customersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/customers",
   component: CustomersPage,
+  validateSearch: customersSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/customers"),
 });
 
 const customerDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/customers/$customerId",
   component: CustomerDetailPage,
+  validateSearch: customerDetailSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/customers/$customerId"),
 });
 
 const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks",
   component: TasksPage,
+  validateSearch: tasksSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/tasks"),
 });
 
 const settingsRoute = createRoute({
@@ -80,12 +108,16 @@ const chaseRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/chase",
   component: ChasePage,
+  validateSearch: chaseSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/chase"),
 });
 
 const statementsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/statements",
   component: StatementsPage,
+  validateSearch: statementsSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/statements"),
 });
 
 const mondayTermsImportRoute = createRoute({
@@ -112,6 +144,39 @@ const rosterTagImportRoute = createRoute({
   component: RosterTagImportPage,
 });
 
+const returnsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns",
+  component: ReturnsListPage,
+  validateSearch: returnsSearchSchema,
+  beforeLoad: restoreSearchOnEmpty("/returns"),
+});
+
+const returnNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns/new",
+  component: ReturnNewPage,
+});
+
+const returnDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns/$rmaId",
+  component: ReturnDetailPage,
+});
+
+const creditMemoCreateRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/returns/$rmaId/credit-memo",
+  component: CreditMemoCreatePage,
+  validateSearch: creditMemoCreateSearchSchema,
+});
+
+const seasonsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/seasons",
+  component: SeasonsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -125,6 +190,11 @@ const routeTree = rootRoute.addChildren([
   shopifyB2bAuditRoute,
   shopifyLinkRoute,
   rosterTagImportRoute,
+  returnsRoute,
+  returnNewRoute,
+  returnDetailRoute,
+  creditMemoCreateRoute,
+  seasonsRoute,
 ]);
 
 const router = createRouter({ routeTree });

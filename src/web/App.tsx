@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   LayoutDashboard,
@@ -9,6 +9,9 @@ import {
   Sparkles,
   Settings,
   AlertCircle,
+  RotateCcw,
+  CalendarRange,
+  LogOut,
 } from "lucide-react";
 import { cn } from "./lib/cn";
 import { NotificationBell } from "./components/notification-bell";
@@ -16,10 +19,12 @@ import { NotificationBell } from "./components/notification-bell";
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/customers", label: "Customers", icon: Users },
-  { to: "/invoicing", label: "Invoicing", icon: FileText },
+  { to: "/invoicing", label: "Today", icon: FileText },
   { to: "/chase", label: "Chase", icon: AlertCircle },
   { to: "/statements", label: "Statements", icon: Receipt },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
+  { to: "/returns", label: "Returns", icon: RotateCcw },
+  { to: "/seasons", label: "Seasons", icon: CalendarRange },
   { to: "/agent", label: "Agent", icon: Sparkles },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
@@ -53,7 +58,10 @@ export default function App({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
-        <div className="border-t border-default p-3 text-xs text-muted">v2.0</div>
+        <div className="border-t border-default p-3 space-y-2">
+          <SignOutFooter />
+          <div className="text-xs text-muted">v2.0</div>
+        </div>
       </aside>
 
       <main className="flex flex-1 flex-col">
@@ -63,6 +71,67 @@ export default function App({ children }: { children: ReactNode }) {
         </header>
         <div className="flex-1 overflow-y-auto p-4 md:p-6">{children}</div>
       </main>
+    </div>
+  );
+}
+
+function SignOutFooter() {
+  const [email, setEmail] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/session")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { user?: { email?: string } } | null) => {
+        if (!cancelled) setEmail(data?.user?.email ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    try {
+      const csrfRes = await fetch("/api/auth/csrf");
+      const { csrfToken } = (await csrfRes.json()) as { csrfToken: string };
+      const body = new URLSearchParams();
+      body.append("csrfToken", csrfToken);
+      body.append("callbackUrl", "/login");
+      body.append("json", "true");
+      await fetch("/api/auth/signout", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
+    } catch {
+      // fall through to the redirect — the cookie clear may have worked
+    }
+    window.location.href = "/api/auth/signin";
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {email && (
+        <div className="truncate text-[11px] text-muted" title={email}>
+          {email}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={handleSignOut}
+        disabled={signingOut}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-secondary transition-colors",
+          "hover:bg-elevated hover:text-primary",
+          "disabled:opacity-50 disabled:cursor-not-allowed",
+        )}
+      >
+        <LogOut className="size-4" />
+        {signingOut ? "Signing out…" : "Sign out"}
+      </button>
     </div>
   );
 }

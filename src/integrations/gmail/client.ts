@@ -36,7 +36,7 @@ const INITIAL_BACKOFF_MS = 2000;
 // shared queue until the items list is exhausted. Preserves input order
 // in the result. Local utility — no new dep needed for what amounts to
 // 15 lines.
-async function mapWithLimit<T, R>(
+export async function mapWithLimit<T, R>(
   items: T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,
@@ -467,6 +467,60 @@ export async function getThread(
     `threads.get(${threadId})`,
   );
   return (res.data.messages ?? []).map(formatMessage);
+}
+
+// Fetch just the To + Cc headers for a Gmail message without paying for
+// a full body decode. Used by the "Reply all" path to grab the original
+// recipient list. Returns the raw header strings (comma-separated; may
+// be empty if the header was absent).
+export async function getMessageRecipients(
+  messageId: string,
+  externalAccountId?: string,
+): Promise<{ from: string; to: string; cc: string }> {
+  const { gmail } = await getClient(externalAccountId);
+  const res = await withRetry(
+    () =>
+      gmail.users.messages.get({
+        userId: "me",
+        id: messageId,
+        format: "metadata",
+        metadataHeaders: ["From", "To", "Cc"],
+      }),
+    `messages.get-headers(${messageId})`,
+  );
+  const headers = res.data.payload?.headers ?? [];
+  const headerValue = (name: string): string => {
+    const lower = name.toLowerCase();
+    return (
+      headers.find((h) => (h.name ?? "").toLowerCase() === lower)?.value ?? ""
+    );
+  };
+  return {
+    from: headerValue("From"),
+    to: headerValue("To"),
+    cc: headerValue("Cc"),
+  };
+}
+
+// Strip the UNREAD label from a Gmail message — the equivalent of the
+// "Mark as read" button in the Gmail UI. Used when the operator actions
+// an email in finance-hub so the Gmail inbox view stays in sync.
+// Returns void; failure is logged but not thrown so the caller's
+// primary action (mark-actioned in our DB) still succeeds.
+export async function markGmailAsRead(
+  messageId: string,
+  externalAccountId?: string,
+): Promise<void> {
+  const { gmail } = await getClient(externalAccountId);
+  await withRetry(
+    () =>
+      gmail.users.messages.modify({
+        userId: "me",
+        id: messageId,
+        requestBody: { removeLabelIds: ["UNREAD"] },
+      }),
+    `messages.modify(${messageId}, -UNREAD)`,
+  );
 }
 
 export async function getProfileEmail(externalAccountId?: string): Promise<string> {

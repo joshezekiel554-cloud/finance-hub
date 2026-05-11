@@ -25,6 +25,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import sanitizeHtml from "sanitize-html";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
@@ -35,12 +36,35 @@ import { recordActivity } from "../../modules/crm/index.js";
 
 const log = createLogger({ component: "routes.email-send" });
 
+// Outbound-send body cap. Up to 20 base64 attachments at ~1.33x raw size,
+// plus headroom for body/subject/headers. Fastify's default 1MB bodyLimit
+// silently 413s any meaningful multi-attachment send (a single 750KB PDF
+// is ~1MB after base64 encoding), so the route below overrides it.
+const SEND_BODY_LIMIT_BYTES = 25 * 1024 * 1024; // 25 MB
+
+// Per-attachment cap on the base64 payload. ~25MB raw → ~33.5MB base64;
+// keep this slightly under the route bodyLimit so a single oversized
+// attachment fails the schema validator (clear 400) instead of getting
+// truncated at the connection layer.
+const MAX_ATTACHMENT_BASE64_BYTES = 35_000_000; // ~35 MB after base64
+
+// Aggregate cap across all attachments — guards against a request with 20
+// near-max-size attachments getting through schema validation but blowing
+// the route bodyLimit further down. Keep below SEND_BODY_LIMIT_BYTES so
+// the schema-side check is what fires first.
+const MAX_TOTAL_ATTACHMENTS_BASE64_BYTES = 24 * 1024 * 1024;
+
 const attachmentSchema = z.object({
   filename: z.string().min(1).max(255),
   mimeType: z.string().min(1).max(255),
   // Base64-encoded payload from the browser. Decoded once into a Buffer
-  // before handing to the MIME builder.
-  dataBase64: z.string().min(1),
+  // before handing to the MIME builder. Capped per-attachment so a single
+  // oversized file is rejected with a clear 400 instead of slipping through
+  // and tripping the route bodyLimit.
+  dataBase64: z
+    .string()
+    .min(1)
+    .max(MAX_ATTACHMENT_BASE64_BYTES, "attachment exceeds per-file size limit"),
 });
 
 const sendBodySchema = z.object({
@@ -49,11 +73,33 @@ const sendBodySchema = z.object({
   bcc: z.string().max(2000).optional(),
   subject: z.string().min(1).max(998),
   body: z.string().min(1).max(200_000),
+  // When true, body is treated as already-formatted HTML (from the
+  // TipTap editor) and run through sanitize-html before being used as
+  // the HTML part. The plain-text part is derived by stripping tags.
+  // When false (or absent), the legacy plain-text-from-textarea flow
+  // applies — bodyToHtml wraps newlines in <p>/<br/> tags.
+  isHtml: z.boolean().optional().default(false),
   alias: z.string().max(255).optional(),
   inReplyTo: z.string().max(998).optional(),
   threadId: z.string().max(255).optional(),
   customerId: z.string().max(64).optional(),
-  attachments: z.array(attachmentSchema).max(20).optional(),
+  attachments: z
+    .array(attachmentSchema)
+    .max(20)
+    .optional()
+    .superRefine((attachments, ctx) => {
+      if (!attachments) return;
+      const total = attachments.reduce(
+        (sum, a) => sum + a.dataBase64.length,
+        0,
+      );
+      if (total > MAX_TOTAL_ATTACHMENTS_BASE64_BYTES) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `total attachment size exceeds ${Math.floor(MAX_TOTAL_ATTACHMENTS_BASE64_BYTES / 1024 / 1024)}MB after base64 encoding`,
+        });
+      }
+    }),
   // Optional overrides for the activity row this send produces. When
   // provided, the activity's refType/refId point at the related doc
   // (e.g. an invoice or credit memo) instead of the default
@@ -84,6 +130,75 @@ function bodyToHtml(raw: string): string {
     .join("\n");
 }
 
+// Allowlist sanitiser for compose-modal HTML bodies. Tag set covers the
+// formatting the TipTap toolbar can produce (bold, italic, lists, links,
+// blockquotes, paragraphs); the URL allowlist drops javascript: and
+// data: URIs from links — so a paste from a malicious source can't
+// smuggle a clickable scriptlet into the recipient's mail client.
+//
+// `transformTags` on `<a>` ensures every link carries rel="noopener
+// noreferrer" + target="_blank" — defence-in-depth for the recipient
+// who clicks through to a sketchy URL the operator pasted by accident.
+const HTML_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [
+    "p",
+    "br",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "s",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "a",
+    "code",
+    "pre",
+    "hr",
+    "span",
+    "div",
+  ],
+  allowedAttributes: {
+    a: ["href", "target", "rel"],
+  },
+  allowedSchemes: ["http", "https", "mailto"],
+  allowedSchemesByTag: {},
+  // Drop empty class/style/anything-else attributes universally.
+  allowedSchemesAppliedToAttributes: ["href"],
+  transformTags: {
+    a: (tagName, attribs) => ({
+      tagName,
+      attribs: {
+        ...attribs,
+        target: "_blank",
+        rel: "noopener noreferrer",
+      },
+    }),
+  },
+};
+
+function sanitizeBodyHtml(html: string): string {
+  return sanitizeHtml(html, HTML_SANITIZE_OPTIONS);
+}
+
+// Derive plain-text from sanitised HTML for the multipart text/plain
+// part. Strips ALL tags (allowedTags: []) but preserves text content
+// + injects a newline after block-level elements so the layout is
+// vaguely readable in clients that prefer text/plain.
+function htmlToPlainText(html: string): string {
+  return sanitizeHtml(html, {
+    allowedTags: [],
+    allowedAttributes: {},
+    textFilter: (text) => text,
+  })
+    .replace(/&nbsp;/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const emailSendRoute: FastifyPluginAsync = async (app) => {
   // GET /api/aliases — proxy listAliases() through to the compose modal's
   // From dropdown. Cached at the integration layer (5m TTL) so this is a
@@ -102,7 +217,10 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
 
   // POST /api/email/send — user-initiated send. Mounted with prefix
   // `/api/email` so this resolves to /api/email/send.
-  app.post("/send", async (req, reply) => {
+  // bodyLimit override: Fastify's 1MB default would 413 any send with
+  // even a single mid-sized attachment (a 750KB PDF base64-encodes to
+  // ~1MB). 25MB matches what Gmail itself accepts on the upstream send.
+  app.post("/send", { bodyLimit: SEND_BODY_LIMIT_BYTES }, async (req, reply) => {
     const user = await requireAuth(req);
     const parse = sendBodySchema.safeParse(req.body);
     if (!parse.success) {
@@ -116,6 +234,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       bcc,
       subject,
       body,
+      isHtml,
       alias,
       inReplyTo,
       threadId,
@@ -125,8 +244,18 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       refId: refIdOverride,
     } = parse.data;
 
-    const html = bodyToHtml(body);
-    const text = body;
+    // Two body shapes converge here:
+    //   - isHtml=true  → body is already formatted HTML from the TipTap
+    //                    editor. Run sanitize-html (allowlist tags +
+    //                    drop javascript:/data: URLs + force rel/target
+    //                    on links) before sending. Plain-text part is
+    //                    derived by stripping tags.
+    //   - isHtml=false → body is plain text from the legacy textarea
+    //                    or an internal caller. Keep the existing
+    //                    bodyToHtml flow that wraps newlines in
+    //                    <p>/<br/> tags.
+    const html = isHtml ? sanitizeBodyHtml(body) : bodyToHtml(body);
+    const text = isHtml ? htmlToPlainText(html) : body;
 
     // Decode base64 attachments to Buffers — the integration layer
     // expects raw bytes and base64-encodes them when building MIME.

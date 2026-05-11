@@ -1,10 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, MessageSquare, Package, Truck } from "lucide-react";
+import { Link, getRouteApi } from "@tanstack/react-router";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { InvoicingTodaySearch } from "../lib/search-schemas/invoicing-today";
+import { AlertCircle, CheckCircle2, Mail, MessageSquare, Package, Truck } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/cn";
+// ReturnReceiptReviewDialog intentionally NOT removed here — Phase 5 (Task 5.1) handles deletion.
+import ReturnReceiptReviewDialog, {
+  type ReceiptRow as BaseReceiptRow,
+} from "../components/return-receipt-review-dialog";
+
+type ReceiptRow = BaseReceiptRow & {
+  linkedRmas?: Array<{
+    rmaId: string;
+    rmaNumber: string | null;
+    customerName: string | null;
+  }>;
+  emailBodyHtml?: string | null;
+};
+import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
+import { ReturnReceiptCard } from "../components/return-receipt-card";
+
+const invoicingTodayRouteApi = getRouteApi("/invoicing");
 
 type ReconcileAction =
   | { type: "set_metadata"; trackingNumber: string; shipVia: string; shipDate: string }
@@ -57,6 +78,10 @@ type Row = {
   receivedAt: string | null;
   parseConfidence: number;
   parseMissingFields: string[];
+  emailSubject: string;
+  emailFrom: string;
+  emailSnippet: string;
+  emailBody: string;
   parsed: {
     poNumber: string | null;
     shopifyOrderNumber: string | null;
@@ -127,6 +152,7 @@ type DismissedRecord = {
 };
 type ApiResponse = {
   rows: Row[];
+  receiptRows?: ReceiptRow[];
   dismissed: Record<string, DismissedRecord>;
   shadowMode: boolean;
 };
@@ -139,25 +165,86 @@ const REASON_LABELS: Record<DismissReason, string> = {
   other: "Other",
 };
 
-type Tab = "open" | "sent" | "dismissed";
+type Tab = "open" | "unparseable" | "sent" | "dismissed";
 
-// Single source of truth for which tab a row belongs in. Dismissed wins
-// (a dismissed-but-sent row still appears under Dismissed). Otherwise we
-// classify by QBO's EmailStatus — already populated in the API response
-// and rendered in the SendHistoryPill, so this mirrors what the user sees
-// per-card.
+// Single source of truth for which tab a row belongs in. Priority order:
+//   1. Dismissed wins (a dismissed row stays under Dismissed regardless).
+//   2. Already-sent rows live in Sent (matches QBO EmailStatus).
+//   3. Low-confidence parses go to Unparseable so the Open tab is just
+//      actionable shipment emails.
+//   4. Everything else is Open.
 function classifyRow(
   row: Row,
   dismissed: Record<string, DismissedRecord>,
 ): Tab {
   if (dismissed[row.gmailId]) return "dismissed";
   if (row.qbInvoice?.emailStatus === "EmailSent") return "sent";
+  if (row.parseConfidence < 0.5) return "unparseable";
   return "open";
 }
 
 export default function InvoicingTodayPage() {
-  const [tab, setTab] = useState<Tab>("open");
+  const search = invoicingTodayRouteApi.useSearch();
+  const { setFilter } = useFilterNavigate<InvoicingTodaySearch>("/invoicing");
+  useFilterPersistence("/invoicing");
+
+  const tab = search.tab;
+  const setTab = (next: InvoicingTodaySearch["tab"]) =>
+    setFilter("tab", next, { history: "push" });
+
   const queryClient = useQueryClient();
+
+  // Task 2.2: dismiss mutation for ReturnReceiptCard — uses new /dismiss-with-reason endpoint.
+  const dismissMutation = useMutation({
+    mutationFn: async (input: {
+      receiptId: string;
+      reason: "done" | "not_return" | "other";
+      reasonText?: string;
+    }) => {
+      const res = await fetch(
+        `/api/rmas/extensiv-receipts/${input.receiptId}/dismiss-with-reason`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: input.reason, reasonText: input.reasonText }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    // Optimistic: remove the receipt from the cached list immediately so
+    // the card disappears on click.
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: ["invoicing", "today"] });
+      const prev = queryClient.getQueryData<ApiResponse>(["invoicing", "today"]);
+      if (prev) {
+        queryClient.setQueryData<ApiResponse>(["invoicing", "today"], {
+          ...prev,
+          receiptRows: prev.receiptRows?.filter((r) => r.receiptId !== input.receiptId),
+        });
+      }
+      return { prev };
+    },
+    onError: (err: Error, _input, ctx) => {
+      // Restore on failure
+      if (ctx?.prev) {
+        queryClient.setQueryData(["invoicing", "today"], ctx.prev);
+      }
+      // Surface the failure to the operator — they need to know dismissal didn't stick.
+      console.error("Dismiss failed:", err);
+      alert(`Dismiss failed: ${err.message}`);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["invoicing", "today"] });
+    },
+  });
+
+  // Legacy state kept in place — dialog is NOT deleted until Task 5.1.
+  // setCreditMemoTarget is still wired to RmaCreditMemoDialog below.
+  const [creditMemoTarget, setCreditMemoTarget] = useState<{
+    rmaId: string;
+    customerId: string;
+  } | null>(null);
 
   const { data, isPending, isError, error, refetch, isFetching } = useQuery<ApiResponse>({
     queryKey: ["invoicing", "today"],
@@ -187,9 +274,10 @@ export default function InvoicingTodayPage() {
     <div className="space-y-6">
       <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Invoicing — Today</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Today</h1>
           <p className="mt-1 text-sm text-secondary">
-            Feldart shipment notifications from the last 7 days, matched to QuickBooks invoices and Shopify orders.
+            Feldart's pending workload — orders to ship out and returns
+            received from the warehouse, last 7 days.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -222,62 +310,164 @@ export default function InvoicingTodayPage() {
         </Card>
       )}
 
-      {data && data.rows.length === 0 && (
-        <Card>
-          <CardBody>
-            <p className="text-sm text-secondary">No shipment notifications found in the last 7 days.</p>
-          </CardBody>
-        </Card>
-      )}
-
-      {data && data.rows.length > 0 && (
-        <Summary rows={data.rows} dismissed={data.dismissed} />
-      )}
-
+      {/* Top-line "today snapshot" — clickable. Three numbers spanning
+          both Orders + Returns: how many shipments need invoicing, how
+          many invoices we've sent in the window, how many returns are
+          waiting on review. */}
       {data && (
-        <div className="flex items-center justify-between">
-          <TabToggle
-            tab={tab}
-            onChange={setTab}
-            counts={{
-              open: data.rows.filter(
-                (r) =>
-                  classifyRow(r, data.dismissed) === "open" &&
-                  r.parseConfidence >= 0.5,
-              ).length,
-              sent: data.rows.filter(
-                (r) => classifyRow(r, data.dismissed) === "sent",
-              ).length,
-              dismissed: data.rows.filter(
-                (r) => classifyRow(r, data.dismissed) === "dismissed",
-              ).length,
-            }}
-          />
-          {tab === "open" && (
-            <BulkDismissButton
-              candidateGmailIds={data.rows
-                .filter(
-                  (r) =>
-                    classifyRow(r, data.dismissed) === "open" &&
-                    r.parseConfidence < 0.5,
-                )
-                .map((r) => r.gmailId)}
-            />
-          )}
-        </div>
+        <Summary
+          rows={data.rows}
+          dismissed={data.dismissed}
+          receiptRowCount={(data.receiptRows ?? []).length}
+          onSelectOrdersTab={(t) => {
+            setTab(t);
+          }}
+          onScrollToReturns={() => {
+            document
+              .getElementById("returns-section")
+              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+        />
       )}
 
-      {data?.rows
-        .filter((r) => classifyRow(r, data.dismissed) === tab)
-        .map((row) => (
-          <ShipmentCard
-            key={row.gmailId}
-            row={row}
-            shadowMode={data.shadowMode}
-            terms={terms}
-            dismissedRecord={data.dismissed[row.gmailId] ?? null}
+      {/* ──────────────── Orders section ────────────────────────────── */}
+      {data && (
+        <section className="space-y-3">
+          <SectionHeader
+            title="Orders"
+            subtitle="Shipment notifications matched to QBO invoices + Shopify orders. Reconcile and send the invoice email."
           />
-        ))}
+          <div className="flex items-center justify-between">
+            <TabToggle
+              tab={tab}
+              onChange={setTab}
+              counts={{
+                open: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "open",
+                ).length,
+                unparseable: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "unparseable",
+                ).length,
+                sent: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "sent",
+                ).length,
+                dismissed: data.rows.filter(
+                  (r) => classifyRow(r, data.dismissed) === "dismissed",
+                ).length,
+              }}
+            />
+            {tab === "unparseable" && (
+              <BulkDismissButton
+                candidateGmailIds={data.rows
+                  .filter(
+                    (r) => classifyRow(r, data.dismissed) === "unparseable",
+                  )
+                  .map((r) => r.gmailId)}
+              />
+            )}
+          </div>
+          {data.rows.length === 0 ? (
+            <Card>
+              <CardBody>
+                <p className="text-sm text-secondary">
+                  No shipment notifications in the last 7 days.
+                </p>
+              </CardBody>
+            </Card>
+          ) : (
+            data.rows
+              .filter((r) => classifyRow(r, data.dismissed) === tab)
+              .map((row) =>
+                tab === "unparseable" ? (
+                  <UnparseableCard key={row.gmailId} row={row} />
+                ) : (
+                  <ShipmentCard
+                    key={row.gmailId}
+                    row={row}
+                    shadowMode={data.shadowMode}
+                    terms={terms}
+                    dismissedRecord={data.dismissed[row.gmailId] ?? null}
+                  />
+                ),
+              )
+          )}
+        </section>
+      )}
+
+      {/* ──────────────── Returns section ───────────────────────────── */}
+      {data && (
+        <section
+          id="returns-section"
+          className="space-y-3 mt-8 pt-6 border-t-2 border-default scroll-mt-4"
+        >
+          <SectionHeader
+            title="Returns received"
+            subtitle="Bluechip warehouse-receipt notifications waiting for you to review and (when matched) issue the credit memo."
+            count={(data.receiptRows ?? []).length}
+          />
+          {(data.receiptRows ?? []).length === 0 ? (
+            <Card>
+              <CardBody>
+                <p className="text-sm text-secondary">
+                  No pending return receipts. Confirmed receipts are visible
+                  on the matched RMA via{" "}
+                  <Link
+                    to="/returns"
+                    className="text-accent-primary underline-offset-2 hover:underline"
+                  >
+                    /returns
+                  </Link>
+                  .
+                </p>
+              </CardBody>
+            </Card>
+          ) : (
+            // Task 2.2: render ReturnReceiptCard list. No inline review dialog.
+            // Task 2.3: emailBodyHtml now populated from email_log.body_html.
+            (data.receiptRows ?? []).map((receipt) => (
+              <ReturnReceiptCard
+                key={receipt.receiptId}
+                receipt={{
+                  receiptId: receipt.receiptId,
+                  gmailMessageId: receipt.gmailMessageId,
+                  emailSubject: receipt.emailSubject,
+                  emailFrom: receipt.emailFrom,
+                  emailBodyHtml: receipt.emailBodyHtml ?? undefined,
+                  emailBodyText: receipt.emailBody,
+                  classifiedAt: receipt.classifiedAt,
+                }}
+                linkedRmas={receipt.linkedRmas ?? []}
+                onDismiss={(reason, reasonText) =>
+                  dismissMutation.mutate({ receiptId: receipt.receiptId, reason, reasonText })
+                }
+              />
+            ))
+          )}
+        </section>
+      )}
+
+      {/* ReturnReceiptReviewDialog intentionally NOT rendered — deprecated by Task 2.2.
+          The file itself is preserved until Task 5.1 (Phase 5 cutover). */}
+
+      {/* Credit memo dialog — opened after the receipt review hands off.
+          Uses the same shared dialog the wizard does, so sales tax checkbox
+          and QBO PDF auto-attach are available here too. */}
+      {creditMemoTarget && (
+        <RmaCreditMemoDialog
+          open={creditMemoTarget !== null}
+          onOpenChange={(next) => {
+            if (!next) setCreditMemoTarget(null);
+          }}
+          rmaId={creditMemoTarget.rmaId}
+          customerId={creditMemoTarget.customerId}
+          onIssued={() => {
+            setCreditMemoTarget(null);
+            void queryClient.invalidateQueries({
+              queryKey: ["invoicing", "today"],
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -373,6 +563,34 @@ function BulkDismissButton({
   );
 }
 
+function SectionHeader({
+  title,
+  subtitle,
+  count,
+}: {
+  title: string;
+  subtitle?: string;
+  count?: number;
+}) {
+  return (
+    <div className="flex items-end justify-between gap-4">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight">
+          {title}
+          {typeof count === "number" && (
+            <span className="ml-2 text-sm font-normal text-muted">
+              ({count})
+            </span>
+          )}
+        </h2>
+        {subtitle && (
+          <p className="mt-0.5 text-xs text-secondary">{subtitle}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TabToggle({
   tab,
   onChange,
@@ -384,6 +602,7 @@ function TabToggle({
 }) {
   const tabs: { key: Tab; label: string }[] = [
     { key: "open", label: "Open" },
+    { key: "unparseable", label: "Unparseable" },
     { key: "sent", label: "Sent" },
     { key: "dismissed", label: "Dismissed" },
   ];
@@ -408,49 +627,75 @@ function TabToggle({
   );
 }
 
-function Summary({
-  rows,
-  dismissed,
-}: {
+function Summary(props: {
   rows: Row[];
   dismissed: Record<string, DismissedRecord>;
+  receiptRowCount: number;
+  onSelectOrdersTab: (tab: Tab) => void;
+  onScrollToReturns: () => void;
 }) {
-  const visible = rows.filter((r) => !dismissed[r.gmailId]);
-  const ready = visible.filter((r) => r.reconcileResult !== null);
-  const lowConfidence = visible.filter((r) => r.parseConfidence < 0.5);
-  const missingInvoice = visible.filter(
-    (r) => r.parseConfidence >= 0.5 && r.qbInvoice === null,
-  );
+  const awaitingInvoice = props.rows.filter(
+    (r) => classifyRow(r, props.dismissed) === "open",
+  ).length;
+  const sentRecently = props.rows.filter(
+    (r) => classifyRow(r, props.dismissed) === "sent",
+  ).length;
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <Card>
-        <CardBody className="flex items-center gap-3">
-          <CheckCircle2 className="size-5 text-accent-success" />
-          <div>
-            <div className="text-2xl font-semibold">{ready.length}</div>
-            <div className="text-xs text-secondary">ready to reconcile</div>
-          </div>
-        </CardBody>
-      </Card>
-      <Card>
-        <CardBody className="flex items-center gap-3">
-          <AlertCircle className="size-5 text-accent-warning" />
-          <div>
-            <div className="text-2xl font-semibold">{missingInvoice.length}</div>
-            <div className="text-xs text-secondary">no QB invoice match (likely sales receipts)</div>
-          </div>
-        </CardBody>
-      </Card>
-      <Card>
-        <CardBody className="flex items-center gap-3">
-          <Package className="size-5 text-muted" />
-          <div>
-            <div className="text-2xl font-semibold">{lowConfidence.length}</div>
-            <div className="text-xs text-secondary">unparseable / not a shipment email</div>
-          </div>
-        </CardBody>
-      </Card>
+      <StatCard
+        icon={AlertCircle}
+        iconClassName="text-accent-warning"
+        count={awaitingInvoice}
+        label={`shipment${awaitingInvoice === 1 ? "" : "s"} awaiting invoice`}
+        onClick={() => props.onSelectOrdersTab("open")}
+      />
+      <StatCard
+        icon={CheckCircle2}
+        iconClassName="text-accent-success"
+        count={sentRecently}
+        label="invoices sent in last 7 days"
+        onClick={() => props.onSelectOrdersTab("sent")}
+      />
+      <StatCard
+        icon={Package}
+        iconClassName="text-accent-info"
+        count={props.receiptRowCount}
+        label={`pending return${props.receiptRowCount === 1 ? "" : "s"} to review`}
+        onClick={props.onScrollToReturns}
+      />
     </div>
+  );
+}
+
+function StatCard({
+  icon: Icon,
+  iconClassName,
+  count,
+  label,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  iconClassName: string;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left transition-colors hover:bg-elevated rounded-lg"
+    >
+      <Card>
+        <CardBody className="flex items-center gap-3">
+          <Icon className={`size-5 ${iconClassName}`} />
+          <div>
+            <div className="text-2xl font-semibold">{count}</div>
+            <div className="text-xs text-secondary">{label}</div>
+          </div>
+        </CardBody>
+      </Card>
+    </button>
   );
 }
 
@@ -464,6 +709,136 @@ type SendResult =
       emailError?: string | null;
     }
   | { ok: false; error: string };
+
+// UnparseableCard — shown on the "Unparseable" tab. Email couldn't be
+// parsed as a Feldart shipment notification (low confidence) so we don't
+// have shipment / invoice / Shopify fields to render. Surfaces what we
+// know — gmail id, received-at, missing fields — and offers a Gmail link
+// + Dismiss action so the operator can clear the row from the queue.
+function UnparseableCard({ row }: { row: Row }) {
+  const queryClient = useQueryClient();
+  const [dismissing, setDismissing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function dismiss(): Promise<void> {
+    setDismissing(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/invoicing/dismiss", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          gmailId: row.gmailId,
+          reason: "other",
+          reasonNote: "unparseable / not a shipment email",
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      void queryClient.invalidateQueries({
+        queryKey: ["invoicing", "today"],
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dismiss failed");
+    } finally {
+      setDismissing(false);
+    }
+  }
+
+  const receivedLabel = row.receivedAt
+    ? new Date(row.receivedAt).toLocaleString(undefined, {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "(no received date)";
+
+  const [showFullBody, setShowFullBody] = useState(false);
+  const bodyTruncated = row.emailBody.length > 800;
+  const visibleBody = showFullBody
+    ? row.emailBody
+    : row.emailBody.slice(0, 800);
+
+  return (
+    <Card>
+      <CardBody className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="space-y-0.5 min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge tone="neutral">Unparseable</Badge>
+              <span className="text-secondary">{receivedLabel}</span>
+              <span className="text-muted text-xs">
+                confidence {(row.parseConfidence * 100).toFixed(0)}%
+              </span>
+            </div>
+            {row.emailSubject && (
+              <div className="text-sm font-medium truncate">
+                {row.emailSubject}
+              </div>
+            )}
+            {row.emailFrom && (
+              <div className="text-xs text-secondary truncate">
+                From: {row.emailFrom}
+              </div>
+            )}
+            {row.parseMissingFields.length > 0 && (
+              <div className="text-xs text-muted">
+                Missing: {row.parseMissingFields.join(", ")}
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <a
+              href={`https://mail.google.com/mail/u/0/#all/${row.gmailId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs text-secondary hover:bg-elevated"
+            >
+              <Mail className="size-3" />
+              Open in Gmail
+            </a>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={dismissing}
+              loading={dismissing}
+              onClick={() => void dismiss()}
+            >
+              Dismiss
+            </Button>
+          </div>
+        </div>
+        {/* Body preview — operator can read enough to decide without
+            jumping to Gmail. Truncated at 800 chars with show-more. */}
+        {row.emailBody && (
+          <div className="rounded-md border border-default bg-subtle/40 px-3 py-2">
+            <pre className="whitespace-pre-wrap break-words text-xs text-secondary font-sans leading-relaxed">
+              {visibleBody}
+              {!showFullBody && bodyTruncated ? "…" : ""}
+            </pre>
+            {bodyTruncated && (
+              <button
+                type="button"
+                onClick={() => setShowFullBody((v) => !v)}
+                className="mt-1 text-xs text-accent-primary hover:underline"
+              >
+                {showFullBody ? "Show less" : "Show full email"}
+              </button>
+            )}
+          </div>
+        )}
+        {!row.emailBody && (
+          <p className="text-xs text-muted italic">
+            No plain-text body captured. Open in Gmail to read.
+          </p>
+        )}
+        {error && (
+          <div className="text-xs text-accent-danger">{error}</div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
 
 function ShipmentCard({
   row,

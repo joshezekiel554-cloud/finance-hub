@@ -192,9 +192,16 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
         completedByUserId: tasks.completedByUserId,
         createdAt: tasks.createdAt,
         updatedAt: tasks.updatedAt,
-        commentCount: sql<number>`(SELECT COUNT(*) FROM comments WHERE parent_type = 'task' AND parent_id = ${tasks.id})`,
-        watcherCount: sql<number>`(SELECT COUNT(*) FROM task_watchers WHERE task_id = ${tasks.id})`,
-        mentionCount: sql<number>`(SELECT COUNT(*) FROM mentions WHERE parent_type = 'task' AND parent_id = ${tasks.id} AND mentioned_user_id = ${user.id})`,
+        // Hand-qualify `tasks`.`id` here. ${tasks.id} inside a sql tag
+        // gets serialised as the bare column name `id`, and once that
+        // lands inside the inner subquery it resolves against the
+        // inner table (comments.id, task_watchers.id, mentions.id)
+        // instead of tasks.id — so the WHERE was always-false and
+        // every count returned 0. Same gotcha as
+        // src/server/routes/customers.ts hasPendingRma + lastChasedAt.
+        commentCount: sql<number>`(SELECT COUNT(*) FROM comments WHERE parent_type = 'task' AND parent_id = \`tasks\`.\`id\`)`,
+        watcherCount: sql<number>`(SELECT COUNT(*) FROM task_watchers WHERE task_id = \`tasks\`.\`id\`)`,
+        mentionCount: sql<number>`(SELECT COUNT(*) FROM mentions WHERE parent_type = 'task' AND parent_id = \`tasks\`.\`id\` AND mentioned_user_id = ${user.id})`,
       })
       .from(tasks)
       .where(where)

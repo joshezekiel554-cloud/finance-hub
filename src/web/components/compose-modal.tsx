@@ -19,9 +19,9 @@
 // text and html parts so the recipient's mail client picks whichever it
 // prefers.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Send } from "lucide-react";
+import { Paperclip, Send } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -34,6 +34,7 @@ import {
   renderTemplate,
   type TemplateVars,
 } from "../../modules/email-compose/index.js";
+import { EditorField } from "./editor-field";
 
 type GmailAlias = {
   sendAsEmail: string;
@@ -76,6 +77,10 @@ export type ComposeContext = {
     subject: string;
     from: string;
     bodyExcerpt: string;
+    // When set (Reply all path), prefills the cc field. Comma-separated,
+    // already filtered to drop our own outbound addresses + the original
+    // sender (which goes to the To field instead).
+    cc?: string;
   };
 };
 
@@ -132,9 +137,40 @@ function pickDefaultAlias(aliases: GmailAlias[]): string | null {
   return aliases[0]?.sendAsEmail ?? null;
 }
 
-function buildReplyQuoteBody(reply: ComposeContext["inReplyTo"]): string {
+// Lightweight HTML escape — used when injecting unescaped strings
+// (reply body excerpts, plain-text template content) into editor HTML.
+function escapeHtmlForEditor(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Convert plain text (e.g. an email_template body, which is stored as
+// plain text) into editor-friendly HTML. Mirrors the server-side
+// bodyToHtml: blank-line-separated chunks → <p>, single newlines →
+// <br/>. Output flows into the TipTap editor as initial content;
+// operators can then format further.
+function plainTextToHtml(raw: string): string {
+  if (!raw) return "";
+  const escaped = escapeHtmlForEditor(raw);
+  const paragraphs = escaped.split(/\n{2,}/);
+  return paragraphs
+    .map((p) => `<p>${p.replace(/\n/g, "<br/>") || "<br/>"}</p>`)
+    .join("");
+}
+
+// Build the reply-quote block as HTML (TipTap-compatible). Renders as
+// a divider line + the original sender header + a <blockquote> with
+// the parent body. Operators can edit inside or outside the quote.
+function buildReplyQuoteHtml(reply: ComposeContext["inReplyTo"]): string {
   if (!reply) return "";
-  return `\n\n----- Original message from ${reply.from} -----\n${reply.bodyExcerpt}`;
+  const fromEsc = escapeHtmlForEditor(reply.from);
+  const bodyEsc = escapeHtmlForEditor(reply.bodyExcerpt).replace(
+    /\n/g,
+    "<br/>",
+  );
+  return `<p></p><p>----- Original message from ${fromEsc} -----</p><blockquote>${bodyEsc}</blockquote>`;
 }
 
 export default function ComposeModal({ open, onOpenChange, context }: Props) {
@@ -173,6 +209,9 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
   const [body, setBody] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Attachments selected for this send. Stored as File so we can show
+  // size/name in the chip; serialised to base64 only at send time.
+  const [attachments, setAttachments] = useState<File[]>([]);
 
   // Hydrate form fields when the modal opens, when context changes, or
   // when the aliases finish loading. We rely on a key generated from the
@@ -190,13 +229,20 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
       return;
     }
     setTo(reply?.from ?? context?.customerEmail ?? "");
-    setCc("");
+    // Reply-all prefills the cc; otherwise start blank.
+    setCc(reply?.cc ?? "");
     setBcc("");
-    setShowCcBcc(false);
+    // If there are reply-all recipients, expose the cc/bcc row by default
+    // so the operator can see + edit before sending.
+    setShowCcBcc(Boolean(reply?.cc));
     setSubject(reply ? `Re: ${reply.subject}` : "");
-    setBody(reply ? buildReplyQuoteBody(reply) : "");
+    // Body is now HTML (the editor's native format). Reply mode pre-
+    // fills with a blockquote of the parent message; compose-new opens
+    // empty.
+    setBody(reply ? buildReplyQuoteHtml(reply) : "");
     setSelectedTemplateId("");
     setErrorMessage(null);
+    setAttachments([]);
     // formKey is the controlled re-init trigger — we don't want this
     // effect to re-fire on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -219,25 +265,43 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     if (!tpl) return;
     const vars = fallbackTemplateVars(context);
     setSubject(renderTemplate(tpl.subject, vars));
-    // Preserve the reply quote on the bottom when applying a template
-    // mid-reply — the quoted parent is informational and shouldn't
-    // disappear when the user picks a template.
-    const replyQuote = buildReplyQuoteBody(reply);
-    setBody(renderTemplate(tpl.body, vars) + replyQuote);
+    // Templates are stored as plain text — convert to HTML for the
+    // editor. Preserve the reply quote on the bottom; the quoted parent
+    // is informational and shouldn't disappear when the user picks a
+    // template.
+    const renderedBodyHtml = plainTextToHtml(renderTemplate(tpl.body, vars));
+    const replyQuote = buildReplyQuoteHtml(reply);
+    setBody(renderedBodyHtml + replyQuote);
   }
 
   const sendMutation = useMutation({
     mutationFn: async () => {
+      // Encode any attached files to base64 before serialising the
+      // payload — /api/send expects { filename, mimeType, dataBase64 }.
+      const encodedAttachments = attachments.length
+        ? await Promise.all(
+            attachments.map(async (f) => ({
+              filename: f.name,
+              mimeType: f.type || "application/octet-stream",
+              dataBase64: await fileToBase64(f),
+            })),
+          )
+        : undefined;
       const payload = {
         to,
         cc: cc || undefined,
         bcc: bcc || undefined,
         subject,
         body,
+        // Body is HTML from the TipTap editor — server runs sanitize-html
+        // before using as the html part and derives a plain-text version
+        // for the multipart text/plain part.
+        isHtml: true,
         alias: from || undefined,
         inReplyTo: reply?.messageId,
         threadId: reply?.threadId,
         customerId: context?.customerId,
+        attachments: encodedAttachments,
       };
       const res = await fetch("/api/send", {
         method: "POST",
@@ -268,8 +332,12 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     },
   });
 
+  // Body is HTML now — an "empty" editor still produces "<p></p>" or
+  // similar whitespace markup. Strip tags + trim to test for actual
+  // content before enabling Send.
+  const bodyHasContent = body.replace(/<[^>]*>/g, "").trim().length > 0;
   const requiredFilled =
-    to.trim().length > 0 && subject.trim().length > 0 && body.trim().length > 0;
+    to.trim().length > 0 && subject.trim().length > 0 && bodyHasContent;
   const canSend =
     requiredFilled && from.length > 0 && !sendMutation.isPending;
 
@@ -369,19 +437,28 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
               </select>
             </FieldRow>
 
-            <label className="block">
+            <div>
               <span className="mb-1 block text-xs font-medium text-secondary">
                 Body
               </span>
-              <textarea
+              {/* TipTap-powered editor — see editor-field.tsx. resetKey
+                  is the formKey + selectedTemplateId so the editor
+                  reloads its content when the operator opens a fresh
+                  compose session OR picks a template (both swap the
+                  body wholesale). Mid-typing edits stay sticky. */}
+              <EditorField
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
-                rows={16}
-                autoFocus
-                className="w-full rounded-md border border-default bg-base px-3 py-2 font-mono text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+                onChange={setBody}
                 placeholder="Write your message…"
+                resetKey={`${formKey}::${selectedTemplateId}`}
               />
-            </label>
+            </div>
+
+            <AttachmentsField
+              attachments={attachments}
+              onChange={setAttachments}
+              customerId={context?.customerId}
+            />
           </div>
         </div>
 
@@ -433,6 +510,317 @@ function FieldRow({
       {children}
     </label>
   );
+}
+
+// Compact file-picker + chip list for outbound attachments. Backend
+// /api/send caps at 20 files; we don't enforce client-side beyond a
+// reasonable per-file size warning.
+//
+// When a customerId is supplied (compose-modal mode), a second button
+// surfaces the customer's existing QBO docs (invoices, credit memos)
+// + an open-items statement PDF. Picking one fetches the PDF
+// server-side and wraps it in a File object so the existing base64-
+// encode + send pipeline doesn't change shape.
+function AttachmentsField({
+  attachments,
+  onChange,
+  customerId,
+}: {
+  attachments: File[];
+  onChange: (next: File[]) => void;
+  customerId?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [docPickerOpen, setDocPickerOpen] = useState(false);
+
+  return (
+    <div>
+      <span className="mb-1 block text-xs font-medium text-secondary">
+        Attachments
+      </span>
+      <div className="space-y-1.5">
+        {attachments.map((f, i) => (
+          <div
+            key={`${f.name}-${i}`}
+            className="flex items-center justify-between rounded-md border border-default bg-elevated px-2 py-1 text-xs"
+          >
+            <span className="truncate">
+              <span className="font-medium">{f.name}</span>
+              <span className="ml-2 text-muted">
+                {formatFileSize(f.size)}
+                {f.type ? ` · ${f.type}` : ""}
+              </span>
+            </span>
+            <button
+              type="button"
+              className="ml-2 shrink-0 text-muted hover:text-accent-danger"
+              onClick={() =>
+                onChange(attachments.filter((_, j) => j !== i))
+              }
+              aria-label={`Remove ${f.name}`}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            const picked = e.target.files ? Array.from(e.target.files) : [];
+            // Reset value so the same file can be re-picked after a remove.
+            e.target.value = "";
+            if (picked.length === 0) return;
+            onChange([...attachments, ...picked]);
+          }}
+        />
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs text-secondary hover:bg-elevated"
+          >
+            <Paperclip className="size-3" />
+            {attachments.length === 0 ? "Attach files" : "Add more"}
+          </button>
+          {customerId ? (
+            <button
+              type="button"
+              onClick={() => setDocPickerOpen((v) => !v)}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border border-default px-2 py-1 text-xs text-secondary hover:bg-elevated",
+                docPickerOpen ? "bg-elevated" : "bg-base",
+              )}
+            >
+              <Paperclip className="size-3" />
+              {docPickerOpen ? "Hide customer docs" : "Attach customer doc"}
+            </button>
+          ) : null}
+        </div>
+        {docPickerOpen && customerId ? (
+          <CustomerDocPicker
+            customerId={customerId}
+            attachedFilenames={new Set(attachments.map((f) => f.name))}
+            onPick={(file) => onChange([...attachments, file])}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Inline picker for attaching the customer's existing QBO docs to a
+// compose-new email. Shows recent invoices + credit memos (from the
+// /api/customers/:id/invoices endpoint already used by the Invoices
+// tab) plus a "Generate statement PDF (open items)" virtual entry
+// that re-renders a fresh statement on demand.
+//
+// Picking fetches the PDF as a Blob, wraps it in a File so the
+// downstream base64-encode + send pipeline doesn't fork by source.
+// Already-attached filenames render as disabled to prevent
+// double-attaching the same doc — the operator can still use the
+// chip's × button to remove it.
+type CustomerDocRow = {
+  docType: "invoice" | "credit_memo";
+  qbId: string;
+  docNumber: string | null;
+  issueDate: string | null;
+  total: string;
+  balance: string;
+};
+
+function CustomerDocPicker({
+  customerId,
+  attachedFilenames,
+  onPick,
+}: {
+  customerId: string;
+  attachedFilenames: Set<string>;
+  onPick: (file: File) => void;
+}) {
+  const docsQuery = useQuery<{
+    invoices: CustomerDocRow[];
+  }>({
+    queryKey: ["customer-invoices", customerId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/invoices`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+
+  async function fetchAsFile(
+    url: string,
+    filename: string,
+  ): Promise<File> {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    return new File([blob], filename, {
+      type: blob.type || "application/pdf",
+    });
+  }
+
+  async function pickInvoiceOrCm(row: CustomerDocRow): Promise<void> {
+    const baseName =
+      row.docType === "credit_memo"
+        ? `CreditMemo-${row.docNumber ?? row.qbId}`
+        : `Invoice-${row.docNumber ?? row.qbId}`;
+    const filename = `${baseName}.pdf`;
+    if (attachedFilenames.has(filename)) return;
+    const key = `${row.docType}:${row.qbId}`;
+    setBusyKey(key);
+    setPickError(null);
+    try {
+      const url = `/api/qb-pdf/${row.docType === "credit_memo" ? "creditmemo" : "invoice"}/${encodeURIComponent(row.qbId)}`;
+      const file = await fetchAsFile(url, filename);
+      onPick(file);
+    } catch (err) {
+      setPickError(
+        err instanceof Error ? err.message : "Failed to fetch PDF",
+      );
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function pickStatement(): Promise<void> {
+    const filename = `Statement-${new Date().toISOString().slice(0, 10)}.pdf`;
+    if (attachedFilenames.has(filename)) return;
+    setBusyKey("statement");
+    setPickError(null);
+    try {
+      const url = `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview`;
+      const file = await fetchAsFile(url, filename);
+      onPick(file);
+    } catch (err) {
+      setPickError(
+        err instanceof Error
+          ? err.message
+          : "Failed to render statement PDF",
+      );
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  const rows = docsQuery.data?.invoices ?? [];
+  // Recent first — backend already orders by issue date desc, but we
+  // cap the picker at the 25 most recent so an old account with
+  // hundreds of invoices doesn't fill the dialog.
+  const visibleRows = rows.slice(0, 25);
+
+  return (
+    <div className="rounded-md border border-default bg-subtle p-2">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          {docsQuery.isPending
+            ? "Loading customer docs…"
+            : `Customer docs (${rows.length})`}
+        </span>
+        {pickError ? (
+          <span className="text-[11px] text-accent-danger">
+            {pickError}
+          </span>
+        ) : null}
+      </div>
+      {/* Statement PDF — always offered (re-renders open items on demand). */}
+      <button
+        type="button"
+        onClick={pickStatement}
+        disabled={busyKey !== null}
+        className="mb-1 flex w-full items-center justify-between rounded border border-default bg-base px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:opacity-50"
+      >
+        <span>
+          <span className="font-medium">Statement (open items)</span>
+          <span className="ml-2 text-muted">
+            generated now from current open invoices
+          </span>
+        </span>
+        <span className="ml-2 shrink-0 text-[10px] text-muted">
+          {busyKey === "statement" ? "fetching…" : "PDF"}
+        </span>
+      </button>
+      {docsQuery.isError ? (
+        <div className="text-xs text-accent-danger">
+          {(docsQuery.error as Error)?.message ?? "Failed to load docs"}
+        </div>
+      ) : null}
+      <div className="max-h-48 space-y-0.5 overflow-y-auto">
+        {visibleRows.map((row) => {
+          const key = `${row.docType}:${row.qbId}`;
+          const filename =
+            row.docType === "credit_memo"
+              ? `CreditMemo-${row.docNumber ?? row.qbId}.pdf`
+              : `Invoice-${row.docNumber ?? row.qbId}.pdf`;
+          const alreadyAttached = attachedFilenames.has(filename);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => pickInvoiceOrCm(row)}
+              disabled={busyKey !== null || alreadyAttached}
+              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-elevated disabled:opacity-50"
+            >
+              <span className="truncate">
+                <span className="font-medium">
+                  {row.docType === "credit_memo" ? "CM" : "Inv"}{" "}
+                  {row.docNumber ?? row.qbId}
+                </span>
+                <span className="ml-2 text-muted">
+                  {row.issueDate ?? "—"} · ${Number(row.total).toFixed(2)}
+                </span>
+              </span>
+              <span className="ml-2 shrink-0 text-[10px] text-muted">
+                {alreadyAttached
+                  ? "attached"
+                  : busyKey === key
+                    ? "fetching…"
+                    : "PDF"}
+              </span>
+            </button>
+          );
+        })}
+        {!docsQuery.isPending && visibleRows.length === 0 ? (
+          <div className="px-2 py-1 text-xs text-muted">
+            No invoices or credit memos for this customer.
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Read a File as base64 (no data: prefix). Used to encode attachments
+// for the /api/send payload, which expects raw base64 per attachment.
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const idx = result.indexOf(",");
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    };
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("FileReader error"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function FromField({

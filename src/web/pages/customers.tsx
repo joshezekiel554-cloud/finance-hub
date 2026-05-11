@@ -1,17 +1,28 @@
 import { useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, getRouteApi } from "@tanstack/react-router";
 import {
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Search, AlertCircle, Pause } from "lucide-react";
-import { useEffect } from "react";
+import { Search, AlertCircle, Pause, Plus } from "lucide-react";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import {
+  type CustomersSearch,
+} from "../lib/search-schemas/customers";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/cn";
+import { SyncQbBadge } from "../components/sync-qb-badge";
+import {
+  TaskDetailDrawer,
+  type DrawerMode as TaskDrawerMode,
+} from "../components/task-detail-drawer";
+
+const customersRouteApi = getRouteApi("/customers");
 
 type CustomerType = "b2b" | "b2c" | null;
 
@@ -31,8 +42,12 @@ type CustomerRow = {
   daysOverdue: number | null;
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
+  lastContactedAt: string | null;
   unactionedEmailCount: number;
+  hasPendingRma: boolean;
   tags: string[] | null;
+  openTaskCount: number;
+  mostUrgentTaskDueAt: string | null;
 };
 
 type ListResponse = {
@@ -42,7 +57,34 @@ type ListResponse = {
 };
 
 type FilterTab = "b2b" | "b2c" | "uncategorized" | "all";
-type SortKey = "displayName" | "balance" | "overdueBalance" | "lastSyncedAt";
+type HoldFilter = "all" | "active" | "hold" | "payment_upfront";
+type SortKey =
+  | "displayName"
+  | "balance"
+  | "overdueBalance"
+  | "lastSyncedAt"
+  | "lastPaymentAt"
+  | "lastStatementSentAt"
+  | "lastContactedAt"
+  | "openTaskCount";
+
+const SORT_LABELS: Record<SortKey, string> = {
+  displayName: "Name",
+  balance: "Balance",
+  overdueBalance: "Overdue",
+  lastSyncedAt: "Last synced",
+  lastPaymentAt: "Last payment",
+  lastStatementSentAt: "Last statement",
+  lastContactedAt: "Last contacted",
+  openTaskCount: "Tasks",
+};
+
+const HOLD_LABELS: Record<HoldFilter, string> = {
+  all: "All",
+  active: "Active",
+  hold: "On hold",
+  payment_upfront: "Payment upfront",
+};
 
 const TAB_LABELS: Record<FilterTab, string> = {
   b2b: "B2B",
@@ -52,30 +94,61 @@ const TAB_LABELS: Record<FilterTab, string> = {
 };
 
 export default function CustomersPage() {
-  const [tab, setTab] = useState<FilterTab>("b2b");
-  const [search, setSearch] = useState("");
-  // Default sort surfaces customers with money on the line first — most
-  // operator visits to this page are about action, not the alphabet.
-  // Click the Customer column header once to flip back to A→Z.
-  const [sort, setSort] = useState<SortKey>("balance");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const search = customersRouteApi.useSearch();
+  const { setFilter, setFilters } = useFilterNavigate<CustomersSearch>("/customers");
+  useFilterPersistence("/customers");
+
+  // Local aliases — minimize downstream changes:
+  const tab = search.tab;
+  const sort = search.sort;
+  const dir = search.dir;
+  const hideZero = search.hideZero;
+  const hasOverdueFilter = search.hasOverdue;
+  const onHoldFilter = search.onHold;
+  const missingTermsFilter = search.missingTerms;
+  const hasUnactionedEmailFilter = search.hasUnactionedEmail;
+
+  // Setters wrap useFilterNavigate. Toggles + tab + sort use push history;
+  // text input + boolean filter chips use replace (default).
+  const setTab = (next: CustomersSearch["tab"]) =>
+    setFilters({ tab: next, hideZero: next === "b2b" }, { history: "push" });
+  const setSort = (next: CustomersSearch["sort"]) =>
+    setFilter("sort", next, { history: "push" });
+  const setDir = (next: CustomersSearch["dir"]) =>
+    setFilter("dir", next, { history: "push" });
+  const setHideZero = (next: boolean) => setFilter("hideZero", next);
+  const setHasOverdueFilter = (next: boolean) => setFilter("hasOverdue", next);
+  const setOnHoldFilter = (next: boolean) => setFilter("onHold", next);
+  const setMissingTermsFilter = (next: boolean) =>
+    setFilter("missingTerms", next);
+  const setHasUnactionedEmailFilter = (next: boolean) =>
+    setFilter("hasUnactionedEmail", next);
+  const setSearchValue = (next: string) => setFilter("search", next);
+
   const [sweepMode, setSweepMode] = useState(false);
-  // Filter chips. hideZero defaults ON for B2B (most chase-relevant view)
-  // and OFF for everything else (Uncategorized has many $0 rows that ARE
-  // the workflow). The effect below flips it on tab switches.
-  const [hideZero, setHideZero] = useState(true);
-  const [hasOverdueFilter, setHasOverdueFilter] = useState(false);
-  const [onHoldFilter, setOnHoldFilter] = useState(false);
-  const [missingTermsFilter, setMissingTermsFilter] = useState(false);
-  const [hasUnactionedEmailFilter, setHasUnactionedEmailFilter] =
-    useState(false);
-  useEffect(() => {
-    setHideZero(tab === "b2b");
-  }, [tab]);
   // Selected gmailIds in sweep mode. When the user toggles "Select all
   // (balance > 0)" we pre-fill with the matching ids; individual checkbox
   // clicks add/remove from this set.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Single TaskDetailDrawer mounted once on this page (Item 1).
+  // null = closed; setting a DrawerMode opens it.
+  const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
+
+  // Current operator — required by TaskDetailDrawer for mention resolution
+  // and watcher self-attribution. Same query/staleTime as customer-detail.
+  const meQuery = useQuery<{
+    user: { id: string; name: string | null; email: string; image: string | null };
+  }>({
+    queryKey: ["me"],
+    queryFn: async () => {
+      const res = await fetch("/api/me");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const currentUser = meQuery.data?.user ?? null;
 
   const queryClient = useQueryClient();
 
@@ -83,7 +156,7 @@ export default function CustomersPage() {
     "customers",
     {
       tab,
-      search,
+      search: search.search,
       sort,
       dir,
       hideZero,
@@ -93,11 +166,24 @@ export default function CustomersPage() {
       hasUnactionedEmailFilter,
     },
   ] as const;
+  // When the search box has 2+ chars, ignore tab + filter chips so the
+  // operator gets matches across ALL customers regardless of which tab
+  // or chips are active (Item 3).
+  const searchIsActive = search.search.trim().length >= 2;
+  const hasActiveFilters =
+    tab !== "all" ||
+    hideZero ||
+    hasOverdueFilter ||
+    onHoldFilter ||
+    missingTermsFilter ||
+    hasUnactionedEmailFilter;
+
   const { data, isPending, isError, error } = useQuery<ListResponse>({
     queryKey,
     queryFn: async () => {
       const params = new URLSearchParams({
-        customerType: tab,
+        // When search is active, send "all" so the backend ignores customerType.
+        customerType: searchIsActive ? "all" : tab,
         sort,
         dir,
         // 5000 covers the full customer table (~2,400 today) so the
@@ -105,13 +191,15 @@ export default function CustomersPage() {
         // than the first page. Backend caps at 5000 in the route schema.
         limit: "5000",
       });
-      if (search.trim()) params.set("q", search.trim());
-      if (hideZero) params.set("hideZeroBalance", "true");
-      if (hasOverdueFilter) params.set("hasOverdue", "true");
-      if (onHoldFilter) params.set("holdStatus", "hold");
-      if (missingTermsFilter) params.set("missingTerms", "true");
-      if (hasUnactionedEmailFilter)
-        params.set("hasUnactionedEmail", "true");
+      if (searchIsActive) params.set("q", search.search.trim());
+      // Filter chips are suppressed when search is active.
+      if (!searchIsActive) {
+        if (hideZero) params.set("hideZeroBalance", "true");
+        if (hasOverdueFilter) params.set("hasOverdue", "true");
+        if (onHoldFilter) params.set("holdStatus", "hold");
+        if (missingTermsFilter) params.set("missingTerms", "true");
+        if (hasUnactionedEmailFilter) params.set("hasUnactionedEmail", "true");
+      }
       const res = await fetch(`/api/customers?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -220,6 +308,7 @@ export default function CustomersPage() {
             All customers from QuickBooks. Filter by type or search by name.
           </p>
         </div>
+        <SyncQbBadge />
       </div>
 
       {data && data.totals.uncategorized > 0 && tab !== "uncategorized" && (
@@ -351,15 +440,22 @@ export default function CustomersPage() {
             ))}
         </div>
 
-        <div className="relative ml-auto">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name or email…"
-            className="!pl-8"
-            aria-label="Search customers"
-          />
+        <div className="relative ml-auto flex flex-col items-end gap-1">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
+            <Input
+              value={search.search}
+              onChange={(e) => setSearchValue(e.target.value)}
+              placeholder="Search name or email…"
+              className="!pl-8"
+              aria-label="Search customers"
+            />
+          </div>
+          {searchIsActive && hasActiveFilters && (
+            <p className="text-[11px] text-muted">
+              Filters ignored — searching all customers
+            </p>
+          )}
         </div>
 
         {tab === "uncategorized" && (
@@ -381,27 +477,27 @@ export default function CustomersPage() {
         <FilterChip
           label="Hide $0"
           active={hideZero}
-          onClick={() => setHideZero((v) => !v)}
+          onClick={() => setHideZero(!hideZero)}
         />
         <FilterChip
           label="Has overdue"
           active={hasOverdueFilter}
-          onClick={() => setHasOverdueFilter((v) => !v)}
+          onClick={() => setHasOverdueFilter(!hasOverdueFilter)}
         />
         <FilterChip
           label="On hold"
           active={onHoldFilter}
-          onClick={() => setOnHoldFilter((v) => !v)}
+          onClick={() => setOnHoldFilter(!onHoldFilter)}
         />
         <FilterChip
           label="No terms set"
           active={missingTermsFilter}
-          onClick={() => setMissingTermsFilter((v) => !v)}
+          onClick={() => setMissingTermsFilter(!missingTermsFilter)}
         />
         <FilterChip
           label="Has unactioned email"
           active={hasUnactionedEmailFilter}
-          onClick={() => setHasUnactionedEmailFilter((v) => !v)}
+          onClick={() => setHasUnactionedEmailFilter(!hasUnactionedEmailFilter)}
         />
         {hideZero ||
         hasOverdueFilter ||
@@ -411,11 +507,13 @@ export default function CustomersPage() {
           <button
             type="button"
             onClick={() => {
-              setHideZero(false);
-              setHasOverdueFilter(false);
-              setOnHoldFilter(false);
-              setMissingTermsFilter(false);
-              setHasUnactionedEmailFilter(false);
+              setFilters({
+                hideZero: false,
+                hasOverdue: false,
+                onHold: false,
+                missingTerms: false,
+                hasUnactionedEmail: false,
+              });
             }}
             className="ml-1 text-muted hover:text-primary"
           >
@@ -526,10 +624,41 @@ export default function CustomersPage() {
                   align="right"
                 />
                 <th className="px-3 py-2 text-right">Days</th>
-                <th className="px-3 py-2">Last payment</th>
-                <th className="px-3 py-2">Last statement</th>
+                <SortableTh
+                  label="Last payment"
+                  active={sort === "lastPaymentAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastPaymentAt", sort, setSort, dir, setDir)
+                  }
+                />
+                <SortableTh
+                  label="Last statement"
+                  active={sort === "lastStatementSentAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastStatementSentAt", sort, setSort, dir, setDir)
+                  }
+                />
+                <SortableTh
+                  label="Last contacted"
+                  active={sort === "lastContactedAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastContactedAt", sort, setSort, dir, setDir)
+                  }
+                />
+                <SortableTh
+                  label="Tasks"
+                  active={sort === "openTaskCount"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("openTaskCount", sort, setSort, dir, setDir)
+                  }
+                />
                 <th className="px-3 py-2">Terms</th>
                 <th className="px-3 py-2">Status</th>
+                <th className="w-10 px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
@@ -542,7 +671,7 @@ export default function CustomersPage() {
                   <tr
                     key={row.id}
                     className={cn(
-                      "border-b border-default last:border-b-0",
+                      "group border-b border-default last:border-b-0",
                       onHold
                         ? "bg-accent-danger/10 hover:bg-accent-danger/15"
                         : "hover:bg-elevated",
@@ -586,6 +715,14 @@ export default function CustomersPage() {
                               : row.unactionedEmailCount}
                           </span>
                         ) : null}
+                        {row.hasPendingRma ? (
+                          <span
+                            className="inline-flex items-center rounded border border-accent-warning/40 bg-accent-warning/10 px-1 text-[9px] font-medium uppercase tracking-wide text-accent-warning"
+                            title="Has an active RMA in progress"
+                          >
+                            RMA
+                          </span>
+                        ) : null}
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-secondary">
@@ -623,10 +760,36 @@ export default function CustomersPage() {
                       {relativeShortDate(row.lastStatementSentAt)}
                     </td>
                     <td className="px-3 py-2 text-secondary">
+                      {relativeShortDate(row.lastContactedAt)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <TaskCountBadge
+                        count={row.openTaskCount}
+                        mostUrgentDueAt={row.mostUrgentTaskDueAt}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-secondary">
                       {row.paymentTerms ?? "—"}
                     </td>
                     <td className="px-3 py-2">
                       <StatusBadge status={row.holdStatus} />
+                    </td>
+                    <td className="px-1 py-2">
+                      <button
+                        type="button"
+                        title="Add task for this customer"
+                        aria-label={`Add task for ${row.displayName}`}
+                        onClick={() =>
+                          setTaskDrawer({
+                            mode: "create",
+                            defaults: { customerId: row.id },
+                          })
+                        }
+                        className="flex items-center gap-0.5 rounded px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:bg-elevated hover:text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-primary"
+                      >
+                        <Plus className="size-3" />
+                        Task
+                      </button>
                     </td>
                   </tr>
                 );
@@ -635,7 +798,7 @@ export default function CustomersPage() {
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={sweepMode ? 10 : 9}
+                    colSpan={sweepMode ? 13 : 12}
                   >
                     No customers match.
                   </td>
@@ -645,6 +808,18 @@ export default function CustomersPage() {
           </table>
         </CardBody>
       </Card>
+
+      {/* Single TaskDetailDrawer — opened by the per-row "+ Task" buttons (Item 1) */}
+      <TaskDetailDrawer
+        open={taskDrawer !== null}
+        onClose={() => setTaskDrawer(null)}
+        drawer={taskDrawer ?? { mode: "create" }}
+        currentUser={currentUser}
+        listQueryKey={queryKey}
+        onCreated={() => {
+          queryClient.invalidateQueries({ queryKey: ["customers"] });
+        }}
+      />
     </div>
   );
 }
@@ -671,6 +846,36 @@ function StatusBadge({ status }: { status: HoldStatus }) {
     return <Badge tone="high">Payment upfront</Badge>;
   }
   return <Badge tone="success">Active</Badge>;
+}
+
+// Tasks column cell — shows count with urgency colour coding (Item 2).
+// overdue (mostUrgentDueAt < now) → critical (red)
+// due soon (≤7 days) → high (amber)
+// has tasks, no due pressure → neutral
+// no tasks → muted dash
+function TaskCountBadge({
+  count,
+  mostUrgentDueAt,
+}: {
+  count: number;
+  mostUrgentDueAt: string | null;
+}) {
+  if (count === 0) return <span className="text-muted">—</span>;
+
+  const now = Date.now();
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+
+  if (mostUrgentDueAt) {
+    const due = new Date(mostUrgentDueAt).getTime();
+    if (due < now) {
+      return <Badge tone="critical">{count}</Badge>;
+    }
+    if (due - now <= sevenDays) {
+      return <Badge tone="high">{count}</Badge>;
+    }
+  }
+
+  return <Badge tone="neutral">{count}</Badge>;
 }
 
 function FilterChip({
@@ -760,6 +965,18 @@ function toggleSort(
     setDir(currentDir === "asc" ? "desc" : "asc");
   } else {
     setSort(col);
-    setDir(col === "balance" || col === "overdueBalance" ? "desc" : "asc");
+    // Money + recency columns start desc (largest / newest first); name
+    // starts asc (A→Z). lastSyncedAt left to default desc too — operator
+    // wants "what synced most recently" surfaced, not stalest.
+    const descByDefault: SortKey[] = [
+      "balance",
+      "overdueBalance",
+      "lastPaymentAt",
+      "lastStatementSentAt",
+      "lastContactedAt",
+      "lastSyncedAt",
+      "openTaskCount",
+    ];
+    setDir(descByDefault.includes(col) ? "desc" : "asc");
   }
 }

@@ -53,6 +53,15 @@ export type QboLineDetail = {
   TaxCodeRef?: QboReference;
 };
 
+export type QboDiscountLineDetail = {
+  // true → DiscountPercent is set; false → flat dollar amount in line.Amount
+  PercentBased?: boolean;
+  // Percentage value, e.g. 5 for 5%. Only present when PercentBased = true.
+  DiscountPercent?: number;
+  // Reference to a Discount item in QBO's item list (optional)
+  DiscountAccountRef?: QboReference;
+};
+
 export type QboInvoiceLine = {
   Id?: string;
   LineNum?: number;
@@ -60,6 +69,18 @@ export type QboInvoiceLine = {
   Amount?: number;
   DetailType?: string;
   SalesItemLineDetail?: QboLineDetail;
+  // Present when DetailType === "DiscountLineDetail"
+  DiscountLineDetail?: QboDiscountLineDetail;
+};
+
+// Sales tax block on transactions. TotalTax is the dollar amount of tax on
+// the transaction (0 when the customer/items were tax-exempt). TxnTaxCodeRef
+// names the tax code QBO used — we mirror this onto credit memos so a return
+// of a taxed sale recreates the same tax treatment. TaxLine[] is QBO's
+// per-rate breakdown but we don't need it to mirror; TxnTaxCodeRef is enough.
+export type QboTxnTaxDetail = {
+  TotalTax?: number;
+  TxnTaxCodeRef?: QboReference;
 };
 
 export type QboInvoice = {
@@ -72,6 +93,7 @@ export type QboInvoice = {
   CustomerRef: QboReference;
   CurrencyRef?: QboReference;
   Line?: QboInvoiceLine[];
+  TxnTaxDetail?: QboTxnTaxDetail;
   EmailStatus?: string;
   PrintStatus?: string;
   SyncToken?: string;

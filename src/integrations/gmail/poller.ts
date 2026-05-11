@@ -4,8 +4,13 @@ import { db } from "~/db/index.js";
 import { emailLog } from "~/db/schema/crm.js";
 import { customers } from "~/db/schema/customers.js";
 import { oauthTokens } from "~/db/schema/oauth.js";
+import { extensivReceipts } from "~/db/schema/returns.js";
 import { createLogger } from "~/lib/logger.js";
 import { recordActivity } from "~/modules/crm/index.js";
+import { classifyExtensivEmail } from "~/modules/returns/extensiv-receipt-classifier.js";
+import { matchReceiptToRma } from "~/modules/returns/rma-matcher.js";
+import { linkCustomerReplyIfRmaThread } from "~/modules/returns/rma-customer-reply-linker.js";
+import { linkEmailToRmas } from "~/server/modules/rma/email-linker.js";
 import { BUSINESS_EMAILS } from "./business-emails.js";
 import { searchEmails } from "./client.js";
 import type {
@@ -136,6 +141,94 @@ function formatGmailDateForQuery(d: Date): string {
   return `${yyyy}/${mm}/${dd}`;
 }
 
+// --- Extensiv return-receipt side-channel ---
+//
+// Called for every email successfully inserted into email_log that originates
+// from notifications@secure-wms.com. Classifies the email and, if it is a
+// return receipt, runs the RMA matcher and persists an extensiv_receipts row
+// for operator review.
+//
+// Design notes:
+//   - Idempotent: the extensiv_receipts.gmail_message_id UNIQUE constraint
+//     silently no-ops if the poller re-processes the same message.
+//   - Non-blocking: all errors are caught and logged; a classifier failure
+//     never aborts the normal email_log / activity flow.
+//   - No auto-confirm: per spec §11, all matches surface for operator review.
+
+async function maybeProcessExtensivReceipt(email: ParsedEmail): Promise<void> {
+  // Quick from-address guard — avoids classifier invocation for the majority
+  // of emails that are not from Extensiv.
+  if (!email.from.includes("notifications@secure-wms.com")) return;
+
+  try {
+    const classified = classifyExtensivEmail({
+      from: email.from,
+      subject: email.subject,
+      body: email.body,
+    });
+
+    if (classified.direction !== "return_receipt") {
+      // Outbound shipment or unknown — nothing to persist.
+      return;
+    }
+
+    // Attempt to match to an open RMA. Pass through the classifier-derived
+    // customer name so the matcher's tier-3 fuzzy path can fire when both
+    // tx# and exact-ref miss (the typical receipt-arrived-late case).
+    const matchResult = await matchReceiptToRma({
+      txNumber: classified.txNumber,
+      refString: classified.refString,
+      inferredCustomerName: classified.inferredCustomerName,
+      parsedItems: classified.parsedItems,
+    });
+
+    const rmaId =
+      matchResult.kind !== "no_match" ? matchResult.rmaId : null;
+    const matchConfidence =
+      matchResult.kind === "fuzzy_customer_sku"
+        ? String(matchResult.confidence.toFixed(2))
+        : matchResult.kind !== "no_match"
+          ? "1.00"
+          : null;
+
+    await db.insert(extensivReceipts).values({
+      id: nanoid(24),
+      rmaId,
+      matchKind: matchResult.kind,
+      matchConfidence,
+      txNumber: classified.txNumber ?? null,
+      refString: classified.refString ?? null,
+      parsedItemsJson: (classified.parsedItems ?? []) as unknown as null,
+      inferredCustomerName: classified.inferredCustomerName ?? null,
+      gmailMessageId: email.id,
+    });
+
+    log.info(
+      {
+        gmailMessageId: email.id,
+        matchKind: matchResult.kind,
+        rmaId,
+        txNumber: classified.txNumber,
+      },
+      "extensiv return receipt classified and persisted",
+    );
+  } catch (err) {
+    const msg = (err as { message?: string }).message ?? "";
+    // Duplicate gmail_message_id — idempotent re-run; ignore silently.
+    if (/duplicate|ER_DUP_ENTRY|unique/i.test(msg)) {
+      log.debug(
+        { gmailMessageId: email.id },
+        "extensiv_receipts duplicate; skipped",
+      );
+      return;
+    }
+    log.error(
+      { err, gmailMessageId: email.id },
+      "extensiv return receipt processing failed",
+    );
+  }
+}
+
 // --- The main poll ---
 
 export type PollOptions = {
@@ -240,6 +333,7 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
         toAddress: email.toEmail || null,
         subject: email.subject || null,
         body: email.body || null,
+        bodyHtml: email.htmlBody || null,
         snippet: email.snippet ? email.snippet.slice(0, 510) : null,
         classification: null,
         emailDate: occurredAt,
@@ -260,6 +354,24 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
       );
       continue;
     }
+
+    // Auto-link this email to any RMAs whose number appears in subject/body.
+    // Fire-and-forget at log level — link insert failures shouldn't break the
+    // classifier's main flow.
+    try {
+      await linkEmailToRmas(
+        email.id ?? "",
+        email.subject ?? "",
+        email.body ?? "",
+      );
+    } catch (err) {
+      log.warn({ err, gmailMessageId: email.id }, "email-linker failed");
+    }
+
+    // Side-channel: classify Extensiv emails and persist return receipts for
+    // operator review. Runs after a successful email_log insert; errors are
+    // caught inside and never propagate to the main poll loop.
+    await maybeProcessExtensivReceipt(email);
 
     if (customerId) {
       matched++;
@@ -285,6 +397,27 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
           },
         });
         if (created) activitiesCreated++;
+
+        // Side-channel: link inbound emails that are replies to RMA threads.
+        // Non-blocking — errors are caught and logged; a linker failure never
+        // aborts the main poll loop.
+        if (direction === "inbound" && email.threadId) {
+          try {
+            await linkCustomerReplyIfRmaThread({
+              gmailMessageId: email.id ?? "",
+              threadId: email.threadId,
+              inReplyTo: email.messageIdHeader || undefined, // empty string → undefined
+              from: email.from || "",
+              subject: email.subject || "",
+              bodySnippet: email.snippet || email.body?.slice(0, 512) || "",
+            });
+          } catch (linkErr) {
+            log.debug(
+              { err: linkErr, gmailMessageId: email.id },
+              "rma reply linker failed (non-fatal)",
+            );
+          }
+        }
       } catch (err) {
         log.error(
           { err, gmailMessageId: email.id, customerId },
@@ -436,6 +569,7 @@ export async function syncEmailsForCustomer(
         toAddress: email.toEmail || null,
         subject: email.subject || null,
         body: email.body || null,
+        bodyHtml: email.htmlBody || null,
         snippet: email.snippet ? email.snippet.slice(0, 510) : null,
         classification: null,
         emailDate: occurredAt,

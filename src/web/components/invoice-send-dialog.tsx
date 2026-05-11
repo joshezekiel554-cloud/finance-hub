@@ -167,7 +167,7 @@ export default function InvoiceSendDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             Send {docType === "credit_memo" ? "credit memo" : "invoice"}

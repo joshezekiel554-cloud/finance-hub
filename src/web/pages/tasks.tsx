@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getRouteApi } from "@tanstack/react-router";
 import { Plus, LayoutGrid, List as ListIcon, Search, X } from "lucide-react";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import {
+  type TasksSearch,
+  TASK_STATUSES,
+  TASK_PRIORITIES,
+} from "../lib/search-schemas/tasks";
 import {
   ToastProvider,
   ToastViewport,
@@ -21,6 +29,8 @@ import {
 import type { TaskCardData } from "../components/task-card";
 import { useEventStream } from "../lib/use-event-stream";
 import { cn } from "../lib/cn";
+
+const tasksRouteApi = getRouteApi("/tasks");
 
 type TaskStatus = "open" | "in_progress" | "blocked" | "done" | "cancelled";
 type TaskPriority = "low" | "normal" | "high" | "urgent";
@@ -59,13 +69,7 @@ type ToastEntry = {
 type View = "board" | "list";
 type AssigneeFilter = "me" | "all";
 
-const ALL_STATUSES: TaskStatus[] = [
-  "open",
-  "in_progress",
-  "blocked",
-  "done",
-  "cancelled",
-];
+const ALL_STATUSES = [...TASK_STATUSES] as TaskStatus[];
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
   open: "Open",
@@ -95,20 +99,88 @@ const PRIORITY_TONE: Record<
 const DEFAULT_STATUS_FILTER: TaskStatus[] = ["open", "in_progress", "blocked"];
 
 export default function TasksPage() {
-  const [view, setView] = useState<View>("board");
-  const [assignee, setAssignee] = useState<AssigneeFilter>("me");
-  const [statusFilter, setStatusFilter] = useState<Set<TaskStatus>>(
-    new Set(DEFAULT_STATUS_FILTER),
+  // --- URL-state filters ---
+  const urlSearch = tasksRouteApi.useSearch();
+  const { setFilter } = useFilterNavigate<TasksSearch>("/tasks");
+  useFilterPersistence("/tasks");
+
+  const view = urlSearch.view;
+  const assignee = urlSearch.assignee;
+  const searchValue = urlSearch.search;
+  const customerFilterId = urlSearch.customerId;
+
+  // Rebuild Sets from URL arrays for O(1) membership checks
+  const statusFilter = useMemo(
+    () => new Set(urlSearch.statuses),
+    [urlSearch.statuses],
   );
-  const [priorityFilter, setPriorityFilter] = useState<Set<TaskPriority>>(
-    new Set(),
+  const priorityFilter = useMemo(
+    () => new Set(urlSearch.priorities),
+    [urlSearch.priorities],
   );
-  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState("");
-  const [customerFilter, setCustomerFilter] = useState<{
-    id: string;
-    displayName: string;
-  } | null>(null);
+  const tagFilter = useMemo(
+    () => new Set(urlSearch.tags),
+    [urlSearch.tags],
+  );
+
+  // Fetch customer displayName from URL id so the pill survives back-nav
+  // and bookmarked URLs — no local state needed.
+  const customerFilterQuery = useQuery<{ id: string; displayName: string }>({
+    queryKey: ["customer", customerFilterId],
+    queryFn: async () => {
+      const res = await fetch(`/api/customers/${customerFilterId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      return { id: body.customer.id, displayName: body.customer.displayName };
+    },
+    enabled: !!customerFilterId,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Derived value: pill stays visible (with id placeholder) while loading
+  const customerFilter: { id: string; displayName: string } | null =
+    customerFilterId
+      ? {
+          id: customerFilterId,
+          displayName:
+            customerFilterQuery.data?.displayName ??
+            `#${customerFilterId.slice(0, 8)}`,
+        }
+      : null;
+
+  // Setters
+  const setView = (next: TasksSearch["view"]) =>
+    setFilter("view", next, { history: "push" });
+  const setAssignee = (next: TasksSearch["assignee"]) =>
+    setFilter("assignee", next, { history: "push" });
+  const setSearchValue = (next: string) => setFilter("search", next);
+
+  function toggleStatus(s: TaskStatus) {
+    const next = new Set(urlSearch.statuses);
+    if (next.has(s)) next.delete(s);
+    else next.add(s);
+    setFilter("statuses", Array.from(next), { history: "push" });
+  }
+
+  function togglePriority(p: TaskPriority) {
+    const next = new Set(urlSearch.priorities);
+    if (next.has(p)) next.delete(p);
+    else next.add(p);
+    setFilter("priorities", Array.from(next), { history: "push" });
+  }
+
+  function toggleTag(t: string) {
+    const next = new Set(urlSearch.tags);
+    if (next.has(t)) next.delete(t);
+    else next.add(t);
+    setFilter("tags", Array.from(next), { history: "push" });
+  }
+
+  function setCustomerFilter(next: { id: string; displayName: string } | null) {
+    setFilter("customerId", next?.id ?? null, { history: "push" });
+  }
+
+  // --- Preserved local state ---
   const [drawer, setDrawer] = useState<DrawerMode | null>(null);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const queryClient = useQueryClient();
@@ -133,11 +205,11 @@ export default function TasksPage() {
         {
           assignee,
           status: Array.from(statusFilter).sort().join(","),
-          q: search.trim(),
-          customerId: customerFilter?.id ?? "",
+          q: searchValue.trim(),
+          customerId: customerFilterId ?? "",
         },
       ] as const,
-    [assignee, statusFilter, search, customerFilter],
+    [assignee, statusFilter, searchValue, customerFilterId],
   );
 
   const { data, isPending, isError, error } = useQuery<ListResponse>({
@@ -148,12 +220,14 @@ export default function TasksPage() {
         dir: "asc",
         limit: "200",
       });
-      if (assignee === "me") params.set("assignee", "me");
+      // Always send assignee — server defaults to "me" when unset, which
+      // would silently hide unassigned tasks even after the user picks "All".
+      params.set("assignee", assignee);
       if (statusFilter.size > 0) {
         params.set("status", Array.from(statusFilter).join(","));
       }
-      if (search.trim()) params.set("q", search.trim());
-      if (customerFilter) params.set("customerId", customerFilter.id);
+      if (searchValue.trim()) params.set("q", searchValue.trim());
+      if (customerFilterId) params.set("customerId", customerFilterId);
       const res = await fetch(`/api/tasks?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -209,27 +283,6 @@ export default function TasksPage() {
     setToasts((cur) => cur.filter((t) => t.id !== id));
   }
 
-  function toggleStatus(s: TaskStatus) {
-    const next = new Set(statusFilter);
-    if (next.has(s)) next.delete(s);
-    else next.add(s);
-    setStatusFilter(next);
-  }
-
-  function togglePriority(p: TaskPriority) {
-    const next = new Set(priorityFilter);
-    if (next.has(p)) next.delete(p);
-    else next.add(p);
-    setPriorityFilter(next);
-  }
-
-  function toggleTag(t: string) {
-    const next = new Set(tagFilter);
-    if (next.has(t)) next.delete(t);
-    else next.add(t);
-    setTagFilter(next);
-  }
-
   function openCard(taskId: string) {
     setDrawer({ mode: "edit", taskId });
   }
@@ -268,8 +321,8 @@ export default function TasksPage() {
           tagFilter={tagFilter}
           onToggleTag={toggleTag}
           presentTags={presentTags}
-          search={search}
-          onSearchChange={setSearch}
+          search={searchValue}
+          onSearchChange={setSearchValue}
           customerFilter={customerFilter}
           onCustomerFilterChange={setCustomerFilter}
         />
@@ -458,7 +511,7 @@ function FilterBar({
           </ChipGroup>
 
           <ChipGroup label="Priority">
-            {(["urgent", "high", "normal", "low"] as TaskPriority[]).map(
+            {([...TASK_PRIORITIES].reverse() as TaskPriority[]).map(
               (p) => (
                 <Chip
                   key={p}

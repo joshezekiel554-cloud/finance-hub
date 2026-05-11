@@ -83,6 +83,11 @@ const SETTINGS: AppSettingsMap = {
   footer_note: "Thank you for your business.",
   statement_number_next: "101",
   statement_bcc_email: "",
+  drive_root_folder_id: "",
+  warehouse_team_email: "",
+  rma_shipping_fee_item_id: "",
+  rma_restocking_fee_item_id: "",
+  damage_cm_number_next: "38771",
 };
 
 describe("renderStatementPdf", () => {
@@ -169,6 +174,11 @@ describe("renderStatementPdf", () => {
         footer_note: "",
         statement_number_next: "1",
         statement_bcc_email: "",
+        drive_root_folder_id: "",
+        warehouse_team_email: "",
+        rma_shipping_fee_item_id: "",
+        rma_restocking_fee_item_id: "",
+        damage_cm_number_next: "38771",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

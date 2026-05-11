@@ -60,9 +60,15 @@ type ListTask = TaskCardData & {
 export function TaskList({
   tasks,
   onRowClick,
+  hideCustomerColumn = false,
 }: {
   tasks: ListTask[];
   onRowClick: (taskId: string) => void;
+  // When the list is rendered inside a customer's Tasks tab the
+  // customer column is redundant — every row would show the same
+  // value. Pass `true` to drop the header + cell entirely. Default
+  // false so the global /tasks page keeps its multi-customer view.
+  hideCustomerColumn?: boolean;
 }) {
   const [sort, setSort] = useState<SortKey>("dueAt");
   const [dir, setDir] = useState<"asc" | "desc">("asc");
@@ -136,7 +142,9 @@ export function TaskList({
                 dir={dir}
                 onClick={toggleSort}
               />
-              <th className="px-3 py-2">Customer</th>
+              {!hideCustomerColumn && (
+                <th className="px-3 py-2">Customer</th>
+              )}
               <th className="px-3 py-2">Assignee</th>
               <th className="px-3 py-2 text-right">Activity</th>
             </tr>
@@ -198,9 +206,11 @@ export function TaskList({
                       <span className="text-muted">—</span>
                     )}
                   </td>
-                  <td className="max-w-[12rem] truncate px-3 py-2 text-secondary">
-                    {task.customerName ?? "—"}
-                  </td>
+                  {!hideCustomerColumn && (
+                    <td className="max-w-[12rem] truncate px-3 py-2 text-secondary">
+                      {task.customerName ?? "—"}
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-secondary">
                     {task.assignee?.name ??
                       task.assignee?.email.split("@")[0] ??

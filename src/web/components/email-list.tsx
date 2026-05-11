@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ChevronDown,
   Reply,
+  ReplyAll,
   X,
 } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
@@ -49,13 +50,41 @@ export function EmailList({
   customerId,
   customerName,
   customerEmail,
+  onTaskCreated,
+  direction: directionProp,
+  actioned: actionedProp,
+  onDirectionChange,
+  onActionedChange,
 }: {
   customerId: string;
   customerName?: string;
   customerEmail?: string | null;
+  // Called after "Turn into task" creates a task. The customer-detail
+  // page uses this to open its TaskDetailDrawer in edit mode for the
+  // new task so the operator can fill in title/assignee/due/etc.
+  onTaskCreated?: (taskId: string) => void;
+  // Optional controlled filter props. When provided, the component is
+  // controlled by the parent (URL state). When omitted, internal state
+  // is used as a fallback so existing callers continue to work.
+  direction?: DirectionFilter;
+  actioned?: ActionedFilter;
+  onDirectionChange?: (v: DirectionFilter) => void;
+  onActionedChange?: (v: ActionedFilter) => void;
 }) {
-  const [direction, setDirection] = useState<DirectionFilter>("all");
-  const [actioned, setActioned] = useState<ActionedFilter>("open");
+  const [directionInternal, setDirectionInternal] = useState<DirectionFilter>("all");
+  const [actionedInternal, setActionedInternal] = useState<ActionedFilter>("open");
+
+  // Use controlled props if provided, otherwise fall back to internal state.
+  const direction = directionProp !== undefined ? directionProp : directionInternal;
+  const actioned = actionedProp !== undefined ? actionedProp : actionedInternal;
+  const setDirection = (v: DirectionFilter) => {
+    if (onDirectionChange) onDirectionChange(v);
+    else setDirectionInternal(v);
+  };
+  const setActioned = (v: ActionedFilter) => {
+    if (onActionedChange) onActionedChange(v);
+    else setActionedInternal(v);
+  };
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Bulk-action selection. Independent of the per-row "actioned" toggle
   // — selection is which rows the next bulk action applies to. Cleared
@@ -94,6 +123,16 @@ export function EmailList({
     queryClient.invalidateQueries({ queryKey });
   });
 
+  // Marking an email actioned/unactioned changes the unactionedEmailCount
+  // shown on the customers list ("Has unactioned email" filter + per-row
+  // counter) and on the customer detail page header. Invalidate those too
+  // so the badge updates without a manual refresh.
+  function invalidateUnactionedCounts(): void {
+    queryClient.invalidateQueries({ queryKey });
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+  }
+
   const actionMutation = useMutation({
     mutationFn: async (input: { id: string; actioned: boolean }) => {
       const res = await fetch(`/api/email-log/${input.id}`, {
@@ -104,7 +143,7 @@ export function EmailList({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onSuccess: () => invalidateUnactionedCounts(),
   });
 
   const bulkActionMutation = useMutation<
@@ -122,24 +161,37 @@ export function EmailList({
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey });
+      invalidateUnactionedCounts();
       setSelectedIds(new Set());
     },
   });
 
   const toTaskMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/email-log/${id}/to-task`, {
+    mutationFn: async (input: { id: string; title: string }) => {
+      // Pass the title explicitly rather than relying on server-side
+      // fallback — the API already has a fallback ("Re: <subject>" /
+      // "Follow up on email") but threading the value through the
+      // client side too means the resulting task always has a
+      // meaningful title even if the server falls back to an empty
+      // subject for some reason.
+      const res = await fetch(`/api/email-log/${input.id}/to-task`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ title: input.title }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json() as Promise<{ taskId: string }>;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey });
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({
+        queryKey: ["customer-tasks", customerId],
+      });
+      // Hand the task off to the parent so the drawer opens in edit
+      // mode for the operator to fill in title/assignee/due/etc.
+      // Falls through silently when no callback is wired.
+      onTaskCreated?.(result.taskId);
     },
   });
 
@@ -164,8 +216,48 @@ export function EmailList({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey });
       queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      // Backfill creates email_received activity rows that feed the
+      // customers list "last contact" column — invalidate so the list
+      // reflects the new most-recent interaction.
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
   });
+
+  // Reply-all asks the backend for the original message's To+Cc headers
+  // (we don't store CC in email_log), filters out our own addresses + the
+  // sender, then opens compose-modal with cc prefilled.
+  async function openReplyAll(
+    email: EmailLogRow,
+    ctx: {
+      customerId: string;
+      customerName: string | undefined;
+      customerEmail: string | null | undefined;
+    },
+  ): Promise<void> {
+    let cc = "";
+    try {
+      const res = await fetch(`/api/email-log/${email.id}/recipients`);
+      if (res.ok) {
+        const body = (await res.json()) as { cc?: string };
+        cc = body.cc ?? "";
+      }
+    } catch {
+      // Fall through with empty cc — operator can fill manually.
+    }
+    setComposeContext({
+      customerId: ctx.customerId,
+      customerName: ctx.customerName,
+      customerEmail: ctx.customerEmail ?? undefined,
+      inReplyTo: {
+        messageId: email.messageIdHeader ?? email.gmailMessageId,
+        threadId: email.threadId ?? "",
+        subject: email.subject ?? "",
+        from: email.fromAddress ?? ctx.customerEmail ?? "",
+        bodyExcerpt: email.body ? email.body.slice(0, 1000) : "",
+        cc,
+      },
+    });
+  }
 
   function toggleExpand(id: string) {
     const next = new Set(expanded);
@@ -510,7 +602,14 @@ export function EmailList({
                           <Button
                             variant="secondary"
                             size="sm"
-                            onClick={() => toTaskMutation.mutate(email.id)}
+                            onClick={() =>
+                              toTaskMutation.mutate({
+                                id: email.id,
+                                title: email.subject
+                                  ? `Re: ${email.subject}`
+                                  : "Follow up on email",
+                              })
+                            }
                             disabled={toTaskMutation.isPending}
                           >
                             <ListChecks className="size-3.5" />
@@ -548,6 +647,20 @@ export function EmailList({
                           >
                             <Reply className="size-3.5" />
                             Reply
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() =>
+                              void openReplyAll(email, {
+                                customerId,
+                                customerName,
+                                customerEmail,
+                              })
+                            }
+                          >
+                            <ReplyAll className="size-3.5" />
+                            Reply all
                           </Button>
                         </div>
                       )}

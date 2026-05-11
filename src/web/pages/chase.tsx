@@ -29,6 +29,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { getRouteApi } from "@tanstack/react-router";
 import { Mail, Pause, Send, AlertCircle, CheckCircle2 } from "lucide-react";
 import ChaseEmailSendDialog, {
   type ChaseSendSuccess,
@@ -36,6 +37,7 @@ import ChaseEmailSendDialog, {
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { SyncQbBadge } from "../components/sync-qb-badge";
 import {
   Dialog,
   DialogContent,
@@ -45,6 +47,11 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { cn } from "../lib/cn";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { ChaseSearch } from "../lib/search-schemas/chase";
+
+const chaseRouteApi = getRouteApi("/chase");
 
 // API result types — kept local because the chase page is the only
 // consumer. If a second consumer turns up, lift these into a shared
@@ -62,6 +69,7 @@ type ChaseRow = {
   lastActivityAt: string | null;
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
+  hasPendingRma: boolean;
 };
 
 type ListResponse = {
@@ -86,7 +94,10 @@ type SortKey =
   | "overdueBalance"
   | "daysOverdue"
   | "displayName"
-  | "lastActivityAt";
+  | "lastActivityAt"
+  | "balance"
+  | "lastPaymentAt"
+  | "lastStatementSentAt";
 
 const HOLD_LABELS: Record<HoldFilter, string> = {
   active: "Active",
@@ -101,11 +112,32 @@ const CUSTOMER_TYPE_LABELS: Record<CustomerTypeFilter, string> = {
 };
 
 export default function ChasePage() {
-  const [customerTypeFilter, setCustomerTypeFilter] =
-    useState<CustomerTypeFilter>("b2b");
-  const [holdFilter, setHoldFilter] = useState<HoldFilter>("all");
-  const [sort, setSort] = useState<SortKey>("overdueBalance");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const search = chaseRouteApi.useSearch();
+  const { setFilter, setFilters } = useFilterNavigate<ChaseSearch>("/chase");
+  useFilterPersistence("/chase");
+
+  // Local aliases (preserve old variable names so JSX/queryKey changes are minimal):
+  const customerTypeFilter = search.customerType;
+  const holdFilter = search.holdStatus;
+  const missingTermsFilter = search.missingTerms;
+  const hasPendingRmaFilter = search.hasPendingRma;
+  const sort = search.sort;
+  const dir = search.dir;
+
+  // Setters:
+  const setCustomerTypeFilter = (next: ChaseSearch["customerType"]) =>
+    setFilter("customerType", next, { history: "push" });
+  const setHoldFilter = (next: ChaseSearch["holdStatus"]) =>
+    setFilter("holdStatus", next, { history: "push" });
+  const setMissingTermsFilter = (next: boolean) =>
+    setFilter("missingTerms", next);
+  const setHasPendingRmaFilter = (next: boolean) =>
+    setFilter("hasPendingRma", next);
+  const setSort = (next: ChaseSearch["sort"]) =>
+    setFilter("sort", next, { history: "push" });
+  const setDir = (next: ChaseSearch["dir"]) =>
+    setFilter("dir", next, { history: "push" });
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Per-customer outcome map indexed by customerId. Populated when a
@@ -134,7 +166,14 @@ export default function ChasePage() {
   const queryKey = [
     "chase",
     "customers",
-    { customerTypeFilter, holdFilter, sort, dir },
+    {
+      customerTypeFilter,
+      holdFilter,
+      missingTermsFilter,
+      hasPendingRmaFilter,
+      sort,
+      dir,
+    },
   ] as const;
 
   const { data, isPending, isError, error } = useQuery<ListResponse>({
@@ -150,6 +189,8 @@ export default function ChasePage() {
         sort,
         dir,
       });
+      if (missingTermsFilter) params.set("missingTerms", "true");
+      if (hasPendingRmaFilter) params.set("hasPendingRma", "true");
       const res = await fetch(`/api/chase/customers?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -269,7 +310,12 @@ export default function ChasePage() {
             statementSendId: body.statementSendId,
           },
         }));
+        // Refresh the chase row + the customers list (lastStatementSentAt
+        // column derives from the statement_send activity) + the customer
+        // detail page in case it's open in another tab.
         queryClient.invalidateQueries({ queryKey: ["chase", "customers"] });
+        queryClient.invalidateQueries({ queryKey: ["customers"] });
+        queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
       }
     } finally {
       setRowSendingIds((prev) => {
@@ -292,12 +338,15 @@ export default function ChasePage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Chase list</h1>
-        <p className="mt-1 text-sm text-secondary">
-          B2B customers with overdue balances. Send open-items statements
-          to selected.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Chase list</h1>
+          <p className="mt-1 text-sm text-secondary">
+            B2B customers with overdue balances. Send open-items statements
+            to selected.
+          </p>
+        </div>
+        <SyncQbBadge />
       </div>
 
       <FilterBar
@@ -309,6 +358,20 @@ export default function ChasePage() {
         holdFilter={holdFilter}
         onHoldChange={(v) => {
           setHoldFilter(v);
+          setSelectedIds(new Set());
+        }}
+        missingTermsFilter={missingTermsFilter}
+        onMissingTermsChange={(v) => {
+          setMissingTermsFilter(v);
+          setSelectedIds(new Set());
+        }}
+        hasPendingRmaFilter={hasPendingRmaFilter}
+        onHasPendingRmaChange={(v) => {
+          setHasPendingRmaFilter(v);
+          setSelectedIds(new Set());
+        }}
+        onClearToggles={() => {
+          setFilters({ missingTerms: false, hasPendingRma: false }, { history: "push" });
           setSelectedIds(new Set());
         }}
       />
@@ -366,7 +429,15 @@ export default function ChasePage() {
                   }
                 />
                 <th className="px-3 py-2">Email</th>
-                <th className="px-3 py-2 text-right">Balance</th>
+                <SortableTh
+                  label="Balance"
+                  active={sort === "balance"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("balance", sort, setSort, dir, setDir)
+                  }
+                  align="right"
+                />
                 <SortableTh
                   label="Overdue"
                   active={sort === "overdueBalance"}
@@ -393,8 +464,22 @@ export default function ChasePage() {
                     toggleSort("lastActivityAt", sort, setSort, dir, setDir)
                   }
                 />
-                <th className="px-3 py-2">Last payment</th>
-                <th className="px-3 py-2">Last statement</th>
+                <SortableTh
+                  label="Last payment"
+                  active={sort === "lastPaymentAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastPaymentAt", sort, setSort, dir, setDir)
+                  }
+                />
+                <SortableTh
+                  label="Last statement"
+                  active={sort === "lastStatementSentAt"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("lastStatementSentAt", sort, setSort, dir, setDir)
+                  }
+                />
                 <th className="px-3 py-2">Terms</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2 text-right">Actions</th>
@@ -432,9 +517,17 @@ export default function ChasePage() {
                     <td className="px-3 py-2 font-medium">
                       <a
                         href={`/customers/${row.id}`}
-                        className="hover:text-accent-primary hover:underline underline-offset-2"
+                        className="inline-flex items-center gap-2 hover:text-accent-primary hover:underline underline-offset-2"
                       >
                         {row.displayName}
+                        {row.hasPendingRma ? (
+                          <span
+                            className="inline-flex items-center rounded border border-accent-warning/40 bg-accent-warning/10 px-1 text-[9px] font-medium uppercase tracking-wide text-accent-warning"
+                            title="Has an active RMA in progress"
+                          >
+                            RMA
+                          </span>
+                        ) : null}
                       </a>
                     </td>
                     <td className="px-3 py-2 text-secondary">
@@ -586,12 +679,23 @@ function FilterBar({
   onCustomerTypeChange,
   holdFilter,
   onHoldChange,
+  missingTermsFilter,
+  onMissingTermsChange,
+  hasPendingRmaFilter,
+  onHasPendingRmaChange,
+  onClearToggles,
 }: {
   customerTypeFilter: CustomerTypeFilter;
   onCustomerTypeChange: (v: CustomerTypeFilter) => void;
   holdFilter: HoldFilter;
   onHoldChange: (v: HoldFilter) => void;
+  missingTermsFilter: boolean;
+  onMissingTermsChange: (v: boolean) => void;
+  hasPendingRmaFilter: boolean;
+  onHasPendingRmaChange: (v: boolean) => void;
+  onClearToggles: () => void;
 }) {
+  const anyToggleActive = missingTermsFilter || hasPendingRmaFilter;
   return (
     <Card>
       <CardBody className="flex flex-wrap items-center gap-4 py-3">
@@ -616,6 +720,29 @@ function FilterBar({
               {CUSTOMER_TYPE_LABELS[v]}
             </Chip>
           ))}
+        </ChipGroup>
+        <ChipGroup label="Filters">
+          <Chip
+            active={missingTermsFilter}
+            onClick={() => onMissingTermsChange(!missingTermsFilter)}
+          >
+            No terms set
+          </Chip>
+          <Chip
+            active={hasPendingRmaFilter}
+            onClick={() => onHasPendingRmaChange(!hasPendingRmaFilter)}
+          >
+            RMA pending
+          </Chip>
+          {anyToggleActive ? (
+            <button
+              type="button"
+              onClick={onClearToggles}
+              className="ml-1 text-xs text-muted hover:text-primary"
+            >
+              Clear
+            </button>
+          ) : null}
         </ChipGroup>
       </CardBody>
     </Card>
@@ -1010,13 +1137,16 @@ function toggleSort(
     setDir(currentDir === "asc" ? "desc" : "asc");
   } else {
     setSort(col);
-    // Sensible default direction by column type. Numerical columns
-    // (overdue, days-overdue) start desc; alphanumeric (name) starts
-    // asc; lastActivityAt starts asc so "longest unattended" surfaces
-    // first.
-    setDir(
-      col === "overdueBalance" || col === "daysOverdue" ? "desc" : "asc",
-    );
+    // Sensible default direction by column type:
+    //   - Money + days-overdue → desc (largest first; most overdue / biggest balance up top)
+    //   - Recency timestamps → asc (oldest contact first; surfaces unattended customers)
+    //   - displayName → asc (A→Z)
+    const descByDefault: SortKey[] = [
+      "overdueBalance",
+      "daysOverdue",
+      "balance",
+    ];
+    setDir(descByDefault.includes(col) ? "desc" : "asc");
   }
 }
 

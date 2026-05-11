@@ -13,9 +13,10 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { searchEmails } from "../../integrations/gmail/client.js";
+import { classifyExtensivEmail } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   parseShipmentHtml,
   reconcile,
@@ -35,6 +36,13 @@ import {
   DISMISS_REASONS,
 } from "../../db/schema/dismissed-shipments.js";
 import { customers } from "../../db/schema/customers.js";
+import { emailLog } from "../../db/schema/crm.js";
+import {
+  extensivReceipts,
+  emailRmaLinks,
+  rmas,
+  type ExtensivReceiptMatchKind,
+} from "../../db/schema/returns.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 import { requireAuth } from "../lib/auth.js";
@@ -58,6 +66,12 @@ export type InvoicingTodayRow = {
   receivedAt: string | null;
   parseConfidence: number;
   parseMissingFields: string[];
+  // Raw email metadata + plain-text body (capped at 8 KB) so unparseable
+  // rows can render a useful preview without a separate fetch.
+  emailSubject: string;
+  emailFrom: string;
+  emailSnippet: string;
+  emailBody: string;
   parsed: {
     poNumber: string | null;
     shopifyOrderNumber: string | null;
@@ -130,6 +144,42 @@ export type InvoicingTodayRow = {
       addsNeedingPrice: string[];
     };
   } | null;
+};
+
+// Return-receipt row — surfaced alongside shipment rows on /today.
+// Operators click [Review] to open the receipt review dialog.
+export type ReturnReceiptTodayRow = {
+  docType: "return_receipt";
+  receiptId: string;
+  rmaId: string | null;
+  matchKind: ExtensivReceiptMatchKind;
+  matchConfidence: number | null;
+  txNumber: string | null;
+  refString: string | null;
+  parsedItems: Array<{ sku: string; quantity: number }>;
+  inferredCustomerName: string | null;
+  classifiedAt: string;
+  gmailMessageId: string;
+  // Original Bluechip notification metadata + plain-text body (capped at
+  // 8 KB) so the receipt card can preview the source email inline.
+  emailSubject: string;
+  emailFrom: string;
+  emailBody: string;
+  emailBodyHtml: string | null;
+  rma: {
+    id: string;
+    rmaNumber: string | null;
+    customerId: string | null;
+    customerName: string | null;
+  } | null;
+  // RMAs linked to this receipt's source email via email_rma_links.
+  // Populated from the email linker's auto-scan + manual links.
+  // Empty array when no links exist.
+  linkedRmas: Array<{
+    rmaId: string;
+    rmaNumber: string | null;
+    customerName: string | null;
+  }>;
 };
 
 const sendBodySchema = z.object({
@@ -229,15 +279,46 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
 
     log.info({ count: emails.length, lookbackDays }, "found feldart shipment emails");
 
+    // The Gmail search above pulls every "requested transaction
+    // notification" email — that includes outbound shipments (what this
+    // page is for) AND return receipts (handled by the separate Pending
+    // Return Receipts section below). Run the receipt classifier first
+    // and drop the return-receipt rows so they don't double-up as
+    // "unparseable shipments".
+    const shipmentEmails = emails.filter((email) => {
+      const classified = classifyExtensivEmail({
+        from: email.from,
+        subject: email.subject,
+        body: email.body,
+      });
+      return classified.direction !== "return_receipt";
+    });
+    const droppedAsReceipts = emails.length - shipmentEmails.length;
+    if (droppedAsReceipts > 0) {
+      log.info(
+        { droppedAsReceipts, remainingShipments: shipmentEmails.length },
+        "filtered return receipts out of shipment pipeline",
+      );
+    }
+
     const qbClient = new QboClient();
     const shopifyClient = new ShopifyClient();
 
     // Phase 1: parse htmlBody already populated by searchEmails. The Gmail
     // client extracts text/html alongside text/plain in one messages.get
     // pass, so no second round-trip is needed here.
-    const parsed = emails.map((email) => ({
+    const parsed = shipmentEmails.map((email) => ({
       gmailId: email.id,
       receivedAt: email.emailDate,
+      // Keep subject/from/snippet on each parsed entry so unparseable rows
+      // can show enough context for the operator to decide what to do
+      // without bouncing to Gmail. Plain-text body capped server-side at
+      // 8 KB — anything larger almost certainly isn't a real shipment
+      // notification anyway, and the link-out is still there.
+      emailSubject: email.subject,
+      emailFrom: email.from,
+      emailSnippet: email.snippet,
+      emailBody: (email.body ?? "").slice(0, 8 * 1024),
       parseResult: parseShipmentHtml(email.htmlBody),
     }));
 
@@ -315,6 +396,12 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           p.gmailId,
           p.receivedAt,
           p.parseResult,
+          {
+            subject: p.emailSubject,
+            from: p.emailFrom,
+            snippet: p.emailSnippet,
+            body: p.emailBody,
+          },
           qbInvoiceMap,
           qbSalesReceiptMap,
           qbBatchError,
@@ -341,7 +428,141 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       };
     }
 
-    return reply.send({ rows, dismissed, shadowMode: env.SHADOW_MODE });
+    // Phase 5 (Phase 4 extension): load unreviewed Extensiv return receipts and
+    // append them as `return_receipt` rows. These surface alongside shipment rows
+    // so the operator has a single "today" page for all pending actions.
+    let receiptRows: ReturnReceiptTodayRow[] = [];
+    try {
+      const rawReceipts = await db
+        .select({
+          id: extensivReceipts.id,
+          rmaId: extensivReceipts.rmaId,
+          matchKind: extensivReceipts.matchKind,
+          matchConfidence: extensivReceipts.matchConfidence,
+          txNumber: extensivReceipts.txNumber,
+          refString: extensivReceipts.refString,
+          parsedItemsJson: extensivReceipts.parsedItemsJson,
+          inferredCustomerName: extensivReceipts.inferredCustomerName,
+          classifiedAt: extensivReceipts.classifiedAt,
+          gmailMessageId: extensivReceipts.gmailMessageId,
+          // RMA fields (null when not matched)
+          rmaRmaNumber: rmas.rmaNumber,
+          rmaCustomerId: rmas.customerId,
+          // Email metadata + body so the operator can preview the original
+          // Bluechip notification inline without bouncing to Gmail.
+          emailSubject: emailLog.subject,
+          emailFromAddress: emailLog.fromAddress,
+          emailBody: emailLog.body,
+          emailBodyHtml: emailLog.bodyHtml,
+        })
+        .from(extensivReceipts)
+        .leftJoin(rmas, eq(extensivReceipts.rmaId, rmas.id))
+        .leftJoin(
+          emailLog,
+          eq(extensivReceipts.gmailMessageId, emailLog.gmailMessageId),
+        )
+        .where(
+          and(
+            isNull(extensivReceipts.dismissedAt),
+            isNull(extensivReceipts.confirmedAt),
+          ),
+        );
+
+      // Resolve customer names for matched RMAs in one batch.
+      const rmaCustomerIds = rawReceipts
+        .map((r) => r.rmaCustomerId)
+        .filter((id): id is string => Boolean(id));
+      const customerNameById = new Map<string, string>();
+      if (rmaCustomerIds.length > 0) {
+        const cRows = await db
+          .select({ id: customers.id, displayName: customers.displayName })
+          .from(customers)
+          .where(inArray(customers.id, rmaCustomerIds));
+        for (const c of cRows) customerNameById.set(c.id, c.displayName);
+      }
+
+      const mappedReceipts = rawReceipts.map((r): Omit<ReturnReceiptTodayRow, "linkedRmas"> => {
+        let parsedItems: Array<{ sku: string; quantity: number }> = [];
+        if (Array.isArray(r.parsedItemsJson)) {
+          parsedItems = (r.parsedItemsJson as Array<{ sku?: string; quantity?: number }>)
+            .filter((item) => item && typeof item.sku === "string")
+            .map((item) => ({ sku: item.sku as string, quantity: Number(item.quantity ?? 0) }));
+        }
+        const customerName = r.rmaCustomerId
+          ? (customerNameById.get(r.rmaCustomerId) ?? null)
+          : null;
+        return {
+          docType: "return_receipt",
+          receiptId: r.id,
+          rmaId: r.rmaId ?? null,
+          matchKind: r.matchKind,
+          matchConfidence: r.matchConfidence ? parseFloat(r.matchConfidence) : null,
+          txNumber: r.txNumber ?? null,
+          refString: r.refString ?? null,
+          parsedItems,
+          inferredCustomerName: r.inferredCustomerName ?? null,
+          classifiedAt: r.classifiedAt.toISOString(),
+          gmailMessageId: r.gmailMessageId,
+          emailSubject: r.emailSubject ?? "",
+          emailFrom: r.emailFromAddress ?? "",
+          // Cap at 8 KB — same convention as the unparseable rows. Anything
+          // larger almost certainly isn't valuable preview content; the
+          // Open-in-Gmail link still works for full inspection.
+          emailBody: (r.emailBody ?? "").slice(0, 8 * 1024),
+          emailBodyHtml: r.emailBodyHtml ?? null,
+          rma: r.rmaId
+            ? {
+                id: r.rmaId,
+                rmaNumber: r.rmaRmaNumber ?? null,
+                customerId: r.rmaCustomerId ?? null,
+                customerName,
+              }
+            : null,
+        };
+      });
+
+      // Batch-load linked RMAs for all receipt gmailMessageIds in one query,
+      // then group in JS. Option B with batching — simpler than SQL aggregation
+      // and fine for the bounded < 100 receipts in Today.
+      const gmailMessageIds = mappedReceipts.map((r) => r.gmailMessageId);
+      const links = gmailMessageIds.length
+        ? await db
+            .select({
+              gmailMessageId: emailRmaLinks.gmailMessageId,
+              rmaId: rmas.id,
+              rmaNumber: rmas.rmaNumber,
+              customerName: customers.displayName,
+            })
+            .from(emailRmaLinks)
+            .innerJoin(rmas, eq(rmas.id, emailRmaLinks.rmaId))
+            .leftJoin(customers, eq(customers.id, rmas.customerId))
+            .where(inArray(emailRmaLinks.gmailMessageId, gmailMessageIds))
+        : [];
+
+      const linksByReceipt = new Map<
+        string,
+        Array<{ rmaId: string; rmaNumber: string | null; customerName: string | null }>
+      >();
+      for (const link of links) {
+        const list = linksByReceipt.get(link.gmailMessageId) ?? [];
+        list.push({
+          rmaId: link.rmaId,
+          rmaNumber: link.rmaNumber ?? null,
+          customerName: link.customerName ?? null,
+        });
+        linksByReceipt.set(link.gmailMessageId, list);
+      }
+
+      receiptRows = mappedReceipts.map((r) => ({
+        ...r,
+        linkedRmas: linksByReceipt.get(r.gmailMessageId) ?? [],
+      }));
+    } catch (receiptErr) {
+      log.error({ err: receiptErr }, "failed to load extensiv receipt rows for /today");
+      // Non-fatal: return shipment rows without receipt rows.
+    }
+
+    return reply.send({ rows, receiptRows, dismissed, shadowMode: env.SHADOW_MODE });
   });
 
   // Batch dismiss for the "Dismiss all visible" page-level button.
@@ -712,6 +933,7 @@ async function buildRow(
   gmailId: string,
   receivedAt: Date | null,
   parseResult: ReturnType<typeof parseShipmentHtml>,
+  email: { subject: string; from: string; snippet: string; body: string },
   qbInvoiceMap: Map<string, QboInvoice>,
   qbSalesReceiptMap: Map<string, QboSalesReceipt>,
   qbBatchError: string | null,
@@ -777,6 +999,10 @@ async function buildRow(
     receivedAt: receivedAt?.toISOString() ?? null,
     parseConfidence: parseResult.confidence,
     parseMissingFields: parseResult.missingFields,
+    emailSubject: email.subject,
+    emailFrom: email.from,
+    emailSnippet: email.snippet,
+    emailBody: email.body,
     parsed: {
       poNumber: parseResult.shipment.poNumber,
       shopifyOrderNumber: parseResult.shipment.shopifyOrderNumber,

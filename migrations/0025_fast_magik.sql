@@ -1,0 +1,1 @@
+ALTER TABLE `rmas` ADD CONSTRAINT `rmas_extensiv_tx_number_unique` UNIQUE(`extensiv_tx_number`);

@@ -13,6 +13,401 @@ If you're new to this file:
 
 ## Current phase
 
+**Returns workflow redesign — RMA-page-centric flow + QBO-mirror credit memo. 🟢 SHIPPED (in operator-validation period)**
+(spec + plan: `docs/superpowers/specs/2026-05-07-returns-redesign.md` + `docs/superpowers/plans/2026-05-07-returns-redesign.md`. ~40 commits 2026-05-07/08. Live progress tracker: `docs/superpowers/plans/2026-05-07-returns-redesign-progress.md`.)
+
+Operator complained the existing returns flow "felt like we'd gone backwards from the desktop software." Brainstorming → spec → plan → subagent-driven execution with worktree-based parallelism produced a complete restructure across 16 plan tasks + 9 post-plan polish fixes after operator started using it on real data.
+
+**The new flow:**
+- Today tab is now a **triage inbox** of warehouse emails as collapsible HTML cards (sender / subject / full sanitized HTML body). Three dismiss actions: `Dismiss — done` (auto-fires when CM created) / `not return` / `other (with reason)`.
+- **Email-RMA auto-linking**: every Gmail-poll'd email is regex-scanned for RMA# patterns (`DC#####`, 5-7 digit sequential) against the new `email_rma_links` table. Manual "Check for emails" button on the RMA page does on-demand backfill.
+- **RMA detail page** has a new **Process Return panel** showing all linked emails for that RMA, plus a "Parse warehouse return" button that navigates to the credit memo create page.
+- **Credit memo create page** at `/returns/$rmaId/credit-memo` is a QBO-mirror full-page editor: SKU / Description / Expected / Received / Discrepancy / Unit price / Tax / Total / Delete columns, paste-receipt textarea + damages-note textarea at the top, totals strip, memo (auto-seeded), recipients (resolved via tag rules — `yiddy → bcc sales@feldart.com` etc.), Send + create / Save / Cancel.
+- **Process-return endpoint** orchestrates QBO POST → mark RMA completed → auto-dismiss linked Today receipts → optional email send. Concurrency-safe via `FOR UPDATE` re-check; partial-success path returns `emailSent: false` with QBO doc# for retry.
+
+**Bugs fixed along the way:**
+- SKU order randomly reordering on RMA hydrate (11 server reads missing `orderBy(rmaItems.position)` — caught by opus reviewer)
+- Credit memo emails going to chase recipients instead of invoice recipients (preview endpoint had wrong channel)
+- Credit memo `CustomerMemo` not on QBO statements (operator action: enable "Customer message" in QBO statement template; code was always correct)
+- Re-pasting accumulated quantities (now wipes prior `paste-%` rows; `parsed-receipts` returns latest only)
+- Items missing from parse showed approved qty (now show 0 — warehouse didn't return them)
+- Today tab dismiss had no optimistic update (cards now disappear instantly on click)
+- Permissive parser accepts operator shortcuts (`SKU x N`, `SKU - N`, `SKU: N`, etc.)
+
+**Process notes** (worth carrying forward):
+- Used **opus for all code-quality reviewers** — caught real bugs sonnet implementers missed (the orderBy bug being the standout)
+- **Worktree-based parallel execution** for non-conflicting tasks gave ~2× speedup with zero merge conflicts across 5 waves
+- The **post-plan polish loop** (after operator hit real data) found 9 more bugs/UX gaps beyond what spec/plan/review caught
+- `.env` updated: `ADMIN_EMAILS=joshezekiel554@gmail.com,info@feldart.com`
+
+**Status:** All 16 plan tasks shipped + post-plan polish done. Phase 5 cutover (delete `ReturnReceiptReviewDialog` + `RmaCreditMemoDialog`) is **operator-gated** — pending real-world validation before deleting legacy dialogs.
+
+---
+
+**Customer-page chase email + per-invoice tracking. 🟢 SHIPPED**
+(commits `1fa1499` → `f5aa7c5`, 2026-05-06, 2 commits). Operator-
+requested polish: chase emails are now reachable directly from the
+customer page (no need to flip to /chase), AND the Invoices tab
+supports targeted chases on selected subsets — so an operator with
+a customer who has 8 open invoices can chase just the 3 oldest
+without dragging the others into the message.
+
+**Backend** (`1fa1499`):
+- New `invoice_chases` table (migration `0026_faulty_infant_terrible`)
+  — one row per (invoice × chase email send), preserving history
+  rather than just the latest. Composite index on
+  (invoice_id, sent_at) backs the "Last chased" subqueries.
+- `POST /api/chase/send-chase-email` accepts optional `invoiceIds[]`
+  (≤100). Subset filter applied to the open-invoice fetch + the
+  post-send `invoice_chases` insert. After the Gmail send succeeds,
+  best-effort INSERT one row per scoped invoice; failure is logged
+  but doesn't fail the request (the email already went out).
+- Same `invoiceIds` param on `/preview-chase-email` so the dialog's
+  template re-renders with the subset table when the operator
+  switches level mid-review.
+- Both routes gate the invoice fetch on `customers.id` WHERE so a
+  cross-customer id-guess just falls out of the result set —
+  defence-in-depth.
+- `meta.invoiceIds: string[]` written on the chase activity row +
+  `audit_log.after.invoiceIds` so future timeline UIs can show
+  "chased these N invoices" by reading the activity meta.
+- `GET /api/customers/:id/invoices` adds `lastChasedAt` +
+  `lastChasedLevel` per invoice via correlated subqueries.
+
+**Frontend** (`f5aa7c5`):
+- `<ChaseEmailSendDialog>` gets an L1/L2/L3 segmented selector
+  inside the dialog. Switching levels re-fetches the preview and
+  re-snaps form fields. Optional `invoiceIds` prop threaded through
+  to backend calls.
+- Customer page header: new **Send chase email** button next to
+  **Send statement**. Defaults to L1, opens the dialog scoped to
+  "all open." Auto-fading "Chase L1 sent · N invoices chased"
+  pill mirrors the statement-sent pattern.
+- Invoices tab: new sortable **Last chased** column showing
+  "5d ago L1" with tone gradient muted → secondary → warning
+  across <7d / 7-30d / 30d+. Sort by `lastChasedAt` puts
+  never-chased rows at the front in ascending order — directly
+  enables the "show me invoices I haven't chased recently"
+  workflow.
+- Invoices tab bulk-action bar: when 1+ rows selected, **Send
+  chase email** button appears next to "Download N PDFs". Filters
+  to invoice rows (credit memos can't be chased), opens the dialog
+  scoped to the selected ids.
+
+**No backfill.** Pre-existing chase emails (from before this commit)
+have no per-invoice rows in `invoice_chases`. Old invoices show as
+"never chased" — operator can look at the activity timeline if they
+care about historical context. Reconstructing from `activities` would
+be inaccurate (only "all open at the time of send" was the scope, and
+"open at that moment" isn't recoverable from the current schema).
+
+---
+
+**Pre-cutover bug-check + cleanup wave. 🟢 SHIPPED** (commits
+`69c0a62` → `0e3c26f`, 2026-05-06, 10 commits). Five-agent code
+review across the entire `feat/returns-phase-5-7` branch (returns
+core backend, returns analysis modules, returns frontend, friction
+polish, plus a synthesis pass) surfaced 17 critical + 15 important
+findings. Six parallel implementation agents + me cleared the
+backlog over a single session.
+
+Top hits — these were real bugs, not nits:
+
+- **Cache-invalidation gap was system-wide.** Every RMA mutation
+  was invalidating only `["rma", id]`, leaving the customer's
+  Returns tab, customers list `hasPendingRma` flag, chase RMA
+  pill, and customer-detail KPI strip stale until hard reload.
+  New helper `src/web/lib/invalidate-rma.ts` applied across 21
+  mutation sites in `rma-action-panel`, all rma-*-dialog/action
+  components, customer-detail RmaRowMenu, chase per-row send,
+  email-list backfill (`69c0a62`, `1da048b`).
+- **Wizard silently dropped operator data.** Items removed from
+  local state never DELETEd on backend; items missing `qbItemId`
+  silently skipped at Approve; `classification` edits on resumed
+  wizards omitted from PATCH body. All three fixed (`c5291b9`).
+- **Credit-memo line `Amount` ≠ `Qty * UnitPrice`** when
+  `receivedQuantity` overrode the original quantity — wrong
+  customer credit. Builder now derives Amount from qty × unitPrice
+  (`7a74c48`).
+- **Receipt-review "Create RMA from receipt" was unreachable** —
+  customer search input had no result list and `setFrCustomer`
+  was never called from any UI. Now wired with the same
+  `CustomerPicker` shape from `return-new.tsx` (`c5291b9`).
+- **`mark_already_credited` didn't verify CustomerRef** — operator
+  paste-typo could silently link another customer's CM. Now
+  cross-checks `cm.CustomerRef.value === current.qbCustomerId`
+  (`d022fc3`).
+- **`eligibility-pdf` GET trusted client-supplied `x-user-id`** for
+  Drive token routing, despite calling `requireAuth(req)` and
+  discarding the result. Auth bypass / IDOR. Now uses `user.id`
+  from auth (`d022fc3`).
+- **`/from-receipt` accepted `customerId`/`qbCustomerId` from body**
+  without verifying the receipt was unconfirmed or that the ids
+  matched. Now cross-checks both (`d022fc3`).
+- **Photo upload + addRmaItem position** assigned via SELECT-then-
+  INSERT, racing under concurrent uploads. Both wrapped in
+  `db.transaction(...).for("update")` on the parent rmas row
+  (`d022fc3`).
+- **Drive folder allocation race** — two concurrent first-uploads
+  on the same RMA both saw `driveFolderId=null` and both called
+  `ensureFolder`, creating duplicate folders. Now atomic via the
+  same FOR UPDATE pattern (`d022fc3`).
+- **`/api/email/send` inherited Fastify's default 1MB bodyLimit**,
+  silently 413-ing any meaningful multi-attachment send. Raised
+  to 25MB + per-attachment Zod cap (`d022fc3`).
+- **Customer-detail KPI dates not normalized** — mysql2 returned
+  subquery TIMESTAMPs as `"YYYY-MM-DD HH:MM:SS"` strings, parsed
+  by browsers as local time → "5h ago" for a 4h-old contact on
+  BST. Wrapped through the same normaliser the list route uses
+  (`7a74c48`).
+- **Extensiv export tab/newline injection** — customer names with
+  embedded `\t` or `\n` (rare but real for QBO data) silently
+  broke warehouse parser column alignment. Now sanitised
+  per-column (`7a74c48`).
+- **Tier-3 fuzzy matcher was dead code** — the receipt classifier
+  never extracted `inferredCustomerName` from the `Ref:` line, so
+  the matcher's tier-3 fuzzy path got `null` for every receipt
+  and never fired. Classifier now strips `\sreturns?$` + leading
+  season token; threaded through `gmail/poller` (`7a74c48`).
+- **Reply-linker fallback was dead code** — the "fallback" query
+  was a strict subset of the first (additionally constrained on
+  customerId) and could never return rows the first didn't. Test
+  passed vacuously. Dropped (`7a74c48`).
+- **Hardcoded `SHIPPING_FEE_ITEM_ID = "1"` placeholder** in the
+  CM builder would either 502 ("Item id 1 doesn't exist") or
+  silently issue CMs against whatever item id 1 happened to be.
+  First moved to env vars (`0e3c26f`) then promoted to operator-
+  editable `app_settings` rows (`ef9e520`) — same shape as the
+  existing `drive_root_folder_id` / `warehouse_team_email` /
+  `statement_bcc_email` config. Surfaced in `/settings → Returns`
+  with two new input fields. CM builder loads from settings and
+  throws if a deduction is requested with the matching id unset
+  — refusing to silently issue against the wrong QBO item. **Pre-
+  cutover blocker:** operator sets `rma_shipping_fee_item_id` and
+  `rma_restocking_fee_item_id` to the real QBO service-item ids
+  before issuing any CM with shipping or restocking deductions.
+
+Important-tier hardening that landed in the same wave:
+
+- **forceStatus + deleteRma now require admin** — `ADMIN_EMAILS`
+  env var (mirrors existing `ALLOWED_EMAILS` pattern), `isAdmin()`
+  helper checks against it. Empty list = nobody is admin
+  (fail-closed). `deleteRma` also cleans up Drive folder + files
+  best-effort before cascading the row delete (`31bf7a5`).
+- **`confirmExtensivReceipt` now transactional** — receipt
+  confirmation + RMA status advance no longer split-brain on
+  mid-flight failure (`31bf7a5`).
+- **`listRmas` accepts `offset`** — was silently truncating past
+  500 rows (`31bf7a5`).
+- **Matcher tier-3 customer-name match** uses token-overlap with
+  4-char minimum — was bidirectional `includes()` so "Co" matched
+  every "Cohen"/"Corp"/"Company" customer (`fcb03f3`).
+- **AI parser hardened against prompt injection** — email body +
+  attachment now wrapped in `<email>` / `<attachment>` markers
+  with a system-prompt note that those tags are untrusted data.
+  Input also truncated to 32KB to bound cost (`fcb03f3`).
+- **Classifier item-row regex tightened** — SKU now requires ≥3
+  chars + ≥1 letter, stopping false-positive matches on prose
+  like `"1 5"` (`fcb03f3`).
+- **Bulk markGmailAsRead** now bounded to 5-parallel via
+  `mapWithLimit` with per-call error catch — was serial fire-and-
+  forget, lost on process restart (`1d94dff`).
+- **QBO sync upsert** now uses `INSERT ... ON DUPLICATE KEY
+  UPDATE` instead of SELECT-then-decide. Per-customer sync vs
+  global cron no longer noisily 502s on dup-key (`1d94dff`).
+- **`extensivTxNumber` now UNIQUE** (migration `0025_fast_magik`).
+  Schema previously allowed duplicate warehouse tx numbers across
+  RMAs (`1d94dff`).
+- **Compose modal received-qty validation, sync-route nanoid
+  jobId, warehouse-number Enter-key empty guard** — small
+  hygiene wins (`ab4e3e5`).
+
+Test repairs in the same wave fixed 4 pre-existing failures
+caused by mock-chain drift (`leftJoin` mock missing, a stale
+`approveRma` non-seasonal expectation, the Drive `deleteFile`
+test asserting the wrong call shape, and a vacuous
+`excludeRmaId` test that had been passing without actually
+exercising exclusion). 14 new tests added for the new behaviours.
+
+**Final state:** typecheck `npx tsc --noEmit` exits 0. Test
+suite: **451/451 pass across 29 files** (was 437/441 with 4
+pre-existing failures before this wave).
+
+**Deferred:** I14 (extracting nested step-renderer functions in
+`return-receipt-review-dialog.tsx` to fix focus-loss on parent
+re-render). Moderate effort for moderate impact; the file was
+already heavily modified by A2 in the same session and another
+big refactor felt risky. Track for a future polish pass.
+
+**Pre-cutover operator action:** visit `/settings → Returns` and
+paste the QBO Item ids for the shipping-deduction and restocking-fee
+service items. Empty values are fine while operators don't yet have
+those items in QBO — the CM builder only throws when a deduction
+is actually requested. Plus add admin emails to `ADMIN_EMAILS` env
+var (one operator at minimum, otherwise `forceStatus` + `deleteRma`
+return 403 for everyone).
+
+---
+
+**3-day friction polish + Returns wrap-up. 🟢 SHIPPED** (commits
+`3589642` → `adf53a4`, 2026-05-04 → 2026-05-06, ~11 commits).
+Three back-to-back days of operator-friction fixes after the Returns
+module landed, plus a per-customer QB sync fast-path and a customer-
+page KPI overhaul. Branch `feat/returns-phase-5-7`; not yet merged
+to `main`.
+
+**Day 1 — friction list (`3589642`):** Unparseable tab now shows the
+full email body inline (no more flipping to Gmail to read why we
+couldn't parse). Stale "Has unactioned email" badge on customer rows
+fixed via cross-cache invalidation when a row is marked actioned.
+Compose-modal scroll for long bodies. Outbound Gmail sends now also
+mark the originating thread as read locally. Compose modal grew
+multi-attachment support + reply-all (`Cc` prefilled from
+`/api/email-log/:id/recipients`).
+
+**Day 2 — back nav + manual QB sync (`3d55578`, `77ba277`):** Every
+"go back" affordance is now context-aware (return-detail's "back to
+customer", wizard's "continue editing", today's "back to today"
+preserve query state). New `<SyncQbBadge>` in the global header
+showing relative time since last QB sync + a "Sync QB" button that
+fires the global cron on demand. Then the per-customer fast-path:
+`<SyncCustomerButton>` on the customer-detail page calls
+`POST /api/customers/:id/sync-qb` → `syncOneCustomer(qbCustomerId)`
+which re-pulls just that customer + their invoices + their payments
+(~3 QBO calls vs hundreds for a full sync). Designed for "I need
+fresh data right before sending a statement" — doesn't disturb the
+30-min global cron.
+
+**Day 3 — customer page glance (`adf53a4`):** Customers list +
+chase list both got a small uppercase "RMA" chip next to the name
+when the customer has an active RMA in flight (any of `draft`,
+`approved`, `awaiting_warehouse_number`, `sent_to_warehouse`,
+`received`). Both pages now have all numeric/date columns sortable,
+including new ones — Last contacted, Last payment, Last statement on
+customers; Balance, Last payment, Last statement on chase. Chase
+gained two filter chips: "No terms set" and "RMA pending". Customer
+detail header picks up "Last contacted N ago" + "RMA in flight"
+badge, and the KPI strip at top extended from 4 to 6 cards (Balance ·
+Overdue · Open invoices · Open tasks · RMA in flight · Terms),
+served by a new `kpi` rollup on `GET /api/customers/:id` computed
+in one round-trip alongside `recentActivities`.
+
+**Backfill scripts (`388d781`, `3bb69ca`):** Three idempotent
+one-shots for receipt-data hygiene —
+`scripts/backfill-extensiv-receipts.ts` retro-classifies historical
+secure-wms.com emails that arrived before the classifier was
+deployed; `rematch-extensiv-receipts.ts` re-runs the matcher on
+already-classified rows, auto-confirming when the linked RMA is
+already `completed` (audit-only); `reparse-extensiv-receipts.ts`
+re-runs the line parser when we improve the parsing logic.
+
+**Today page rebuild (`01cfec4`, `3bb69ca`, `18867ed`):** Renamed
+`/invoicing` → `/today`, restructured into vertical Orders + Returns
+sections (was a flat list mixing both), added clickable top-line
+stats ("18 shipments awaiting invoice" → click to filter), and
+per-row email-body preview on receipt cards. Receipts now route
+through their own pipeline — backend filters return-receipt emails
+out of the shipment parser, exposes `emailSubject`/`emailFrom`/
+`emailBody` so the UI can render context inline.
+
+**Receipt classifier hardening (`037835a`, `1bf3aa8`, `ff35328`):**
+Bluechip's HTML-only receipt emails (no plain-text MIME part) now
+parse correctly via `stripHtmlForParse` preprocessing. The receipt
+↔ RMA matcher widened to also accept `approved` and `completed`
+RMAs at tier 1 (exact match), so historical receipts can be linked
+to RMAs that were already issued credit memos in QBO — the link
+is audit-only when the RMA is already `completed`.
+
+**Returns module — phase 0 through 7. 🟢 SHIPPED** (commits
+`7f2ae99` → `2c50dc4`, 2026-05-02 → 2026-05-04, ~80 commits over
+3-4 days). The entire return-management workflow from the
+standalone desktop app, absorbed into finance-hub. Plan was 8
+phases × ~3 weeks; multi-agent execution compressed it to ~4 days.
+Plan file at `C:\Users\user\.claude\plans\returns-integration.md`.
+
+- **Phase 0 — schema + state machine + list page**:
+  `7f2ae99` `02825f2` `cdfbe29` (migration `0020`)
+  scaffolds `rmas`, `rma_items`, `seasons`, `seasonal_products`
+  tables. `64cbdcc` builds the transition table; `dc8ed27` +
+  `34eae7a` add `validateTransition` with happy-path + invalid-
+  transition test coverage. Module barrel + CRUD service:
+  `497905f` `612e455` `fda7ce5` `e240cfb` `710adf3`. Fastify route
+  + sidebar nav: `6c06231` `3df65cd` `6791b5e`.
+
+- **Phase 1 — damage flow end-to-end** (the simplest workflow,
+  sets schema + UI shape): `fd6cfc3` (approveRma damage),
+  `46fffa2` (denyRma), `71f5012` (issueCreditMemo + builder stub),
+  `daf54b3` (markReplacementSent). Item CRUD: `a649af5` `282fef8`
+  `0496587` `16dc632`. Discount-aware QBO price + invoice lookup:
+  `2217d6a`. Discount-aware credit-memo lines: `f68e60a`. Wired in
+  `bd1c9e3`. Email templates seeded: `c5af9e0`. UIs: `34c5d42`
+  (`/returns/new` + damage branch), `c50d704` `c18ba35`
+  (approval/denial dialogs), `ab4f2ff` (`/returns/:id` detail w/
+  state-driven action panel), `b7c6d1f` (CM editor dialog +
+  preview endpoint), `37f6977` (customer profile Returns tab),
+  `d5c5b67` (timeline RMA events).
+
+- **Phase 2 — Drive photo upload**: `c2aac11` (broadened Google
+  scope to drive.file, requires re-consent), `376ee02`
+  (`rma_photos` schema + `drive_folder_id` on rmas), `d1c2938`
+  (Drive client), `0a95652` (upload/delete/list routes), `eeccd1a`
+  (rename folder on RMA-number allocation), `f60c97f` (drag-drop
+  zone + gallery), plus three Drive client fixes: `2bf55d6`
+  (broaden scope from drive.file → drive after permission errors),
+  `0918cf6` (accept either scope), `83ba8e8` (supportsAllDrives
+  flag), `5cd7fc4` (wrap Buffer in Readable for upload),
+  `01642d2` (Settings UI for `drive_root_folder_id` + reads from
+  Auth.js accounts), `930dfa1` (bodyLimit + script to set folder
+  id), `0c1d401` (snapshot FileList before clearing input).
+
+- **Phase 3 — seasonal flow + eligibility + Extensiv export**:
+  `542490c` (cumulative-this-season eligibility), `ff0464c`
+  (eligibility PDF report), `cd99902` (Extensiv 15-column export
+  builder), `543bc25` (seasonal approveRma + warehouse
+  transitions), `fca4eca` (wire warehouse + eligibility +
+  override-approve routes), `78fa805` `4c3726d` `062520c` (seasons
+  + seasonal_products CRUD + UI w/ QBO search), `651221e`
+  (eligibility card + per-item classification UI), `acfc5de`
+  (warehouse export + set-tx-number UI), `5676490` (override-approve
+  for negotiation flow), `7d7ec58` (AI parser for return-request
+  emails).
+
+- **Phase 4 — Extensiv receipt auto-match**: `c685cfb` (classifier),
+  `e8e2f5a` (matcher), `d9abdea` (`extensiv_receipts` schema +
+  migration), `d778ae7` (wire into Gmail poller), `867f7b7`
+  (parallel QBO item search + UI errors), `52649b3` (link customer
+  replies to RMA timeline), `3c4b56c` (receipt rows on /today +
+  manual match/dismiss/confirm), `ad4947e` (receipt review dialog
+  with single-shot CM flow + today wiring).
+
+- **Phase 5 — non-seasonal flow**: `8fd5794` (refinements),
+  `2a88262` `369e219` `73beba1` `a64be2f` `dfcd633` `007c94c`
+  `236624f` `d96a76a` `6a47e46` `9a0b68d` `ab9bfdc` `3069785`
+  `8151ef6` `37cdd72` `8031b95` `d5ab8d9` `bdece7c` `2a887cf`
+  `4104287` (multi-step wizard for both seasonal + non-seasonal
+  with bulk price+invoice lookup, customer-scoped lookup
+  endpoints, auto-pick QBO match for parsed items, drop per-row
+  auto-lookup for bulk button only, customer-scoped PDF preview,
+  cancel/delete actions on detail+list+customer profile, revert-
+  to-draft for editing in-flight RMAs, clickable step pills).
+
+- **Phase 6 — backend infra + receipt review polish**: `361dcea`
+  (tracking, sales tax, reconciliation, drill-down PDF), `0d5b6a0`
+  (UI: damage wizard, resume, Kanban, action-panel reconciliation),
+  `2c50dc4` (hand off receipt review to shared
+  RmaCreditMemoDialog).
+
+- **Phase 7 — selective desktop-SQLite import**: `2d917cd`
+  (one-shot import script).
+
+**Auth refinements (during returns work)**: `e2aff8e` (sign-out
+button in sidebar footer), `94a40fb` (signout redirects to
+`/api/auth/signin`), `402da79` (email-based account linking for
+Google sign-in — was failing on existing email collisions),
+`f5a4e72` (login redirect bounces to `/` instead of 404'ing).
+
+---
+
 **Invoices tab + editable-compose-everywhere. 🟢 SHIPPED** (commits
 `5cf12d3` → `50302d9`, 2026-05-01, ~10 commits). Two threads
 landed in one session:
@@ -300,20 +695,22 @@ Still to do for week 4 closeout:
 
 ## Latest checkpoint
 
-**Date**: 2026-04-30 (loose-ends pass closed)
-**Commit on `main`**: `aa7da53` (home alert for unsent invoices past 11am London)
-**GitHub**: https://github.com/joshezekiel554-cloud/finance-hub (in sync)
+**Date**: 2026-05-06 (customer-page chase email + per-invoice chase tracking committed)
+**Branch**: `feat/returns-phase-5-7` (HEAD `f5aa7c5`) — not yet merged to `main`
+**Last `main` commit**: `aa7da53` (2026-04-30 home alert)
+**GitHub**: https://github.com/joshezekiel554-cloud/finance-hub
 **Local repo**: `C:\Users\user\Documents\finance-hub`
-**Status**: typecheck silent · **192/192 tests pass** · server + web + worker running via `npm run dev`
-**Data populated**: 2,407 customers (2,374 with billing address — backfilled via re-sync) · 3,119 invoices · 19,184 invoice_lines · 4,842 activities · 509 emails · 6 email templates · 9 app_settings rows seeded
-**Migrations**: `0012_yellow_crusher_hogan` applied (adds `email_log.message_id_header` for RFC 5322 reply threading)
-**Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy
-**Smoke test**: GET /api/customers/{abraham}/statement-pdf-preview → 200, `application/pdf`, 4133 bytes, valid %PDF-1.3 in 2s
+**Status**: `npx tsc --noEmit` exits 0 silently · **451/451 tests pass** across 29 files · server + web + worker running via `npm run dev`
+**Data populated**: 2,407 customers · 3,119 invoices · 19,184 invoice_lines · ~4,842 activities · 509+ emails · 9 email templates (added `rma_approval` / `rma_denial` / `rma_credit_memo` during returns build) · app_settings extended with `drive_root_folder_id`, `statement_bcc_email`, statement-PDF copy
+**Migrations**: latest is `0026_faulty_infant_terrible` (`invoice_chases` table for per-invoice chase history). `0025_fast_magik` added UNIQUE on `rmas.extensiv_tx_number`. Returns work added `0020-0024` (rmas + rma_items + seasons + seasonal_products + photos + drive_folder_id + extensiv_receipts). `0019` added `customer_memo` on invoices.
+**New env vars**: `ADMIN_EMAILS` (comma-list of admin operator emails) — required before pre-cutover; empty list = nobody is admin. The RMA fee item IDs are NOT env vars — they're set via `/settings → Returns` (`rma_shipping_fee_item_id`, `rma_restocking_fee_item_id` in app_settings).
+**Local infra**: MySQL local · Memurai (Windows Redis) installed as service · QBO OAuth chain healthy · Google OAuth scope expanded to `drive` (RMA photo upload + folder rename)
+**Smoke**: per-customer QB sync `POST /api/customers/{id}/sync-qb` → 200 in ~3 calls; `<SyncCustomerButton>` reflects fresh data instantly via React Query cache invalidation
 
 ## Active work
 
-**None — ready for Week 8 (Notifications).** Carry-overs that are still
-open but non-blocking:
+**None — ready for next phase.** Pre-existing carry-overs that are
+still open but non-blocking:
 
 1. 180-day Gmail backfill still partial (~6 days populated; per-customer
    "Pull email history" button covers on-demand backfill from any
@@ -323,12 +720,19 @@ open but non-blocking:
    ToastProvider into App.tsx if we want toasts globally.
 3. `relatedTaskId` field on `email_log` was never added to schema; the
    linkage is via `tasks.relatedActivityId` instead. Acceptable.
+4. `feat/returns-phase-5-7` not yet merged to `main` — branch carries
+   the entire Returns module + Today rebuild + 3-day friction polish.
+   Merge gate is operator review of the full RMA flow on real data.
 
-Closed during the 2026-04-30 loose-ends pass (see Current phase):
-- ~~Invoicing 11am cron~~ — replaced with frontend home-page alert (`aa7da53`)
-- ~~`requireAuth` gap on `/api/invoicing/*`~~ — closed in `fb18d54`
-- ~~`In-Reply-To` uses Gmail API messageId~~ — closed in `4a61a1a` + migration `0012`
-- ~~Cross-customer statements log page~~ — shipped at `/statements` (`43472d4`)
+Closed during the 2026-04-30 → 2026-05-06 sweep:
+- ~~Returns integration (8 phases, planned 3 weeks)~~ — shipped in
+  ~4 days via parallel multi-agent work (see Current phase)
+- ~~Per-customer QB sync fast-path~~ — shipped (`77ba277`)
+- ~~Today page rebuild + receipt classifier~~ — shipped (`01cfec4`,
+  `c685cfb` + family)
+- ~~Customer-page glance metrics + RMA tag~~ — shipped (`adf53a4`)
+- ~~Auth: sign-out from sidebar + email-based account linking~~ —
+  shipped (`e2aff8e`, `402da79`)
 
 ## What just shipped (last 24h, 25 commits)
 
@@ -570,42 +974,26 @@ and stable. 207/207 tests green.
 
 ## What's next
 
-**Returns integration (queued — comes BEFORE the AI agent).**
-Absorbing the standalone return-management desktop app into
-finance-hub: damage credits, seasonal returns, non-seasonal returns,
-all under one unified RMA flow. Plan landed at
-`C:\Users\user\.claude\plans\returns-integration.md` (894 lines,
-8 phases, ~3 weeks of focused work). Sequenced before the AI agent
-so the agent's tool registry includes returns from day one rather
-than getting a permanent invoicing/returns split.
+**Phase 8 — Returns cutover.** The Returns module is fully built
+and on `feat/returns-phase-5-7`. Remaining work to call it done:
+1. Operator review of the full RMA flow on real customer data —
+   damage, seasonal, non-seasonal, receipt auto-match.
+2. Merge `feat/returns-phase-5-7` → `main`.
+3. Out-of-band cleanup: deferred items from the original plan that
+   stayed deferred — consignment workflow (separate module),
+   Extensiv API (manual upload kept for v1), auto-completion of
+   receipts (operator confirm step kept).
 
-Brief shape:
-- **Phase 0** — schema + state machine + list page (~2d)
-- **Phase 1** — damage end-to-end (the simplest workflow; sets
-  schema + UI shape) (~3d)
-- **Phase 2** — Drive photo upload (~1.5d)
-- **Phase 3** — seasonal flow + eligibility + Extensiv export (~4d)
-- **Phase 4** — auto-match incoming Extensiv receipts (~2d)
-- **Phase 5** — non-seasonal flow (~2d)
-- **Phase 6** — customer-profile integration (~1d)
-- **Phase 7** — selective import from desktop SQLite (~0.5d)
-- **Phase 8** — cutover (variable)
-
-Out of scope (deferred): consignment workflow (separate module
-after main returns ships); Extensiv API (manual upload stays for
-v1); auto-completion of receipts (operator review for now).
-
-Open questions blocking phase 0 listed in the plan file §11.
-
-**Week 9 — AI agent (after returns).** This is the natural
-biggest piece once returns lands. Foundations are ready: every tool
-the agent will call already exists as a clean function —
+**Week 9 — AI agent.** Returns is shipped, so the agent's tool
+registry now includes RMA tools from day one. Foundations ready:
+every tool the agent will call already exists as a clean function —
 `resolveRecipients`, `sendInvoiceViaQbo`, `sendInvoiceEmail`
 (statements path), `sendChaseEmail`, `createTask`,
-`pushCustomerTermsToQbo`, `pushCustomerPhoneToQbo`, etc. — all
-auditable + idempotent. After returns ships, add RMA tools too:
-`get_rmas_for_customer`, `check_return_eligibility`,
-`propose_credit_memo`, `match_extensiv_receipt`. Agent shape:
+`pushCustomerTermsToQbo`, `pushCustomerPhoneToQbo`, plus the new
+RMA-side: `createRma`, `addRmaItem`, `approveRma`, `denyRma`,
+`issueCreditMemo`, `validateTransition`, `cumulativeEligibility`,
+`buildExtensivExport`, `parseReturnRequestEmail` — all auditable +
+idempotent. Agent shape:
 - `/agent` chat with `@customer-name` scoping syntax
 - Tool registry (read tools auto-execute; write tools require explicit
   Approve click)
@@ -613,7 +1001,8 @@ auditable + idempotent. After returns ships, add RMA tools too:
   cached as the prefix
 - Inline helpers: "Draft chase email" (customer page), "Summarize this
   customer" (sidebar), "What should I do next?" (action suggestion),
-  "Enhance with AI" (compose modal)
+  "Enhance with AI" (compose modal), and now also "Draft RMA
+  approval/denial reasoning" + "Classify this return-request email"
 
 **Week 8 — Notifications (still open, unblocking):**
 - Email digest BullMQ job (7am daily) — feeds team summary of what's
@@ -738,6 +1127,46 @@ These don't block current work but block specific later phases:
 - `dec1e53` — `tasks-ui` agent: Kanban + list + detail drawer + comments + @mentions
 - `4641b1f` — Bug-check pass: regex tightening, LIKE escape, missing SSE events, N+1
 - `28f4e28` — PROGRESS catch-up
+
+**3-day friction polish** (2026-05-04 → 2026-05-06, commits `3589642` → `adf53a4`):
+- `3589642` — Day 1: unparseable-tab body preview + stale badges + dialog scroll + Gmail mark-read + multi-attachment + reply-all
+- `01cfec4` — Today rebuild: rename `/invoicing` → `/today`, split into Orders + Returns
+- `3bb69ca` — Today: clickable top-line stats + extensiv-receipt backfill script
+- `ff35328` — Returns: matcher widened to also accept `approved` RMAs
+- `1bf3aa8` — Returns: matcher accepts `completed` RMAs (audit trail) + auto-confirm
+- `18867ed` — Today: inline email-body preview on receipt cards
+- `037835a` — Returns: receipt classifier handles HTML-only Bluechip emails
+- `3d55578` — Day 2: context-aware back nav + manual `<SyncQbBadge>` w/ relative time + global "Sync QB" button
+- `77ba277` — Per-customer fast-path "Refresh from QB" — `syncOneCustomer(qbCustomerId)` + `<SyncCustomerButton>`
+- `adf53a4` — Day 3: RMA-pending tag, sortable columns + filters on customers/chase, customer-page KPI strip + last-contacted
+
+**Returns module — phase 0-7 + auth refinements** (2026-05-02 → 2026-05-04, commits `7f2ae99` → `2c50dc4`, ~80 commits):
+- `7f2ae99` — Scaffold rmas Drizzle schema
+- `02825f2` — `rma_items` + `seasons` + `seasonal_products` schemas
+- `cdfbe29` — Apply migration `0020`
+- `64cbdcc` — RMA state-machine transition table
+- `dc8ed27` `34eae7a` — `validateTransition` + tests (incl. invalid-transition coverage)
+- `7b9ae07` `bfb5162` `1bb29e5` — Extend ACTIVITY_KINDS + EMAIL_TEMPLATE_CONTEXTS for RMAs
+- `497905f` `612e455` `fda7ce5` `e240cfb` `710adf3` — RMA CRUD service (createRma, getById, listRmas with filters, updateRma w/ status gating)
+- `6c06231` — Wire `/api/rmas` Fastify route plugin
+- `6791b5e` `3df65cd` — RMA list page + sidebar nav link
+- `fd6cfc3` `46fffa2` `71f5012` `daf54b3` — approveRma damage / denyRma / issueCreditMemo + builder / markReplacementSent
+- `a649af5` `282fef8` `0496587` `16dc632` — addRmaItem / updateRmaItem / removeRmaItem + Drizzle date-column fix
+- `2217d6a` `f68e60a` — Discount-aware QBO price + invoice lookup; discount-aware credit-memo lines
+- `bd1c9e3` `c5af9e0` — Wire state-transition + items + QBO routes; seed `rma_approval`/`denial`/`credit_memo` templates
+- `34c5d42` — `/returns/new` create form with damage branch
+- `c50d704` `c18ba35` — Approval + denial email dialogs (with preview)
+- `ab4f2ff` — `/returns/:id` detail page with state-driven action panel
+- `b7c6d1f` — CM editor dialog + preview endpoint
+- `37f6977` — Customer profile Returns tab
+- `d5c5b67` — RMA activity events on timeline
+- **Phase 2 (Drive photos)**: `c2aac11` (drive.file scope), `376ee02` (rma_photos schema + drive_folder_id), `d1c2938` (Drive client), `0a95652` (upload/delete/list), `eeccd1a` (rename folder on RMA-number allocation), `f60c97f` (drag-drop zone + gallery), plus fixes: `2bf55d6` `0918cf6` `83ba8e8` `5cd7fc4` `01642d2` `930dfa1` `0c1d401`
+- **Phase 3 (seasonal + eligibility + Extensiv)**: `542490c` (cumulative-this-season eligibility), `ff0464c` (eligibility PDF report), `cd99902` (Extensiv 15-column export), `543bc25` (seasonal approveRma + warehouse), `fca4eca` (warehouse + eligibility + override-approve routes), `78fa805` `4c3726d` `062520c` (seasons + seasonal_products CRUD + UI), `651221e` (eligibility card UI), `acfc5de` (warehouse export + set-tx-number), `5676490` (override-approve), `7d7ec58` (AI parser for return-request emails)
+- **Phase 4 (Extensiv receipts auto-match)**: `c685cfb` (classifier), `e8e2f5a` (matcher), `d9abdea` (`extensiv_receipts` schema), `d778ae7` (wire into Gmail poller), `867f7b7` (parallel QBO item search), `52649b3` (link customer replies to RMA timeline), `3c4b56c` (receipt rows on /today + manual match/dismiss/confirm), `ad4947e` (receipt review dialog with single-shot CM flow)
+- **Phase 5 (non-seasonal flow)**: `8fd5794` `2a88262` `369e219` `73beba1` `a64be2f` `dfcd633` `007c94c` `236624f` `d96a76a` `6a47e46` `9a0b68d` `ab9bfdc` `3069785` `8151ef6` `37cdd72` `8031b95` `d5ab8d9` — multi-step wizard, customer-scoped lookups, bulk price+invoice lookup, auto-pick QBO match, customer-scoped PDF preview
+- **Phase 6 (UI polish + reconciliation)**: `bdece7c` (clickable step pills + cancel/delete in wizard), `2a887cf` (cancel + delete on detail/list/customer-profile), `4104287` (revert-to-draft for in-flight RMAs), `361dcea` (tracking + sales tax + reconciliation + drill-down PDF), `0d5b6a0` (damage wizard + resume + Kanban + action-panel reconciliation), `2c50dc4` (hand off receipt review to shared dialog)
+- **Phase 7 (desktop SQLite import)**: `2d917cd` — selective import script
+- **Auth refinements (during returns)**: `e2aff8e` (sidebar sign-out button), `94a40fb` (signout redirects to `/api/auth/signin`), `402da79` (email-based account linking for Google), `f5a4e72` (login → `/` instead of 404)
 
 **Invoices tab + editable-compose-everywhere** (2026-05-01, commits `5cf12d3` → `50302d9`):
 - `5cf12d3` — Unified Documents view (invoices + credit memos) with filters / search / sort / PDF / Send

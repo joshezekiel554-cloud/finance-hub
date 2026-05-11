@@ -30,7 +30,9 @@ import {
   emailLog,
   statementSends,
 } from "../../db/schema/crm.js";
-import { invoices } from "../../db/schema/invoices.js";
+import { invoices, invoiceChases } from "../../db/schema/invoices.js";
+import { rmas } from "../../db/schema/returns.js";
+import { tasks } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { nanoid } from "nanoid";
 import { requireAuth } from "../lib/auth.js";
@@ -50,6 +52,7 @@ import {
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
+import { recordActivity } from "../../modules/crm/activity-ingester.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
 import { QboClient } from "../../integrations/qb/client.js";
 
@@ -78,8 +81,22 @@ const listQuerySchema = z.object({
   hasOverdue: boolish,
   hasUnactionedEmail: boolish,
   missingTerms: boolish,
+  // Tag filter — narrows to customers whose tags JSON array contains
+  // the given tag (case-insensitive substring match against the
+  // serialised JSON; cheap because the tags array is small per row).
+  // Multiple tags AND together (all must be present).
+  tag: z.union([z.string().max(64), z.array(z.string().max(64))]).optional(),
   sort: z
-    .enum(["displayName", "balance", "overdueBalance", "lastSyncedAt"])
+    .enum([
+      "displayName",
+      "balance",
+      "overdueBalance",
+      "lastSyncedAt",
+      "lastPaymentAt",
+      "lastStatementSentAt",
+      "lastContactedAt",
+      "openTaskCount",
+    ])
     .default("displayName"),
   dir: z.enum(["asc", "desc"]).default("asc"),
   // 5000 cap covers the full customer table in a single response (we
@@ -165,11 +182,13 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       hasOverdue,
       hasUnactionedEmail,
       missingTerms,
+      tag,
       sort,
       dir,
       limit,
       offset,
     } = parse.data;
+    const tagFilters = Array.isArray(tag) ? tag : tag ? [tag] : [];
 
     const filters = [];
     if (q && q.trim()) {
@@ -201,6 +220,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     if (missingTerms) {
       filters.push(isNull(customers.paymentTerms));
     }
+    // Tag filter: customers.tags is a JSON array. JSON_CONTAINS gives us
+    // exact matching; JSON_SEARCH would let us do partial. We go with
+    // exact since the tag picker UI lists known tags verbatim.
+    for (const t of tagFilters) {
+      filters.push(
+        sql`JSON_CONTAINS(${customers.tags}, JSON_QUOTE(${t}))`,
+      );
+    }
     if (hasUnactionedEmail) {
       // EXISTS subquery — Drizzle renders this as `> 0` against the
       // count expression below, but for filtering we want a cheaper
@@ -218,11 +245,43 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     }
     const where = filters.length > 0 ? and(...filters) : undefined;
 
+    // Subqueries used both in SELECT (for row data) and ORDER BY (for the
+    // new sort options). Defined here so we can reference them in either
+    // context without re-stating the SQL.
+    const lastContactedAtExpr = sql<Date | string | null>`(
+      SELECT MAX(${emailLog.emailDate})
+      FROM ${emailLog}
+      WHERE ${emailLog.customerId} = \`customers\`.\`id\`
+    )`;
+    const lastPaymentExprForSort = sql<Date | string | null>`(
+      SELECT MAX(${activities.occurredAt})
+      FROM ${activities}
+      WHERE ${activities.customerId} = \`customers\`.\`id\`
+        AND ${activities.kind} = 'qbo_payment'
+    )`;
+    const lastStatementExprForSort = sql<Date | string | null>`(
+      SELECT MAX(${statementSends.sentAt})
+      FROM ${statementSends}
+      WHERE ${statementSends.customerId} = \`customers\`.\`id\`
+    )`;
+
+    // Separate expr for sort because it's declared before the SELECT exprs
+    // but needs to match the same subquery shape.
+    const openTaskCountExprForSort = sql<number>`(
+      SELECT COUNT(*) FROM ${tasks}
+      WHERE ${tasks.customerId} = \`customers\`.\`id\`
+        AND ${tasks.status} IN ('open', 'in_progress', 'blocked')
+    )`;
+
     const sortCol = {
       displayName: customers.displayName,
       balance: customers.balance,
       overdueBalance: customers.overdueBalance,
       lastSyncedAt: customers.lastSyncedAt,
+      lastPaymentAt: lastPaymentExprForSort,
+      lastStatementSentAt: lastStatementExprForSort,
+      lastContactedAt: lastContactedAtExpr,
+      openTaskCount: openTaskCountExprForSort,
     }[sort];
     const orderFn = dir === "asc" ? asc : desc;
 
@@ -259,6 +318,36 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         AND ${emailLog.actionedAt} IS NULL
         AND ${emailLog.direction} = 'inbound'
     )`;
+    // RMA in flight = any RMA in an active workflow status (i.e. not
+    // completed, denied, or cancelled). EXISTS short-circuits as soon
+    // as it finds one, so this is cheap even for customers with many
+    // historical RMAs.
+    const hasPendingRmaExpr = sql<boolean>`(
+      EXISTS (
+        SELECT 1 FROM ${rmas}
+        WHERE ${rmas.customerId} = \`customers\`.\`id\`
+          AND ${rmas.status} IN (
+            'draft','approved','awaiting_warehouse_number',
+            'sent_to_warehouse','received'
+          )
+      )
+    )`;
+
+    // Open task count — tasks in an actionable status for this customer.
+    const openTaskCountExpr = sql<number>`(
+      SELECT COUNT(*) FROM ${tasks}
+      WHERE ${tasks.customerId} = \`customers\`.\`id\`
+        AND ${tasks.status} IN ('open', 'in_progress', 'blocked')
+    )`;
+
+    // Earliest due date among open tasks — drives urgency colour in the UI.
+    // NULL means no open tasks have a due date set.
+    const mostUrgentTaskDueAtExpr = sql<Date | string | null>`(
+      SELECT MIN(${tasks.dueAt}) FROM ${tasks}
+      WHERE ${tasks.customerId} = \`customers\`.\`id\`
+        AND ${tasks.status} IN ('open', 'in_progress', 'blocked')
+        AND ${tasks.dueAt} IS NOT NULL
+    )`;
 
     const rowsPromise = db
       .select({
@@ -277,7 +366,11 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         daysOverdue: daysOverdueExpr,
         lastPaymentAt: lastPaymentExpr,
         lastStatementSentAt: lastStatementSentExpr,
+        lastContactedAt: lastContactedAtExpr,
         unactionedEmailCount: unactionedEmailCountExpr,
+        hasPendingRma: hasPendingRmaExpr,
+        openTaskCount: openTaskCountExpr,
+        mostUrgentTaskDueAt: mostUrgentTaskDueAtExpr,
       })
       .from(customers)
       .where(where)
@@ -311,6 +404,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       lastStatementSentAt: normalizeDateValue(r.lastStatementSentAt),
       // COUNT(*) comes back as a string in some mysql2 modes — coerce.
       unactionedEmailCount: Number(r.unactionedEmailCount ?? 0),
+      openTaskCount: Number(r.openTaskCount ?? 0),
+      mostUrgentTaskDueAt: normalizeDateValue(r.mostUrgentTaskDueAt),
     }));
     const hasMore = rowsRaw.length > limit;
     const totals = totalsRaw[0] ?? { b2b: 0, b2c: 0, uncategorized: 0, all: 0 };
@@ -436,6 +531,96 @@ const customersRoute: FastifyPluginAsync = async (app) => {
   // customer's known email addresses (primary + billing) up to
   // maxResults (default 1000, cap 5000). Idempotent — duplicates
   // dedupe on email_log.gmailMessageId UNIQUE.
+  // POST /api/customers/:id/sync-qb — per-customer QBO refresh.
+  // Pulls just this customer + their invoices + their payments,
+  // bypassing the global 30-min cron when an operator needs fresh
+  // data fast (e.g. before sending a statement). ~3 QBO calls vs
+  // hundreds for the full sync. Per-customer scope means cross-
+  // customer state (e.g. a payment applied across multiple invoices)
+  // isn't reconciled here — the global sync remains the safety net.
+  app.post("/:id/sync-qb", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const customerRows = await db
+      .select({ qbCustomerId: customers.qbCustomerId })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    const customer = customerRows[0];
+    if (!customer) {
+      return reply.code(404).send({ error: "customer not found" });
+    }
+    if (!customer.qbCustomerId) {
+      return reply
+        .code(400)
+        .send({ error: "customer has no QBO id — cannot sync" });
+    }
+    try {
+      const { syncOneCustomer } = await import(
+        "../../integrations/qb/sync.js"
+      );
+      const result = await syncOneCustomer(customer.qbCustomerId);
+      return reply.send({
+        ...result,
+        syncedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      log.error(
+        { err, customerId: id, qbCustomerId: customer.qbCustomerId },
+        "per-customer QB sync failed",
+      );
+      return reply.code(502).send({
+        error: err instanceof Error ? err.message : "QB sync failed",
+      });
+    }
+  });
+
+  // POST /api/customers/:id/notes — create a manual_note activity for
+  // this customer. Used by the Notes tab on the customer-detail page.
+  // Body: { body: string, subject?: string }. The activity-ingester
+  // handles the audit-log row + SSE event so subscribers (the
+  // activity timeline + this customer's note list) refresh
+  // automatically.
+  //
+  // Notes are first-class activities with kind="manual_note" — no
+  // separate notes table. That mirrors how the Notes tab reads them
+  // (filtered from recentActivities) and keeps the timeline view
+  // consistent.
+  app.post("/:id/notes", async (req, reply) => {
+    const user = await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const bodySchema = z.object({
+      body: z.string().min(1).max(10_000),
+      subject: z.string().max(255).optional(),
+    });
+    const parse = bodySchema.safeParse(req.body ?? {});
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    // Verify the customer exists before recording — recordActivity
+    // accepts any customerId but we want a clean 404 on bad ids
+    // rather than orphaned activity rows.
+    const customerRows = await db
+      .select({ id: customers.id })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    if (customerRows.length === 0) {
+      return reply.code(404).send({ error: "customer not found" });
+    }
+    const activityId = await recordActivity({
+      customerId: id,
+      kind: "manual_note",
+      source: "user_action",
+      userId: user.id,
+      subject: parse.data.subject ?? null,
+      body: parse.data.body,
+    });
+    return reply.send({ activityId });
+  });
+
   app.post("/:id/sync-emails", async (req, reply) => {
     await requireAuth(req);
     const id = (req.params as { id: string }).id;
@@ -720,16 +905,92 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     const customer = rows[0];
     if (!customer) return reply.code(404).send({ error: "customer not found" });
 
-    // Recent activities — first 50, sorted newest first. The full
-    // timeline UI paginates via cursor; this is the seed.
-    const recentActivities = await db
-      .select()
-      .from(activities)
-      .where(eq(activities.customerId, id))
-      .orderBy(desc(activities.occurredAt))
-      .limit(50);
+    // KPI rollups for the customer detail header strip. Computed in one
+    // round-trip alongside recentActivities so the page paints fast.
+    const [recentActivities, kpiRows] = await Promise.all([
+      db
+        .select()
+        .from(activities)
+        .where(eq(activities.customerId, id))
+        .orderBy(desc(activities.occurredAt))
+        .limit(50),
+      db
+        .select({
+          openInvoiceCount: sql<number>`(
+            SELECT COUNT(*) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id}
+              AND ${invoices.balance} > 0
+          )`,
+          oldestUnpaidInvoiceDueDate: sql<Date | string | null>`(
+            SELECT MIN(${invoices.dueDate}) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id}
+              AND ${invoices.balance} > 0
+              AND ${invoices.dueDate} IS NOT NULL
+          )`,
+          openTaskCount: sql<number>`(
+            SELECT COUNT(*) FROM ${tasks}
+            WHERE ${tasks.customerId} = ${id}
+              AND ${tasks.status} IN ('open','in_progress','blocked')
+          )`,
+          hasPendingRma: sql<boolean>`(
+            EXISTS (
+              SELECT 1 FROM ${rmas}
+              WHERE ${rmas.customerId} = ${id}
+                AND ${rmas.status} IN (
+                  'draft','approved','awaiting_warehouse_number',
+                  'sent_to_warehouse','received'
+                )
+            )
+          )`,
+          lastContactedAt: sql<Date | string | null>`(
+            SELECT MAX(${emailLog.emailDate})
+            FROM ${emailLog}
+            WHERE ${emailLog.customerId} = ${id}
+          )`,
+          lastPaymentAt: sql<Date | string | null>`(
+            SELECT MAX(${activities.occurredAt})
+            FROM ${activities}
+            WHERE ${activities.customerId} = ${id}
+              AND ${activities.kind} = 'qbo_payment'
+          )`,
+          lastStatementSentAt: sql<Date | string | null>`(
+            SELECT MAX(${statementSends.sentAt})
+            FROM ${statementSends}
+            WHERE ${statementSends.customerId} = ${id}
+          )`,
+        })
+        .from(customers)
+        .where(eq(customers.id, id))
+        .limit(1),
+    ]);
+    const kpi = kpiRows[0] ?? null;
 
-    return reply.send({ customer, recentActivities });
+    // Normalise the KPI row before sending. mysql2 hands back correlated-
+    // subquery TIMESTAMPs as `"YYYY-MM-DD HH:MM:SS"` strings (UTC values
+    // styled as a local-looking string); piping through normalizeDateValue
+    // converts them to ISO so the frontend's `new Date(...)` parses them as
+    // UTC rather than local time (otherwise "5h ago" for a 4h-old contact on
+    // BST). DATE columns (oldestUnpaidInvoiceDueDate) stay as `YYYY-MM-DD`.
+    // EXISTS returns 0|1 and COUNT returns string in some mysql2 modes —
+    // coerce both. Mirrors the shape produced by the list route.
+    const normalizedKpi = kpi
+      ? {
+          ...kpi,
+          lastContactedAt: normalizeDateValue(kpi.lastContactedAt),
+          lastPaymentAt: normalizeDateValue(kpi.lastPaymentAt),
+          lastStatementSentAt: normalizeDateValue(kpi.lastStatementSentAt),
+          oldestUnpaidInvoiceDueDate: kpi.oldestUnpaidInvoiceDueDate
+            ? typeof kpi.oldestUnpaidInvoiceDueDate === "string"
+              ? kpi.oldestUnpaidInvoiceDueDate.slice(0, 10)
+              : kpi.oldestUnpaidInvoiceDueDate.toISOString().slice(0, 10)
+            : null,
+          hasPendingRma: Boolean(kpi.hasPendingRma),
+          openInvoiceCount: Number(kpi.openInvoiceCount ?? 0),
+          openTaskCount: Number(kpi.openTaskCount ?? 0),
+        }
+      : null;
+
+    return reply.send({ customer, recentActivities, kpi: normalizedKpi });
   });
 
   // PATCH /api/customers/:id — single-customer update. Used from the
@@ -890,6 +1151,34 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     }
     const qbCustomerId = cust[0]!.qbCustomerId;
 
+    // Last-chased rollup: most recent (sent_at, level) for each
+    // invoice. Drives the "Last chased" column on the customer
+    // detail Invoices tab so the operator can target the next
+    // chase at invoices that haven't been chased recently.
+    //
+    // The composite index idx_invoice_chases_invoice_sent_at backs
+    // both subqueries.
+    //
+    // Hand-qualified `invoices`.`id` is REQUIRED inside the sql tag
+    // — Drizzle's column serializer drops the table prefix on
+    // ${invoices.id} in this context, which makes MySQL resolve `id`
+    // against the inner table (invoice_chases.id, the chase row's
+    // PK) instead of invoices.id. Result: subquery always returns
+    // empty/NULL. Same gotcha applied to lastContactedAt / lastPayment
+    // / etc. in the customers list route.
+    const lastChasedAtExpr = sql<Date | string | null>`(
+      SELECT MAX(${invoiceChases.sentAt})
+      FROM ${invoiceChases}
+      WHERE ${invoiceChases.invoiceId} = \`invoices\`.\`id\`
+    )`;
+    const lastChasedLevelExpr = sql<number | null>`(
+      SELECT ${invoiceChases.level}
+      FROM ${invoiceChases}
+      WHERE ${invoiceChases.invoiceId} = \`invoices\`.\`id\`
+      ORDER BY ${invoiceChases.sentAt} DESC
+      LIMIT 1
+    )`;
+
     // Local invoices read.
     const invoiceRowsP = db
       .select({
@@ -904,6 +1193,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: invoices.customerMemo,
         sentAt: invoices.sentAt,
         sentVia: invoices.sentVia,
+        lastChasedAt: lastChasedAtExpr,
+        lastChasedLevel: lastChasedLevelExpr,
       })
       .from(invoices)
       .where(eq(invoices.customerId, id))
@@ -970,6 +1261,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       customerMemo: string | null;
       sentAt: string | null;
       sentVia: string | null;
+      // Last chase email that touched this invoice — null when never
+      // chased. Always null on credit memos (chase is invoice-only).
+      lastChasedAt: string | null;
+      lastChasedLevel: number | null;
     };
 
     const out: DocRow[] = [];
@@ -987,6 +1282,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: inv.customerMemo,
         sentAt: inv.sentAt ? inv.sentAt.toISOString() : null,
         sentVia: inv.sentVia,
+        // mysql2 returns the subquery TIMESTAMP as a string; normalise
+        // to ISO so the frontend's relativeTime() doesn't have to
+        // guess. Same pattern used by normalizeDateValue elsewhere.
+        lastChasedAt: normalizeDateValue(inv.lastChasedAt),
+        lastChasedLevel:
+          inv.lastChasedLevel === null || inv.lastChasedLevel === undefined
+            ? null
+            : Number(inv.lastChasedLevel),
       });
     }
     for (const cm of creditMemoRows) {
@@ -1005,6 +1308,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: cm.customerMemo,
         sentAt: cm.emailStatus === "EmailSent" ? "(sent)" : null,
         sentVia: cm.emailStatus === "EmailSent" ? "qbo" : null,
+        // Chase tracking is invoice-only — credit memos can't be
+        // chased.
+        lastChasedAt: null,
+        lastChasedLevel: null,
       });
     }
 
@@ -1053,6 +1360,47 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         bcc: resolved.bcc,
         bccReasons: resolved.bccReasons,
       });
+    },
+  );
+
+  // GET /api/customers/:id/resolved-recipients?channel=invoice|statement
+  // Returns { to, cc, bcc } after applying tag-based rules via resolveRecipients.
+  // Used by the credit-memo create page (and any other page) to seed
+  // recipient fields correctly — bypassing raw invoiceToEmails/etc. arrays
+  // which don't apply tag rules (e.g. auto-BCC for "yiddy"-tagged customers).
+  const recipientsQuerySchema = z.object({
+    channel: z.enum(["invoice", "statement"]).default("invoice"),
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/:id/resolved-recipients",
+    async (req, reply) => {
+      await requireAuth(req);
+      const parse = recipientsQuerySchema.safeParse(req.query);
+      if (!parse.success) {
+        return reply.code(400).send({ error: "Invalid query", details: parse.error.flatten() });
+      }
+      const customerRows = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, req.params.id))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        return reply.code(404).send({ error: "customer not found" });
+      }
+      const resolved = await resolveRecipients(parse.data.channel, {
+        primaryEmail: customer.primaryEmail,
+        billingEmails: customer.billingEmails,
+        invoiceToEmails: customer.invoiceToEmails,
+        invoiceCcEmails: customer.invoiceCcEmails,
+        invoiceBccEmails: customer.invoiceBccEmails,
+        statementToEmails: customer.statementToEmails,
+        statementCcEmails: customer.statementCcEmails,
+        statementBccEmails: customer.statementBccEmails,
+        tags: customer.tags,
+      });
+      return reply.send({ to: resolved.to, cc: resolved.cc, bcc: resolved.bcc });
     },
   );
 

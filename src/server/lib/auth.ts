@@ -137,3 +137,20 @@ export async function requireAuth(req: FastifyRequest): Promise<User> {
   if (!user) throw new UnauthorizedError();
   return user;
 }
+
+// Admin gate. Reads `ADMIN_EMAILS` (comma-separated, already lowercased by
+// the env loader) and checks the user's email against the list. Used to
+// guard destructive routes (force-status, hard delete) where any
+// authenticated user being able to flip RMA state would be wrong now that
+// the app is multi-user.
+//
+// Returns false (never throws) so callers can choose 403 vs other handling.
+// An empty list means "no admins configured" — every caller is rejected,
+// which is the correct fail-closed default for production.
+export function isAdmin(user: Pick<User, "email"> | null | undefined): boolean {
+  if (!user?.email) return false;
+  const list = env.ADMIN_EMAILS;
+  if (!list) return false;
+  const email = user.email.toLowerCase();
+  return list.split(",").some((e) => e === email);
+}

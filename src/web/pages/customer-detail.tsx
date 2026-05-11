@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams, Link } from "@tanstack/react-router";
+import { useParams, Link, getRouteApi } from "@tanstack/react-router";
+import { useFilterNavigate } from "../lib/use-filter-navigate";
+import { useFilterPersistence } from "../lib/use-filter-persistence";
+import type { CustomerDetailSearch } from "../lib/search-schemas/customer-detail";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -14,8 +17,12 @@ import {
   CreditCard,
   ExternalLink,
   Send,
+  RotateCcw,
+  Plus,
+  ClipboardList,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
+import { CollapsibleCard } from "../components/ui/collapsible-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -27,11 +34,26 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { ActivityTimeline } from "../components/activity-timeline";
+import type { Activity } from "../components/activity-timeline";
+import RmaRowMenu from "../components/rma-row-menu";
 import { EmailList } from "../components/email-list";
 import { HoldBanner } from "../components/hold-banner";
+import { SyncCustomerButton } from "../components/sync-customer-button";
 import StatementSendDialog, {
   type StatementSendSuccess,
 } from "../components/statement-send-dialog";
+import ChaseEmailSendDialog, {
+  type ChaseSendSuccess,
+} from "../components/chase-email-send-dialog";
+import ComposeModal, {
+  type ComposeContext,
+} from "../components/compose-modal";
+import {
+  TaskDetailDrawer,
+  type DrawerMode as TaskDrawerMode,
+} from "../components/task-detail-drawer";
+import { TaskList } from "../components/task-list";
+import type { TaskCardData } from "../components/task-card";
 import InvoiceSendDialog, {
   type InvoiceSendSuccess,
 } from "../components/invoice-send-dialog";
@@ -39,6 +61,8 @@ import InvoiceReminderDialog, {
   type InvoiceReminderSuccess,
 } from "../components/invoice-reminder-dialog";
 import { cn } from "../lib/cn";
+
+const customerDetailRouteApi = getRouteApi("/customers/$customerId");
 
 type Customer = {
   id: string;
@@ -67,16 +91,27 @@ type Customer = {
   updatedAt: string;
 };
 
-// Activity type imported from the timeline component so the meta shape
-// stays in sync with what it renders (amount, currency, qbId, etc.).
-import type { Activity } from "../components/activity-timeline";
+// KPI rollups computed server-side in the customer GET. All counts are
+// numbers and timestamps are ISO strings (mysql2 subquery normalised
+// route-side). Nullable when there's nothing of that kind for the
+// customer — e.g. lastContactedAt is null when no email_log row exists.
+type CustomerKpi = {
+  openInvoiceCount: number;
+  oldestUnpaidInvoiceDueDate: string | null;
+  openTaskCount: number;
+  hasPendingRma: boolean;
+  lastContactedAt: string | null;
+  lastPaymentAt: string | null;
+  lastStatementSentAt: string | null;
+};
 
 type DetailResponse = {
   customer: Customer;
   recentActivities: Activity[];
+  kpi: CustomerKpi | null;
 };
 
-type TabKey = "activity" | "emails" | "invoices" | "orders" | "tasks" | "notes";
+type TabKey = "activity" | "emails" | "invoices" | "orders" | "tasks" | "notes" | "returns";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "Activity" },
@@ -85,6 +120,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "orders", label: "Orders" },
   { key: "tasks", label: "Tasks" },
   { key: "notes", label: "Notes" },
+  { key: "returns", label: "Returns" },
 ];
 
 type ShopifyTagsResponse = {
@@ -95,11 +131,52 @@ type ShopifyTagsResponse = {
 
 export default function CustomerDetailPage() {
   const { customerId } = useParams({ from: "/customers/$customerId" });
-  const [tab, setTab] = useState<TabKey>("activity");
+  const search = customerDetailRouteApi.useSearch();
+  const { setFilter } = useFilterNavigate<CustomerDetailSearch>("/customers/$customerId");
+  useFilterPersistence("/customers/$customerId");
+
+  const tab = search.tab;
+  const setTab = (next: CustomerDetailSearch["tab"]) =>
+    setFilter("tab", next, { history: "push" });
+
+  // Invoices tab filter aliases
+  const invStatus = search.invStatus;
+  const invType = search.invType;
+  const invSearch = search.invSearch;
+  const invSort = search.invSort;
+  const invDir = search.invDir;
+
+  // Emails tab filter aliases
+  const emailDirection = search.emailDirection;
+  const emailActioned = search.emailActioned;
+
+  // Returns tab filter aliases
+  const rmaStatus = search.rmaStatus;
+  const rmaType = search.rmaType;
   const [holdDialogOpen, setHoldDialogOpen] = useState(false);
   const [statementDialogOpen, setStatementDialogOpen] = useState(false);
   const [statementSuccess, setStatementSuccess] =
     useState<StatementSendSuccess | null>(null);
+  // Chase email dialog state. invoiceIds is undefined when chasing all
+  // open (the header button); populated when chasing a subset (the
+  // Invoices tab bulk-action button).
+  const [chaseDialog, setChaseDialog] = useState<{
+    invoiceIds?: string[];
+  } | null>(null);
+  const [chaseSuccess, setChaseSuccess] = useState<{
+    level: 1 | 2 | 3;
+    invoiceCount: number;
+  } | null>(null);
+  // Compose-new dialog state. Distinct from the reply path that lives
+  // inside <EmailList> — this is "operator wants to start a fresh
+  // outbound email to the customer with no thread context."
+  const [composeOpen, setComposeOpen] = useState(false);
+  // Task drawer state — null when closed, else { mode: "create"|"edit", ...}.
+  // Reused across the header "+ New task" button, the Tasks tab, and
+  // any future entry points (email-row, RMA detail). Always opened
+  // with `customerId` pre-filled in defaults so the resulting task
+  // links back to this customer automatically.
+  const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
   const queryClient = useQueryClient();
 
   // Auto-dismiss the "statement sent" pill after ~6s. We don't have a
@@ -111,6 +188,13 @@ export default function CustomerDetailPage() {
     const t = setTimeout(() => setStatementSuccess(null), 6000);
     return () => clearTimeout(t);
   }, [statementSuccess]);
+
+  // Same auto-dismiss pattern for the chase-sent pill.
+  useEffect(() => {
+    if (!chaseSuccess) return;
+    const t = setTimeout(() => setChaseSuccess(null), 6000);
+    return () => clearTimeout(t);
+  }, [chaseSuccess]);
 
   const { data, isPending, isError, error } = useQuery<DetailResponse>({
     queryKey: ["customer", customerId],
@@ -125,6 +209,51 @@ export default function CustomerDetailPage() {
     queryKey: ["shopify-tags", customerId],
     queryFn: async () => {
       const res = await fetch(`/api/customers/${customerId}/shopify-tags`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  // Current authenticated operator — used by TaskDetailDrawer for
+  // mention resolution + watcher self-attribution. Same query the
+  // /tasks page uses; cached for 5 min so hopping between customer
+  // pages doesn't re-fetch /api/me on every nav.
+  const meQuery = useQuery<{
+    user: { id: string; name: string | null; email: string; image: string | null };
+  }>({
+    queryKey: ["me"],
+    queryFn: async () => {
+      const res = await fetch("/api/me");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const currentUser = meQuery.data?.user ?? null;
+
+  // Customer-scoped task list. Used by:
+  //   - The Tasks tab (renders the list + an Add task button)
+  //   - The KPI strip's "open tasks" count (already in customer GET kpi
+  //     rollup but the tasks tab needs the actual rows)
+  //   - The drawer's listQueryKey for invalidation after mutations
+  const tasksQueryKey = useMemo(
+    () => ["customer-tasks", customerId] as const,
+    [customerId],
+  );
+  const tasksQuery = useQuery<{ rows: TaskCardData[]; hasMore: boolean }>({
+    queryKey: tasksQueryKey,
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        customerId,
+        // Default to "all" assignees here — the tasks tab on a customer
+        // page is about the customer, not "my tasks." Operator can
+        // filter inside the drawer if needed.
+        assignee: "all",
+        sort: "position",
+        dir: "asc",
+        limit: "200",
+      });
+      const res = await fetch(`/api/tasks?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -173,7 +302,7 @@ export default function CustomerDetailPage() {
   }
   if (!data) return null;
 
-  const { customer, recentActivities } = data;
+  const { customer, recentActivities, kpi } = data;
   const balance = Number(customer.balance);
   const overdue = Number(customer.overdueBalance);
 
@@ -227,6 +356,23 @@ export default function CustomerDetailPage() {
                 Yiddy
               </Badge>
             ) : null}
+            {kpi?.hasPendingRma ? (
+              <Badge
+                tone="high"
+                title="This customer has an active RMA in progress — check the Returns tab"
+              >
+                <RotateCcw className="mr-1 size-3" />
+                RMA in flight
+              </Badge>
+            ) : null}
+            {kpi?.lastContactedAt ? (
+              <span
+                className="text-xs text-muted"
+                title={new Date(kpi.lastContactedAt).toLocaleString()}
+              >
+                Last contacted {detailRelativeTime(kpi.lastContactedAt)}
+              </span>
+            ) : null}
           </div>
           <CustomerRecipientsRow
             primaryEmail={customer.primaryEmail}
@@ -237,34 +383,92 @@ export default function CustomerDetailPage() {
           <ShopifyTagsRow tagsQuery={tagsQuery} />
         </div>
 
-        <div className="flex flex-wrap items-end gap-2">
-          {/* Statements only make sense when there's something to chase
-              for. balance comes back as a string from MySQL DECIMAL —
-              Number(...) > 0 weeds out "0.00" and the rare unparseable
-              edge case (NaN > 0 is false). Held customers are still
-              chase-able, so holdStatus is intentionally not gating. */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setStatementDialogOpen(true)}
-            disabled={!(balance > 0)}
-            title={
-              balance > 0
-                ? "Send a statement of open invoices to this customer"
-                : "No open balance — nothing to send"
-            }
-          >
-            <FileText className="size-3.5" />
-            Send statement
-          </Button>
-          <StatusActions
-            holdStatus={customer.holdStatus}
-            disabled={holdToggleMutation.isPending}
-            onRequest={(target) => {
-              setPendingTarget(target);
-              setHoldDialogOpen(true);
-            }}
-          />
+        <div className="flex flex-col items-end gap-2">
+          {/* Row 1 — account-state actions: hold-toggle + (when not on
+              hold) payment-upfront-toggle + per-customer QB refresh.
+              These change the operational state of the customer rather
+              than firing an outbound message, so they live above the
+              messaging row. */}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StatusActions
+              holdStatus={customer.holdStatus}
+              disabled={holdToggleMutation.isPending}
+              onRequest={(target) => {
+                setPendingTarget(target);
+                setHoldDialogOpen(true);
+              }}
+            />
+            {/* Per-customer QB refresh — fast path for "I need fresh
+                data before sending a statement". Doesn't touch other
+                customers. */}
+            <SyncCustomerButton customerId={customer.id} />
+          </div>
+          {/* Row 2 — outbound messaging. Each gated on having something
+              to send (balance for statement/chase, primary email for
+              compose). Held customers are still chase-able so the
+              chase + statement gates intentionally don't block on
+              holdStatus. */}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setStatementDialogOpen(true)}
+              disabled={!(balance > 0)}
+              title={
+                balance > 0
+                  ? "Send a statement of open invoices to this customer"
+                  : "No open balance — nothing to send"
+              }
+            >
+              <FileText className="size-3.5" />
+              Send statement
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setChaseDialog({})}
+              disabled={!(balance > 0)}
+              title={
+                balance > 0
+                  ? "Send a chase email covering all open invoices (L1 by default — switch level inside the dialog)"
+                  : "No open balance — nothing to chase"
+              }
+            >
+              <Send className="size-3.5" />
+              Send chase email
+            </Button>
+            {/* Compose-new — operator-initiated outbound with no
+                thread context. Distinct from the per-row Reply button
+                on the Email tab. */}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setComposeOpen(true)}
+              title="Compose a new email to this customer (attachments optional)"
+              disabled={!customer.primaryEmail}
+            >
+              <Mail className="size-3.5" />
+              New email
+            </Button>
+            {/* New task — opens the task drawer in create mode with
+                customerId pre-filled. Same drawer the /tasks page
+                uses, so all its features (assignee, watchers, due,
+                priority, tags, mentions) come along automatically. */}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                setTaskDrawer({
+                  mode: "create",
+                  defaults: { customerId },
+                })
+              }
+              title="Create a task linked to this customer"
+            >
+              <Plus className="size-3.5" />
+              New task
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -285,6 +489,18 @@ export default function CustomerDetailPage() {
           </span>
         </div>
       )}
+      {chaseSuccess && (
+        <div
+          role="status"
+          className="flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+        >
+          <CheckCircle2 className="size-4" />
+          <span>
+            Chase L{chaseSuccess.level} sent · {chaseSuccess.invoiceCount}{" "}
+            invoice{chaseSuccess.invoiceCount === 1 ? "" : "s"} chased
+          </span>
+        </div>
+      )}
 
       <StatementSendDialog
         open={statementDialogOpen}
@@ -293,6 +509,73 @@ export default function CustomerDetailPage() {
         customerName={customer.displayName}
         onSent={(result) => setStatementSuccess(result)}
       />
+
+      {/* Chase email dialog. Mounted conditionally so the
+          previewQuery only fires when the operator opens it.
+          chaseDialog.invoiceIds === undefined → chase all open;
+          === [] → also chase all open (defence-in-depth);
+          === [...] → chase that subset (set by the Invoices tab
+          bulk action). */}
+      {/* Reusable task drawer — same component the /tasks page uses.
+          Mounted unconditionally so create + edit transitions
+          (post-create the parent flips drawer to edit mode) animate
+          smoothly. The drawer self-handles open/close styling; we
+          just supply mode + defaults + currentUser. */}
+      <TaskDetailDrawer
+        open={taskDrawer !== null}
+        onClose={() => setTaskDrawer(null)}
+        drawer={taskDrawer ?? { mode: "create", defaults: { customerId } }}
+        currentUser={currentUser}
+        listQueryKey={tasksQueryKey}
+        onCreated={(taskId) =>
+          setTaskDrawer({ mode: "edit", taskId })
+        }
+      />
+
+      {/* Compose-new email to this customer. ComposeModal already
+          handles the no-thread-context branch (title flips to "New
+          email"); we just hand it the customer context so TO is
+          pre-filled and the resulting email_log row links back here. */}
+      {composeOpen ? (
+        <ComposeModal
+          open={composeOpen}
+          onOpenChange={setComposeOpen}
+          context={
+            {
+              customerId: customer.id,
+              customerName: customer.displayName,
+              customerEmail: customer.primaryEmail ?? undefined,
+            } satisfies ComposeContext
+          }
+        />
+      ) : null}
+
+      {chaseDialog ? (
+        <ChaseEmailSendDialog
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setChaseDialog(null);
+          }}
+          customerId={customer.id}
+          customerName={customer.displayName}
+          level={1}
+          invoiceIds={chaseDialog.invoiceIds}
+          onSent={(_result: ChaseSendSuccess) => {
+            // The dialog already invalidates the right cache keys.
+            // We just stash the success metadata so the auto-fading
+            // pill above renders. invoiceCount is the number of
+            // invoices the dialog scope covered — for "all open"
+            // (undefined invoiceIds) we approximate from the kpi
+            // openInvoiceCount; for a subset we know exactly.
+            const count =
+              chaseDialog.invoiceIds?.length ??
+              kpi?.openInvoiceCount ??
+              0;
+            setChaseSuccess({ level: _result.level, invoiceCount: count });
+            setChaseDialog(null);
+          }}
+        />
+      ) : null}
 
       <Dialog
         open={holdDialogOpen}
@@ -360,7 +643,7 @@ export default function CustomerDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
         <StatCard label="Open balance" value={`$${balance.toFixed(2)}`} />
         <StatCard
           label="Overdue"
@@ -368,12 +651,25 @@ export default function CustomerDetailPage() {
           tone={overdue > 0 ? "warning" : "neutral"}
         />
         <StatCard
-          label="Type"
+          label="Open invoices"
           value={
-            customer.customerType
-              ? customer.customerType.toUpperCase()
-              : "Untagged"
+            kpi?.openInvoiceCount && kpi.openInvoiceCount > 0
+              ? String(kpi.openInvoiceCount)
+              : "—"
           }
+        />
+        <StatCard
+          label="Open tasks"
+          value={
+            kpi?.openTaskCount && kpi.openTaskCount > 0
+              ? String(kpi.openTaskCount)
+              : "—"
+          }
+        />
+        <StatCard
+          label="RMA in flight"
+          value={kpi?.hasPendingRma ? "Yes" : "—"}
+          tone={kpi?.hasPendingRma ? "warning" : "neutral"}
         />
         <TermsCard
           customerId={customer.id}
@@ -416,16 +712,59 @@ export default function CustomerDetailPage() {
             customerId={customer.id}
             customerName={customer.displayName}
             customerEmail={customer.primaryEmail}
+            onTaskCreated={(taskId) =>
+              setTaskDrawer({ mode: "edit", taskId })
+            }
+            direction={emailDirection}
+            actioned={emailActioned}
+            onDirectionChange={(v) => setFilter("emailDirection", v, { history: "push" })}
+            onActionedChange={(v) => setFilter("emailActioned", v, { history: "push" })}
           />
         )}
         {tab === "invoices" && (
           <InvoicesPanel
             customerId={customer.id}
             customerName={customer.displayName}
+            onBulkChase={(invoiceIds) => setChaseDialog({ invoiceIds })}
+            invStatus={invStatus}
+            invType={invType}
+            invSearch={invSearch}
+            invSort={invSort}
+            invDir={invDir}
+            onSetInvStatus={(v) => setFilter("invStatus", v, { history: "push" })}
+            onSetInvType={(v) => setFilter("invType", v, { history: "push" })}
+            onSetInvSearch={(v) => setFilter("invSearch", v)}
+            onSetInvSort={(v) => setFilter("invSort", v, { history: "push" })}
+            onSetInvDir={(v) => setFilter("invDir", v, { history: "push" })}
           />
         )}
         {tab === "orders" && <PlaceholderPanel label="Orders" />}
-        {tab === "tasks" && <PlaceholderPanel label="Tasks" />}
+        {tab === "tasks" && (
+          <TasksPanel
+            tasks={tasksQuery.data?.rows ?? []}
+            isPending={tasksQuery.isPending}
+            isError={tasksQuery.isError}
+            error={tasksQuery.error}
+            onAdd={() =>
+              setTaskDrawer({
+                mode: "create",
+                defaults: { customerId },
+              })
+            }
+            onOpen={(taskId) =>
+              setTaskDrawer({ mode: "edit", taskId })
+            }
+          />
+        )}
+        {tab === "returns" && (
+          <ReturnsPanel
+            customerId={customer.id}
+            rmaStatus={rmaStatus}
+            rmaType={rmaType}
+            onRmaStatusChange={(v) => setFilter("rmaStatus", v, { history: "push" })}
+            onRmaTypeChange={(v) => setFilter("rmaType", v, { history: "push" })}
+          />
+        )}
         {tab === "notes" && (
           <NotesPanel
             customerId={customer.id}
@@ -673,6 +1012,82 @@ function PlaceholderPanel({ label }: { label: string }) {
   );
 }
 
+// Tasks tab on the customer-detail page. Renders the customer's open
+// + closed tasks via the shared <TaskList>. Add button opens the same
+// <TaskDetailDrawer> the parent header button does, with customerId
+// already in defaults so the new task links back automatically. Click
+// any row → drawer flips to edit mode for that task.
+function TasksPanel({
+  tasks,
+  isPending,
+  isError,
+  error,
+  onAdd,
+  onOpen,
+}: {
+  tasks: TaskCardData[];
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  onAdd: () => void;
+  onOpen: (taskId: string) => void;
+}) {
+  if (isPending) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-muted">
+          Loading tasks…
+        </CardBody>
+      </Card>
+    );
+  }
+  if (isError) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-accent-danger">
+          {(error as Error)?.message ?? "Failed to load tasks"}
+        </CardBody>
+      </Card>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-secondary">
+          {tasks.length === 0
+            ? "No tasks for this customer yet."
+            : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
+        </div>
+        <Button variant="primary" size="sm" onClick={onAdd}>
+          <Plus className="size-3.5" />
+          Add task
+        </Button>
+      </div>
+      {tasks.length > 0 ? (
+        <TaskList
+          tasks={tasks}
+          onRowClick={onOpen}
+          hideCustomerColumn
+        />
+      ) : (
+        <Card>
+          <CardBody className="flex flex-col items-center gap-2 py-10 text-sm text-muted">
+            <ClipboardList className="size-6 text-muted" />
+            <span>No tasks yet — click "Add task" to create one.</span>
+          </CardBody>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// Notes tab on the customer-detail page. Renders the customer's
+// existing manual_note activities (filtered from recentActivities by
+// the parent) and offers an inline create form. Posts to
+// POST /api/customers/:id/notes which writes a new manual_note
+// activity via the standard recordActivity path; on success we
+// invalidate ["customer", customerId] so the new note appears in
+// recentActivities → flows back into this panel.
 function NotesPanel({
   customerId,
   notes,
@@ -680,33 +1095,106 @@ function NotesPanel({
   customerId: string;
   notes: Activity[];
 }) {
-  // Stubbed for now — full add-note + @mentions land with Task #7
-  // (comments/mentions architecture). For the moment we just render
-  // any existing manual_note activities.
-  const _ = customerId;
-  if (notes.length === 0) {
-    return (
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const createMutation = useMutation({
+    mutationFn: async (body: string) => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/notes`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body }),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{ activityId: string | null }>;
+    },
+    onSuccess: () => {
+      // Customer detail GET returns recentActivities; the new note
+      // appears there. Activity timeline also subscribes to the same
+      // key. SSE event fires from the activity-ingester too, so
+      // anyone with an open page sees it.
+      queryClient.invalidateQueries({
+        queryKey: ["customer", customerId],
+      });
+      setDraft("");
+      setError(null);
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "Failed to save note");
+    },
+  });
+
+  return (
+    <div className="space-y-3">
       <Card>
-        <CardBody className="py-8 text-center text-sm text-muted">
-          No notes yet. Add one — coming next.
+        <CardBody className="space-y-2 py-3">
+          <span className="text-xs font-medium text-secondary">
+            Add a note
+          </span>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            placeholder="Internal note about this customer — visible to the team in the activity timeline."
+            className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+          />
+          {error ? (
+            <div className="text-xs text-accent-danger">{error}</div>
+          ) : null}
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => createMutation.mutate(draft.trim())}
+              disabled={
+                draft.trim().length === 0 || createMutation.isPending
+              }
+              loading={createMutation.isPending}
+            >
+              Save note
+            </Button>
+          </div>
         </CardBody>
       </Card>
-    );
-  }
-  return (
-    <Card>
-      <CardBody className="space-y-3">
-        {notes.map((n) => (
-          <div key={n.id} className="border-b border-default pb-3 last:border-b-0">
-            <div className="text-xs text-muted">
-              {new Date(n.occurredAt).toLocaleString()}
-            </div>
-            {n.subject && <div className="mt-1 font-medium">{n.subject}</div>}
-            {n.body && <p className="mt-1 text-sm text-secondary">{n.body}</p>}
-          </div>
-        ))}
-      </CardBody>
-    </Card>
+
+      {notes.length === 0 ? (
+        <Card>
+          <CardBody className="py-6 text-center text-sm text-muted">
+            No notes yet.
+          </CardBody>
+        </Card>
+      ) : (
+        <Card>
+          <CardBody className="space-y-3">
+            {notes.map((n) => (
+              <div
+                key={n.id}
+                className="border-b border-default pb-3 last:border-b-0"
+              >
+                <div className="text-xs text-muted">
+                  {new Date(n.occurredAt).toLocaleString()}
+                </div>
+                {n.subject ? (
+                  <div className="mt-1 font-medium">{n.subject}</div>
+                ) : null}
+                {n.body ? (
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-secondary">
+                    {n.body}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+          </CardBody>
+        </Card>
+      )}
+    </div>
   );
 }
 
@@ -816,43 +1304,53 @@ function StatusActions({
   disabled: boolean;
   onRequest: (target: "active" | "hold" | "payment_upfront") => void;
 }) {
-  const showActiveButton = holdStatus !== "active";
-  const showUpfrontButton = holdStatus !== "payment_upfront";
-  const showHoldButton = holdStatus !== "hold";
+  // Two state-aware toggles:
+  //   - hold-toggle (always visible): "Put on hold" when not held;
+  //     "Take off hold" when held.
+  //   - payment-upfront-toggle (hidden when held): "Set to payment
+  //     upfront" when active; "Set to active" when upfront. Hidden
+  //     during hold because operator must take off hold first —
+  //     mixing payment-upfront with hold is operationally
+  //     contradictory.
+  const isHeld = holdStatus === "hold";
+  const isUpfront = holdStatus === "payment_upfront";
   return (
     <>
-      {showActiveButton ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => onRequest("active")}
-          disabled={disabled}
-        >
+      <Button
+        variant={isHeld ? "secondary" : "danger"}
+        size="sm"
+        onClick={() => onRequest(isHeld ? "active" : "hold")}
+        disabled={disabled}
+      >
+        {isHeld ? (
           <Play className="size-3.5" />
-          Set active
-        </Button>
-      ) : null}
-      {showUpfrontButton ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => onRequest("payment_upfront")}
-          disabled={disabled}
-        >
-          <CreditCard className="size-3.5" />
-          Payment upfront
-        </Button>
-      ) : null}
-      {showHoldButton ? (
-        <Button
-          variant="danger"
-          size="sm"
-          onClick={() => onRequest("hold")}
-          disabled={disabled}
-        >
+        ) : (
           <Pause className="size-3.5" />
-          Put on hold
-        </Button>
+        )}
+        {isHeld ? "Take off hold" : "Put on hold"}
+      </Button>
+      {!isHeld ? (
+        isUpfront ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onRequest("active")}
+            disabled={disabled}
+          >
+            <Play className="size-3.5" />
+            Set to active
+          </Button>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onRequest("payment_upfront")}
+            disabled={disabled}
+          >
+            <CreditCard className="size-3.5" />
+            Set to payment upfront
+          </Button>
+        )
       ) : null}
     </>
   );
@@ -864,45 +1362,102 @@ function StatusActions({
 // email_routing_rules row. All edits hit PATCH /api/customers/:id;
 // the route handles the QBO push for invoice-side fields.
 function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
+  // Collapsed-state summaries — short, glanceable, so the operator
+  // can tell at a glance whether a card has content worth expanding.
+  const invoiceSummary = summariseEmailCounts(
+    customer.invoiceToEmails,
+    customer.invoiceCcEmails,
+    customer.invoiceBccEmails,
+  );
+  const statementSummary = summariseEmailCounts(
+    customer.statementToEmails,
+    customer.statementCcEmails,
+    customer.statementBccEmails,
+  );
+  const phoneCount =
+    (customer.phone ? 1 : 0) + (customer.additionalPhones?.length ?? 0);
+  const phoneSummary =
+    phoneCount === 0
+      ? "no numbers set"
+      : `${phoneCount} number${phoneCount === 1 ? "" : "s"}`;
+  const tagCount = customer.tags?.length ?? 0;
+  const tagSummary =
+    tagCount === 0
+      ? "no tags"
+      : (customer.tags ?? []).slice(0, 3).join(", ") +
+        (tagCount > 3 ? ` (+${tagCount - 3})` : "");
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-      <ChannelEmailsCard
-        customerId={customer.id}
+      <CollapsibleCard
         title="Invoice recipients"
-        helper="Where invoice emails are sent (when finance-hub sends)."
-        toEmails={customer.invoiceToEmails}
-        ccEmails={customer.invoiceCcEmails}
-        bccEmails={customer.invoiceBccEmails}
-        toField="invoiceToEmails"
-        ccField="invoiceCcEmails"
-        bccField="invoiceBccEmails"
-        channel="invoice"
-        tags={customer.tags ?? []}
-      />
-      <ChannelEmailsCard
-        customerId={customer.id}
+        summary={invoiceSummary}
+      >
+        <ChannelEmailsCard
+          customerId={customer.id}
+          title="Invoice recipients"
+          helper="Where invoice emails are sent (when finance-hub sends)."
+          toEmails={customer.invoiceToEmails}
+          ccEmails={customer.invoiceCcEmails}
+          bccEmails={customer.invoiceBccEmails}
+          toField="invoiceToEmails"
+          ccField="invoiceCcEmails"
+          bccField="invoiceBccEmails"
+          channel="invoice"
+          tags={customer.tags ?? []}
+        />
+      </CollapsibleCard>
+      <CollapsibleCard
         title="Statement & chase recipients"
-        helper="Where Statement.pdf and chase emails are sent."
-        toEmails={customer.statementToEmails}
-        ccEmails={customer.statementCcEmails}
-        bccEmails={customer.statementBccEmails}
-        toField="statementToEmails"
-        ccField="statementCcEmails"
-        bccField="statementBccEmails"
-        channel="statement"
-        tags={customer.tags ?? []}
-      />
-      <PhonesCard
-        customerId={customer.id}
-        phone={customer.phone}
-        additionalPhones={customer.additionalPhones}
-      />
-      <TagsCard
-        customerId={customer.id}
-        currentTags={customer.tags ?? []}
-      />
+        summary={statementSummary}
+      >
+        <ChannelEmailsCard
+          customerId={customer.id}
+          title="Statement & chase recipients"
+          helper="Where Statement.pdf and chase emails are sent."
+          toEmails={customer.statementToEmails}
+          ccEmails={customer.statementCcEmails}
+          bccEmails={customer.statementBccEmails}
+          toField="statementToEmails"
+          ccField="statementCcEmails"
+          bccField="statementBccEmails"
+          channel="statement"
+          tags={customer.tags ?? []}
+        />
+      </CollapsibleCard>
+      <CollapsibleCard title="Phones" summary={phoneSummary}>
+        <PhonesCard
+          customerId={customer.id}
+          phone={customer.phone}
+          additionalPhones={customer.additionalPhones}
+        />
+      </CollapsibleCard>
+      <CollapsibleCard title="Tags" summary={tagSummary}>
+        <TagsCard
+          customerId={customer.id}
+          currentTags={customer.tags ?? []}
+        />
+      </CollapsibleCard>
     </div>
   );
+}
+
+// One-line summary of (TO / CC / BCC) counts for the recipient cards'
+// collapsed state. "no recipients set" when all three are empty so
+// the operator can tell at a glance the card needs setup.
+function summariseEmailCounts(
+  toEmails: string[] | null,
+  ccEmails: string[] | null,
+  bccEmails: string[] | null,
+): string {
+  const to = toEmails?.length ?? 0;
+  const cc = ccEmails?.length ?? 0;
+  const bcc = bccEmails?.length ?? 0;
+  if (to === 0 && cc === 0 && bcc === 0) return "no recipients set";
+  const parts: string[] = [];
+  parts.push(`${to} TO`);
+  if (cc > 0) parts.push(`${cc} CC`);
+  if (bcc > 0) parts.push(`${bcc} BCC`);
+  return parts.join(" · ");
 }
 
 // One per channel (invoice / statement). Three identical chip-list
@@ -979,65 +1534,64 @@ function ChannelEmailsCard({
     },
   });
 
+  // Inner content only — title + Card wrapper provided by the parent
+  // CollapsibleCard. `title` prop kept on the function signature for
+  // call-site clarity even though it's no longer rendered here.
+  void title;
   return (
-    <Card>
-      <CardBody className="space-y-2 py-3">
-        <div className="text-xs uppercase tracking-wide text-muted">
-          {title}
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted">{helper}</div>
+      <EmailChipList
+        label="TO"
+        values={toEmails ?? []}
+        onChange={(next) =>
+          mutation.mutate({
+            [toField]: next.length > 0 ? next : null,
+          } as never)
+        }
+        placeholder="add TO email and press enter"
+      />
+      <EmailChipList
+        label="CC"
+        values={ccEmails ?? []}
+        onChange={(next) =>
+          mutation.mutate({
+            [ccField]: next.length > 0 ? next : null,
+          } as never)
+        }
+        placeholder="add CC email and press enter"
+      />
+      <EmailChipList
+        label="BCC"
+        values={bccEmails ?? []}
+        onChange={(next) =>
+          mutation.mutate({
+            [bccField]: next.length > 0 ? next : null,
+          } as never)
+        }
+        placeholder="add BCC email and press enter"
+      />
+      {tagDerivedBccs.length > 0 ? (
+        <div className="rounded-md border border-default bg-subtle px-2 py-1 text-[11px] text-secondary">
+          <div className="font-medium text-accent-info">
+            + auto-BCC from tags:
+          </div>
+          <ul className="ml-3 list-disc">
+            {tagDerivedBccs.map((r, i) => (
+              <li key={i}>
+                {r.value}{" "}
+                <span className="text-muted">({r.tag})</span>
+              </li>
+            ))}
+          </ul>
         </div>
-        <div className="text-[11px] text-muted">{helper}</div>
-        <EmailChipList
-          label="TO"
-          values={toEmails ?? []}
-          onChange={(next) =>
-            mutation.mutate({
-              [toField]: next.length > 0 ? next : null,
-            } as never)
-          }
-          placeholder="add TO email and press enter"
-        />
-        <EmailChipList
-          label="CC"
-          values={ccEmails ?? []}
-          onChange={(next) =>
-            mutation.mutate({
-              [ccField]: next.length > 0 ? next : null,
-            } as never)
-          }
-          placeholder="add CC email and press enter"
-        />
-        <EmailChipList
-          label="BCC"
-          values={bccEmails ?? []}
-          onChange={(next) =>
-            mutation.mutate({
-              [bccField]: next.length > 0 ? next : null,
-            } as never)
-          }
-          placeholder="add BCC email and press enter"
-        />
-        {tagDerivedBccs.length > 0 ? (
-          <div className="rounded-md border border-default bg-subtle px-2 py-1 text-[11px] text-secondary">
-            <div className="font-medium text-accent-info">
-              + auto-BCC from tags:
-            </div>
-            <ul className="ml-3 list-disc">
-              {tagDerivedBccs.map((r, i) => (
-                <li key={i}>
-                  {r.value}{" "}
-                  <span className="text-muted">({r.tag})</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {mutation.isError ? (
-          <div className="text-[11px] text-accent-danger">
-            {(mutation.error as Error)?.message ?? "save failed"}
-          </div>
-        ) : null}
-      </CardBody>
-    </Card>
+      ) : null}
+      {mutation.isError ? (
+        <div className="text-[11px] text-accent-danger">
+          {(mutation.error as Error)?.message ?? "save failed"}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1217,76 +1771,75 @@ function TagsCard({
       .map((r) => describeRule(r.action, r.value));
   }
 
+  // Inner content only — Card + title bar provided by parent
+  // CollapsibleCard.
   return (
-    <Card>
-      <CardBody className="space-y-2 py-3">
-        <div className="text-xs uppercase tracking-wide text-muted">Tags</div>
-        <div className="text-[11px] text-muted">
-          Drives auto-routing rules. Match against Settings → Email
-          routing rules.
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted">
+        Drives auto-routing rules. Match against Settings → Email
+        routing rules.
+      </div>
+      {draft.length > 0 ? (
+        <ul className="space-y-1">
+          {draft.map((tag) => {
+            const effects = effectsForTag(tag);
+            return (
+              <li key={tag} className="text-xs">
+                <span className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]">
+                  {tag}
+                  <button
+                    type="button"
+                    onClick={() => removeTag(tag)}
+                    className="text-muted hover:text-accent-danger"
+                    aria-label={`Remove tag ${tag}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+                {effects.length > 0 ? (
+                  <ul className="ml-2 mt-0.5 list-disc text-[10px] text-accent-info">
+                    {effects.map((e, i) => (
+                      <li key={i} className="ml-2">
+                        {e}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              addTag();
+            }
+          }}
+          placeholder="add tag (e.g. yiddy)"
+          className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={addTag}
+          disabled={!input.trim()}
+        >
+          Add
+        </Button>
+      </div>
+      {mutation.isError ? (
+        <div className="text-[11px] text-accent-danger">
+          {(mutation.error as Error)?.message ?? "save failed"}
         </div>
-        {draft.length > 0 ? (
-          <ul className="space-y-1">
-            {draft.map((tag) => {
-              const effects = effectsForTag(tag);
-              return (
-                <li key={tag} className="text-xs">
-                  <span className="inline-flex items-center gap-1 rounded-md border border-default bg-subtle px-1.5 py-0.5 text-[10px]">
-                    {tag}
-                    <button
-                      type="button"
-                      onClick={() => removeTag(tag)}
-                      className="text-muted hover:text-accent-danger"
-                      aria-label={`Remove tag ${tag}`}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
-                  {effects.length > 0 ? (
-                    <ul className="ml-2 mt-0.5 list-disc text-[10px] text-accent-info">
-                      {effects.map((e, i) => (
-                        <li key={i} className="ml-2">
-                          {e}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        ) : null}
-        <div className="flex gap-1">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === ",") {
-                e.preventDefault();
-                addTag();
-              }
-            }}
-            placeholder="add tag (e.g. yiddy)"
-            className="flex-1 rounded-md border border-default bg-base px-2 py-1 text-xs"
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={addTag}
-            disabled={!input.trim()}
-          >
-            Add
-          </Button>
-        </div>
-        {mutation.isError ? (
-          <div className="text-[11px] text-accent-danger">
-            {(mutation.error as Error)?.message ?? "save failed"}
-          </div>
-        ) : null}
-      </CardBody>
-    </Card>
+      ) : null}
+    </div>
   );
 }
 
@@ -1390,111 +1943,110 @@ function PhonesCard({
     mutation.mutate({ additionalPhones: extras.length > 0 ? extras : null });
   }
 
+  // Inner content only — Card + title bar provided by parent
+  // CollapsibleCard.
   return (
-    <Card>
-      <CardBody className="space-y-2 py-3">
-        <div className="text-xs uppercase tracking-wide text-muted">Phones</div>
-        <div className="text-[11px] text-muted">
-          Main syncs to QuickBooks. Additional lines are local-only.
-        </div>
-        <label className="block">
-          <span className="mb-0.5 block text-[11px] text-muted">Main</span>
-          <input
-            type="tel"
-            value={phoneDraft}
-            onChange={(e) => setPhoneDraft(e.target.value)}
-            onBlur={savePhone}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            placeholder="(555) 123-4567"
-            className="w-full rounded-md border border-default bg-base px-2 py-1 text-xs"
-          />
-        </label>
-        <div>
-          <span className="mb-0.5 block text-[11px] text-muted">
-            Additional ({extras.length}/10)
-          </span>
-          {extras.length > 0 ? (
-            <ul className="mb-1 space-y-1">
-              {extras.map((e, i) => (
-                <li key={i} className="flex gap-1">
-                  <input
-                    type="text"
-                    value={e.label}
-                    onChange={(ev) =>
-                      updateExtra(i, { label: ev.target.value })
-                    }
-                    onBlur={saveExtras}
-                    placeholder="Label"
-                    className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-                  />
-                  <input
-                    type="tel"
-                    value={e.number}
-                    onChange={(ev) =>
-                      updateExtra(i, { number: ev.target.value })
-                    }
-                    onBlur={saveExtras}
-                    placeholder="Number"
-                    className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeExtra(i)}
-                    className="rounded p-1 text-muted hover:text-accent-danger"
-                    aria-label={`Remove ${e.label || "phone"}`}
-                  >
-                    <X className="size-3" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {extras.length < 10 ? (
-            <div className="flex gap-1">
-              <input
-                type="text"
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-                placeholder="Label"
-                className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-              />
-              <input
-                type="tel"
-                value={newNumber}
-                onChange={(e) => setNewNumber(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addExtra();
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted">
+        Main syncs to QuickBooks. Additional lines are local-only.
+      </div>
+      <label className="block">
+        <span className="mb-0.5 block text-[11px] text-muted">Main</span>
+        <input
+          type="tel"
+          value={phoneDraft}
+          onChange={(e) => setPhoneDraft(e.target.value)}
+          onBlur={savePhone}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          placeholder="(555) 123-4567"
+          className="w-full rounded-md border border-default bg-base px-2 py-1 text-xs"
+        />
+      </label>
+      <div>
+        <span className="mb-0.5 block text-[11px] text-muted">
+          Additional ({extras.length}/10)
+        </span>
+        {extras.length > 0 ? (
+          <ul className="mb-1 space-y-1">
+            {extras.map((e, i) => (
+              <li key={i} className="flex gap-1">
+                <input
+                  type="text"
+                  value={e.label}
+                  onChange={(ev) =>
+                    updateExtra(i, { label: ev.target.value })
                   }
-                }}
-                placeholder="Number"
-                className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={addExtra}
-                disabled={!newLabel.trim() || newNumber.trim().length < 3}
-              >
-                Add
-              </Button>
-            </div>
-          ) : null}
-        </div>
-        {mutation.isError ? (
-          <div className="text-[11px] text-accent-danger">
-            {(mutation.error as Error)?.message ?? "save failed"}
+                  onBlur={saveExtras}
+                  placeholder="Label"
+                  className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                />
+                <input
+                  type="tel"
+                  value={e.number}
+                  onChange={(ev) =>
+                    updateExtra(i, { number: ev.target.value })
+                  }
+                  onBlur={saveExtras}
+                  placeholder="Number"
+                  className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeExtra(i)}
+                  className="rounded p-1 text-muted hover:text-accent-danger"
+                  aria-label={`Remove ${e.label || "phone"}`}
+                >
+                  <X className="size-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {extras.length < 10 ? (
+          <div className="flex gap-1">
+            <input
+              type="text"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              placeholder="Label"
+              className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+            />
+            <input
+              type="tel"
+              value={newNumber}
+              onChange={(e) => setNewNumber(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addExtra();
+                }
+              }}
+              placeholder="Number"
+              className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={addExtra}
+              disabled={!newLabel.trim() || newNumber.trim().length < 3}
+            >
+              Add
+            </Button>
           </div>
         ) : null}
-      </CardBody>
-    </Card>
+      </div>
+      {mutation.isError ? (
+        <div className="text-[11px] text-accent-danger">
+          {(mutation.error as Error)?.message ?? "save failed"}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1520,19 +2072,56 @@ type InvoiceRow = {
   customerMemo: string | null;
   sentAt: string | null;
   sentVia: string | null;
+  // Last chase email that touched this invoice. Always null for
+  // credit memos (chase tracking is invoice-only). Drives the
+  // sortable "Last chased" column + the bulk-action target picker.
+  lastChasedAt: string | null;
+  lastChasedLevel: number | null;
 };
 
 type StatusFilter = "all" | "open" | "paid" | "overdue" | "sent" | "void";
 type TypeFilter = "all" | "invoice" | "credit_memo";
-type SortKey = "issueDate" | "docNumber" | "total" | "balance";
+type SortKey =
+  | "issueDate"
+  | "docNumber"
+  | "total"
+  | "balance"
+  | "lastChasedAt";
 type SortDir = "asc" | "desc";
 
 function InvoicesPanel({
   customerId,
   customerName,
+  onBulkChase,
+  invStatus,
+  invType,
+  invSearch,
+  invSort,
+  invDir,
+  onSetInvStatus,
+  onSetInvType,
+  onSetInvSearch,
+  onSetInvSort,
+  onSetInvDir,
 }: {
   customerId: string;
   customerName: string;
+  // Operator clicked "Send chase email" with N invoices selected.
+  // The parent owns the dialog state; we just hand it the ids of
+  // the selected invoice rows (credit memos filtered out — chase is
+  // invoice-only). Chase tracking + invalidation is the dialog's
+  // job after send succeeds.
+  onBulkChase: (invoiceIds: string[]) => void;
+  invStatus: StatusFilter;
+  invType: TypeFilter;
+  invSearch: string;
+  invSort: SortKey;
+  invDir: SortDir;
+  onSetInvStatus: (v: StatusFilter) => void;
+  onSetInvType: (v: TypeFilter) => void;
+  onSetInvSearch: (v: string) => void;
+  onSetInvSort: (v: SortKey) => void;
+  onSetInvDir: (v: SortDir) => void;
 }) {
   const { data, isPending, isError, error } = useQuery<{
     invoices: InvoiceRow[];
@@ -1554,11 +2143,12 @@ function InvoicesPanel({
   const [reminding, setReminding] = useState<InvoiceRow | null>(null);
   const [reminderSuccess, setReminderSuccess] =
     useState<InvoiceReminderSuccess | null>(null);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [search, setSearch] = useState<string>("");
-  const [sortKey, setSortKey] = useState<SortKey>("issueDate");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // filter state lifted to page-level URL params (invStatus, invType, invSearch, invSort, invDir)
+  const statusFilter = invStatus;
+  const typeFilter = invType;
+  const search = invSearch;
+  const sortKey = invSort;
+  const sortDir = invDir;
   // Selection — keyed by docType:qbId so invoices and credit memos
   // with overlapping QBO ids don't collide.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1635,10 +2225,10 @@ function InvoicesPanel({
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
+      onSetInvDir(sortDir === "asc" ? "desc" : "asc");
     } else {
-      setSortKey(key);
-      setSortDir("desc");
+      onSetInvSort(key);
+      onSetInvDir("desc");
     }
   }
 
@@ -1780,54 +2370,54 @@ function InvoicesPanel({
           <FilterChip
             label="All"
             active={statusFilter === "all"}
-            onClick={() => setStatusFilter("all")}
+            onClick={() => onSetInvStatus("all")}
           />
           <FilterChip
             label="Open"
             active={statusFilter === "open"}
-            onClick={() => setStatusFilter("open")}
+            onClick={() => onSetInvStatus("open")}
           />
           <FilterChip
             label="Paid"
             active={statusFilter === "paid"}
-            onClick={() => setStatusFilter("paid")}
+            onClick={() => onSetInvStatus("paid")}
           />
           <FilterChip
             label="Overdue"
             active={statusFilter === "overdue"}
-            onClick={() => setStatusFilter("overdue")}
+            onClick={() => onSetInvStatus("overdue")}
           />
           <FilterChip
             label="Sent"
             active={statusFilter === "sent"}
-            onClick={() => setStatusFilter("sent")}
+            onClick={() => onSetInvStatus("sent")}
           />
           <FilterChip
             label="Void"
             active={statusFilter === "void"}
-            onClick={() => setStatusFilter("void")}
+            onClick={() => onSetInvStatus("void")}
           />
           <span className="mx-1 h-4 w-px bg-default" />
           <FilterChip
             label="All types"
             active={typeFilter === "all"}
-            onClick={() => setTypeFilter("all")}
+            onClick={() => onSetInvType("all")}
           />
           <FilterChip
             label="Invoices"
             active={typeFilter === "invoice"}
-            onClick={() => setTypeFilter("invoice")}
+            onClick={() => onSetInvType("invoice")}
           />
           <FilterChip
             label="Credit memos"
             active={typeFilter === "credit_memo"}
-            onClick={() => setTypeFilter("credit_memo")}
+            onClick={() => onSetInvType("credit_memo")}
           />
           <div className="ml-auto">
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => onSetInvSearch(e.target.value)}
               placeholder="search doc#…"
               className="w-40 rounded-md border border-default bg-base px-2 py-1 text-xs"
             />
@@ -1855,12 +2445,48 @@ function InvoicesPanel({
                 clear
               </button>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {bulkPdfError ? (
                 <span className="text-[11px] text-accent-danger">
                   {bulkPdfError}
                 </span>
               ) : null}
+              {/* Chase only the selected INVOICES (credit memos
+                  excluded — chase tracking is invoice-only and the
+                  template renders invoice rows). When zero invoices
+                  are selected (only CMs), the button is disabled. */}
+              {(() => {
+                const invoiceLocalIds = selectedRows
+                  .filter((r) => r.docType === "invoice" && r.id)
+                  .map((r) => r.id as string);
+                const chaseDisabled = invoiceLocalIds.length === 0;
+                return (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      if (chaseDisabled) return;
+                      onBulkChase(invoiceLocalIds);
+                      // Don't clear selection here — operator can
+                      // cancel the dialog and re-fire. Selection
+                      // clears via the explicit "clear" link or on
+                      // dialog success (parent clears via key).
+                    }}
+                    disabled={chaseDisabled}
+                    title={
+                      chaseDisabled
+                        ? "Select at least one invoice (credit memos can't be chased)"
+                        : `Send a chase email covering the ${invoiceLocalIds.length} selected invoice${invoiceLocalIds.length === 1 ? "" : "s"} (L1 by default — switch level inside the dialog)`
+                    }
+                  >
+                    <Send className="size-3.5" />
+                    Send chase email
+                    {invoiceLocalIds.length > 0
+                      ? ` (${invoiceLocalIds.length})`
+                      : ""}
+                  </Button>
+                );
+              })()}
               <Button
                 size="sm"
                 variant="secondary"
@@ -1936,6 +2562,13 @@ function InvoicesPanel({
                     activeDir={sortDir}
                     onClick={toggleSort}
                     align="right"
+                  />
+                  <SortHeader
+                    label="Last chased"
+                    sortKey="lastChasedAt"
+                    activeKey={sortKey}
+                    activeDir={sortDir}
+                    onClick={toggleSort}
                   />
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 text-right font-medium">Actions</th>
@@ -2046,6 +2679,20 @@ function compareRows(a: InvoiceRow, b: InvoiceRow, key: SortKey): number {
       return Number(a.total) - Number(b.total);
     case "balance":
       return Number(a.balance) - Number(b.balance);
+    case "lastChasedAt": {
+      // Nulls (never-chased) sort to the END in ascending order so
+      // "haven't chased recently" surfaces at the top when the
+      // operator clicks asc → asc means oldest-chase-first AND
+      // never-chased-first share the front of the list, which is
+      // the actionable target. Tiny lie: empty string < anything
+      // non-empty, so we use a guard instead of "".
+      const aVal = a.lastChasedAt ?? "";
+      const bVal = b.lastChasedAt ?? "";
+      if (aVal === bVal) return 0;
+      if (aVal === "") return -1;
+      if (bVal === "") return 1;
+      return aVal.localeCompare(bVal);
+    }
     default:
       return 0;
   }
@@ -2220,6 +2867,13 @@ function InvoiceTableRow({
           <span className="text-muted">—</span>
         )}
       </td>
+      <td className="px-3 py-2 text-xs">
+        <LastChasedCell
+          docType={row.docType}
+          lastChasedAt={row.lastChasedAt}
+          lastChasedLevel={row.lastChasedLevel}
+        />
+      </td>
       <td className="px-3 py-2">
         <InvoiceStatusBadge status={row.status} isPaid={isPaid} />
       </td>
@@ -2272,6 +2926,47 @@ function InvoiceTableRow({
   );
 }
 
+// "Chased Nd ago (L1)" cell content. Credit memos always render dash
+// (chase tracking is invoice-only). Never-chased invoices render a
+// muted dash so the column reads clean. Tooltip shows the absolute
+// timestamp for operators who want the exact date.
+function LastChasedCell({
+  docType,
+  lastChasedAt,
+  lastChasedLevel,
+}: {
+  docType: "invoice" | "credit_memo";
+  lastChasedAt: string | null;
+  lastChasedLevel: number | null;
+}) {
+  if (docType === "credit_memo" || !lastChasedAt) {
+    return <span className="text-muted">—</span>;
+  }
+  const ago = detailRelativeTime(lastChasedAt);
+  const absolute = new Date(lastChasedAt).toLocaleString();
+  const level =
+    lastChasedLevel === 1 || lastChasedLevel === 2 || lastChasedLevel === 3
+      ? `L${lastChasedLevel}`
+      : "L?";
+  // Recency tone: < 7d ago = neutral (recently chased — don't re-chase
+  // yet); 7-30d ago = info (chase candidate); 30d+ = warning (long
+  // overdue chase). Same tone vocabulary used by other badges.
+  const diffMs = Date.now() - new Date(lastChasedAt).getTime();
+  const days = diffMs / (1000 * 60 * 60 * 24);
+  const tone =
+    days < 7
+      ? "text-muted"
+      : days < 30
+        ? "text-secondary"
+        : "text-accent-warning";
+  return (
+    <span className={tone} title={`Chased L${lastChasedLevel} on ${absolute}`}>
+      {ago}{" "}
+      <span className="text-[9px] uppercase tracking-wide">{level}</span>
+    </span>
+  );
+}
+
 function InvoiceStatusBadge({
   status,
   isPaid,
@@ -2288,4 +2983,421 @@ function InvoiceStatusBadge({
   if (status === "open") return <Badge tone="info">Open</Badge>;
   if (status === "applied") return <Badge tone="success">Applied</Badge>;
   return <Badge tone="medium">—</Badge>;
+}
+
+// ─── Returns tab ─────────────────────────────────────────────────────────────
+
+type RmaStatus =
+  | "draft"
+  | "approved"
+  | "awaiting_warehouse_number"
+  | "sent_to_warehouse"
+  | "received"
+  | "completed"
+  | "denied"
+  | "cancelled";
+
+type RmaReturnType = "damage" | "seasonal" | "non_seasonal";
+
+type RmaRow = {
+  id: string;
+  rmaNumber: string | null;
+  returnType: RmaReturnType;
+  status: RmaStatus;
+  totalValue: string;
+  createdAt: string;
+  completedAt: string | null;
+  // Used to compute "stuck N days" badges for awaiting-return rows.
+  sentToWarehouseAt: string | null;
+  approvedAt: string | null;
+  trackingNumber: string | null;
+};
+
+type RmaListResponse = { rmas: RmaRow[] };
+
+const RMA_STATUS_LABELS: Record<RmaStatus, string> = {
+  draft: "Draft",
+  approved: "Approved",
+  awaiting_warehouse_number: "Awaiting warehouse #",
+  sent_to_warehouse: "Awaiting return",
+  received: "Received",
+  completed: "Completed",
+  denied: "Denied",
+  cancelled: "Cancelled",
+};
+
+type BadgeTone = "critical" | "high" | "medium" | "low" | "neutral" | "info" | "success";
+
+const RMA_STATUS_TONES: Record<RmaStatus, BadgeTone> = {
+  draft: "neutral",
+  approved: "success",
+  awaiting_warehouse_number: "high",
+  sent_to_warehouse: "info",
+  received: "info",
+  completed: "success",
+  denied: "critical",
+  cancelled: "neutral",
+};
+
+const RMA_TYPE_LABELS: Record<RmaReturnType, string> = {
+  damage: "Damage",
+  seasonal: "Seasonal",
+  non_seasonal: "Non-seasonal",
+};
+
+// Statuses that are considered "open" (in-flight / pending resolution).
+const OPEN_STATUSES = new Set<RmaStatus>([
+  "draft",
+  "approved",
+  "awaiting_warehouse_number",
+  "sent_to_warehouse",
+  "received",
+]);
+
+// "Stuck" = approved / awaiting_warehouse_number / sent_to_warehouse status
+// that's been sitting longer than expected without forward progress. We use
+// the most relevant timestamp (sentToWarehouseAt for "Awaiting return",
+// approvedAt for the others) so the count reflects time since the operator
+// last took action — not just how long the RMA has existed. Returns 0 when
+// the RMA isn't in a stuckable state.
+function stuckDays(r: {
+  status: RmaStatus;
+  sentToWarehouseAt: string | null;
+  approvedAt: string | null;
+}): number {
+  let anchor: string | null;
+  switch (r.status) {
+    case "sent_to_warehouse":
+      anchor = r.sentToWarehouseAt ?? r.approvedAt;
+      break;
+    case "awaiting_warehouse_number":
+    case "approved":
+      anchor = r.approvedAt;
+      break;
+    default:
+      return 0;
+  }
+  if (!anchor) return 0;
+  const ms = Date.now() - new Date(anchor).getTime();
+  return Math.max(0, Math.floor(ms / 86_400_000));
+}
+
+function ReturnsPanel({
+  customerId,
+  rmaStatus,
+  rmaType,
+  onRmaStatusChange,
+  onRmaTypeChange,
+}: {
+  customerId: string;
+  rmaStatus: RmaStatus | "all";
+  rmaType: RmaReturnType | "all";
+  onRmaStatusChange: (v: RmaStatus | "all") => void;
+  onRmaTypeChange: (v: RmaReturnType | "all") => void;
+}) {
+  const statusFilter = rmaStatus;
+  const typeFilter = rmaType;
+
+  const { data, isPending, isError, error } = useQuery<RmaListResponse>({
+    queryKey: ["customer-rmas", customerId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/rmas?customerId=${encodeURIComponent(customerId)}`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const allRows = data?.rmas ?? [];
+
+  // Summary stats derived from the full (unfiltered) list.
+  const summary = useMemo(() => {
+    const currentYearStart = new Date(new Date().getFullYear(), 0, 1);
+    let open = 0;
+    let inFlight = 0;
+    let completedYtd = 0;
+    let stuck = 0;
+    for (const r of allRows) {
+      if (OPEN_STATUSES.has(r.status)) {
+        open++;
+        inFlight += Number(r.totalValue);
+      }
+      if (stuckDays(r) >= 7) stuck++;
+      if (
+        r.status === "completed" &&
+        r.completedAt &&
+        new Date(r.completedAt) >= currentYearStart
+      ) {
+        completedYtd++;
+      }
+    }
+    return { open, inFlight, completedYtd, stuck };
+  }, [allRows]);
+
+  const filteredRows = useMemo(() => {
+    return allRows
+      .filter((r) => statusFilter === "all" || r.status === statusFilter)
+      .filter((r) => typeFilter === "all" || r.returnType === typeFilter);
+  }, [allRows, statusFilter, typeFilter]);
+
+  const anyFilterActive = statusFilter !== "all" || typeFilter !== "all";
+
+  return (
+    <div className="space-y-3">
+      {/* Header row: summary + create button */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="text-sm text-secondary">
+          <span className="font-medium text-primary">{summary.open}</span> open
+          {" · "}
+          <span className="font-medium text-primary">
+            ${summary.inFlight.toFixed(2)}
+          </span>{" "}
+          in flight
+          {" · "}
+          <span className="font-medium text-primary">{summary.completedYtd}</span>{" "}
+          completed YTD
+          {summary.stuck > 0 && (
+            <>
+              {" · "}
+              <span className="font-medium text-accent-warning">
+                {summary.stuck} stuck &gt;7d
+              </span>
+            </>
+          )}
+        </div>
+        <Link
+          to="/returns/new"
+          search={{ customerId } as never}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-default bg-base px-3 py-1.5 text-xs font-medium text-secondary hover:bg-elevated hover:text-primary"
+        >
+          <RotateCcw className="size-3.5" />
+          Create return
+        </Link>
+      </div>
+
+      {/* Filter chips: status + type */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted">Status:</span>
+          <ReturnFilterChip
+            label="All"
+            active={statusFilter === "all"}
+            onClick={() => onRmaStatusChange("all")}
+          />
+          {(Object.keys(RMA_STATUS_LABELS) as RmaStatus[]).map((s) => (
+            <ReturnFilterChip
+              key={s}
+              label={RMA_STATUS_LABELS[s]}
+              active={statusFilter === s}
+              onClick={() =>
+                onRmaStatusChange(statusFilter === s ? "all" : s)
+              }
+            />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted">Type:</span>
+          <ReturnFilterChip
+            label="All"
+            active={typeFilter === "all"}
+            onClick={() => onRmaTypeChange("all")}
+          />
+          {(Object.keys(RMA_TYPE_LABELS) as RmaReturnType[]).map((t) => (
+            <ReturnFilterChip
+              key={t}
+              label={RMA_TYPE_LABELS[t]}
+              active={typeFilter === t}
+              onClick={() =>
+                onRmaTypeChange(typeFilter === t ? "all" : t)
+              }
+            />
+          ))}
+        </div>
+        {anyFilterActive && (
+          <button
+            type="button"
+            onClick={() => {
+              onRmaStatusChange("all");
+              onRmaTypeChange("all");
+            }}
+            className="text-xs text-muted hover:text-primary"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <h2 className="text-sm font-medium text-secondary">
+            {isPending
+              ? "Loading…"
+              : `${filteredRows.length} RMA${filteredRows.length === 1 ? "" : "s"}`}
+          </h2>
+        </CardHeader>
+        <CardBody className="p-0">
+          {isError && (
+            <div className="p-4 text-sm text-accent-danger">
+              {(error as Error)?.message ?? "Failed to load returns"}
+            </div>
+          )}
+          <table className="w-full text-sm">
+            <thead className="border-b border-default bg-subtle text-left text-xs uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-3 py-2">RMA #</th>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2">Created</th>
+                <th className="px-3 py-2 w-8"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((r) => (
+                <tr
+                  key={r.id}
+                  className="border-b border-default last:border-b-0 hover:bg-elevated"
+                >
+                  <td className="px-3 py-2 font-medium">
+                    <Link
+                      to="/returns/$rmaId"
+                      params={{ rmaId: r.id }}
+                      className="font-mono text-xs hover:text-accent-primary hover:underline underline-offset-2"
+                    >
+                      {r.rmaNumber ?? `Draft ${r.id.slice(0, 6)}…`}
+                    </Link>
+                  </td>
+                  <td className="px-3 py-2 text-secondary">
+                    {RMA_TYPE_LABELS[r.returnType]}
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge tone={RMA_STATUS_TONES[r.status]}>
+                        {RMA_STATUS_LABELS[r.status]}
+                      </Badge>
+                      {(() => {
+                        const days = stuckDays(r);
+                        if (days < 7) return null;
+                        const tone: BadgeTone = days >= 14 ? "critical" : "high";
+                        return (
+                          <Badge tone={tone}>
+                            stuck {days}d
+                          </Badge>
+                        );
+                      })()}
+                      {r.trackingNumber && r.status === "sent_to_warehouse" && (
+                        <Badge tone="info">tracked</Badge>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    <span
+                      className={cn(
+                        "font-medium",
+                        Number(r.totalValue) > 0
+                          ? "text-primary"
+                          : "text-muted",
+                      )}
+                    >
+                      ${Number(r.totalValue).toFixed(2)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-secondary">
+                    {new Date(r.createdAt).toLocaleDateString(undefined, {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })}
+                  </td>
+                  <td className="px-3 py-2">
+                    <RmaRowMenu
+                      rmaId={r.id}
+                      status={r.status}
+                      // Mirror the keys invalidateAfterRmaChange touches so
+                      // the customer-detail KPI strip ("hasPendingRma"),
+                      // activity timeline, customers list flag, and chase
+                      // RMA pill all refresh after cancel/delete from this
+                      // menu. The menu accepts plain query keys, so we
+                      // duplicate the helper's set here. (The ["rma", id]
+                      // detail key is omitted — operator is on the customer
+                      // page, not the detail.)
+                      invalidateKeys={[
+                        ["returns-list"],
+                        ["rmas"],
+                        ["customer-rmas", customerId],
+                        ["customer", customerId],
+                        ["customers"],
+                        ["chase", "customers"],
+                      ]}
+                    />
+                  </td>
+                </tr>
+              ))}
+              {!isPending && filteredRows.length === 0 && (
+                <tr>
+                  <td
+                    className="p-8 text-center text-sm text-muted"
+                    colSpan={6}
+                  >
+                    No RMAs match the current filters
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+// Short relative-time formatter for the "Last contacted N ago" chip in
+// the customer header. Mirrors the chase-page relativeTime() shape but
+// kept local — the chase helper isn't a public export and the customer
+// detail file already has its own helper section.
+function detailRelativeTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const diffMs = Date.now() - d.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks <= 6) return `${weeks}w ago`;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year:
+      d.getUTCFullYear() === new Date().getUTCFullYear() ? undefined : "numeric",
+  });
+}
+
+function ReturnFilterChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-2.5 py-1 transition-colors",
+        active
+          ? "border-accent-primary/40 bg-accent-primary/10 text-accent-primary"
+          : "border-default text-secondary hover:bg-elevated hover:text-primary",
+      )}
+    >
+      {label}
+    </button>
+  );
 }

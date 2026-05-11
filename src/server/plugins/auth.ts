@@ -19,13 +19,38 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
       Google({
         clientId: env.AUTH_GOOGLE_CLIENT_ID,
         clientSecret: env.AUTH_GOOGLE_CLIENT_SECRET,
+        // Link to existing user row when the email matches. Safe for our
+        // single-tenant + ALLOWED_EMAILS gate — controlling the email
+        // address is sufficient identity proof here. Without this flag,
+        // Auth.js refuses to link a new OAuth account to a pre-existing
+        // user (e.g. one created earlier by the DEV_USER_EMAIL bypass) and
+        // returns OAuthAccountNotLinked.
+        allowDangerousEmailAccountLinking: true,
+        authorization: {
+          params: {
+            scope: [
+              "openid",
+              "email",
+              "profile",
+              // Full Drive scope rather than drive.file — drive.file only
+              // grants access to files the app itself created, which means
+              // operators can't point the photo root at an existing folder
+              // (e.g. one they already use for returns paperwork). Full
+              // drive scope lets the app create subfolders + files inside
+              // any folder the operator chooses. Acceptable trade-off for
+              // an internal tool with email allowlist + audit logging.
+              "https://www.googleapis.com/auth/drive",
+            ].join(" "),
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
       }),
     ],
     secret: env.AUTH_SECRET,
     session: { strategy: "database" },
     trustHost: true,
     basePath: "/api/auth",
-    pages: { signIn: "/login" },
     callbacks: {
       async signIn({ user }) {
         const email = user?.email?.toLowerCase();
@@ -36,6 +61,20 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
           return false;
         }
         return allowList.has(email);
+      },
+      async redirect({ url, baseUrl }) {
+        // Auth.js's default redirect can land on stale callbackUrls (e.g.
+        // /login from an old session) that aren't real routes. Bounce
+        // those to /. Also force same-origin: external URLs are unsafe
+        // as redirect targets.
+        try {
+          const target = new URL(url, baseUrl);
+          if (target.origin !== baseUrl) return baseUrl;
+          if (target.pathname === "/login") return baseUrl;
+          return target.toString();
+        } catch {
+          return baseUrl;
+        }
       },
       async session({ session, user }) {
         if (session.user && user) {

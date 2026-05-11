@@ -6,6 +6,7 @@ import {
   Download,
   ExternalLink,
   Eye,
+  Pencil,
   Plus,
   Save,
   Trash2,
@@ -74,7 +75,9 @@ export default function SettingsPage() {
       </div>
       <EmailTemplatesSection />
       <StatementPdfSection />
+      <ReturnsSection />
       <RoutingRulesSection />
+      <TagEmailSchedulesSection />
       <ImportsSection />
     </div>
   );
@@ -273,6 +276,454 @@ function RoutingRulesSection() {
             {(createMutation.error as Error)?.message ?? "create failed"}
           </div>
         ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+// ─────────────────────── Scheduled tag emails ────────────────────────────
+
+type TagEmailFrequency = "daily" | "weekly" | "monthly";
+type TagEmailContentType = "hold_or_upfront_summary";
+
+type TagEmailSchedule = {
+  id: string;
+  tag: string;
+  recipientEmail: string;
+  frequency: TagEmailFrequency;
+  contentType: TagEmailContentType;
+  enabled: boolean;
+  lastSentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const FREQUENCY_LABELS: Record<TagEmailFrequency, string> = {
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+};
+
+const CONTENT_TYPE_LABELS: Record<TagEmailContentType, string> = {
+  hold_or_upfront_summary: "Hold/upfront summary",
+};
+
+const TAG_EMAIL_FREQUENCIES: TagEmailFrequency[] = ["daily", "weekly", "monthly"];
+const TAG_EMAIL_CONTENT_TYPES: TagEmailContentType[] = [
+  "hold_or_upfront_summary",
+];
+
+const EMPTY_FORM = {
+  tag: "",
+  recipientEmail: "",
+  frequency: "weekly" as TagEmailFrequency,
+  contentType: "hold_or_upfront_summary" as TagEmailContentType,
+  enabled: true,
+};
+
+function validateScheduleForm(f: typeof EMPTY_FORM): string[] {
+  const errs: string[] = [];
+  if (!f.tag.trim()) errs.push("Tag is required.");
+  else if (f.tag.trim().length > 64) errs.push("Tag must be ≤ 64 characters.");
+  if (!f.recipientEmail.trim()) errs.push("Recipient email is required.");
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.recipientEmail.trim()))
+    errs.push("Recipient email must be a valid email address.");
+  return errs;
+}
+
+function TagEmailSchedulesSection() {
+  const queryClient = useQueryClient();
+
+  const { data, isPending } = useQuery<{ schedules: TagEmailSchedule[] }>({
+    queryKey: ["tag-email-schedules"],
+    queryFn: async () => {
+      const res = await fetch("/api/tag-email-schedules");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  // form state — null = closed, "new" = add mode, string id = edit mode
+  const [formMode, setFormMode] = useState<null | "new" | string>(null);
+  const [form, setForm] = useState<typeof EMPTY_FORM>({ ...EMPTY_FORM });
+  const [formErrors, setFormErrors] = useState<string[]>([]);
+
+  function openAdd() {
+    setForm({ ...EMPTY_FORM });
+    setFormErrors([]);
+    setFormMode("new");
+  }
+
+  function openEdit(s: TagEmailSchedule) {
+    setForm({
+      tag: s.tag,
+      recipientEmail: s.recipientEmail,
+      frequency: s.frequency,
+      contentType: s.contentType,
+      enabled: s.enabled,
+    });
+    setFormErrors([]);
+    setFormMode(s.id);
+  }
+
+  function closeForm() {
+    setFormMode(null);
+    setFormErrors([]);
+  }
+
+  const createMutation = useMutation({
+    mutationFn: async (input: typeof EMPTY_FORM) => {
+      const res = await fetch("/api/tag-email-schedules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+      closeForm();
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: Partial<typeof EMPTY_FORM> }) => {
+      const res = await fetch(
+        `/api/tag-email-schedules/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+      closeForm();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(
+        `/api/tag-email-schedules/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+    },
+  });
+
+  // Optimistic enabled toggle — PATCH just the enabled field.
+  const toggleMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      const res = await fetch(
+        `/api/tag-email-schedules/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ enabled }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onMutate: async ({ id, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ["tag-email-schedules"] });
+      const prev = queryClient.getQueryData<{ schedules: TagEmailSchedule[] }>(
+        ["tag-email-schedules"],
+      );
+      queryClient.setQueryData<{ schedules: TagEmailSchedule[] }>(
+        ["tag-email-schedules"],
+        (old) =>
+          old
+            ? {
+                schedules: old.schedules.map((s) =>
+                  s.id === id ? { ...s, enabled } : s,
+                ),
+              }
+            : old,
+      );
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev)
+        queryClient.setQueryData(["tag-email-schedules"], ctx.prev);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-email-schedules"] });
+    },
+  });
+
+  function handleSubmit() {
+    const errs = validateScheduleForm(form);
+    if (errs.length) {
+      setFormErrors(errs);
+      return;
+    }
+    setFormErrors([]);
+    const payload = {
+      ...form,
+      tag: form.tag.trim().toLowerCase(),
+      recipientEmail: form.recipientEmail.trim().toLowerCase(),
+    };
+    if (formMode === "new") {
+      createMutation.mutate(payload);
+    } else if (formMode) {
+      updateMutation.mutate({ id: formMode, input: payload });
+    }
+  }
+
+  const schedules = data?.schedules ?? [];
+  const isMutating =
+    createMutation.isPending || updateMutation.isPending;
+  const mutationError =
+    (createMutation.isError
+      ? (createMutation.error as Error)?.message
+      : null) ??
+    (updateMutation.isError
+      ? (updateMutation.error as Error)?.message
+      : null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-medium">Scheduled tag emails</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Recurring digests sent to a fixed recipient when customers tagged
+              X have a specific status. E.g., a weekly summary of customers
+              tagged &ldquo;yiddy&rdquo; on hold or payment-upfront.
+            </p>
+          </div>
+          {formMode === null && (
+            <Button variant="secondary" size="sm" onClick={openAdd}>
+              <Plus className="size-3.5" />
+              Add schedule
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-3">
+        {isPending ? (
+          <div className="text-xs text-muted">Loading…</div>
+        ) : schedules.length === 0 && formMode === null ? (
+          <div className="rounded-md border border-dashed border-default p-4 text-center text-xs text-muted">
+            No schedules yet. Configure recurring digests sent to a fixed
+            recipient when customers tagged X have specific status. E.g., a
+            weekly summary of customers tagged &ldquo;yiddy&rdquo; on hold or
+            payment-upfront.
+          </div>
+        ) : schedules.length > 0 ? (
+          <>
+          <table className="w-full text-xs">
+            <thead className="border-b border-default text-[10px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-2 py-1 text-left">Tag</th>
+                <th className="px-2 py-1 text-left">Recipient</th>
+                <th className="px-2 py-1 text-left">Frequency</th>
+                <th className="px-2 py-1 text-left">Content</th>
+                <th className="px-2 py-1 text-left">Last sent</th>
+                <th className="px-2 py-1 text-left">On</th>
+                <th className="px-2 py-1"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedules.map((s) => (
+                <tr key={s.id} className="border-b border-default">
+                  <td className="px-2 py-1 font-mono">{s.tag}</td>
+                  <td className="px-2 py-1">{s.recipientEmail}</td>
+                  <td className="px-2 py-1">{FREQUENCY_LABELS[s.frequency]}</td>
+                  <td className="px-2 py-1">{CONTENT_TYPE_LABELS[s.contentType]}</td>
+                  <td className="px-2 py-1 text-muted">
+                    {formatRelative(s.lastSentAt)}
+                  </td>
+                  <td className="px-2 py-1">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={s.enabled}
+                      disabled={toggleMutation.isPending}
+                      onClick={() =>
+                        toggleMutation.mutate({ id: s.id, enabled: !s.enabled })
+                      }
+                      className={cn(
+                        "relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+                        s.enabled ? "bg-accent-brand" : "bg-default",
+                      )}
+                      aria-label={s.enabled ? "Disable schedule" : "Enable schedule"}
+                    >
+                      <span
+                        className={cn(
+                          "pointer-events-none block h-3 w-3 rounded-full bg-white shadow-sm ring-0 transition-transform",
+                          s.enabled ? "translate-x-3" : "translate-x-0",
+                        )}
+                      />
+                    </button>
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(s)}
+                        className="text-muted hover:text-primary"
+                        aria-label="Edit schedule"
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deleteMutation.isPending}
+                        onClick={() => {
+                          if (
+                            confirm(
+                              `Delete schedule "${s.tag} → ${s.recipientEmail} (${FREQUENCY_LABELS[s.frequency]})"?`,
+                            )
+                          ) {
+                            deleteMutation.mutate(s.id);
+                          }
+                        }}
+                        className="text-muted hover:text-accent-danger"
+                        aria-label="Delete schedule"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1 text-xs text-muted">
+            Note: default schedules are re-inserted on worker restart unless their seeder is also removed.
+          </p>
+          </>
+        ) : null}
+
+        {/* Inline add/edit form */}
+        {formMode !== null && (
+          <div className="flex flex-wrap items-end gap-2 rounded-md border border-default bg-subtle p-3">
+            <label className="block text-xs">
+              <span className="mb-0.5 block text-muted">Tag</span>
+              <Input
+                value={form.tag}
+                onChange={(e) => setForm((f) => ({ ...f, tag: e.target.value }))}
+                placeholder="yiddy"
+                className="w-28 text-xs"
+              />
+            </label>
+            <label className="block flex-1 text-xs">
+              <span className="mb-0.5 block text-muted">Recipient email</span>
+              <Input
+                type="email"
+                value={form.recipientEmail}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, recipientEmail: e.target.value }))
+                }
+                placeholder="sales@feldart.com"
+                className="text-xs"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="mb-0.5 block text-muted">Frequency</span>
+              <select
+                value={form.frequency}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    frequency: e.target.value as TagEmailFrequency,
+                  }))
+                }
+                className="rounded-md border border-default bg-base px-2 py-1 text-xs"
+              >
+                {TAG_EMAIL_FREQUENCIES.map((f) => (
+                  <option key={f} value={f}>
+                    {FREQUENCY_LABELS[f]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs">
+              <span className="mb-0.5 block text-muted">Content type</span>
+              <select
+                value={form.contentType}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    contentType: e.target.value as TagEmailContentType,
+                  }))
+                }
+                className="rounded-md border border-default bg-base px-2 py-1 text-xs"
+              >
+                {TAG_EMAIL_CONTENT_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {CONTENT_TYPE_LABELS[ct]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs">
+              <input
+                type="checkbox"
+                checked={form.enabled}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, enabled: e.target.checked }))
+                }
+                className="rounded"
+              />
+              <span className="text-muted">Enabled</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={closeForm}
+                disabled={isMutating}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSubmit}
+                disabled={isMutating}
+              >
+                <Save className="size-3.5" />
+                {isMutating
+                  ? "Saving…"
+                  : formMode === "new"
+                    ? "Create"
+                    : "Save"}
+              </Button>
+            </div>
+            {formErrors.length > 0 && (
+              <div className="w-full space-y-0.5">
+                {formErrors.map((e) => (
+                  <div key={e} className="text-xs text-accent-danger">
+                    {e}
+                  </div>
+                ))}
+              </div>
+            )}
+            {mutationError && (
+              <div className="w-full text-xs text-accent-danger">
+                {mutationError}
+              </div>
+            )}
+          </div>
+        )}
       </CardBody>
     </Card>
   );
@@ -958,6 +1409,274 @@ function StatementPdfSection() {
       </CardBody>
     </Card>
   );
+}
+
+// ───────────────────────── Returns section ──────────────────────────────
+
+function ReturnsSection() {
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const initialDriveFolder =
+    settingsQuery.data?.settings.drive_root_folder_id ?? "";
+  const initialWarehouseEmail =
+    settingsQuery.data?.settings.warehouse_team_email ?? "";
+  const initialShippingFeeItemId =
+    settingsQuery.data?.settings.rma_shipping_fee_item_id ?? "";
+  const initialRestockingFeeItemId =
+    settingsQuery.data?.settings.rma_restocking_fee_item_id ?? "";
+  const initialDamageCmNumberNext =
+    settingsQuery.data?.settings.damage_cm_number_next ?? "38771";
+
+  const [driveFolderDraft, setDriveFolderDraft] = useState<string>("");
+  const [warehouseEmailDraft, setWarehouseEmailDraft] = useState<string>("");
+  const [shippingFeeItemIdDraft, setShippingFeeItemIdDraft] =
+    useState<string>("");
+  const [restockingFeeItemIdDraft, setRestockingFeeItemIdDraft] =
+    useState<string>("");
+  const [damageCmNumberNextDraft, setDamageCmNumberNextDraft] =
+    useState<string>("");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  // Snap drafts to server values on (re)load.
+  useEffect(() => {
+    if (settingsQuery.data) {
+      setDriveFolderDraft(initialDriveFolder);
+      setWarehouseEmailDraft(initialWarehouseEmail);
+      setShippingFeeItemIdDraft(initialShippingFeeItemId);
+      setRestockingFeeItemIdDraft(initialRestockingFeeItemId);
+      setDamageCmNumberNextDraft(initialDamageCmNumberNext);
+    }
+  }, [
+    settingsQuery.data,
+    initialDriveFolder,
+    initialWarehouseEmail,
+    initialShippingFeeItemId,
+    initialRestockingFeeItemId,
+    initialDamageCmNumberNext,
+  ]);
+
+  const driveFolderDirty =
+    driveFolderDraft.trim() !== initialDriveFolder.trim();
+  const warehouseEmailDirty =
+    warehouseEmailDraft.trim() !== initialWarehouseEmail.trim();
+  const shippingFeeDirty =
+    shippingFeeItemIdDraft.trim() !== initialShippingFeeItemId.trim();
+  const restockingFeeDirty =
+    restockingFeeItemIdDraft.trim() !== initialRestockingFeeItemId.trim();
+  const damageCmNumberNextDirty =
+    damageCmNumberNextDraft.trim() !== initialDamageCmNumberNext.trim();
+  const dirty =
+    driveFolderDirty ||
+    warehouseEmailDirty ||
+    shippingFeeDirty ||
+    restockingFeeDirty ||
+    damageCmNumberNextDirty;
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      // Send only the keys that actually changed so the audit log + the
+      // updated_at column don't churn on every save.
+      const body: Record<string, string> = {};
+      if (driveFolderDirty) body.drive_root_folder_id = driveFolderDraft.trim();
+      if (warehouseEmailDirty)
+        body.warehouse_team_email = warehouseEmailDraft.trim();
+      if (shippingFeeDirty)
+        body.rma_shipping_fee_item_id = shippingFeeItemIdDraft.trim();
+      if (restockingFeeDirty)
+        body.rma_restocking_fee_item_id = restockingFeeItemIdDraft.trim();
+      if (damageCmNumberNextDirty)
+        body.damage_cm_number_next = damageCmNumberNextDraft.trim();
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as AppSettingsResponse;
+    },
+    onSuccess: () => {
+      setSavedAt(Date.now());
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    },
+  });
+
+  // Try to extract a folder ID if the operator pastes a full Drive URL.
+  function handleDriveFolderChange(raw: string): void {
+    const match = raw.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    setDriveFolderDraft(match?.[1] ?? raw);
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-base font-semibold">Returns</h2>
+        <p className="mt-1 text-xs text-muted">
+          Settings that apply to all RMA workflows.
+        </p>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <div>
+          <label
+            htmlFor="drive-root-folder-id"
+            className="block text-sm font-medium text-secondary"
+          >
+            Google Drive folder for RMA photos
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Photos uploaded on damage RMAs land here, in a per-RMA subfolder.
+            Paste the folder URL or just the ID. To find the ID: open the folder
+            in Drive — the ID is the last segment of the URL after{" "}
+            <code className="rounded bg-elevated px-1">/folders/</code>.
+          </p>
+          <Input
+            id="drive-root-folder-id"
+            type="text"
+            placeholder="https://drive.google.com/drive/folders/... or just the ID"
+            value={driveFolderDraft}
+            onChange={(e) => handleDriveFolderChange(e.target.value)}
+            className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="warehouse-team-email"
+            className="block text-sm font-medium text-secondary"
+          >
+            Warehouse team email
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Recipient(s) for the "customer is shipping back RMA X with tracking
+            Y" notification. Comma-separate multiple addresses. Leave empty to
+            disable the auto-email — tracking still saves but you'll have to
+            notify the warehouse out-of-band.
+          </p>
+          <Input
+            id="warehouse-team-email"
+            type="email"
+            placeholder="warehouse@example.com"
+            value={warehouseEmailDraft}
+            onChange={(e) => setWarehouseEmailDraft(e.target.value)}
+            className="mt-2 text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="rma-shipping-fee-item-id"
+            className="block text-sm font-medium text-secondary"
+          >
+            Shipping-deduction QBO Item ID
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            QBO Item id for the negative line on credit memos when an RMA
+            includes a return-shipping deduction. Create a service item in
+            QBO (e.g. "Return shipping deduction" pointed at a contra-revenue
+            account), then paste its numeric Item.Id here. Leave empty to
+            disable shipping deductions — the CM builder will refuse to
+            issue any CM with shipping fees while this is unset.
+          </p>
+          <Input
+            id="rma-shipping-fee-item-id"
+            type="text"
+            placeholder="e.g. 47"
+            value={shippingFeeItemIdDraft}
+            onChange={(e) => setShippingFeeItemIdDraft(e.target.value)}
+            className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="rma-restocking-fee-item-id"
+            className="block text-sm font-medium text-secondary"
+          >
+            Restocking-fee QBO Item ID
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            QBO Item id for the negative line on credit memos when an RMA
+            includes a restocking fee. Same setup as the shipping item:
+            create a service item in QBO, paste its numeric Item.Id. Leave
+            empty to disable restocking deductions.
+          </p>
+          <Input
+            id="rma-restocking-fee-item-id"
+            type="text"
+            placeholder="e.g. 112"
+            value={restockingFeeItemIdDraft}
+            onChange={(e) => setRestockingFeeItemIdDraft(e.target.value)}
+            className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="damage-cm-number-next"
+            className="block text-sm font-medium text-secondary"
+          >
+            Next damage credit-memo number
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Sequential counter used as the QBO DocNumber for damage CMs
+            (formatted as <code className="rounded bg-elevated px-1">DC#####</code>).
+            Auto-increments at every damage RMA approve. Adjust here if you
+            need to seed a different starting number or correct after an
+            accidental increment. Seasonal + non-seasonal CMs use{" "}
+            <code className="rounded bg-elevated px-1">{"{tx#}CR"}</code>{" "}
+            instead and don't consume this counter.
+          </p>
+          <Input
+            id="damage-cm-number-next"
+            type="number"
+            min={1}
+            placeholder="38771"
+            value={damageCmNumberNextDraft}
+            onChange={(e) => setDamageCmNumberNextDraft(e.target.value)}
+            className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={!dirty || saveMutation.isPending}
+          >
+            <Save className="size-4" />
+            {saveMutation.isPending ? "Saving…" : "Save"}
+          </Button>
+          {savedAt && !dirty && (
+            <span className="text-xs text-muted">Saved.</span>
+          )}
+          {saveMutation.isError && (
+            <span className="text-xs text-accent-danger">
+              {(saveMutation.error as Error).message}
+            </span>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return "Never";
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 5) return "Just now";
+  if (seconds < 86400) return formatSecondsAgo(seconds);
+  const days = Math.floor(seconds / 86400);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 function formatSecondsAgo(secs: number): string {

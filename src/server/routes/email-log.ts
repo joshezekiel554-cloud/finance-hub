@@ -22,6 +22,12 @@ import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
 import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
+import {
+  getMessageRecipients,
+  mapWithLimit,
+  markGmailAsRead,
+} from "../../integrations/gmail/client.js";
+import { BUSINESS_EMAILS } from "../../integrations/gmail/business-emails.js";
 
 const log = createLogger({ component: "routes.email-log" });
 
@@ -88,6 +94,24 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
       after: { actionedAt: update.actionedAt?.toISOString() ?? null },
     });
 
+    // Mirror in Gmail: when an operator actions an email here, drop the
+    // UNREAD label so the Gmail inbox view reflects what they've already
+    // dealt with. Fire-and-forget — Gmail downtime shouldn't block the
+    // primary action. We only mark-as-read on action=true; un-actioning
+    // doesn't restore unread (would be surprising / not what operators want).
+    if (parse.data.actioned && before.gmailMessageId) {
+      markGmailAsRead(before.gmailMessageId).catch((err) => {
+        log.warn(
+          {
+            err: err instanceof Error ? err.message : err,
+            emailLogId: id,
+            gmailMessageId: before.gmailMessageId,
+          },
+          "failed to mark Gmail message as read",
+        );
+      });
+    }
+
     const afterRows = await db
       .select()
       .from(emailLog)
@@ -117,7 +141,11 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
     const { ids, actioned } = parse.data;
 
     const beforeRows = await db
-      .select({ id: emailLog.id, actionedAt: emailLog.actionedAt })
+      .select({
+        id: emailLog.id,
+        actionedAt: emailLog.actionedAt,
+        gmailMessageId: emailLog.gmailMessageId,
+      })
       .from(emailLog)
       .where(inArray(emailLog.id, ids));
     const beforeMap = new Map(
@@ -158,10 +186,76 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
       "email_log mark-actioned-bulk applied",
     );
 
+    // Mark each Gmail message as read in the background. Same fire-and-forget
+    // pattern as the single-PATCH route. Run with bounded parallelism (5) via
+    // mapWithLimit so we don't burst the Gmail rate limit on large batches.
+    // Per-call errors are caught and logged so one bad message doesn't kill
+    // the rest of the loop.
+    // TODO: durability via a BullMQ job survives process restart; current
+    // best-effort is acceptable.
+    if (actioned) {
+      const targets = beforeRows.filter(
+        (r): r is typeof r & { gmailMessageId: string } => !!r.gmailMessageId,
+      );
+      void mapWithLimit(targets, 5, async (r) => {
+        try {
+          await markGmailAsRead(r.gmailMessageId);
+        } catch (err) {
+          log.warn(
+            {
+              err: err instanceof Error ? err.message : err,
+              emailLogId: r.id,
+              gmailMessageId: r.gmailMessageId,
+            },
+            "failed to mark Gmail message as read (bulk)",
+          );
+        }
+      });
+    }
+
     return reply.send({
       updated: beforeRows.length,
       missing: ids.length - beforeRows.length,
     });
+  });
+
+  // GET /api/email-log/:id/recipients — fetch the original message's
+  // To/Cc headers for the Reply all flow. Returns a single cc string
+  // ready to paste into the compose modal — original To+Cc combined,
+  // de-duped, with our own addresses + the original sender stripped.
+  app.get("/:id/recipients", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const rows = await db
+      .select({
+        gmailMessageId: emailLog.gmailMessageId,
+        fromAddress: emailLog.fromAddress,
+      })
+      .from(emailLog)
+      .where(eq(emailLog.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return reply.code(404).send({ error: "email not found" });
+    if (!row.gmailMessageId) {
+      return reply.send({ to: "", cc: "" });
+    }
+    try {
+      const headers = await getMessageRecipients(row.gmailMessageId);
+      const cc = buildReplyAllCc(
+        headers.to,
+        headers.cc,
+        headers.from || row.fromAddress || "",
+      );
+      // The "to" for reply-all is just the original sender — the existing
+      // Reply path already prefills that, so we only return cc here.
+      return reply.send({ cc });
+    } catch (err) {
+      log.warn(
+        { err: err instanceof Error ? err.message : err, emailLogId: id },
+        "failed to fetch reply-all recipients from Gmail",
+      );
+      return reply.code(502).send({ error: "Gmail headers fetch failed" });
+    }
   });
 
   // POST /api/email-log/:id/to-task — promote an email into a task.
@@ -262,6 +356,66 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n) + "…";
+}
+
+// Build the cc string for a Reply All. Combines original To + Cc, drops:
+//   - our own outbound addresses (so we don't email ourselves),
+//   - the original sender (already going in the To field of the reply),
+//   - duplicates (case-insensitive on the email portion).
+// Address parsing is loose-RFC-5322 — split on commas and pluck out the
+// email between < > if present, else use the whole token. Good enough
+// for the Gmail header strings we get from the API.
+function buildReplyAllCc(
+  toHeader: string,
+  ccHeader: string,
+  senderHeader: string,
+): string {
+  const senderEmail = extractEmail(senderHeader).toLowerCase();
+  const seen = new Set<string>();
+  if (senderEmail) seen.add(senderEmail);
+  for (const ours of BUSINESS_EMAILS) {
+    seen.add(ours.toLowerCase());
+  }
+  const out: string[] = [];
+  for (const raw of [
+    ...splitAddressList(toHeader),
+    ...splitAddressList(ccHeader),
+  ]) {
+    const email = extractEmail(raw).toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    out.push(raw.trim());
+  }
+  return out.join(", ");
+}
+
+function splitAddressList(s: string): string[] {
+  if (!s) return [];
+  // Split on commas that aren't inside quotes — naive but handles the
+  // common "Name, Surname" <foo@bar.com> case. We don't see RFC groups
+  // ("group:addr1,addr2;") in practice from Gmail's metadata.
+  const out: string[] = [];
+  let buf = "";
+  let inQuote = false;
+  for (const ch of s) {
+    if (ch === '"') {
+      inQuote = !inQuote;
+      buf += ch;
+    } else if (ch === "," && !inQuote) {
+      if (buf.trim()) out.push(buf.trim());
+      buf = "";
+    } else {
+      buf += ch;
+    }
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+function extractEmail(addr: string): string {
+  // "Name <email>" → email; otherwise return the input trimmed.
+  const m = addr.match(/<([^>]+)>/);
+  return (m?.[1] ?? addr).trim();
 }
 
 export default emailLogRoute;

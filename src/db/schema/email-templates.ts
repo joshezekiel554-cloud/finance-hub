@@ -23,6 +23,9 @@ export const EMAIL_TEMPLATE_CONTEXTS = [
   "invoice_reminder",
   "generic",
   "reply",
+  "rma_approval",
+  "rma_denial",
+  "rma_credit_memo",
 ] as const;
 export type EmailTemplateContext = (typeof EMAIL_TEMPLATE_CONTEXTS)[number];
 

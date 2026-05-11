@@ -28,6 +28,18 @@ export const ACTIVITY_KINDS = [
   "manual_note",
   "task_created",
   "task_completed",
+  "rma_created",
+  "rma_approved",
+  "rma_denied",
+  "rma_override_approved",
+  "rma_warehouse_export_generated",
+  "rma_warehouse_export_cancelled",
+  "rma_sent_to_warehouse",
+  "rma_received_at_warehouse",
+  "rma_credit_memo_issued",
+  "rma_completed",
+  "rma_customer_reply",
+  "rma_cancelled",
 ] as const;
 
 export const ACTIVITY_SOURCES = [
@@ -263,6 +275,7 @@ export const emailLog = mysqlTable(
     // mediumtext (16 MB) — Gmail bodies of 64 KB+ are routine for long
     // threads with quoted replies + signatures + base64 inline images.
     body: mediumtext("body"),
+    bodyHtml: mediumtext("body_html"),
     snippet: varchar("snippet", { length: 512 }),
     classification: varchar("classification", { length: 64 }),
     emailDate: timestamp("email_date").notNull(),

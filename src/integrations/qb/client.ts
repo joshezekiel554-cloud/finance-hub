@@ -179,11 +179,12 @@ export class QboClient {
     }
   }
 
-  // Single QBO query call. Auto-retries once on 401 by forcing a token refresh —
-  // covers the "another worker rotated the token mid-flight" race.
+  // Single QBO query call. Auto-retries:
+  //   - 401 → force a token refresh (mid-flight rotation race)
+  //   - 429 → backoff up to 3 attempts (per-second rate limit burst)
   private async query<T>(query: string): Promise<QboQueryResponse<T>> {
     const url = `${this.baseUrl}/v3/company/${this.config.realmId}/query`;
-    const accessToken = await this.getAccessToken();
+    let accessToken = await this.getAccessToken();
 
     const doRequest = async (token: string) => {
       return this.http.get<QboQueryResponse<T>>(url, {
@@ -195,18 +196,29 @@ export class QboClient {
       });
     };
 
-    try {
-      const response = await doRequest(accessToken);
-      return response.data;
-    } catch (err) {
-      const axiosErr = err as AxiosError;
-      if (axiosErr.response?.status === 401) {
-        const fresh = await this.forceRefresh();
-        const response = await doRequest(fresh);
+    const MAX_429_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+      try {
+        const response = await doRequest(accessToken);
         return response.data;
+      } catch (err) {
+        const axiosErr = err as AxiosError;
+        const status = axiosErr.response?.status;
+        if (status === 401) {
+          accessToken = await this.forceRefresh();
+          continue;
+        }
+        if (status === 429 && attempt < MAX_429_RETRIES) {
+          // Exponential backoff: 1s, 2s, 4s.
+          const waitMs = 1000 * Math.pow(2, attempt);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+    // Unreachable — loop either returns or throws.
+    throw new Error("QBO query exhausted retries");
   }
 
   // Generic paginated query — STARTPOSITION + MAXRESULTS pattern from 1.0.
@@ -253,6 +265,13 @@ export class QboClient {
   async getPayments(): Promise<QboPayment[]> {
     return this.queryAll<QboPayment>(
       "SELECT * FROM Payment",
+      (r) => r.QueryResponse.Payment,
+    );
+  }
+
+  async getPaymentsForCustomer(qbCustomerId: string): Promise<QboPayment[]> {
+    return this.queryAll<QboPayment>(
+      `SELECT * FROM Payment WHERE CustomerRef = '${escapeQboLiteral(qbCustomerId)}'`,
       (r) => r.QueryResponse.Payment,
     );
   }
@@ -442,6 +461,23 @@ export class QboClient {
       `SELECT * FROM Invoice WHERE Id = '${escapeQboLiteral(invoiceId)}'`,
     );
     return data.QueryResponse.Invoice?.[0] ?? null;
+  }
+
+  // Fetches all invoices for a given customer, sorted descending by date
+  // (most recent first). Used by the returns module to find the most recent
+  // invoice containing a specific item. We query by customer only and filter
+  // client-side by item — the QBO query DSL does not reliably support
+  // Line.SalesItemLineDetail.ItemRef across all minor versions, so a
+  // client-side filter on the per-customer invoice set is more portable.
+  //
+  // The per-customer invoice count for a typical account is on the order of
+  // tens to low hundreds, well within the PAGE_SIZE = 1000 ceiling, so this
+  // is one QBO call in the common case.
+  async findInvoicesForCustomer(customerId: string): Promise<QboInvoice[]> {
+    return this.queryAll<QboInvoice>(
+      `SELECT * FROM Invoice WHERE CustomerRef = '${escapeQboLiteral(customerId)}' ORDERBY TxnDate DESC`,
+      (r) => r.QueryResponse.Invoice,
+    );
   }
 
   // POST to /invoice/{id}/send — QBO emails the invoice to the customer's
@@ -646,6 +682,50 @@ export class QboClient {
     return data.QueryResponse.CreditMemo?.[0] ?? null;
   }
 
+  // Lookup by the human-facing CM number ("18329CR"). Used by the
+  // "already credited" workflow on imported RMAs where the operator types
+  // the doc# they see in QBO and we resolve it back to the internal id +
+  // verify it really exists.
+  async getCreditMemoByDocNumber(
+    docNumber: string,
+  ): Promise<QboCreditMemo | null> {
+    const data = await this.query<QboCreditMemo>(
+      `SELECT * FROM CreditMemo WHERE DocNumber = '${escapeQboLiteral(docNumber)}'`,
+    );
+    return data.QueryResponse.CreditMemo?.[0] ?? null;
+  }
+
+  // Create a new CreditMemo in QBO. POST to /v3/company/.../creditmemo with the
+  // full payload (no sparse flag — this is a create, not an update). Returns the
+  // saved CreditMemo including the QBO-assigned Id and DocNumber.
+  // 401 → forced refresh → single retry, same as all other write paths.
+  async createCreditMemo(payload: object): Promise<QboCreditMemo> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/creditmemo`;
+    const accessToken = await this.getAccessToken();
+    const doRequest = async (token: string) => {
+      return this.http.post<{ CreditMemo: QboCreditMemo }>(url, payload, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+    };
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.CreditMemo;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.CreditMemo;
+      }
+      throw err;
+    }
+  }
+
   async updateCreditMemo(payload: object): Promise<QboCreditMemo> {
     const url = `${this.baseUrl}/v3/company/${this.config.realmId}/creditmemo`;
     const accessToken = await this.getAccessToken();
@@ -741,22 +821,45 @@ export class QboClient {
   }
 
   // Fuzzy item search for the UI's add-line picker. Matches against Sku
-  // (prefix) OR Name (substring) — QBO's LIKE is case-sensitive so we
-  // search both ALL-CAPS and the user's literal text. Caller-side dedupe.
+  // (substring) OR Name (substring). QBO's query parser rejects the combined
+  // `(Sku LIKE ... OR Sku LIKE ... OR Name LIKE ...)` form with a
+  // ValidationFault, so we run two simpler queries in parallel and merge.
+  // QBO's LIKE is case-sensitive against stored values; we send both the
+  // literal text and uppercase to cover the common case where SKUs are
+  // stored uppercase but the operator types lowercase.
   async searchItems(query: string, max = 20): Promise<QboItem[]> {
     const q = query.trim();
     if (!q) return [];
     const escaped = escapeQboLiteral(q);
     const escapedUpper = escapeQboLiteral(q.toUpperCase());
-    const data = await this.query<QboItem>(
-      `SELECT * FROM Item WHERE Active = true AND (Sku LIKE '${escaped}%' OR Sku LIKE '${escapedUpper}%' OR Name LIKE '%${escaped}%') MAXRESULTS ${max}`,
+
+    const queries = [
+      `SELECT * FROM Item WHERE Active = true AND Sku LIKE '%${escaped}%' MAXRESULTS ${max}`,
+      `SELECT * FROM Item WHERE Active = true AND Name LIKE '%${escaped}%' MAXRESULTS ${max}`,
+    ];
+    if (escaped !== escapedUpper) {
+      queries.push(
+        `SELECT * FROM Item WHERE Active = true AND Sku LIKE '%${escapedUpper}%' MAXRESULTS ${max}`,
+      );
+    }
+
+    const results = await Promise.all(
+      queries.map((sql) =>
+        this.query<QboItem>(sql).catch(
+          () => ({ QueryResponse: { Item: [] as QboItem[] } }) as { QueryResponse: { Item?: QboItem[] } },
+        ),
+      ),
     );
+
     const seen = new Set<string>();
     const out: QboItem[] = [];
-    for (const item of data.QueryResponse.Item ?? []) {
-      if (seen.has(item.Id)) continue;
-      seen.add(item.Id);
-      out.push(item);
+    for (const data of results) {
+      for (const item of data.QueryResponse.Item ?? []) {
+        if (seen.has(item.Id)) continue;
+        seen.add(item.Id);
+        out.push(item);
+        if (out.length >= max) return out;
+      }
     }
     return out;
   }
@@ -766,6 +869,38 @@ export class QboClient {
       `SELECT * FROM Item WHERE Sku = '${escapeQboLiteral(sku)}'`,
     );
     return data.QueryResponse.Item?.[0] ?? null;
+  }
+
+  // Fetch a single Item by its QBO Id. Used when caller already has the
+  // qbItemId (e.g. from a seasonal_product row) and doesn't need a query-by-SKU
+  // round-trip. Falls back gracefully — returns null if the item doesn't exist.
+  async getItemById(itemId: string): Promise<QboItem | null> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/item/${encodeURIComponent(itemId)}`;
+    const accessToken = await this.getAccessToken();
+
+    const doRequest = async (token: string) => {
+      return this.http.get<{ Item: QboItem }>(url, {
+        params: { minorversion: QBO_MINOR_VERSION },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.Item ?? null;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.Item ?? null;
+      }
+      if ((axiosErr.response?.status ?? 0) === 404) return null;
+      throw err;
+    }
   }
 }
 
