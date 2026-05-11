@@ -31,7 +31,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import {
@@ -421,11 +421,27 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
       return { error: "invalid JSON" };
     }
 
+    const isoDateSchema = z.string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "must be yyyy-mm-dd")
+      .refine((s) => {
+        const d = new Date(s + "T00:00:00Z");
+        return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(s);
+      }, "invalid calendar date");
+
     const parse = z
       .object({
-        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        startDate: isoDateSchema,
+        endDate: isoDateSchema,
       })
+      .refine((b) => b.startDate <= b.endDate, {
+        message: "endDate must be on or after startDate",
+      })
+      .refine((b) => {
+        const start = new Date(b.startDate + "T00:00:00Z").getTime();
+        const end = new Date(b.endDate + "T00:00:00Z").getTime();
+        const days = (end - start) / (24 * 60 * 60 * 1000);
+        return days <= 365;
+      }, { message: "range must be 365 days or less" })
       .safeParse(body);
     if (!parse.success) {
       reply.code(400);
@@ -433,9 +449,11 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
     }
 
     const queues = getQueues();
+    const jobId = `backfill:${parse.data.startDate}:${parse.data.endDate}`;
     const job = await queues.vocatechBackfill.add(
       VOCATECH_BACKFILL_JOB,
       parse.data as VocatechBackfillJobData,
+      { jobId },
     );
     return { jobId: job.id };
   });
@@ -510,22 +528,13 @@ async function dispatchEvent(payload: AnyVocatechPayload): Promise<void> {
 async function handleCallEnded(payload: CallEndedPayload): Promise<void> {
   const d = payload.data;
 
-  // Dedupe by call_id — duplicate deliveries from Vocatech retries.
-  const existing = await db
-    .select({ id: phoneCommunications.id })
-    .from(phoneCommunications)
-    .where(eq(phoneCommunications.sourceEventId, d.call_id))
-    .limit(1);
-  if (existing.length > 0) {
-    log.debug({ callId: d.call_id }, "call already recorded; skipping");
-    return;
-  }
-
   const match = await matchPhoneToCustomer(d.remote_number);
   const kind = d.direction === "outbound" ? "call_out" : "call_in";
   const id = nanoid();
 
-  await db.insert(phoneCommunications).values({
+  // No-op upsert on source_event_id unique key — safe against concurrent
+  // webhook retries and backfill runs without a SELECT-then-INSERT race.
+  const result = await db.insert(phoneCommunications).values({
     id,
     kind,
     customerId: match?.customerId ?? null,
@@ -538,7 +547,16 @@ async function handleCallEnded(payload: CallEndedPayload): Promise<void> {
     durationSeconds: d.duration,
     groupNumber: d.group_number ?? null,
     sourceEventId: d.call_id,
+  }).onDuplicateKeyUpdate({
+    // No-op: keeps the existing row; MySQL needs a SET clause.
+    set: { sourceEventId: sql`source_event_id` },
   });
+
+  const wasInserted = result[0].affectedRows === 1;
+  if (!wasInserted) {
+    log.debug({ callId: d.call_id }, "call already recorded; skipping");
+    return;
+  }
 
   if (match) {
     events.emit("phone-communication.received", {
@@ -623,23 +641,12 @@ async function handleMessageReceived(
 ): Promise<void> {
   const d = payload.data;
 
-  const existing = await db
-    .select({ id: phoneCommunications.id })
-    .from(phoneCommunications)
-    .where(eq(phoneCommunications.sourceEventId, d.message_id))
-    .limit(1);
-  if (existing.length > 0) {
-    log.debug(
-      { messageId: d.message_id },
-      "message already recorded; skipping",
-    );
-    return;
-  }
-
   const match = await matchPhoneToCustomer(d.from);
   const id = nanoid();
 
-  await db.insert(phoneCommunications).values({
+  // No-op upsert on source_event_id unique key — safe against concurrent
+  // webhook retries and backfill runs without a SELECT-then-INSERT race.
+  const result = await db.insert(phoneCommunications).values({
     id,
     kind: "sms_in",
     customerId: match?.customerId ?? null,
@@ -649,7 +656,16 @@ async function handleMessageReceived(
     startedAt: new Date(d.created_at),
     body: d.body,
     sourceEventId: d.message_id,
+  }).onDuplicateKeyUpdate({
+    // No-op: keeps the existing row; MySQL needs a SET clause.
+    set: { sourceEventId: sql`source_event_id` },
   });
+
+  const wasInserted = result[0].affectedRows === 1;
+  if (!wasInserted) {
+    log.debug({ messageId: d.message_id }, "message already recorded; skipping");
+    return;
+  }
 
   if (match) {
     events.emit("phone-communication.received", {

@@ -23,7 +23,7 @@ import { listCalls, listMessages } from "../../integrations/vocatech/client.js";
 import { db } from "../../db/index.js";
 import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { matchPhoneToCustomer } from "../../integrations/vocatech/matcher.js";
-import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createLogger } from "../../lib/logger.js";
 
@@ -39,6 +39,8 @@ export type VocatechBackfillJobResult = {
   messages: number;
 };
 
+const MAX_PAGES = 10_000;
+
 export async function vocatechBackfillHandler(
   job: Job<VocatechBackfillJobData>,
 ): Promise<VocatechBackfillJobResult> {
@@ -50,16 +52,10 @@ export async function vocatechBackfillHandler(
 
   // ---- Calls ----------------------------------------------------------------
   let page: string | undefined;
+  let pageCount = 0;
   while (true) {
     const res = await listCalls({ startDate, endDate, direction: "any", page });
     for (const c of res.data) {
-      const existing = await db
-        .select({ id: phoneCommunications.id })
-        .from(phoneCommunications)
-        .where(eq(phoneCommunications.sourceEventId, c.call_id))
-        .limit(1);
-      if (existing.length > 0) continue;
-
       const match = await matchPhoneToCustomer(c.remote_number);
       const kind = c.direction === "outbound" ? "call_out" : "call_in";
 
@@ -75,7 +71,7 @@ export async function vocatechBackfillHandler(
         recordingMediaId = m?.[1] ?? null;
       }
 
-      await db.insert(phoneCommunications).values({
+      const result = await db.insert(phoneCommunications).values({
         id: nanoid(),
         kind,
         customerId: match?.customerId ?? null,
@@ -91,33 +87,41 @@ export async function vocatechBackfillHandler(
         recordingMediaId,
         groupNumber: c.group_number ?? null,
         sourceEventId: c.call_id,
+      }).onDuplicateKeyUpdate({
+        // No-op upsert: keeps the existing row when source_event_id collides.
+        set: { sourceEventId: sql`source_event_id` },
       });
-      callsTotal++;
+
+      // MySQL: rowsAffected=1 means inserted, 0 means no-op duplicate.
+      if (result[0].affectedRows === 1) {
+        callsTotal++;
+      }
     }
 
     await job.updateProgress({ calls: callsTotal, messages: messagesTotal });
 
     if (!res.next) break;
+    if (res.next === page) {
+      log.warn({ page }, "vocatech returned same cursor — breaking to avoid loop");
+      break;
+    }
     page = res.next;
+    if (++pageCount > MAX_PAGES) {
+      throw new Error(`backfill exceeded ${MAX_PAGES} pages — likely runaway`);
+    }
   }
 
   // ---- Messages -------------------------------------------------------------
   let msgPage: string | undefined;
+  let msgPageCount = 0;
   while (true) {
     const res = await listMessages({ startDate, endDate, direction: "any", page: msgPage });
     for (const m of res.data) {
-      const existing = await db
-        .select({ id: phoneCommunications.id })
-        .from(phoneCommunications)
-        .where(eq(phoneCommunications.sourceEventId, m.message_id))
-        .limit(1);
-      if (existing.length > 0) continue;
-
       const kind = m.direction === "outbound" ? "sms_out" : "sms_in";
       const remoteNumber = m.direction === "outbound" ? m.to : m.from;
       const match = await matchPhoneToCustomer(remoteNumber);
 
-      await db.insert(phoneCommunications).values({
+      const result = await db.insert(phoneCommunications).values({
         id: nanoid(),
         kind,
         customerId: match?.customerId ?? null,
@@ -128,13 +132,27 @@ export async function vocatechBackfillHandler(
         body: m.body,
         smsStatus: m.status,
         sourceEventId: m.message_id,
+      }).onDuplicateKeyUpdate({
+        // No-op upsert: keeps the existing row when source_event_id collides.
+        set: { sourceEventId: sql`source_event_id` },
       });
-      messagesTotal++;
+
+      // MySQL: rowsAffected=1 means inserted, 0 means no-op duplicate.
+      if (result[0].affectedRows === 1) {
+        messagesTotal++;
+      }
     }
 
     await job.updateProgress({ calls: callsTotal, messages: messagesTotal });
     if (!res.next) break;
+    if (res.next === msgPage) {
+      log.warn({ page: msgPage }, "vocatech returned same cursor — breaking to avoid loop");
+      break;
+    }
     msgPage = res.next;
+    if (++msgPageCount > MAX_PAGES) {
+      throw new Error(`backfill exceeded ${MAX_PAGES} pages (messages) — likely runaway`);
+    }
   }
 
   log.info({ callsTotal, messagesTotal }, "backfill complete");
