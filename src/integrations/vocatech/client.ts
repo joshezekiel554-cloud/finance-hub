@@ -172,12 +172,48 @@ export async function listMessages(params: {
   return call<VocatechMessagesList>(`/messages?${qs}`);
 }
 
-export async function sendMessage(input: {
+// POST /messages request shape per the live OpenAPI spec:
+//   { platform: "text", from, to, message, name?, members?, test? }
+// `from` must be a phone number registered to the authenticated company
+// (configure via VOCATECH_FROM_NUMBER env). `message` (not `body`) is the
+// text content, max 1600 chars. `name` is a display label for the contact —
+// we pass the customer's displayName so the Vocatech UI shows a useful label.
+// Response on success is 201 with `{ status: "created", message: { mode,
+// platform, from, to, name, room_uuid?, email_recipient?, message_sent,
+// email_sent?, created_at } }`. Note: no `message_id` is returned here —
+// the resulting message arrives in our system via the message.sent webhook
+// or message.status_updated webhook, where we'll learn its id.
+export type VocatechSendMessageInput = {
+  platform: "text";
+  from: string;
   to: string;
-  body: string;
-  channel?: "text" | "whatsapp";
-}): Promise<VocatechMessage> {
-  return call<VocatechMessage>("/messages", {
+  message: string;
+  name?: string;
+  members?: string[];
+  test?: boolean;
+};
+
+export type VocatechSendMessageResponse = {
+  status: "created" | "test" | string;
+  message: {
+    mode: "webex" | "email";
+    platform: string;
+    from: string;
+    to: string;
+    name?: string;
+    room_uuid?: string;
+    email_recipient?: string;
+    message_sent?: boolean;
+    email_sent?: boolean;
+    created_at?: string;
+    existing_space?: boolean;
+  };
+};
+
+export async function sendMessage(
+  input: VocatechSendMessageInput,
+): Promise<VocatechSendMessageResponse> {
+  return call<VocatechSendMessageResponse>("/messages", {
     method: "POST",
     body: JSON.stringify(input),
   });

@@ -111,10 +111,20 @@ type MessageReceivedPayload = {
   event_type: "message.received";
   data: {
     message_id: string;
+    direction?: string;
+    channel?: "text" | "whatsapp";
     from: string;
     to: string;
     body: string;
-    created_at: string;
+    status?: "sent" | "delivered" | "read" | "failed";
+    // Per OpenAPI spec, the field is `sent_at` (NOT `created_at`).
+    sent_at: string;
+    attachments?: Array<{
+      url: string;
+      content_type: string;
+      filename?: string;
+      size?: number;
+    }>;
   };
 };
 
@@ -346,8 +356,14 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
         return { error: "invalid body", details: parse.error.flatten() };
       }
 
+      const fromNumber = env.VOCATECH_FROM_NUMBER;
+      if (!fromNumber) {
+        reply.code(500);
+        return { error: "VOCATECH_FROM_NUMBER not configured — set it in .env to a phone number registered with your Vocatech tenant" };
+      }
+
       const cust = await db
-        .select({ id: customers.id })
+        .select({ id: customers.id, displayName: customers.displayName })
         .from(customers)
         .where(eq(customers.id, req.params.id))
         .limit(1);
@@ -356,11 +372,13 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
         return { error: "customer not found" };
       }
 
-      let sent;
       try {
-        sent = await sendMessage({
+        await sendMessage({
+          platform: "text",
+          from: fromNumber,
           to: parse.data.toNumber,
-          body: parse.data.body,
+          message: parse.data.body,
+          name: cust[0]!.displayName,
         });
       } catch (err) {
         log.warn(
@@ -376,6 +394,11 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
         return { error: err instanceof Error ? err.message : "SMS send failed" };
       }
 
+      // Vocatech's send response doesn't return a message_id — that arrives
+      // later via message.sent / message.status_updated webhook. We persist
+      // our row with sourceEventId=null so the webhook handler can attach
+      // the upstream id when it arrives. The unique constraint allows
+      // multiple NULL values, so this doesn't conflict with the dedupe.
       const id = nanoid();
       await db.insert(phoneCommunications).values({
         id,
@@ -389,7 +412,7 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
         startedAt: new Date(),
         body: parse.data.body,
         smsStatus: "sent",
-        sourceEventId: sent.message_id,
+        sourceEventId: null,
       });
 
       events.emit("phone-communication.received", {
@@ -650,6 +673,11 @@ async function handleMessageReceived(
   const id = nanoid();
 
   // INSERT IGNORE on source_event_id unique key — see /webhook call.ended.
+  // Attachments arrive as `data.attachments[]` per the spec, but
+  // `phone_communications` doesn't have a column for them yet — we capture
+  // the body text only. Adding attachment storage is a follow-up
+  // (likely a new `phone_communication_attachments` table once a real
+  // payload arrives so we can confirm field shapes).
   const result = await db.insert(phoneCommunications).ignore().values({
     id,
     kind: "sms_in",
@@ -657,8 +685,9 @@ async function handleMessageReceived(
     phoneLabelMatched: match?.phoneLabel ?? null,
     remoteNumber: d.from,
     direction: "inbound",
-    startedAt: new Date(d.created_at),
+    startedAt: new Date(d.sent_at),
     body: d.body,
+    smsStatus: d.status ?? null,
     sourceEventId: d.message_id,
   });
 
