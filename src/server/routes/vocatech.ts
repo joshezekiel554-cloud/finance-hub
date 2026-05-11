@@ -38,11 +38,13 @@ import {
   vocatechEvents,
   phoneCommunications,
 } from "../../db/schema/vocatech.js";
+import { customers } from "../../db/schema/customers.js";
 import { verifyVocatechSignature } from "../../integrations/vocatech/webhook-verifier.js";
 import {
   getCall,
   getMediaUrl,
   sendMessage,
+  VocatechApiError,
 } from "../../integrations/vocatech/client.js";
 import { matchPhoneToCustomer } from "../../integrations/vocatech/matcher.js";
 import { env } from "../../lib/env.js";
@@ -333,6 +335,16 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
         return { error: "invalid body", details: parse.error.flatten() };
       }
 
+      const cust = await db
+        .select({ id: customers.id })
+        .from(customers)
+        .where(eq(customers.id, req.params.id))
+        .limit(1);
+      if (cust.length === 0) {
+        reply.code(404);
+        return { error: "customer not found" };
+      }
+
       let sent;
       try {
         sent = await sendMessage({
@@ -344,10 +356,13 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
           { err, customerId: req.params.id },
           "outbound SMS send failed",
         );
+        if (err instanceof VocatechApiError && err.status === 429) {
+          reply.code(429);
+          if (err.retryAfter) reply.header("Retry-After", String(err.retryAfter));
+          return { error: "Vocatech rate limit — try again shortly", retryAfter: err.retryAfter };
+        }
         reply.code(502);
-        return {
-          error: err instanceof Error ? err.message : "SMS send failed",
-        };
+        return { error: err instanceof Error ? err.message : "SMS send failed" };
       }
 
       const id = nanoid();

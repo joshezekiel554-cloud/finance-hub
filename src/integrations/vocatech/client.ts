@@ -13,6 +13,17 @@ import { createLogger } from "../../lib/logger.js";
 const log = createLogger({ component: "vocatech.client" });
 const BASE = "https://api.vocatech.com/v1";
 
+export class VocatechApiError extends Error {
+  status: number;
+  retryAfter?: number; // seconds, parsed from Retry-After header if present
+  constructor(message: string, status: number, retryAfter?: number) {
+    super(message);
+    this.name = "VocatechApiError";
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+}
+
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const apiKey = env.VOCATECH_API_KEY;
   if (!apiKey) throw new Error("VOCATECH_API_KEY not configured");
@@ -27,7 +38,13 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     log.warn({ status: res.status, path, body }, "vocatech api error");
-    throw new Error(`Vocatech ${res.status}: ${body || res.statusText}`);
+    const retryAfterHeader = res.headers.get("Retry-After");
+    const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) : undefined;
+    throw new VocatechApiError(
+      `Vocatech ${res.status}: ${body || res.statusText}`,
+      res.status,
+      Number.isFinite(retryAfter) ? retryAfter : undefined,
+    );
   }
   return res.json() as Promise<T>;
 }
