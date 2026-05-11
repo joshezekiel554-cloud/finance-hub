@@ -19,7 +19,7 @@
 | W1 (parallel ×2) | 1.1 API client + HMAC verifier, 1.2 phone matcher | ✅ done |
 | W2 (1 task) | webhook route + all 4 event handlers + outbound endpoints | ✅ done |
 | W3 (1 bundled task) | backfill job + roster sync job + nightly cron (bundled to avoid merge conflicts on queues.ts/worker.ts/schedule.ts/vocatech.ts) | ✅ done |
-| W4 (parallel ×2) | 4.1 Calls and SMS tab UI, 4.2 Settings section | not started |
+| W4 (parallel ×2) | 4.1 Calls and SMS tab UI, 4.2 Settings section | ✅ done |
 | W5 (1 task) | Activity inline + Today unmatched inbox | not started |
 
 ## Task status
@@ -32,8 +32,8 @@
 | 289 (W2) | Webhook + handlers bundle | **opus** | ✅ completed | `92776ea` + `edeb46a` (review fixes), merged `2c3f338` |
 | 290 (W3.1) | Backfill job | sonnet | ✅ completed | bundled in W3, merged `e7730a4` |
 | 291 (W3.2) | Roster sync job | sonnet | ✅ completed | bundled in W3, merged `e7730a4` |
-| 292 (W4.1) | Calls and SMS tab | **opus** | pending | — |
-| 293 (W4.2) | Settings section | sonnet | pending | — |
+| 292 (W4.1) | Calls and SMS tab | **opus** | ✅ completed | `a07dcb7` + fix `e21c230`, merged `07edc40` |
+| 293 (W4.2) | Settings section | sonnet | ✅ completed | `7deb90e` + fix `7e7aa1d`, merged `9becdd7` |
 | 294 (W5) | Activity inline + unmatched inbox | sonnet | pending | — |
 
 ## Commits on branch
@@ -51,6 +51,8 @@
 - `331bd80` — fix client to match real API shape (envelope, page-numbered pagination, incoming/outgoing direction, INSERT IGNORE)
 - `99015dc` — fix contacts client + roster sync against OpenAPI spec (fields-keyed payload, error parsing, precondition check)
 - `5bcce31` — fix sendMessage + message.received webhook against OpenAPI spec
+- W4.1 (voc/calls-sms-tab): `a07dcb7` + fix `e21c230` (toNumber reset + aria-label), merged `07edc40`
+- W4.2 (voc/settings): `7deb90e` + fix `7e7aa1d` (apostrophe), merged `9becdd7`
 
 ## Migration to run before deploy
 
@@ -78,6 +80,7 @@ Also need `VOCATECH_FROM_NUMBER` in `.env` (a phone number registered to the ten
 - ⏸️ roster end-to-end push: blocked on operator configuring Vocatech fields (Joshua waiting on web admin access)
 - ⏸️ outbound SMS: blocked on `VOCATECH_FROM_NUMBER` env config
 - ⏸️ inbound webhook: not yet tested with a live tunnel
+- ✅ W4 UI shipped: Calls & SMS tab on customer detail + Settings → Vocatech section (health badge, backfill, roster push, webhook test). Real test against Joshua's tenant blocked on (a) Vocatech custom fields config (b) `VOCATECH_FROM_NUMBER` env
 
 ## Known issues
 
