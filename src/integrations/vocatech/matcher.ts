@@ -24,10 +24,12 @@ let cachedIndex: Index | null = null;
 let cachedAt = 0;
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-// Normalize: strip non-digits, take last 10. Returns null if too short.
+// Normalize: strip extension markers, then non-digits, take last 10. Returns null if too short.
 export function normalize(phone: string | null | undefined): string | null {
   if (!phone) return null;
-  const digits = phone.replace(/\D/g, "");
+  // Strip extension markers like "x99", "ext 99", "ext. 99" before digit extraction
+  const withoutExt = phone.replace(/(?:\bx|ext\.?)\s*\d+\s*$/i, "");
+  const digits = withoutExt.replace(/\D/g, "");
   if (digits.length < 10) return null;
   return digits.slice(-10);
 }
