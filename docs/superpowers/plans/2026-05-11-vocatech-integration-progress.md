@@ -18,7 +18,7 @@
 | W0 (1 task) | 0.1 schema migration | ✅ done |
 | W1 (parallel ×2) | 1.1 API client + HMAC verifier, 1.2 phone matcher | ✅ done |
 | W2 (1 task) | webhook route + all 4 event handlers + outbound endpoints | ✅ done |
-| W3 (parallel ×2) | 3.1 backfill job, 3.2 roster sync job + nightly cron | not started |
+| W3 (1 bundled task) | backfill job + roster sync job + nightly cron (bundled to avoid merge conflicts on queues.ts/worker.ts/schedule.ts/vocatech.ts) | ✅ done |
 | W4 (parallel ×2) | 4.1 Calls and SMS tab UI, 4.2 Settings section | not started |
 | W5 (1 task) | Activity inline + Today unmatched inbox | not started |
 
@@ -30,8 +30,8 @@
 | 287 (W1.1) | API client + HMAC verifier | sonnet | ✅ completed | `5840243`, merged in W1 batch |
 | 288 (W1.2) | Phone matcher | sonnet | ✅ completed | `828f7ca` + `45582d8` (ext-digit fix), merged in W1 batch |
 | 289 (W2) | Webhook + handlers bundle | **opus** | ✅ completed | `92776ea` + `edeb46a` (review fixes), merged `2c3f338` |
-| 290 (W3.1) | Backfill job | sonnet | pending | — |
-| 291 (W3.2) | Roster sync job | sonnet | pending | — |
+| 290 (W3.1) | Backfill job | sonnet | ✅ completed | bundled in W3, merged `e7730a4` |
+| 291 (W3.2) | Roster sync job | sonnet | ✅ completed | bundled in W3, merged `e7730a4` |
 | 292 (W4.1) | Calls and SMS tab | **opus** | pending | — |
 | 293 (W4.2) | Settings section | sonnet | pending | — |
 | 294 (W5) | Activity inline + unmatched inbox | sonnet | pending | — |
@@ -45,6 +45,13 @@
 - `cf185a3` — progress update after W1
 - (W2 worktree commits) `92776ea` + `edeb46a` (customer-exists + 429 handling fixes)
 - merged W2 (push at `2c3f338`)
+- `ffd8f22` — progress + backlog capture
+- (W3 worktree commits on voc/jobs) `c28580e` + `ce3ef79` + `7cad850` (critical fixes) + `0929bc7` (important fixes)
+- merged W3 at `e7730a4`, pushed to origin
+
+## Migration to run before deploy
+
+W3 added `migrations/0031_vocatech_source_event_unique.sql` — adds a `UNIQUE` constraint to `phone_communications.source_event_id`. Run `npm run db:migrate` on each environment before the worker process restarts so the webhook + backfill code (now using `INSERT ... ON DUPLICATE KEY UPDATE`) is consistent with the schema.
 
 ## Known issues
 
