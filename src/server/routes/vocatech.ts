@@ -51,6 +51,13 @@ import { env } from "../../lib/env.js";
 import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 import { requireAuth, isAdmin } from "../lib/auth.js";
+import {
+  getQueues,
+  VOCATECH_BACKFILL_JOB,
+  VOCATECH_ROSTER_JOB,
+} from "../../jobs/queues.js";
+import type { VocatechBackfillJobData } from "../../jobs/definitions/vocatech-backfill.js";
+import type { VocatechRosterSyncJobData } from "../../jobs/definitions/vocatech-roster-sync.js";
 
 const log = createLogger({ component: "routes.vocatech" });
 
@@ -390,6 +397,88 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
       return { ok: true, id };
     },
   );
+
+  // -------------------------------------------------------------------------
+  // POST /backfill — admin-only; enqueue a history backfill job.
+  // -------------------------------------------------------------------------
+  // Paginates /calls and /messages over a date range and inserts any rows
+  // not already in phone_communications. Useful on first install and after
+  // extended downtime. Returns the BullMQ job ID so the caller can poll
+  // job status if needed.
+  app.post("/backfill", async (req, reply) => {
+    const user = await requireAuth(req);
+    if (!isAdmin(user)) {
+      reply.code(403);
+      return { error: "admin only" };
+    }
+
+    // Scoped parser hands us a string; parse it here.
+    let body: unknown;
+    try {
+      body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    } catch {
+      reply.code(400);
+      return { error: "invalid JSON" };
+    }
+
+    const parse = z
+      .object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      })
+      .safeParse(body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "invalid body", details: parse.error.flatten() };
+    }
+
+    const queues = getQueues();
+    const job = await queues.vocatechBackfill.add(
+      VOCATECH_BACKFILL_JOB,
+      parse.data as VocatechBackfillJobData,
+    );
+    return { jobId: job.id };
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /roster-sync — admin-only; enqueue a full roster push to Vocatech.
+  // -------------------------------------------------------------------------
+  // Pushes all customers (scope "b2b" by default, or "all") into Vocatech's
+  // contact directory. The nightly delta cron handles incremental updates;
+  // this endpoint is for operator-triggered full refreshes (e.g. after a
+  // data migration or first install). Uses the cached vocatechRoster queue
+  // from getQueues() — no ephemeral Queue() construction needed.
+  app.post("/roster-sync", async (req, reply) => {
+    const user = await requireAuth(req);
+    if (!isAdmin(user)) {
+      reply.code(403);
+      return { error: "admin only" };
+    }
+
+    // Scoped parser hands us a string; parse it here.
+    let body: unknown;
+    try {
+      body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    } catch {
+      reply.code(400);
+      return { error: "invalid JSON" };
+    }
+
+    const parse = z
+      .object({ scope: z.enum(["b2b", "all"]).default("b2b") })
+      .safeParse(body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: "invalid body", details: parse.error.flatten() };
+    }
+
+    const queues = getQueues();
+    const job = await queues.vocatechRoster.add(
+      VOCATECH_ROSTER_JOB,
+      { mode: "full", scope: parse.data.scope } as VocatechRosterSyncJobData,
+    );
+    return { jobId: job.id };
+  });
 };
 
 // --- Event dispatcher + handlers --------------------------------------------
