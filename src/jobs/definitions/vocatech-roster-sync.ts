@@ -29,6 +29,7 @@ import type { Job } from "bullmq";
 import { upsertContacts } from "../../integrations/vocatech/client.js";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
+import { sql } from "drizzle-orm";
 import { eq, isNull, or, gt, inArray } from "drizzle-orm";
 import { createLogger } from "../../lib/logger.js";
 
@@ -133,6 +134,11 @@ export async function vocatechRosterSyncHandler(
         continue;
       }
 
+      if (row.displayName.trim().length === 0) {
+        skipped++;
+        continue;
+      }
+
       contacts.push({
         external_id: row.id,
         name: row.displayName,
@@ -144,9 +150,13 @@ export async function vocatechRosterSyncHandler(
     if (contacts.length > 0) {
       await upsertContacts(contacts);
 
+      // Use server-side NOW() so vocatech_last_pushed_at and the ON UPDATE
+      // CURRENT_TIMESTAMP on updated_at are computed in the same statement,
+      // preventing updated_at > vocatech_last_pushed_at skew that would cause
+      // the delta query to re-push the entire roster nightly.
       await db
         .update(customers)
-        .set({ vocatechLastPushedAt: new Date() })
+        .set({ vocatechLastPushedAt: sql`NOW()` })
         .where(inArray(customers.id, batchIds));
 
       pushed += contacts.length;
