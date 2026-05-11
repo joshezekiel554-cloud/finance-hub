@@ -5,6 +5,11 @@
 // This is how we hydrate history on first install and after extended
 // downtime — the webhook only fires forward-going events.
 //
+// Pagination model (confirmed against live API 2026-05-11): page-numbered,
+// 1-indexed, stop when current page >= meta.total_pages. The response
+// envelope is `{ calls: [...], meta }` for /calls and `{ messages: [...],
+// meta }` for /messages — there is NO `data` field and NO `next` cursor.
+//
 // Progress is reported via job.updateProgress so BullMQ Bull-Board (or any
 // monitor) can show live counts while the job pages through a large range.
 //
@@ -19,11 +24,14 @@
 // rarely an issue in practice.
 
 import type { Job } from "bullmq";
-import { listCalls, listMessages } from "../../integrations/vocatech/client.js";
+import {
+  listCalls,
+  listMessages,
+  mapDirection,
+} from "../../integrations/vocatech/client.js";
 import { db } from "../../db/index.js";
 import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { matchPhoneToCustomer } from "../../integrations/vocatech/matcher.js";
-import { sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { createLogger } from "../../lib/logger.js";
 
@@ -51,13 +59,13 @@ export async function vocatechBackfillHandler(
   let messagesTotal = 0;
 
   // ---- Calls ----------------------------------------------------------------
-  let page: string | undefined;
-  let pageCount = 0;
+  let page = 1;
   while (true) {
     const res = await listCalls({ startDate, endDate, direction: "any", page });
-    for (const c of res.data) {
+    for (const c of res.calls) {
       const match = await matchPhoneToCustomer(c.remote_number);
-      const kind = c.direction === "outbound" ? "call_out" : "call_in";
+      const dbDirection = mapDirection(c.direction);
+      const kind = dbDirection === "outbound" ? "call_out" : "call_in";
 
       let transcription: string | null = null;
       let recordingMediaId: string | null = null;
@@ -71,7 +79,7 @@ export async function vocatechBackfillHandler(
         recordingMediaId = m?.[1] ?? null;
       }
 
-      const result = await db.insert(phoneCommunications).values({
+      const result = await db.insert(phoneCommunications).ignore().values({
         id: nanoid(),
         kind,
         customerId: match?.customerId ?? null,
@@ -79,7 +87,7 @@ export async function vocatechBackfillHandler(
         remoteNumber: c.remote_number,
         extensionNumber: c.extension ?? null,
         extensionName: c.extension_name ?? null,
-        direction: c.direction === "outbound" ? "outbound" : "inbound",
+        direction: dbDirection,
         startedAt: new Date(c.start_time),
         durationSeconds: c.duration,
         body: null,
@@ -87,12 +95,12 @@ export async function vocatechBackfillHandler(
         recordingMediaId,
         groupNumber: c.group_number ?? null,
         sourceEventId: c.call_id,
-      }).onDuplicateKeyUpdate({
-        // No-op upsert: keeps the existing row when source_event_id collides.
-        set: { sourceEventId: sql`source_event_id` },
       });
 
-      // MySQL: rowsAffected=1 means inserted, 0 means no-op duplicate.
+      // INSERT IGNORE: affectedRows=1 on new insert, 0 when the UNIQUE
+      // constraint on source_event_id rejected the row. This counter is
+      // immune to mysql2's CLIENT_FOUND_ROWS flag (which only affects
+      // UPDATE/REPLACE row counts, not IGNORE-rejected inserts).
       if (result[0].affectedRows === 1) {
         callsTotal++;
       }
@@ -100,57 +108,50 @@ export async function vocatechBackfillHandler(
 
     await job.updateProgress({ calls: callsTotal, messages: messagesTotal });
 
-    if (!res.next) break;
-    if (res.next === page) {
-      log.warn({ page }, "vocatech returned same cursor — breaking to avoid loop");
-      break;
-    }
-    page = res.next;
-    if (++pageCount > MAX_PAGES) {
+    if (page >= res.meta.total_pages) break;
+    page++;
+    if (page > MAX_PAGES) {
       throw new Error(`backfill exceeded ${MAX_PAGES} pages — likely runaway`);
     }
   }
 
   // ---- Messages -------------------------------------------------------------
-  let msgPage: string | undefined;
-  let msgPageCount = 0;
+  let msgPage = 1;
   while (true) {
     const res = await listMessages({ startDate, endDate, direction: "any", page: msgPage });
-    for (const m of res.data) {
-      const kind = m.direction === "outbound" ? "sms_out" : "sms_in";
-      const remoteNumber = m.direction === "outbound" ? m.to : m.from;
+    for (const m of res.messages) {
+      const dbDirection = mapDirection(m.direction);
+      const kind = dbDirection === "outbound" ? "sms_out" : "sms_in";
+      // Vocatech messages have a single `remote_number` regardless of
+      // direction — for an outbound message that's the recipient, for an
+      // inbound message that's the sender.
+      const remoteNumber = m.remote_number;
       const match = await matchPhoneToCustomer(remoteNumber);
 
-      const result = await db.insert(phoneCommunications).values({
+      const result = await db.insert(phoneCommunications).ignore().values({
         id: nanoid(),
         kind,
         customerId: match?.customerId ?? null,
         phoneLabelMatched: match?.phoneLabel ?? null,
         remoteNumber,
-        direction: m.direction === "outbound" ? "outbound" : "inbound",
-        startedAt: new Date(m.created_at),
+        direction: dbDirection,
+        startedAt: new Date(m.sent_time),
         body: m.body,
         smsStatus: m.status,
+        groupNumber: m.group_number ?? null,
         sourceEventId: m.message_id,
-      }).onDuplicateKeyUpdate({
-        // No-op upsert: keeps the existing row when source_event_id collides.
-        set: { sourceEventId: sql`source_event_id` },
       });
 
-      // MySQL: rowsAffected=1 means inserted, 0 means no-op duplicate.
+      // INSERT IGNORE — see /calls comment above.
       if (result[0].affectedRows === 1) {
         messagesTotal++;
       }
     }
 
     await job.updateProgress({ calls: callsTotal, messages: messagesTotal });
-    if (!res.next) break;
-    if (res.next === msgPage) {
-      log.warn({ page: msgPage }, "vocatech returned same cursor — breaking to avoid loop");
-      break;
-    }
-    msgPage = res.next;
-    if (++msgPageCount > MAX_PAGES) {
+    if (msgPage >= res.meta.total_pages) break;
+    msgPage++;
+    if (msgPage > MAX_PAGES) {
       throw new Error(`backfill exceeded ${MAX_PAGES} pages (messages) — likely runaway`);
     }
   }

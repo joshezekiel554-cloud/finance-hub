@@ -6,6 +6,18 @@
 //   POST /v1/messages (send SMS)
 //   POST /v1/contacts (upsert customer roster, batch up to 500)
 //   POST /v1/webhooks/{id}/test (settings health check)
+//
+// API envelope shapes (confirmed against live API 2026-05-11):
+//   GET /calls:    { query, calls:   VocatechCall[],    meta: PageMeta }
+//   GET /messages: { query, messages: VocatechMessage[], meta: PageMeta }
+//   GET /contacts: { query, contacts: VocatechContact[], meta: PageMeta }
+//   GET /webhooks: VocatechWebhook[] (returned as a bare array)
+// Pagination is page-numbered (1-indexed) via `?page=N`, with total_pages on
+// meta. Cursor-based pagination is NOT used.
+//
+// Direction values from the API are "incoming" | "outgoing" | "internal".
+// (NOT "inbound"/"outbound" — those are the values we use in our DB column.
+// Map at the edge.)
 
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
@@ -49,22 +61,35 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// --- Read endpoints ----------------------------------------------------------
+// --- Shared shapes -----------------------------------------------------------
+
+export type VocatechApiDirection = "incoming" | "outgoing" | "internal";
+
+export type VocatechPageMeta = {
+  page: number;
+  limit: number;
+  total_pages: number;
+};
+
+// --- Calls -------------------------------------------------------------------
 
 export type VocatechCallJourneySegment = {
   order: number;
   type: string;
-  name?: string;
+  extension_name?: string;
+  extension?: string;
   start_time: string;
   end_time: string;
   duration: number;
-  transcription?: string;
+  summary?: string | null;
+  transcription?: string | null;
   recording_url?: string | null;
 };
 
 export type VocatechCall = {
   call_id: string;
-  direction: "inbound" | "outbound" | "internal";
+  direction: VocatechApiDirection;
+  status?: string;
   extension?: string;
   extension_name?: string;
   remote_name?: string;
@@ -77,22 +102,22 @@ export type VocatechCall = {
 };
 
 export type VocatechCallsList = {
-  data: VocatechCall[];
-  next?: string;
+  calls: VocatechCall[];
+  meta: VocatechPageMeta & { total_calls: number };
 };
 
 export async function listCalls(params: {
   startDate?: string;
   endDate?: string;
-  direction?: "inbound" | "outbound" | "any";
-  page?: string;
+  direction?: VocatechApiDirection | "any";
+  page?: number;
   timezone?: string;
 }): Promise<VocatechCallsList> {
   const qs = new URLSearchParams();
   if (params.startDate) qs.set("start_date", params.startDate);
   if (params.endDate) qs.set("end_date", params.endDate);
   if (params.direction) qs.set("direction", params.direction);
-  if (params.page) qs.set("page", params.page);
+  if (params.page) qs.set("page", String(params.page));
   qs.set("timezone", params.timezone ?? "UTC");
   return call<VocatechCallsList>(`/calls?${qs}`);
 }
@@ -107,31 +132,43 @@ export async function getMediaUrl(mediaId: string): Promise<{ url: string; expir
 
 // --- Messages ----------------------------------------------------------------
 
-export type VocatechMessage = {
-  message_id: string;
-  from: string;
-  to: string;
-  channel: "text" | "whatsapp";
-  direction: "inbound" | "outbound";
-  body: string;
-  status: "sent" | "delivered" | "read" | "failed";
-  attachments?: Array<{ media_id: string; content_type: string }>;
-  created_at: string;
+export type VocatechMessageAttachment = {
+  id: string;
+  content_type: string;
+  filename?: string;
+  size?: number;
 };
 
-export type VocatechMessagesList = { data: VocatechMessage[]; next?: string };
+export type VocatechMessage = {
+  message_id: string;
+  direction: VocatechApiDirection;
+  status: "sent" | "delivered" | "read" | "failed";
+  remote_name?: string;
+  remote_number: string;
+  group_number?: string;
+  sent_time: string;
+  channel: "text" | "whatsapp";
+  type?: string;
+  body: string;
+  attachments?: VocatechMessageAttachment[];
+};
+
+export type VocatechMessagesList = {
+  messages: VocatechMessage[];
+  meta: VocatechPageMeta & { total_messages: number };
+};
 
 export async function listMessages(params: {
   startDate?: string;
   endDate?: string;
-  direction?: "inbound" | "outbound" | "any";
-  page?: string;
+  direction?: VocatechApiDirection | "any";
+  page?: number;
 }): Promise<VocatechMessagesList> {
   const qs = new URLSearchParams();
   if (params.startDate) qs.set("start_date", params.startDate);
   if (params.endDate) qs.set("end_date", params.endDate);
   if (params.direction) qs.set("direction", params.direction);
-  if (params.page) qs.set("page", params.page);
+  if (params.page) qs.set("page", String(params.page));
   return call<VocatechMessagesList>(`/messages?${qs}`);
 }
 
@@ -169,10 +206,32 @@ export async function upsertContacts(
 
 // --- Webhook health ----------------------------------------------------------
 
-export async function listWebhooks(): Promise<{ data: Array<{ id: string; name: string; url: string; event_filters: string[] }> }> {
-  return call("/webhooks");
+export type VocatechWebhook = {
+  id: string;
+  name: string;
+  url: string;
+  event_filters: string[];
+};
+
+export async function listWebhooks(): Promise<VocatechWebhook[]> {
+  // API returns a bare array (no envelope).
+  return call<VocatechWebhook[]>("/webhooks");
 }
 
 export async function testWebhook(webhookId: string): Promise<{ ok: true }> {
   return call(`/webhooks/${encodeURIComponent(webhookId)}/test`, { method: "POST" });
+}
+
+// --- Helpers -----------------------------------------------------------------
+
+// Map Vocatech's API direction values to our DB enum. The REST API uses
+// "incoming" | "outgoing" | "internal"; webhook payloads MAY use the same
+// or may use "inbound" | "outbound" — we accept both spellings defensively
+// until a real webhook is observed. Our `phone_communications.direction`
+// column is enum('inbound','outbound'). Internal calls collapse to
+// "inbound" (single-customer view); practically we rarely ingest them.
+export function mapDirection(
+  d: VocatechApiDirection | string | undefined,
+): "inbound" | "outbound" {
+  return d === "outgoing" || d === "outbound" ? "outbound" : "inbound";
 }

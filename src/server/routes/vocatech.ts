@@ -31,7 +31,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import {
@@ -43,6 +43,7 @@ import { verifyVocatechSignature } from "../../integrations/vocatech/webhook-ver
 import {
   getCall,
   getMediaUrl,
+  mapDirection,
   sendMessage,
   VocatechApiError,
 } from "../../integrations/vocatech/client.js";
@@ -81,7 +82,10 @@ type CallEndedPayload = {
   event_type: "call.ended";
   data: {
     call_id: string;
-    direction: "inbound" | "outbound" | "internal";
+    // Webhook direction may be either the REST-API spelling ("incoming"/
+    // "outgoing"/"internal") or the older spec spelling ("inbound"/
+    // "outbound"/"internal"). mapDirection() handles both.
+    direction: string;
     extension?: string;
     extension_name?: string;
     remote_number: string;
@@ -529,12 +533,16 @@ async function handleCallEnded(payload: CallEndedPayload): Promise<void> {
   const d = payload.data;
 
   const match = await matchPhoneToCustomer(d.remote_number);
-  const kind = d.direction === "outbound" ? "call_out" : "call_in";
+  const dbDirection = mapDirection(d.direction);
+  const kind = dbDirection === "outbound" ? "call_out" : "call_in";
   const id = nanoid();
 
-  // No-op upsert on source_event_id unique key — safe against concurrent
+  // INSERT IGNORE on source_event_id unique key — safe against concurrent
   // webhook retries and backfill runs without a SELECT-then-INSERT race.
-  const result = await db.insert(phoneCommunications).values({
+  // (ODKU with no-op SET would also work, but mysql2's CLIENT_FOUND_ROWS
+  // makes its affectedRows ambiguous for "row exists vs new"; IGNORE
+  // gives a clean 1-vs-0 signal.)
+  const result = await db.insert(phoneCommunications).ignore().values({
     id,
     kind,
     customerId: match?.customerId ?? null,
@@ -542,14 +550,11 @@ async function handleCallEnded(payload: CallEndedPayload): Promise<void> {
     remoteNumber: d.remote_number,
     extensionNumber: d.extension ?? null,
     extensionName: d.extension_name ?? null,
-    direction: d.direction === "outbound" ? "outbound" : "inbound",
+    direction: dbDirection,
     startedAt: new Date(d.start_time),
     durationSeconds: d.duration,
     groupNumber: d.group_number ?? null,
     sourceEventId: d.call_id,
-  }).onDuplicateKeyUpdate({
-    // No-op: keeps the existing row; MySQL needs a SET clause.
-    set: { sourceEventId: sql`source_event_id` },
   });
 
   const wasInserted = result[0].affectedRows === 1;
@@ -644,9 +649,8 @@ async function handleMessageReceived(
   const match = await matchPhoneToCustomer(d.from);
   const id = nanoid();
 
-  // No-op upsert on source_event_id unique key — safe against concurrent
-  // webhook retries and backfill runs without a SELECT-then-INSERT race.
-  const result = await db.insert(phoneCommunications).values({
+  // INSERT IGNORE on source_event_id unique key — see /webhook call.ended.
+  const result = await db.insert(phoneCommunications).ignore().values({
     id,
     kind: "sms_in",
     customerId: match?.customerId ?? null,
@@ -656,9 +660,6 @@ async function handleMessageReceived(
     startedAt: new Date(d.created_at),
     body: d.body,
     sourceEventId: d.message_id,
-  }).onDuplicateKeyUpdate({
-    // No-op: keeps the existing row; MySQL needs a SET clause.
-    set: { sourceEventId: sql`source_event_id` },
   });
 
   const wasInserted = result[0].affectedRows === 1;
