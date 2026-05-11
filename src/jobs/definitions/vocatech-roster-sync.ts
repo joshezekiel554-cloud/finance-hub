@@ -12,21 +12,20 @@
 //     where vocatech_last_pushed_at IS NULL). Runs nightly at 02:00
 //     Europe/London via the cron registered in schedule.ts.
 //
-// After each successful 500-row batch we stamp vocatech_last_pushed_at = NOW()
-// on the batch so a failure mid-way through leaves all prior batches durable.
+// After each successful batch we stamp vocatech_last_pushed_at = NOW() only
+// for the contacts that succeeded (not failed ones, so they retry next delta).
 //
-// Customers with zero non-empty phone numbers are skipped — there's no point
-// pushing them since Vocatech matches by phone, and the push would waste an
-// API slot.
+// Customers with zero non-empty phone numbers are skipped — Vocatech matches
+// by phone and the push would waste an API slot.
 //
-// 429 handling: same rationale as backfill — let VocatechApiError propagate
-// and rely on BullMQ's 3-attempt exponential backoff. Roster sync is not
-// latency-sensitive and the nightly cron fires at 02:00 with no contention.
+// 429 handling: let VocatechApiError propagate and rely on BullMQ's 3-attempt
+// exponential backoff. Roster sync is not latency-sensitive.
 //
 // SSE events: none. Roster pushes don't affect the in-app timeline.
 
 import type { Job } from "bullmq";
-import { upsertContacts } from "../../integrations/vocatech/client.js";
+import { getContactFields, upsertContacts } from "../../integrations/vocatech/client.js";
+import type { VocatechContactField } from "../../integrations/vocatech/client.js";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { sql } from "drizzle-orm";
@@ -42,15 +41,75 @@ export type VocatechRosterSyncJobData =
 export type VocatechRosterSyncJobResult = {
   pushed: number;
   skipped: number;
+  errors: number;
 };
 
 const BATCH_SIZE = 500;
+
+// Field selection heuristic:
+//
+// 1. phoneField   — first field with is_phone === true (required)
+// 2. nameField    — first non-phone, non-integration field. Among those,
+//                   prefer one whose name contains "name", "company", or
+//                   "contact" (case-insensitive) as that's the most likely
+//                   display-name field; otherwise fall back to lowest order.
+// 3. externalIdField (optional) — first is_match, non-phone, non-integration
+//                   field that is NOT the same field as nameField. Used for
+//                   stable dedup keyed on our internal customer.id.
+function selectFields(fields: VocatechContactField[]): {
+  phoneField: VocatechContactField;
+  nameField: VocatechContactField;
+  externalIdField: VocatechContactField | null;
+} {
+  const sorted = [...fields].sort((a, b) => a.order - b.order);
+
+  const phoneField = sorted.find((f) => f.is_phone);
+  const textCandidates = sorted.filter((f) => !f.is_phone && !f.is_integration);
+
+  const nameKeywords = /name|company|contact/i;
+  const nameField =
+    textCandidates.find((f) => nameKeywords.test(f.name)) ?? textCandidates[0];
+
+  if (!phoneField || !nameField) {
+    throw new Error(
+      "Vocatech tenant has no usable contact fields configured. " +
+      "Please define at least one phone field (is_phone=true) and one text field in Vocatech's admin UI. " +
+      "Recommended: 'Company' (text, is_match=true), 'Phone' (is_phone=true, is_match=true), 'External ID' (text, is_match=true).",
+    );
+  }
+
+  const externalIdField =
+    sorted.find(
+      (f) =>
+        f.is_match &&
+        !f.is_phone &&
+        !f.is_integration &&
+        f.id !== nameField.id,
+    ) ?? null;
+
+  return { phoneField, nameField, externalIdField };
+}
 
 export async function vocatechRosterSyncHandler(
   job: Job<VocatechRosterSyncJobData>,
 ): Promise<VocatechRosterSyncJobResult> {
   const { mode } = job.data;
   log.info({ mode, ...(mode === "full" ? { scope: (job.data as { scope: string }).scope } : {}) }, "roster sync starting");
+
+  // --- Field discovery / precondition check ----------------------------------
+
+  const { fields: allFields } = await getContactFields();
+  const { phoneField, nameField, externalIdField } = selectFields(allFields);
+
+  log.info(
+    {
+      phone_field: phoneField.name,
+      name_field: nameField.name,
+      external_id_field: externalIdField?.name ?? null,
+      all_field_names: allFields.map((f) => f.name),
+    },
+    "vocatech field mapping selected",
+  );
 
   // --- Query customers -------------------------------------------------------
 
@@ -108,48 +167,82 @@ export async function vocatechRosterSyncHandler(
 
   let pushed = 0;
   let skipped = 0;
+  let errors = 0;
 
   // Process in batches of BATCH_SIZE.
   for (let offset = 0; offset < rows.length; offset += BATCH_SIZE) {
     const batch = rows.slice(offset, offset + BATCH_SIZE);
 
-    const contacts: Array<{ external_id: string; name: string; phone_numbers: string[] }> = [];
-    const batchIds: string[] = [];
+    // Build contact payloads and track which batch index maps to which customer id.
+    const contacts: Array<{ fields: Record<string, string> }> = [];
+    const batchCustomerIds: string[] = []; // parallel array — same index as contacts[]
 
     for (const row of batch) {
-      const phoneNumbers: string[] = [];
+      const allPhones: string[] = [];
       if (row.phone && row.phone.trim().length > 0) {
-        phoneNumbers.push(row.phone.trim());
+        allPhones.push(row.phone.trim());
       }
       if (Array.isArray(row.additionalPhones)) {
         for (const p of row.additionalPhones) {
           if (p.number && p.number.trim().length > 0) {
-            phoneNumbers.push(p.number.trim());
+            allPhones.push(p.number.trim());
           }
         }
       }
 
-      if (phoneNumbers.length === 0) {
+      if (allPhones.length === 0) {
         skipped++;
         continue;
       }
 
-      if (row.displayName.trim().length === 0) {
+      const displayName = row.displayName.trim();
+      if (displayName.length === 0) {
         skipped++;
         continue;
       }
 
-      contacts.push({
-        external_id: row.id,
-        name: row.displayName,
-        phone_numbers: phoneNumbers,
-      });
-      batchIds.push(row.id);
+      const fieldMap: Record<string, string> = {
+        [phoneField.name]: allPhones.join(";"),
+        [nameField.name]: displayName,
+      };
+      if (externalIdField) {
+        fieldMap[externalIdField.name] = row.id;
+      }
+
+      contacts.push({ fields: fieldMap });
+      batchCustomerIds.push(row.id);
     }
 
-    if (contacts.length > 0) {
-      await upsertContacts(contacts);
+    if (contacts.length === 0) continue;
 
+    const response = await upsertContacts(contacts);
+
+    // Build a set of failed indices so we only stamp customers that succeeded.
+    // We intentionally skip failed indices — they keep vocatech_last_pushed_at
+    // unset/stale so the next delta run will retry them automatically.
+    const failedIndices = new Set(response.errors.map((e) => e.index));
+    const toStampIds: string[] = [];
+
+    for (let i = 0; i < batchCustomerIds.length; i++) {
+      if (!failedIndices.has(i)) {
+        toStampIds.push(batchCustomerIds[i]!);
+      }
+    }
+
+    const errorsThisBatch = response.errors.length;
+    const pushedThisBatch = contacts.length - errorsThisBatch;
+
+    if (errorsThisBatch > 0) {
+      log.warn(
+        {
+          errors_this_batch: errorsThisBatch,
+          sample: response.errors.slice(0, 5),
+        },
+        "vocatech upsert returned per-row errors",
+      );
+    }
+
+    if (toStampIds.length > 0) {
       // Use server-side NOW() so vocatech_last_pushed_at and the ON UPDATE
       // CURRENT_TIMESTAMP on updated_at are computed in the same statement,
       // preventing updated_at > vocatech_last_pushed_at skew that would cause
@@ -157,15 +250,16 @@ export async function vocatechRosterSyncHandler(
       await db
         .update(customers)
         .set({ vocatechLastPushedAt: sql`NOW()` })
-        .where(inArray(customers.id, batchIds));
-
-      pushed += contacts.length;
+        .where(inArray(customers.id, toStampIds));
     }
 
+    pushed += pushedThisBatch;
+    errors += errorsThisBatch;
+
     await job.updateProgress({ pushed, total });
-    log.debug({ pushed, skipped, total }, "roster sync batch done");
+    log.debug({ pushed, skipped, errors, total }, "roster sync batch done");
   }
 
-  log.info({ pushed, skipped, total }, "roster sync complete");
-  return { pushed, skipped };
+  log.info({ pushed, skipped, errors, total }, "roster sync complete");
+  return { pushed, skipped, errors };
 }

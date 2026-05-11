@@ -185,20 +185,40 @@ export async function sendMessage(input: {
 
 // --- Contacts (roster push) --------------------------------------------------
 
-export type VocatechContactUpsert = {
-  external_id: string;
+export type VocatechContactField = {
+  id: number;
   name: string;
-  phone_numbers: string[];
+  order: number;
+  is_phone: boolean;
+  is_match: boolean;
+  reports_enabled: boolean;
+  hide_no_data: boolean;
+  show_in_fields: boolean;
+  is_integration: boolean;
+};
+
+export async function getContactFields(): Promise<{ fields: VocatechContactField[] }> {
+  return call<{ fields: VocatechContactField[] }>("/contacts/fields");
+}
+
+// Each contact is a bag of field name → value strings. Field names are
+// whatever the tenant configured in Vocatech's admin UI — discover them
+// via getContactFields() before building payloads.
+export type VocatechContactUpsert = { fields: Record<string, string> };
+
+export type VocatechContactUpsertResponse = {
+  summary: { total: number; created: number; updated: number; errors: number };
+  contacts: Array<{ contact: { id: number; fields: Record<string, string> }; action: "created" | "updated" }>;
+  errors: Array<{ index: number; message: string }>;
 };
 
 export async function upsertContacts(
   contacts: VocatechContactUpsert[],
-): Promise<{ inserted: number; updated: number }> {
-  // API accepts batches up to 500.
+): Promise<VocatechContactUpsertResponse> {
   if (contacts.length > 500) {
     throw new Error("upsertContacts batch exceeds 500 — chunk caller-side");
   }
-  return call("/contacts", {
+  return call<VocatechContactUpsertResponse>("/contacts", {
     method: "POST",
     body: JSON.stringify({ contacts }),
   });
