@@ -1,6 +1,6 @@
 // Pinned SMS compose box for the Calls & SMS tab.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Send } from "lucide-react";
 import { Button } from "./ui/button";
@@ -52,11 +52,13 @@ export function SmsComposeBox({
   const [toNumber, setToNumber] = useState<string>(() => options[0]?.value ?? "");
   const [body, setBody] = useState("");
 
-  // Keep the picker in sync if the parent's customer prop reloads with a
-  // different default after the component already mounted.
-  if (toNumber === "" && options.length > 0) {
-    setToNumber(options[0]!.value);
-  }
+  // Reset the picker when the customer changes or their phone list reloads.
+  // Without this, navigating from customer A to customer B would leave
+  // toNumber pointed at A's primary phone (which isn't in B's options) and
+  // render a blank select.
+  useEffect(() => {
+    setToNumber(options[0]?.value ?? "");
+  }, [customerId, options]);
 
   const sendMutation = useMutation<
     SendResponse,
@@ -147,6 +149,7 @@ export function SmsComposeBox({
           value={body}
           onChange={(e) => setBody(e.target.value.slice(0, SMS_MAX_LEN))}
           placeholder="Type your message…"
+          aria-label="SMS message body"
           rows={3}
           disabled={sendMutation.isPending}
           className={cn(
