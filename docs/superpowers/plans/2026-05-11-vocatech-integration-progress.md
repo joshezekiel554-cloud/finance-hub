@@ -16,8 +16,8 @@
 | Wave | Tasks | Status |
 |---|---|---|
 | W0 (1 task) | 0.1 schema migration | ✅ done |
-| W1 (parallel ×2) | 1.1 API client + HMAC verifier, 1.2 phone matcher | not started |
-| W2 (1 task) | webhook route + all 4 event handlers + outbound endpoints | not started |
+| W1 (parallel ×2) | 1.1 API client + HMAC verifier, 1.2 phone matcher | ✅ done |
+| W2 (1 task) | webhook route + all 4 event handlers + outbound endpoints | in_progress |
 | W3 (parallel ×2) | 3.1 backfill job, 3.2 roster sync job + nightly cron | not started |
 | W4 (parallel ×2) | 4.1 Calls and SMS tab UI, 4.2 Settings section | not started |
 | W5 (1 task) | Activity inline + Today unmatched inbox | not started |
@@ -27,9 +27,9 @@
 | Task ID | Subject | Model | Status | Commit |
 |---|---|---|---|---|
 | 286 (W0.1) | Schema migration | sonnet | ✅ completed | `e3b5548` |
-| 287 (W1.1) | API client + HMAC verifier | sonnet | pending | — |
-| 288 (W1.2) | Phone matcher | sonnet | pending | — |
-| 289 (W2) | Webhook + handlers bundle | **opus** | pending | — |
+| 287 (W1.1) | API client + HMAC verifier | sonnet | ✅ completed | `5840243`, merged in W1 batch |
+| 288 (W1.2) | Phone matcher | sonnet | ✅ completed | `828f7ca` + `45582d8` (ext-digit fix), merged in W1 batch |
+| 289 (W2) | Webhook + handlers bundle | **opus** | in_progress | — |
 | 290 (W3.1) | Backfill job | sonnet | pending | — |
 | 291 (W3.2) | Roster sync job | sonnet | pending | — |
 | 292 (W4.1) | Calls and SMS tab | **opus** | pending | — |
@@ -39,6 +39,9 @@
 ## Commits on branch
 
 - `e3b5548` — `feat(vocatech): schema for events + phone_communications + customer last-pushed timestamp`
+- `14b32bf` — `docs(vocatech): live progress tracker + PROGRESS.md update (W0.1 done)`
+- (W1 worktree commits) `5840243` + `828f7ca` + `45582d8`
+- merge commits via W1 batch (push at `c3d53b0`)
 
 ## Known issues
 
