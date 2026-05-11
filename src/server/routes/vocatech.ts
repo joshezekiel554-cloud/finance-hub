@@ -31,7 +31,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, gt, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import {
@@ -45,6 +45,9 @@ import {
   getMediaUrl,
   mapDirection,
   sendMessage,
+  testWebhook,
+  listWebhooks,
+  getContactFields,
   VocatechApiError,
 } from "../../integrations/vocatech/client.js";
 import { matchPhoneToCustomer } from "../../integrations/vocatech/matcher.js";
@@ -484,6 +487,86 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
     );
     return { jobId: job.id };
   });
+
+  // -------------------------------------------------------------------------
+  // GET /health — authenticated (any user); integration status for Settings.
+  // -------------------------------------------------------------------------
+  app.get("/health", async (req, reply) => {
+    await requireAuth(req);
+
+    const apiKeyConfigured = !!env.VOCATECH_API_KEY;
+    const webhookSecretConfigured = !!env.VOCATECH_WEBHOOK_SECRET;
+    const fromNumberConfigured = !!env.VOCATECH_FROM_NUMBER;
+
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const [lastRows, countRows] = await Promise.all([
+      db
+        .select({ lastAt: sql<string | null>`MAX(${vocatechEvents.receivedAt})` })
+        .from(vocatechEvents),
+      db
+        .select({ n: sql<number>`COUNT(*)` })
+        .from(vocatechEvents)
+        .where(gt(vocatechEvents.receivedAt, cutoff)),
+    ]);
+
+    const lastWebhookAt = lastRows[0]?.lastAt ?? null;
+    const recentEventCount24h = Number(countRows[0]?.n ?? 0);
+
+    // API calls — degrade gracefully if unconfigured or unreachable.
+    let webhooks: Awaited<ReturnType<typeof listWebhooks>> = [];
+    let contactFieldsResult: Awaited<ReturnType<typeof getContactFields>> = { fields: [] };
+    try {
+      webhooks = await listWebhooks();
+    } catch {
+      // VOCATECH_API_KEY unset or API unreachable — return empty list
+    }
+    try {
+      contactFieldsResult = await getContactFields();
+    } catch {
+      // same — return zero so UI can show the warning
+    }
+
+    const contactFields = contactFieldsResult.fields.map((f) => ({
+      name: f.name,
+      is_phone: f.is_phone,
+      is_match: f.is_match,
+      is_integration: f.is_integration,
+    }));
+
+    reply.code(200);
+    return {
+      apiKeyConfigured,
+      webhookSecretConfigured,
+      fromNumberConfigured,
+      lastWebhookAt,
+      recentEventCount24h,
+      webhooks,
+      contactFieldsCount: contactFields.length,
+      contactFields,
+    };
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /webhooks/:webhookId/test — admin-only; trigger a test delivery.
+  // -------------------------------------------------------------------------
+  app.post<{ Params: { webhookId: string } }>(
+    "/webhooks/:webhookId/test",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      if (!isAdmin(user)) {
+        reply.code(403);
+        return { error: "admin only" };
+      }
+      try {
+        await testWebhook(req.params.webhookId);
+        return { ok: true };
+      } catch (err) {
+        reply.code(502);
+        return { error: err instanceof Error ? err.message : "test failed" };
+      }
+    },
+  );
 
   // -------------------------------------------------------------------------
   // POST /roster-sync — admin-only; enqueue a full roster push to Vocatech.
