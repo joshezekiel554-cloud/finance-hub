@@ -37,6 +37,7 @@ import { ActivityTimeline } from "../components/activity-timeline";
 import type { Activity } from "../components/activity-timeline";
 import RmaRowMenu from "../components/rma-row-menu";
 import { EmailList } from "../components/email-list";
+import { CallsSmsTab } from "../components/calls-sms-tab";
 import { HoldBanner } from "../components/hold-banner";
 import { SyncCustomerButton } from "../components/sync-customer-button";
 import StatementSendDialog, {
@@ -111,11 +112,20 @@ type DetailResponse = {
   kpi: CustomerKpi | null;
 };
 
-type TabKey = "activity" | "emails" | "invoices" | "orders" | "tasks" | "notes" | "returns";
+type TabKey =
+  | "activity"
+  | "emails"
+  | "invoices"
+  | "orders"
+  | "tasks"
+  | "notes"
+  | "returns"
+  | "calls_sms";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "Activity" },
   { key: "emails", label: "Emails" },
+  { key: "calls_sms", label: "Calls & SMS" },
   { key: "invoices", label: "Invoices" },
   { key: "orders", label: "Orders" },
   { key: "tasks", label: "Tasks" },
@@ -769,6 +779,13 @@ export default function CustomerDetailPage() {
           <NotesPanel
             customerId={customer.id}
             notes={recentActivities.filter((a) => a.kind === "manual_note")}
+          />
+        )}
+        {tab === "calls_sms" && (
+          <CallsSmsTab
+            customerId={customer.id}
+            primaryPhone={customer.phone}
+            additionalPhones={customer.additionalPhones}
           />
         )}
       </div>

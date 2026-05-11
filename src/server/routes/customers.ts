@@ -32,6 +32,7 @@ import {
 } from "../../db/schema/crm.js";
 import { invoices, invoiceChases } from "../../db/schema/invoices.js";
 import { rmas } from "../../db/schema/returns.js";
+import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { tasks } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { nanoid } from "nanoid";
@@ -691,6 +692,25 @@ const customersRoute: FastifyPluginAsync = async (app) => {
 
     return reply.send({ rows });
   });
+
+  // GET /api/customers/:id/phone-communications — Vocatech calls + SMS
+  // for this customer, newest first. Used by the "Calls & SMS" tab on the
+  // customer detail page. 200-row cap is fine until volume warrants
+  // pagination; the W2 webhook handlers populate new rows live and SSE
+  // pushes invalidate the client query.
+  app.get<{ Params: { id: string } }>(
+    "/:id/phone-communications",
+    async (req, reply) => {
+      await requireAuth(req);
+      const rows = await db
+        .select()
+        .from(phoneCommunications)
+        .where(eq(phoneCommunications.customerId, req.params.id))
+        .orderBy(desc(phoneCommunications.startedAt))
+        .limit(200);
+      return reply.send({ rows });
+    },
+  );
 
   // GET /api/customers/:id/statement-preview — preview the statement
   // payload before the user confirms a send. Returns the open-invoice

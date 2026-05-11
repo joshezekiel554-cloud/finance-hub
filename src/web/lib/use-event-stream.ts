@@ -54,6 +54,17 @@ export type SSEEvent =
       userId: string;
       kind: string;
     }
+  | {
+      type: "phone-communication.received";
+      customerId: string;
+      communicationId: string;
+      kind: string;
+    }
+  | {
+      type: "phone-communication.updated";
+      customerId: string;
+      communicationId: string;
+    }
   | { type: "ping"; ts: number };
 
 export type SSEEventType = SSEEvent["type"];
