@@ -51,6 +51,20 @@ export type DomainEventMap = {
     userId: string;
     kind: string;
   };
+  // Phone-communication events (Vocatech). `received` fires on new
+  // call/sms rows; `updated` fires when a row's body/transcription/status
+  // changes (e.g. when call.transcription arrives after call.ended). The
+  // SSE plugin fans out to all users; the customer detail page filters
+  // client-side on customerId.
+  "phone-communication.received": {
+    customerId: string;
+    communicationId: string;
+    kind: "call_in" | "call_out" | "sms_in" | "sms_out";
+  };
+  "phone-communication.updated": {
+    customerId: string;
+    communicationId: string;
+  };
 };
 
 class TypedEventBus {

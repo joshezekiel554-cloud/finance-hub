@@ -67,6 +67,17 @@ export type SSEEvent =
       userId: string;
       kind: string;
     }
+  | {
+      type: "phone-communication.received";
+      customerId: string;
+      communicationId: string;
+      kind: "call_in" | "call_out" | "sms_in" | "sms_out";
+    }
+  | {
+      type: "phone-communication.updated";
+      customerId: string;
+      communicationId: string;
+    }
   | { type: "ping"; ts: number };
 
 export type SSEBroker = {
@@ -212,6 +223,14 @@ export const ssePlugin = fp(async function ssePlugin(app: FastifyInstance) {
     // Per-user — the bell on the recipient's session re-fetches its list.
     broker.publish(e.userId, { type: "notification.created", ...e });
   });
+  // Phone-communication events fan out to all sessions; the customer
+  // detail page filters by customerId client-side, same as activity.
+  const offPhoneReceived = events.on("phone-communication.received", (e) => {
+    broker.publishAll({ type: "phone-communication.received", ...e });
+  });
+  const offPhoneUpdated = events.on("phone-communication.updated", (e) => {
+    broker.publishAll({ type: "phone-communication.updated", ...e });
+  });
 
   app.addHook("onClose", async () => {
     clearInterval(interval);
@@ -225,5 +244,7 @@ export const ssePlugin = fp(async function ssePlugin(app: FastifyInstance) {
     offCommentDeleted();
     offMention();
     offNotification();
+    offPhoneReceived();
+    offPhoneUpdated();
   });
 });
