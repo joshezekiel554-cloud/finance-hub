@@ -13,8 +13,21 @@ If you're new to this file:
 
 ## Current phase
 
-**Returns workflow redesign — RMA-page-centric flow + QBO-mirror credit memo. 🟢 SHIPPED (in operator-validation period)**
-(spec + plan: `docs/superpowers/specs/2026-05-07-returns-redesign.md` + `docs/superpowers/plans/2026-05-07-returns-redesign.md`. ~40 commits 2026-05-07/08. Live progress tracker: `docs/superpowers/plans/2026-05-07-returns-redesign-progress.md`.)
+**Vocatech phone/SMS integration. 🟡 IN PROGRESS** (started 2026-05-11, branch `feat/vocatech-integration` off `main`). Plan: `docs/superpowers/plans/2026-05-11-vocatech-integration.md`. Spec: `docs/superpowers/specs/2026-05-11-vocatech-integration.md`. Live tracker: `docs/superpowers/plans/2026-05-11-vocatech-integration-progress.md`.
+
+Webhook-driven integration with Vocatech (cloud PBX, US SMB). End state:
+- Inbound calls + AI summaries + transcripts + recordings flow to a new "Calls and SMS" tab on each customer detail page.
+- SMS send/receive in the same combined chronological tab.
+- Unmatched calls inbox on Today tab.
+- B2B customer roster pushed to Vocatech contacts for Callpop name-matching.
+- Scoped excluding: click-to-call from app (Vocatech doesn't expose outbound dial API).
+
+Status: **Wave 0 done (`e3b5548` schema migration).** ~9 tasks across 6 waves remaining. Subagent-driven execution with worktree parallelism + opus reviewers (same pattern as returns redesign).
+
+---
+
+**Returns workflow redesign — RMA-page-centric flow + QBO-mirror credit memo. 🟢 SHIPPED**
+(spec + plan: `docs/superpowers/specs/2026-05-07-returns-redesign.md` + `docs/superpowers/plans/2026-05-07-returns-redesign.md`. ~40 commits 2026-05-07/08. Live progress tracker: `docs/superpowers/plans/2026-05-07-returns-redesign-progress.md`. **Merged to main 2026-05-11 in merge commit `71d50d2`.**)
 
 Operator complained the existing returns flow "felt like we'd gone backwards from the desktop software." Brainstorming → spec → plan → subagent-driven execution with worktree-based parallelism produced a complete restructure across 16 plan tasks + 9 post-plan polish fixes after operator started using it on real data.
 
