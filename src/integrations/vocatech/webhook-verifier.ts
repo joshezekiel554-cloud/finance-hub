@@ -31,8 +31,11 @@ export function verifyVocatechSignature(
   const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - tsUnix);
   if (ageSeconds > REPLAY_WINDOW_SECONDS) return { ok: false, reason: "expired" };
 
+  // Per the OpenAPI spec, the HMAC payload is the literal string
+  //   "t=<timestamp>.<raw_body>"
+  // — including the `t=` prefix, not just `<timestamp>.<raw_body>`.
   const expected = createHmac("sha256", secret)
-    .update(`${t}.${rawBody}`)
+    .update(`t=${t}.${rawBody}`)
     .digest("hex");
 
   const expectedBuf = Buffer.from(expected);
