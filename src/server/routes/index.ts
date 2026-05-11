@@ -30,6 +30,7 @@ import returnsRoute from "./returns.js";
 import seasonsRoute from "./seasons.js";
 import syncRoute from "./sync.js";
 import tagEmailSchedulesRoute from "./tag-email-schedules.js";
+import vocatechRoute from "./vocatech.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -82,6 +83,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(tagEmailSchedulesRoute, {
     prefix: "/api/tag-email-schedules",
   });
+  await app.register(vocatechRoute, { prefix: "/api/vocatech" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });
