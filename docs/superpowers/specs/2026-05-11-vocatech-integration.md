@@ -226,9 +226,19 @@ When operator hits "Send SMS":
 3. On success, immediately write `phone_communications` row (`kind: sms_out`, `sms_status: sent`)
 4. `message.status_updated` webhook later updates the row's status (delivered → read)
 
+## Local development & testing
+
+Three complementary paths so we can iterate on localhost without depending on prod:
+
+1. **Outbound API** (SMS send, recording URL fetch, contact upsert) works on localhost from day 1 — laptop hits `api.vocatech.com` over HTTPS, no inbound webhook required.
+2. **Fake-event replay tool** — admin-only `POST /api/vocatech/replay-event` endpoint that takes a raw Vocatech event payload (paste JSON) and runs it through the same per-event handler as a real webhook. Bypasses HMAC verification (admin-gated). Lets us exercise parsing/matching/storage end-to-end without an actual incoming call. Doubles as production debugging tool for reprocessing events.
+3. **HTTPS tunnel for real webhook testing** — operator runs `ngrok http 3001` (or Cloudflare Tunnel) during dev session, configures Vocatech webhook URL to the tunnel URL, real inbound calls arrive at localhost. ngrok paid (~$8/mo) or Cloudflare Tunnel (free) give stable subdomains.
+
+Deploy flow: dev with ngrok or replay tool → smoke test on `finance.feldart.com` after deploy → swap Vocatech webhook URL to prod.
+
 ## Edge cases
 
-- **Webhook URL must be public HTTPS.** Dev is localhost. Configure Vocatech with prod URL only OR use ngrok in dev.
+- **Webhook URL must be public HTTPS.** Use tunnel in dev (see above) or prod URL.
 - **Recording URLs expire after 30 min.** Don't cache, re-mint per click.
 - **AI summary delay (5-30 min).** Card shows "Summary processing…" until `call.transcription` arrives.
 - **SMS rate limit: 5 / 10 min.** Frontend throttles and shows queue state on 429.
@@ -255,7 +265,7 @@ When operator hits "Send SMS":
 - `migrations/<next>_vocatech_phone_communications.sql` — Drizzle migration
 - `src/integrations/vocatech/client.ts` — API client + HMAC verifier helper
 - `src/integrations/vocatech/matcher.ts` — phone normalization + customer lookup
-- `src/server/routes/vocatech.ts` — webhook endpoint, recording-url proxy, SMS send, settings actions
+- `src/server/routes/vocatech.ts` — webhook endpoint, recording-url proxy, SMS send, settings actions, **admin replay-event endpoint** for local testing
 - `src/jobs/definitions/vocatech-backfill.ts` — BullMQ backfill handler
 - `src/jobs/definitions/vocatech-roster-sync.ts` — BullMQ roster sync handler
 - `src/web/components/calls-sms-tab.tsx` — customer detail tab content
