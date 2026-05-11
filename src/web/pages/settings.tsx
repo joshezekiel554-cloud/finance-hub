@@ -1886,7 +1886,7 @@ function VocatechSection() {
               {health.contactFieldsCount === 0 ? (
                 <div className="rounded border border-accent-warning/40 bg-accent-warning/10 px-3 py-2 text-xs text-accent-warning">
                   Roster sync needs at least one is_phone field and one text
-                  field configured in Vocatech&apos;s admin UI. Go to your
+                  field configured in Vocatech's admin UI. Go to your
                   Vocatech tenant settings to add them.
                 </div>
               ) : (
