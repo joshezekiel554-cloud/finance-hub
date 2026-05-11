@@ -18,12 +18,16 @@ import { processGmailPoll } from "./definitions/gmail-poll.js";
 import { processQbSync } from "./definitions/qb-sync.js";
 import { processTaskOverdueScan } from "./definitions/task-overdue-scan.js";
 import { processTagEmail } from "./definitions/tag-email.js";
+import { vocatechBackfillHandler } from "./definitions/vocatech-backfill.js";
+import { vocatechRosterSyncHandler } from "./definitions/vocatech-roster-sync.js";
 import {
   CHASE_QUEUE,
   GMAIL_QUEUE,
   NOTIFICATIONS_QUEUE,
   SYNC_QUEUE,
   TAG_EMAIL_QUEUE,
+  VOCATECH_BACKFILL_QUEUE,
+  VOCATECH_ROSTER_QUEUE,
   closeQueues,
   connectionOptions,
   getQueues,
@@ -36,13 +40,15 @@ import { createLogger } from "../lib/logger.js";
 const log = createLogger({ component: "worker" });
 
 // One concurrency per queue is plenty here — these jobs do a lot of I/O but
-// our upstreams (QBO, Gmail) are rate-limited, and stacking parallel runs
-// doesn't help. If load grows we can bump per-queue concurrency individually.
+// our upstreams (QBO, Gmail, Vocatech) are rate-limited, and stacking
+// parallel runs doesn't help. If load grows we can bump per-queue concurrency.
 const QB_CONCURRENCY = 1;
 const GMAIL_CONCURRENCY = 1;
 const CHASE_CONCURRENCY = 1;
 const NOTIFICATIONS_CONCURRENCY = 1;
 const TAG_EMAIL_CONCURRENCY = 1;
+const VOCATECH_BACKFILL_CONCURRENCY = 1;
+const VOCATECH_ROSTER_CONCURRENCY = 1;
 
 function buildWorkers(): Worker[] {
   const connection = connectionOptions();
@@ -77,7 +83,27 @@ function buildWorkers(): Worker[] {
     { connection, concurrency: TAG_EMAIL_CONCURRENCY },
   );
 
-  for (const w of [qbWorker, gmailWorker, chaseWorker, notificationsWorker, tagEmailWorker]) {
+  const vocatechBackfillWorker = new Worker(
+    VOCATECH_BACKFILL_QUEUE,
+    async (job: Job) => vocatechBackfillHandler(job),
+    { connection, concurrency: VOCATECH_BACKFILL_CONCURRENCY },
+  );
+
+  const vocatechRosterWorker = new Worker(
+    VOCATECH_ROSTER_QUEUE,
+    async (job: Job) => vocatechRosterSyncHandler(job),
+    { connection, concurrency: VOCATECH_ROSTER_CONCURRENCY },
+  );
+
+  for (const w of [
+    qbWorker,
+    gmailWorker,
+    chaseWorker,
+    notificationsWorker,
+    tagEmailWorker,
+    vocatechBackfillWorker,
+    vocatechRosterWorker,
+  ]) {
     w.on("failed", (job, err) => {
       log.error(
         {
@@ -101,7 +127,15 @@ function buildWorkers(): Worker[] {
     });
   }
 
-  return [qbWorker, gmailWorker, chaseWorker, notificationsWorker, tagEmailWorker];
+  return [
+    qbWorker,
+    gmailWorker,
+    chaseWorker,
+    notificationsWorker,
+    tagEmailWorker,
+    vocatechBackfillWorker,
+    vocatechRosterWorker,
+  ];
 }
 
 async function shutdown(workers: Worker[], signal: string): Promise<void> {

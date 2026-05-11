@@ -45,7 +45,7 @@ export const phoneCommunications = mysqlTable(
     recordingMediaId: varchar("recording_media_id", { length: 64 }),
     smsStatus: mysqlEnum("sms_status", ["sent", "delivered", "read", "failed"]),
     groupNumber: varchar("group_number", { length: 32 }),
-    sourceEventId: varchar("source_event_id", { length: 64 }),
+    sourceEventId: varchar("source_event_id", { length: 64 }).unique(),
     dismissedAt: timestamp("dismissed_at"),
     dismissedByUserId: varchar("dismissed_by_user_id", { length: 255 }),
     createdAt: timestamp("created_at").notNull().defaultNow(),

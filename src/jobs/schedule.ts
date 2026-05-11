@@ -4,13 +4,14 @@
 // worker boot is idempotent — the second registration is a no-op against
 // Redis. Cron strings:
 //
-//   qb-sync             */30 * * * *     every 30 minutes
-//   gmail-poll          */15 * * * *     every 15 minutes
-//   task-overdue-scan   0 8 * * *        08:00 daily, Europe/London
-//   chase-digest        0 17 * * *       17:00 daily, Europe/London
-//   tag-email-daily     0 9 * * *        09:00 daily, Europe/London
-//   tag-email-weekly    0 9 * * 1        09:00 Monday, Europe/London
-//   tag-email-monthly   0 9 1 * *        09:00 1st of month, Europe/London
+//   qb-sync                 */30 * * * *     every 30 minutes
+//   gmail-poll              */15 * * * *     every 15 minutes
+//   task-overdue-scan       0 8 * * *        08:00 daily, Europe/London
+//   chase-digest            0 17 * * *       17:00 daily, Europe/London
+//   tag-email-daily         0 9 * * *        09:00 daily, Europe/London
+//   tag-email-weekly        0 9 * * 1        09:00 Monday, Europe/London
+//   tag-email-monthly       0 9 1 * *        09:00 1st of month, Europe/London
+//   vocatech-roster-delta   0 2 * * *        02:00 daily, Europe/London
 //
 // Timezone handling: BullMQ's `repeat.tz` applies the cron in that zone, so
 // "0 17 * * *" with tz="Europe/London" fires at 17:00 BST in summer and
@@ -26,7 +27,9 @@ import {
   TAG_EMAIL_MONTHLY_JOB,
   TAG_EMAIL_WEEKLY_JOB,
   TASK_OVERDUE_SCAN_JOB,
+  VOCATECH_ROSTER_DELTA_JOB,
 } from "./queues.js";
+import type { VocatechRosterSyncJobData } from "./definitions/vocatech-roster-sync.js";
 import { createLogger } from "../lib/logger.js";
 
 const log = createLogger({ component: "jobs.schedule" });
@@ -123,6 +126,23 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
     },
   );
   registered.push({ name: TAG_EMAIL_MONTHLY_JOB, cron: "0 9 1 * *", tz: "Europe/London" });
+
+  // Vocatech roster delta — 02:00 Europe/London daily. Pushes only customers
+  // whose records have changed since the last push. Runs at night to avoid
+  // contention with daytime traffic; 2am is consistently quiet for this site.
+  await queues.vocatechRoster.add(
+    VOCATECH_ROSTER_DELTA_JOB,
+    { mode: "delta" } as VocatechRosterSyncJobData,
+    {
+      jobId: `repeat:${VOCATECH_ROSTER_DELTA_JOB}`,
+      repeat: { pattern: "0 2 * * *", tz: "Europe/London" },
+    },
+  );
+  registered.push({
+    name: VOCATECH_ROSTER_DELTA_JOB,
+    cron: "0 2 * * *",
+    tz: "Europe/London",
+  });
 
   log.info({ jobs: registered }, "repeatable jobs registered");
   return registered;
