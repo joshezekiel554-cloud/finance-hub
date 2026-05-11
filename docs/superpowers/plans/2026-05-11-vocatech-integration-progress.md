@@ -48,10 +48,36 @@
 - `ffd8f22` — progress + backlog capture
 - (W3 worktree commits on voc/jobs) `c28580e` + `ce3ef79` + `7cad850` (critical fixes) + `0929bc7` (important fixes)
 - merged W3 at `e7730a4`, pushed to origin
+- `331bd80` — fix client to match real API shape (envelope, page-numbered pagination, incoming/outgoing direction, INSERT IGNORE)
+- `99015dc` — fix contacts client + roster sync against OpenAPI spec (fields-keyed payload, error parsing, precondition check)
+- `5bcce31` — fix sendMessage + message.received webhook against OpenAPI spec
 
 ## Migration to run before deploy
 
-W3 added `migrations/0031_vocatech_source_event_unique.sql` — adds a `UNIQUE` constraint to `phone_communications.source_event_id`. Run `npm run db:migrate` on each environment before the worker process restarts so the webhook + backfill code (now using `INSERT ... ON DUPLICATE KEY UPDATE`) is consistent with the schema.
+W3 added `migrations/0031_vocatech_source_event_unique.sql` — adds a `UNIQUE` constraint to `phone_communications.source_event_id`. Run `npm run db:migrate` on each environment before the worker process restarts so the webhook + backfill code (now using `INSERT IGNORE`) is consistent with the schema.
+
+Also bump the journal `when` for 0031 if you regenerate from scratch — drizzle-kit sorts by `when` not `idx`, and the hand-written stub originally had a 2025 placeholder that caused `db:migrate` to skip it. Fixed value: `1778600000000`.
+
+## Operator configuration before roster sync works
+
+Roster sync now refuses to run unless the Vocatech tenant has custom contact fields configured (it would silently push empty contacts otherwise). Recommended setup in Vocatech's admin UI:
+
+| Field | type | is_phone | is_match | Maps to |
+|---|---|---|---|---|
+| Company | text | no | yes | `customer.displayName` |
+| Phone | text | yes | yes | all customer phones, joined by `;` |
+| External ID | text | no | yes | `customer.id` (stable dedup key) |
+
+Also need `VOCATECH_FROM_NUMBER` in `.env` (a phone number registered to the tenant) before outbound SMS will work.
+
+## Smoke test status (2026-05-11)
+
+- ✅ migration applied; UNIQUE constraint present
+- ✅ backfill end-to-end: 18 calls + 1 SMS over 7 days, ~600ms; idempotency verified
+- ✅ roster precondition fires loudly when no fields configured (operator-actionable error)
+- ⏸️ roster end-to-end push: blocked on operator configuring Vocatech fields (Joshua waiting on web admin access)
+- ⏸️ outbound SMS: blocked on `VOCATECH_FROM_NUMBER` env config
+- ⏸️ inbound webhook: not yet tested with a live tunnel
 
 ## Known issues
 
