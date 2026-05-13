@@ -1,5 +1,32 @@
-import "dotenv/config";
+// Pick the env file based on NODE_ENV. pm2 sets NODE_ENV=production via
+// ecosystem.config.cjs BEFORE node imports this module, so process.env.NODE_ENV
+// is reliable here. Dev / local stays on `.env`; prod loads `.env.production`.
+// Falls back to `.env` if the prod file is missing (e.g. running locally with
+// NODE_ENV=production for testing).
+import { config as loadDotenv } from "dotenv";
+import { existsSync } from "node:fs";
+
+const envFile =
+  process.env.NODE_ENV === "production" && existsSync(".env.production")
+    ? ".env.production"
+    : ".env";
+loadDotenv({ path: envFile });
+
 import { z } from "zod";
+
+// Helper: dotenv populates empty strings for lines like `KEY=`. Zod's
+// .optional() accepts undefined but not "" — so for secret-style fields
+// we treat empty strings as "unset".
+const optionalSecret = (minLen?: number) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v == null || v === "" ? undefined : v))
+    .pipe(
+      minLen != null
+        ? z.string().min(minLen).optional()
+        : z.string().optional(),
+    );
 
 const boolish = z
   .union([z.string(), z.boolean()])
@@ -102,11 +129,11 @@ const schema = z.object({
   // and NODE_ENV is production.
   DEV_USER_EMAIL: z.string().email().optional(),
 
-  VOCATECH_API_KEY: z.string().min(1).optional(),
-  VOCATECH_WEBHOOK_SECRET: z.string().min(1).optional(),
+  VOCATECH_API_KEY: optionalSecret(1),
+  VOCATECH_WEBHOOK_SECRET: optionalSecret(1),
   // E.164 or 10-digit US sender number registered to your Vocatech tenant.
   // Required for outbound SMS — the API rejects sends without it.
-  VOCATECH_FROM_NUMBER: z.string().min(7).optional(),
+  VOCATECH_FROM_NUMBER: optionalSecret(7),
 });
 
 // SHADOW_MODE has a NODE_ENV-derived default applied in loadEnv(), so the
