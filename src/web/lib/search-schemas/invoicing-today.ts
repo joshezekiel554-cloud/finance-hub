@@ -5,7 +5,9 @@
 import { z } from "zod";
 
 export const invoicingTodaySearchSchema = z.object({
-  tab: z.enum(["open", "unparseable", "sent", "dismissed"]).catch("open"),
+  tab: z
+    .enum(["open", "unparseable", "sent", "dismissed", "phone_calls"])
+    .catch("open"),
 });
 
 export type InvoicingTodaySearch = z.infer<typeof invoicingTodaySearchSchema>;

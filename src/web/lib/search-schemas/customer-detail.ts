@@ -20,6 +20,7 @@ export const customerDetailSearchSchema = z.object({
       "tasks",
       "notes",
       "returns",
+      "calls_sms",
     ])
     .catch("activity"),
 

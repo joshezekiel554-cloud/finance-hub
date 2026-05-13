@@ -90,6 +90,7 @@ export const customers = mysqlTable(
       .default("0"),
     internalNotes: text("internal_notes"),
     lastSyncedAt: timestamp("last_synced_at"),
+    vocatechLastPushedAt: timestamp("vocatech_last_pushed_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },

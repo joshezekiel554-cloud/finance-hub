@@ -24,6 +24,7 @@ type ReceiptRow = BaseReceiptRow & {
 };
 import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
 import { ReturnReceiptCard } from "../components/return-receipt-card";
+import { UnmatchedPhoneCommInbox } from "../components/unmatched-phone-comm-inbox";
 
 const invoicingTodayRouteApi = getRouteApi("/invoicing");
 
@@ -165,7 +166,7 @@ const REASON_LABELS: Record<DismissReason, string> = {
   other: "Other",
 };
 
-type Tab = "open" | "unparseable" | "sent" | "dismissed";
+type Tab = "open" | "unparseable" | "sent" | "dismissed" | "phone_calls";
 
 // Single source of truth for which tab a row belongs in. Priority order:
 //   1. Dismissed wins (a dismissed row stays under Dismissed regardless).
@@ -270,6 +271,19 @@ export default function InvoicingTodayPage() {
   });
   const terms = termsData?.terms ?? [];
 
+  // Tap the same queryKey the UnmatchedPhoneCommInbox uses so this count
+  // reads from TanStack Query's shared cache — no extra network call.
+  const { data: unmatchedData } = useQuery<{ rows: unknown[] }>({
+    queryKey: ["vocatech", "unmatched"],
+    queryFn: async () => {
+      const res = await fetch("/api/vocatech/unmatched?days=7");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchInterval: 60_000,
+  });
+  const unmatchedCount = unmatchedData?.rows.length ?? 0;
+
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between">
@@ -354,6 +368,7 @@ export default function InvoicingTodayPage() {
                 dismissed: data.rows.filter(
                   (r) => classifyRow(r, data.dismissed) === "dismissed",
                 ).length,
+                phone_calls: unmatchedCount,
               }}
             />
             {tab === "unparseable" && (
@@ -366,7 +381,12 @@ export default function InvoicingTodayPage() {
               />
             )}
           </div>
-          {data.rows.length === 0 ? (
+          {tab === "phone_calls" ? (
+            // Vocatech inbox — phone communications from the last 7 days
+            // that the matcher couldn't link to a customer. Operator can
+            // match (opens customer-picker) or ignore (stamps dismissed_at).
+            <UnmatchedPhoneCommInbox />
+          ) : data.rows.length === 0 ? (
             <Card>
               <CardBody>
                 <p className="text-sm text-secondary">
@@ -605,6 +625,7 @@ function TabToggle({
     { key: "unparseable", label: "Unparseable" },
     { key: "sent", label: "Sent" },
     { key: "dismissed", label: "Dismissed" },
+    { key: "phone_calls", label: "Phone calls" },
   ];
   return (
     <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
@@ -880,6 +901,14 @@ function ShipmentCard({
     row.qbInvoice?.billEmailBcc ?? "",
   );
   const [emailExpanded, setEmailExpanded] = useState<boolean>(false);
+  // TxnDate (issue date) override. Defaults to today in America/New_York;
+  // operator can edit before sending. Server defaults to today if omitted,
+  // but we surface it in the UI so the operator can see + override.
+  const todayNY = useMemo(
+    () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()),
+    [],
+  );
+  const [txnDate, setTxnDate] = useState<string>(todayNY);
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
 
   const queryClient = useQueryClient();
@@ -1003,6 +1032,9 @@ function ShipmentCard({
             billEmailBcc.trim() !== (row.qbInvoice?.billEmailBcc ?? "")
               ? billEmailBcc.trim()
               : undefined,
+          // Only send the override when it differs from today; server
+          // defaults to today in America/New_York when omitted.
+          txnDate: txnDate !== todayNY ? txnDate : undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -1420,6 +1452,18 @@ function ShipmentCard({
                       setSendResult(null);
                     }}
                     placeholder="-SP for special offer"
+                    className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+                  />
+                </label>
+                <label className="flex-1 text-xs text-secondary">
+                  <span className="mb-1 block font-medium">Issue date</span>
+                  <input
+                    type="date"
+                    value={txnDate}
+                    onChange={(e) => {
+                      setTxnDate(e.target.value);
+                      setSendResult(null);
+                    }}
                     className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
                   />
                 </label>

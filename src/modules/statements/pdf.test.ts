@@ -44,6 +44,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     overdueBalance: "500.00",
     internalNotes: null,
     lastSyncedAt: FROZEN,
+    vocatechLastPushedAt: null,
     createdAt: FROZEN,
     updatedAt: FROZEN,
     ...overrides,

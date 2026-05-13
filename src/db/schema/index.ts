@@ -10,4 +10,6 @@ export * from "./notifications";
 export * from "./audit";
 export * from "./oauth";
 export * from "./returns";
+export * from "./vocatech";
+export * from "./invoice-bcc-forwards";
 export * from "../relations";

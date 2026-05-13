@@ -101,6 +101,12 @@ const schema = z.object({
   // production — the auth helper hard-fails if both DEV_USER_EMAIL is set
   // and NODE_ENV is production.
   DEV_USER_EMAIL: z.string().email().optional(),
+
+  VOCATECH_API_KEY: z.string().min(1).optional(),
+  VOCATECH_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // E.164 or 10-digit US sender number registered to your Vocatech tenant.
+  // Required for outbound SMS — the API rejects sends without it.
+  VOCATECH_FROM_NUMBER: z.string().min(7).optional(),
 });
 
 // SHADOW_MODE has a NODE_ENV-derived default applied in loadEnv(), so the

@@ -77,8 +77,10 @@ export default function SettingsPage() {
       <StatementPdfSection />
       <ReturnsSection />
       <RoutingRulesSection />
+      <BccForwardingSection />
       <TagEmailSchedulesSection />
       <ImportsSection />
+      <VocatechSection />
     </div>
   );
 }
@@ -1670,6 +1672,445 @@ function ReturnsSection() {
   );
 }
 
+// ─────────────────────── Vocatech (Phone & SMS) ──────────────────────────
+
+type VocatechHealthData = {
+  apiKeyConfigured: boolean;
+  webhookSecretConfigured: boolean;
+  fromNumberConfigured: boolean;
+  lastWebhookAt: string | null;
+  recentEventCount24h: number;
+  webhooks: Array<{
+    id: string;
+    name: string;
+    url: string;
+    event_filters: string[];
+  }>;
+  contactFieldsCount: number;
+  contactFields: Array<{
+    name: string;
+    is_phone: boolean;
+    is_match: boolean;
+    is_integration: boolean;
+  }>;
+};
+
+function VocatechSection() {
+  const queryClient = useQueryClient();
+
+  const healthQuery = useQuery<VocatechHealthData>({
+    queryKey: ["vocatech", "health"],
+    queryFn: async () => {
+      const res = await fetch("/api/vocatech/health");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<VocatechHealthData>;
+    },
+    refetchInterval: 60_000,
+  });
+
+  const health = healthQuery.data;
+
+  // Inline status for per-webhook test button: null = idle, "pending" | "ok" | string (error)
+  const [webhookTestStatus, setWebhookTestStatus] = useState<
+    Record<string, "pending" | "ok" | string>
+  >({});
+
+  // Inline status for backfill / roster actions
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const backfillMutation = useMutation({
+    mutationFn: async ({
+      startDate,
+      endDate,
+    }: {
+      startDate: string;
+      endDate: string;
+    }) => {
+      const res = await fetch("/api/vocatech/backfill", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ startDate, endDate }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{ jobId?: string }>;
+    },
+    onSuccess: (data) => {
+      setActionStatus(`Backfill enqueued — job ${data.jobId ?? "?"}`);
+      setActionError(null);
+      void queryClient.invalidateQueries({ queryKey: ["vocatech", "health"] });
+    },
+    onError: (err) => {
+      setActionError((err as Error).message);
+      setActionStatus(null);
+    },
+  });
+
+  const rosterMutation = useMutation({
+    mutationFn: async (scope: "b2b" | "all") => {
+      const res = await fetch("/api/vocatech/roster-sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scope }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{ jobId?: string }>;
+    },
+    onSuccess: (data) => {
+      setActionStatus(`Roster sync enqueued — job ${data.jobId ?? "?"}`);
+      setActionError(null);
+      void queryClient.invalidateQueries({ queryKey: ["vocatech", "health"] });
+    },
+    onError: (err) => {
+      setActionError((err as Error).message);
+      setActionStatus(null);
+    },
+  });
+
+  function isoDate(d: Date): string {
+    return d.toISOString().slice(0, 10);
+  }
+
+  function triggerBackfill(daysBack: number | null) {
+    const today = isoDate(new Date());
+    const start =
+      daysBack === null
+        ? "2000-01-01"
+        : isoDate(new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000));
+    setActionStatus(null);
+    setActionError(null);
+    backfillMutation.mutate({ startDate: start, endDate: today });
+  }
+
+  async function testWebhookById(webhookId: string) {
+    setWebhookTestStatus((prev) => ({ ...prev, [webhookId]: "pending" }));
+    try {
+      const res = await fetch(
+        `/api/vocatech/webhooks/${encodeURIComponent(webhookId)}/test`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      setWebhookTestStatus((prev) => ({ ...prev, [webhookId]: "ok" }));
+    } catch (err) {
+      setWebhookTestStatus((prev) => ({
+        ...prev,
+        [webhookId]: (err as Error).message,
+      }));
+    }
+    void queryClient.invalidateQueries({ queryKey: ["vocatech", "health"] });
+  }
+
+  const anyActionInFlight =
+    backfillMutation.isPending || rosterMutation.isPending;
+
+  const fullyConfigured =
+    health?.apiKeyConfigured && health?.webhookSecretConfigured;
+
+  function configBadge() {
+    if (!health) return null;
+    if (fullyConfigured) {
+      return (
+        <span className="flex items-center gap-1 text-xs text-accent-success font-medium">
+          <span className="inline-block size-2 rounded-full bg-accent-success" />
+          Connected
+        </span>
+      );
+    }
+    const missing: string[] = [];
+    if (!health.apiKeyConfigured) missing.push("API key missing");
+    if (!health.webhookSecretConfigured) missing.push("Webhook secret missing");
+    return (
+      <span className="flex items-center gap-1 text-xs text-accent-danger font-medium">
+        <span className="inline-block size-2 rounded-full bg-accent-danger" />
+        {missing.join(" • ")}
+      </span>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">Vocatech (Phone &amp; SMS)</h2>
+          {configBadge()}
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-5">
+        {healthQuery.isPending && (
+          <p className="text-xs text-muted">Loading integration status…</p>
+        )}
+        {healthQuery.isError && (
+          <p className="text-xs text-accent-danger">
+            Could not load health data —{" "}
+            {(healthQuery.error as Error).message}
+          </p>
+        )}
+
+        {health && (
+          <>
+            {/* ── Configuration status ─────────────────────────────── */}
+            <div className="space-y-1.5">
+              <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+                Configuration
+              </div>
+              <div className="grid gap-1 text-xs">
+                <ConfigRow label="API key" ok={health.apiKeyConfigured} />
+                <ConfigRow
+                  label="Webhook secret"
+                  ok={health.webhookSecretConfigured}
+                />
+                <ConfigRow
+                  label="Outbound SMS from-number"
+                  ok={health.fromNumberConfigured}
+                  note={
+                    !health.fromNumberConfigured
+                      ? "Required for outbound SMS"
+                      : undefined
+                  }
+                />
+              </div>
+
+              {/* Custom fields summary */}
+              <div className="mt-2 text-xs">
+                <span className="text-secondary">Custom fields configured:</span>{" "}
+                <span className="font-mono">{health.contactFieldsCount}</span>
+              </div>
+              {health.contactFieldsCount === 0 ? (
+                <div className="rounded border border-accent-warning/40 bg-accent-warning/10 px-3 py-2 text-xs text-accent-warning">
+                  Roster sync needs at least one is_phone field and one text
+                  field configured in Vocatech's admin UI. Go to your
+                  Vocatech tenant settings to add them.
+                </div>
+              ) : (
+                <table className="mt-1 w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="text-left text-muted">
+                      <th className="pr-3 pb-0.5 font-normal">Field</th>
+                      <th className="pb-0.5 font-normal">Flags</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {health.contactFields.map((f) => (
+                      <tr key={f.name}>
+                        <td className="pr-3 py-0.5 font-mono">{f.name}</td>
+                        <td className="py-0.5 flex flex-wrap gap-1">
+                          {f.is_phone && (
+                            <Badge tone="neutral" className="text-xs px-1 py-0">
+                              phone
+                            </Badge>
+                          )}
+                          {f.is_match && (
+                            <Badge tone="neutral" className="text-xs px-1 py-0">
+                              match
+                            </Badge>
+                          )}
+                          {f.is_integration && (
+                            <Badge tone="neutral" className="text-xs px-1 py-0">
+                              integration
+                            </Badge>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* Recent activity */}
+              <div className="mt-2 text-xs text-secondary">
+                {health.recentEventCount24h > 0 || health.lastWebhookAt ? (
+                  <>
+                    {health.recentEventCount24h} event
+                    {health.recentEventCount24h === 1 ? "" : "s"} in last 24h
+                    {health.lastWebhookAt
+                      ? ` • last event: ${formatRelative(health.lastWebhookAt)}`
+                      : null}
+                  </>
+                ) : (
+                  "No events yet"
+                )}
+              </div>
+            </div>
+
+            {/* ── Backfill ──────────────────────────────────────────── */}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+                Backfill history
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { label: "Last 30 days", days: 30 },
+                    { label: "Last 90 days", days: 90 },
+                    { label: "Last 1 year", days: 365 },
+                    { label: "All time", days: null },
+                  ] as const
+                ).map(({ label, days }) => (
+                  <Button
+                    key={label}
+                    variant="secondary"
+                    size="sm"
+                    disabled={anyActionInFlight}
+                    onClick={() => triggerBackfill(days)}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+              {actionStatus && (
+                <p className="text-xs text-accent-success">{actionStatus}</p>
+              )}
+              {actionError && (
+                <p className="text-xs text-accent-danger">{actionError}</p>
+              )}
+            </div>
+
+            {/* ── Roster push ──────────────────────────────────────── */}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+                Roster push
+              </div>
+              {health.contactFieldsCount === 0 && (
+                <p className="text-xs text-muted">
+                  Configure Vocatech custom fields first
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={
+                    anyActionInFlight || health.contactFieldsCount === 0
+                  }
+                  onClick={() => rosterMutation.mutate("b2b")}
+                  title={
+                    health.contactFieldsCount === 0
+                      ? "Configure Vocatech custom fields first"
+                      : undefined
+                  }
+                >
+                  Push all B2B customers
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={
+                    anyActionInFlight || health.contactFieldsCount === 0
+                  }
+                  onClick={() => rosterMutation.mutate("all")}
+                  title={
+                    health.contactFieldsCount === 0
+                      ? "Configure Vocatech custom fields first"
+                      : undefined
+                  }
+                >
+                  Push everyone
+                </Button>
+              </div>
+            </div>
+
+            {/* ── Webhooks ─────────────────────────────────────────── */}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+                Registered webhooks
+              </div>
+              {health.webhooks.length === 0 ? (
+                <p className="text-xs text-muted">
+                  No webhooks registered. Configure webhook URL + secret in
+                  your Vocatech tenant settings; events will then flow into
+                  finance-hub.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {health.webhooks.map((wh) => {
+                    const status = webhookTestStatus[wh.id];
+                    return (
+                      <div
+                        key={wh.id}
+                        className="flex items-start justify-between gap-3 rounded border border-default px-3 py-2 text-xs"
+                      >
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="font-medium truncate">
+                            {wh.name || wh.url}
+                          </div>
+                          {wh.name && (
+                            <div className="text-muted truncate">{wh.url}</div>
+                          )}
+                          {wh.event_filters.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {wh.event_filters.map((f) => (
+                                <Badge key={f} tone="neutral" className="text-xs px-1 py-0">
+                                  {f}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={status === "pending"}
+                            onClick={() => void testWebhookById(wh.id)}
+                          >
+                            {status === "pending" ? "Testing…" : "Test"}
+                          </Button>
+                          {status === "ok" && (
+                            <span className="text-xs text-accent-success">
+                              Sent
+                            </span>
+                          )}
+                          {status && status !== "ok" && status !== "pending" && (
+                            <span className="text-xs text-accent-danger">
+                              {status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function ConfigRow({
+  label,
+  ok,
+  note,
+}: {
+  label: string;
+  ok: boolean;
+  note?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={cn(
+          "font-mono",
+          ok ? "text-accent-success" : "text-accent-danger",
+        )}
+      >
+        {ok ? "✓" : "✗"}
+      </span>
+      <span>{label}</span>
+      {note && <span className="text-muted">— {note}</span>}
+    </div>
+  );
+}
+
 function formatRelative(iso: string | null): string {
   if (!iso) return "Never";
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -1686,4 +2127,131 @@ function formatSecondsAgo(secs: number): string {
   if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
   const hours = Math.floor(mins / 60);
   return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
+// ── BCC forwarding health section ────────────────────────────────────────────
+// Surfaces live data from invoice_bcc_forwards and lets the operator trigger
+// a manual catch-up batch. Status is always "active" — the forwarder runs
+// opportunistically after every QB send, and the batch endpoint handles any
+// docs that slipped through non-finance-hub paths.
+
+type BccHealthData = {
+  todayCount: number;
+  weekCount: number;
+  lastForwardedAt: string | null;
+};
+
+function BccForwardingSection() {
+  const queryClient = useQueryClient();
+
+  const healthQuery = useQuery<BccHealthData>({
+    queryKey: ["bcc-forward", "health"],
+    queryFn: async () => {
+      const res = await fetch("/api/invoicing/forward-bcc/health");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<BccHealthData>;
+    },
+    refetchInterval: 60_000,
+  });
+
+  const batchMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/invoicing/forward-bcc-todays-batch", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{ queued: number; skipped: number }>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["bcc-forward", "health"] });
+    },
+  });
+
+  const health = healthQuery.data;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">BCC Forwarding (QBO workaround)</h2>
+          <span className="flex items-center gap-1 text-xs text-accent-success font-medium">
+            <span className="inline-block size-2 rounded-full bg-accent-success" />
+            Active
+          </span>
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <p className="text-xs text-muted">
+          QBO silently drops <code>BillEmailBcc</code> on sent invoices. After
+          every successful QB invoice or sales-receipt send, finance-hub
+          forwards a PDF copy to all matching{" "}
+          <code>bcc_invoice</code> routing-rule targets. The{" "}
+          <code>invoice_bcc_forwards</code> table tracks each send; the unique
+          constraint prevents duplicates.
+        </p>
+
+        {healthQuery.isPending && (
+          <p className="text-xs text-muted">Loading…</p>
+        )}
+        {healthQuery.isError && (
+          <p className="text-xs text-accent-danger">
+            Could not load health data —{" "}
+            {(healthQuery.error as Error).message}
+          </p>
+        )}
+
+        {health && (
+          <div className="grid gap-1 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Forwards today</span>
+              <span className="font-mono font-medium">{health.todayCount}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Forwards last 7 days</span>
+              <span className="font-mono font-medium">{health.weekCount}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Last forwarded</span>
+              <span className="font-mono">
+                {formatRelative(health.lastForwardedAt)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+            Manual catch-up
+          </div>
+          <p className="text-xs text-muted">
+            Enqueues BCC-forward jobs for all of today's invoices whose
+            customer has a matching routing rule. Safe to run multiple times —
+            already-forwarded docs are skipped.
+          </p>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={batchMutation.isPending}
+            onClick={() => batchMutation.mutate()}
+          >
+            {batchMutation.isPending ? "Enqueuing…" : "Send today's batch now"}
+          </Button>
+          {batchMutation.isSuccess && (
+            <p className="text-xs text-accent-success">
+              Enqueued {batchMutation.data.queued}, skipped{" "}
+              {batchMutation.data.skipped} already-done.
+            </p>
+          )}
+          {batchMutation.isError && (
+            <p className="text-xs text-accent-danger">
+              {(batchMutation.error as Error).message}
+            </p>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
 }

@@ -150,7 +150,7 @@ export class QboClient {
   // can pipe it into the HTTP response without re-encoding. Same 401 →
   // forceRefresh retry as the query path.
   async getPdf(
-    kind: "invoice" | "creditmemo",
+    kind: "invoice" | "creditmemo" | "salesreceipt",
     qbId: string,
   ): Promise<Buffer> {
     const url = `${this.baseUrl}/v3/company/${this.config.realmId}/${kind}/${encodeURIComponent(qbId)}/pdf`;

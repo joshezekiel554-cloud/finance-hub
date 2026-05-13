@@ -5,6 +5,8 @@
 export {
   CHASE_DIGEST_JOB,
   CHASE_QUEUE,
+  FORWARD_BCC_JOB,
+  FORWARD_BCC_QUEUE,
   GMAIL_POLL_JOB,
   GMAIL_QUEUE,
   QB_SYNC_JOB,
@@ -13,6 +15,11 @@ export {
   TAG_EMAIL_MONTHLY_JOB,
   TAG_EMAIL_QUEUE,
   TAG_EMAIL_WEEKLY_JOB,
+  VOCATECH_BACKFILL_JOB,
+  VOCATECH_BACKFILL_QUEUE,
+  VOCATECH_ROSTER_DELTA_JOB,
+  VOCATECH_ROSTER_JOB,
+  VOCATECH_ROSTER_QUEUE,
   closeQueues,
   getConnection,
   getQueues,
@@ -37,3 +44,15 @@ export type {
   TagEmailJobData,
   TagEmailJobResult,
 } from "./definitions/tag-email.js";
+export type {
+  VocatechBackfillJobData,
+  VocatechBackfillJobResult,
+} from "./definitions/vocatech-backfill.js";
+export type {
+  VocatechRosterSyncJobData,
+  VocatechRosterSyncJobResult,
+} from "./definitions/vocatech-roster-sync.js";
+export type {
+  ForwardBccJobData,
+  ForwardBccJobResult,
+} from "./definitions/forward-bcc.js";
