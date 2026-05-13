@@ -870,7 +870,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
                   docId: sent.Id,
                   customerId: localCust[0]!.id,
                 },
-                { jobId: `salesreceipt:${sent.Id}` },
+                { jobId: `salesreceipt-${sent.Id}` },
               );
             }
           }
@@ -977,7 +977,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
                   docId: invoiceId,
                   customerId: localCust[0]!.id,
                 },
-                { jobId: `invoice:${invoiceId}` },
+                { jobId: `invoice-${invoiceId}` },
               );
             }
           }
@@ -1125,7 +1125,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           docId: inv.qbInvoiceId,
           customerId: inv.customerId,
         },
-        { jobId: `invoice:${inv.qbInvoiceId}` },
+        { jobId: `invoice-${inv.qbInvoiceId}` },
       );
       queued++;
     }
