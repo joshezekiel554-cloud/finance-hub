@@ -91,6 +91,9 @@ Also need `VOCATECH_FROM_NUMBER` in `.env` (a phone number registered to the ten
 - ✅ Cloudflare quick tunnel up + dev webhook (id 48) registered + HMAC fixed (`t=` prefix) + Vocatech test-webhook returns `success: true, status_code: 200`
 - ✅ W5 shipped: Activity tab inline phone-comm entries + Today tab Unmatched Inbox with match/dismiss actions
 - 🎉 **All 8 waves done.**
+- ✅ W5 polish (operator-requested 2026-05-13): Phone calls tab on Today (`9edede0`) + per-row playback + transcript modal on unmatched inbox rows. Tab badge shares cache with the inbox query — zero extra network call.
+- ✅ Adjacent: QB BCC forwarder (workaround for QBO BillEmailBcc drops, 3 yiddy-customer forwards verified) + TxnDate-on-send (invoice/SR send now bumps QBO TxnDate to today with operator-override input).
+- ✅ Branch `feat/vocatech-integration` ready to merge to `main` (46 commits ahead at the time of wrap-up).
 
 ## Known issues
 
