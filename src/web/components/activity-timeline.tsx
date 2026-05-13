@@ -324,21 +324,16 @@ export function ActivityTimeline({
                       <div className="flex items-baseline justify-between gap-2">
                         <button
                           type="button"
-                          disabled={!hasBody && !isPhoneComm}
+                          disabled={!hasBody}
                           onClick={() => {
-                            if (isPhoneComm && onJumpToCallsSms) {
-                              onJumpToCallsSms();
-                              return;
-                            }
                             if (hasBody) toggleExpanded(activity.id);
                           }}
                           className={cn(
                             "min-w-0 flex-1 truncate text-left font-medium",
-                            (hasBody || (isPhoneComm && onJumpToCallsSms)) &&
-                              "cursor-pointer hover:text-accent-primary",
+                            hasBody && "cursor-pointer hover:text-accent-primary",
                           )}
                         >
-                          {hasBody && !isPhoneComm && (
+                          {hasBody && (
                             <span className="mr-1 inline-block align-middle text-muted">
                               {isExpanded ? (
                                 <ChevronDown className="inline size-3" />

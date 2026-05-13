@@ -304,7 +304,12 @@ function CustomerTypeahead({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<CustomerHit[]>([]);
   const [searching, setSearching] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const debounceRef = useRef<number | null>(null);
+
+  // Reset active selection whenever the query or results change.
+  useEffect(() => { setActiveIndex(-1); }, [query]);
+  useEffect(() => { setActiveIndex(-1); }, [results]);
 
   useEffect(() => {
     if (debounceRef.current != null) {
@@ -315,15 +320,21 @@ function CustomerTypeahead({
       setResults([]);
       return;
     }
+    const controller = new AbortController();
     debounceRef.current = window.setTimeout(async () => {
       setSearching(true);
       try {
         const res = await fetch(
           `/api/customers?q=${encodeURIComponent(trimmed)}&customerType=all&limit=20`,
+          { signal: controller.signal },
         );
         if (!res.ok) return;
         const body = (await res.json()) as CustomerListResponse;
         setResults(body.rows ?? []);
+      } catch (err) {
+        // Abort is expected when the user keeps typing; don't log.
+        if ((err as Error).name === "AbortError") return;
+        // Other errors fall through to setResults([]) implicitly
       } finally {
         setSearching(false);
       }
@@ -332,6 +343,7 @@ function CustomerTypeahead({
       if (debounceRef.current != null) {
         window.clearTimeout(debounceRef.current);
       }
+      controller.abort();
     };
   }, [query]);
 
@@ -345,7 +357,20 @@ function CustomerTypeahead({
         placeholder="Search customer by name or email (min 2 chars)…"
         className="w-full rounded-md border border-default bg-base px-2 py-1.5 text-sm"
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActiveIndex((i) => Math.min(results.length - 1, i + 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActiveIndex((i) => Math.max(-1, i - 1));
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (activeIndex >= 0 && results[activeIndex]) {
+              onPick(results[activeIndex].id);
+            }
+          } else if (e.key === "Escape") {
+            onClose();
+          }
         }}
         disabled={isPending}
       />
@@ -356,13 +381,17 @@ function CustomerTypeahead({
           ) : results.length === 0 ? (
             <div className="px-2 py-1.5 text-xs text-muted">No matches.</div>
           ) : (
-            results.map((c) => (
+            results.map((c, idx) => (
               <button
                 key={c.id}
                 type="button"
                 disabled={isPending}
                 onClick={() => onPick(c.id)}
-                className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-elevated disabled:opacity-50"
+                onMouseEnter={() => setActiveIndex(idx)}
+                className={cn(
+                  "block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-elevated disabled:opacity-50",
+                  activeIndex === idx && "bg-elevated font-semibold",
+                )}
               >
                 <div className="font-medium">{c.displayName}</div>
                 {c.primaryEmail && (
