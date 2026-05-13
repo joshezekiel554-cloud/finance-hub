@@ -5,6 +5,8 @@
 export {
   CHASE_DIGEST_JOB,
   CHASE_QUEUE,
+  FORWARD_BCC_JOB,
+  FORWARD_BCC_QUEUE,
   GMAIL_POLL_JOB,
   GMAIL_QUEUE,
   QB_SYNC_JOB,
@@ -50,3 +52,7 @@ export type {
   VocatechRosterSyncJobData,
   VocatechRosterSyncJobResult,
 } from "./definitions/vocatech-roster-sync.js";
+export type {
+  ForwardBccJobData,
+  ForwardBccJobResult,
+} from "./definitions/forward-bcc.js";
