@@ -36,6 +36,9 @@ import {
   CheckCircle2,
   MessageCircle,
   Ban,
+  PhoneIncoming,
+  PhoneOutgoing,
+  ArrowUpRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
@@ -69,7 +72,15 @@ export type ActivityKind =
   | "rma_credit_memo_issued"
   | "rma_completed"
   | "rma_customer_reply"
-  | "rma_cancelled";
+  | "rma_cancelled"
+  // Phone-communication synthetic kinds. The activities table doesn't
+  // store these (ACTIVITY_KINDS is strict); the customer-detail GET
+  // merges phone_communications rows into the timeline server-side
+  // with these kinds so they render alongside emails/payments.
+  | "phone_call_in"
+  | "phone_call_out"
+  | "phone_sms_in"
+  | "phone_sms_out";
 
 export type Activity = {
   id: string;
@@ -95,6 +106,13 @@ export type Activity = {
     // RMA-specific meta fields
     creditMemoDocNumber?: string | null;
     rmaNumber?: string | null;
+    // Phone-communication meta (only populated when kind starts with
+    // "phone_"). Synthesized by the customer-detail GET — no DB column.
+    remoteNumber?: string;
+    extensionName?: string | null;
+    durationSeconds?: number | null;
+    smsStatus?: string | null;
+    phoneLabelMatched?: string | null;
   } | null;
 };
 
@@ -128,7 +146,23 @@ const KIND_META: Record<
   rma_completed: { icon: CheckCircle2, label: "RMA completed", tone: "success" },
   rma_customer_reply: { icon: MessageCircle, label: "Customer reply", tone: "info" },
   rma_cancelled: { icon: Ban, label: "RMA cancelled", tone: "medium" },
+  // Phone-comm rows. Call_in matches email_in's blue tone; call_out
+  // mirrors email_out's success-green. SMS reuses the call colors for
+  // inbound/outbound parity but with the MessageSquare icon.
+  phone_call_in: { icon: PhoneIncoming, label: "Call received", tone: "info" },
+  phone_call_out: { icon: PhoneOutgoing, label: "Call placed", tone: "success" },
+  phone_sms_in: { icon: MessageSquare, label: "SMS received", tone: "info" },
+  phone_sms_out: { icon: MessageSquare, label: "SMS sent", tone: "success" },
 };
+
+// Set of synthetic phone-comm kinds — used by the timeline to decide
+// whether a row should expose the "open Calls & SMS tab" affordance.
+const PHONE_COMM_KINDS = new Set<string>([
+  "phone_call_in",
+  "phone_call_out",
+  "phone_sms_in",
+  "phone_sms_out",
+]);
 
 function metaFor(kind: string) {
   return (KIND_META as Record<string, (typeof KIND_META)[ActivityKind]>)[kind] ?? {
@@ -142,6 +176,7 @@ export function ActivityTimeline({
   customerId,
   activities,
   queryKey,
+  onJumpToCallsSms,
 }: {
   customerId: string;
   activities: Activity[];
@@ -149,6 +184,11 @@ export function ActivityTimeline({
   // component live inside any page that fetches activities however it
   // wants (full customer query vs. a dedicated activities endpoint).
   queryKey: readonly unknown[];
+  // Optional handler invoked when a phone-comm timeline row is clicked
+  // (or its "open Calls & SMS" affordance). The customer-detail page
+  // wires this to setTab("calls_sms"). Other consumers (none today)
+  // could omit it; in that case the row stays inert.
+  onJumpToCallsSms?: () => void;
 }) {
   const [filterKinds, setFilterKinds] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -157,6 +197,17 @@ export function ActivityTimeline({
   // Subscribe to live activity events for THIS customer. We invalidate
   // (rather than splice) so the parent's data stays the source of truth.
   useEventStream("activity.created", (event) => {
+    if (event.customerId !== customerId) return;
+    queryClient.invalidateQueries({ queryKey });
+  });
+  // Same pattern for phone communications — when a new call/SMS lands
+  // for this customer, the customer-detail GET will re-merge it into
+  // the timeline on the next fetch.
+  useEventStream("phone-communication.received", (event) => {
+    if (event.customerId !== customerId) return;
+    queryClient.invalidateQueries({ queryKey });
+  });
+  useEventStream("phone-communication.updated", (event) => {
     if (event.customerId !== customerId) return;
     queryClient.invalidateQueries({ queryKey });
   });
@@ -252,6 +303,7 @@ export function ActivityTimeline({
               const m = metaFor(activity.kind);
               const isExpanded = expanded.has(activity.id);
               const hasBody = Boolean(activity.body);
+              const isPhoneComm = PHONE_COMM_KINDS.has(activity.kind);
               return (
                 <li key={activity.id} className="px-4 py-3 text-sm">
                   <div className="flex items-start gap-3">
@@ -272,14 +324,21 @@ export function ActivityTimeline({
                       <div className="flex items-baseline justify-between gap-2">
                         <button
                           type="button"
-                          disabled={!hasBody}
-                          onClick={() => hasBody && toggleExpanded(activity.id)}
+                          disabled={!hasBody && !isPhoneComm}
+                          onClick={() => {
+                            if (isPhoneComm && onJumpToCallsSms) {
+                              onJumpToCallsSms();
+                              return;
+                            }
+                            if (hasBody) toggleExpanded(activity.id);
+                          }}
                           className={cn(
                             "min-w-0 flex-1 truncate text-left font-medium",
-                            hasBody && "cursor-pointer hover:text-accent-primary",
+                            (hasBody || (isPhoneComm && onJumpToCallsSms)) &&
+                              "cursor-pointer hover:text-accent-primary",
                           )}
                         >
-                          {hasBody && (
+                          {hasBody && !isPhoneComm && (
                             <span className="mr-1 inline-block align-middle text-muted">
                               {isExpanded ? (
                                 <ChevronDown className="inline size-3" />
@@ -310,8 +369,26 @@ export function ActivityTimeline({
                             #{activity.meta.docNumber}
                           </span>
                         )}
+                        {isPhoneComm && activity.meta?.phoneLabelMatched && (
+                          <Badge tone="neutral">
+                            {activity.meta.phoneLabelMatched}
+                          </Badge>
+                        )}
+                        {isPhoneComm && activity.meta?.smsStatus && (
+                          <Badge tone="neutral">{activity.meta.smsStatus}</Badge>
+                        )}
                         <PdfLink kind={activity.kind} qbId={activity.meta?.qbId} />
                         <RmaLink refType={activity.refType} refId={activity.refId} />
+                        {isPhoneComm && onJumpToCallsSms && (
+                          <button
+                            type="button"
+                            onClick={onJumpToCallsSms}
+                            className="inline-flex items-center gap-1 text-accent-primary hover:underline"
+                          >
+                            <ArrowUpRight className="size-3" />
+                            Open in Calls & SMS
+                          </button>
+                        )}
                         <span className="text-muted">via {activity.source}</span>
                       </div>
                       {hasBody && isExpanded && (
