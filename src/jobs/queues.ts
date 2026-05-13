@@ -3,7 +3,7 @@
 // enqueue ad-hoc jobs) and the consumer (the worker process) talk to the
 // same Redis client and don't fight over connection limits.
 //
-// Seven queues, one per concern:
+// Eight queues, one per concern:
 //   - SYNC_QUEUE              — QuickBooks pulls (every 30 min, repeatable)
 //   - GMAIL_QUEUE             — Gmail polls (every 15 min, repeatable)
 //   - CHASE_QUEUE             — Daily chase digest (17:00 Europe/London)
@@ -11,6 +11,7 @@
 //   - TAG_EMAIL_QUEUE         — Tag-driven digest emails (daily/weekly/monthly)
 //   - VOCATECH_BACKFILL_QUEUE — Ad-hoc history backfill (admin-triggered)
 //   - VOCATECH_ROSTER_QUEUE   — Contact roster push (full or nightly delta)
+//   - FORWARD_BCC_QUEUE       — BCC-forward copies after QB invoice/receipt send
 //
 // Defaults are conservative: 3 attempts with exponential backoff, completed
 // jobs trimmed at 100 to keep Redis memory bounded; failed jobs trimmed at
@@ -30,6 +31,7 @@ export const NOTIFICATIONS_QUEUE = "notifications";
 export const TAG_EMAIL_QUEUE = "tag-email";
 export const VOCATECH_BACKFILL_QUEUE = "vocatech-backfill";
 export const VOCATECH_ROSTER_QUEUE = "vocatech-roster";
+export const FORWARD_BCC_QUEUE = "forward-bcc";
 
 export const QB_SYNC_JOB = "qb-sync";
 export const GMAIL_POLL_JOB = "gmail-poll";
@@ -41,6 +43,7 @@ export const TAG_EMAIL_MONTHLY_JOB = "tag-email-monthly";
 export const VOCATECH_BACKFILL_JOB = "vocatech-backfill";
 export const VOCATECH_ROSTER_JOB = "vocatech-roster-full";
 export const VOCATECH_ROSTER_DELTA_JOB = "vocatech-roster-delta";
+export const FORWARD_BCC_JOB = "forward-bcc";
 
 let cachedConnection: Redis | undefined;
 
@@ -85,6 +88,7 @@ let cachedQueues:
       tagEmail: Queue;
       vocatechBackfill: Queue;
       vocatechRoster: Queue;
+      forwardBcc: Queue;
     }
   | undefined;
 
@@ -96,6 +100,7 @@ export type Queues = {
   tagEmail: Queue;
   vocatechBackfill: Queue;
   vocatechRoster: Queue;
+  forwardBcc: Queue;
 };
 
 export function getQueues(): Queues {
@@ -118,6 +123,7 @@ export function getQueues(): Queues {
       connection,
       defaultJobOptions,
     }),
+    forwardBcc: new Queue(FORWARD_BCC_QUEUE, { connection, defaultJobOptions }),
   };
   return cachedQueues;
 }
@@ -134,6 +140,7 @@ export async function closeQueues(): Promise<void> {
       cachedQueues.tagEmail.close(),
       cachedQueues.vocatechBackfill.close(),
       cachedQueues.vocatechRoster.close(),
+      cachedQueues.forwardBcc.close(),
     ]);
     cachedQueues = undefined;
   }
