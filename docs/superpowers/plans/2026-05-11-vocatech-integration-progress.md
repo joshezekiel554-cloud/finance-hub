@@ -94,6 +94,8 @@ Also need `VOCATECH_FROM_NUMBER` in `.env` (a phone number registered to the ten
 - ✅ W5 polish (operator-requested 2026-05-13): Phone calls tab on Today (`9edede0`) + per-row playback + transcript modal on unmatched inbox rows. Tab badge shares cache with the inbox query — zero extra network call.
 - ✅ Adjacent: QB BCC forwarder (workaround for QBO BillEmailBcc drops, 3 yiddy-customer forwards verified) + TxnDate-on-send (invoice/SR send now bumps QBO TxnDate to today with operator-override input).
 - ✅ Branch `feat/vocatech-integration` ready to merge to `main` (46 commits ahead at the time of wrap-up).
+- ✅ Merged to main + **deployed to production at https://finance.feldart.com** on 2026-05-13. Full local DB transferred (2354 customers / 3096 invoices / 6230 activities / 480 phone comms / 164 RMAs). Vocatech webhook re-pointed to prod (id 49); dev webhook 48 deleted. HMAC verified live against prod URL.
+- ✅ Two production-deploy fixes landed during cutover: `drizzle-kit` moved from devDeps → deps (so `npm ci --omit=dev` on the VPS installs it for migrations); `src/lib/env.ts` now picks `.env.production` when `NODE_ENV=production` via dotenv path-based loading + `optionalSecret` helper that treats empty strings as unset for `VOCATECH_API_KEY`/`VOCATECH_WEBHOOK_SECRET`/`VOCATECH_FROM_NUMBER`.
 
 ## Known issues
 
