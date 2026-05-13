@@ -49,12 +49,16 @@ export async function forwardBccHandler(
   if (tags.length === 0) return { sent: 0, skipped: 0, errors: 0 };
 
   // 2. Find matching routing rules — action='bcc_invoice' fires for both
-  //    invoices and sales receipts.
+  //    invoices and sales receipts. Lowercase both sides defensively;
+  //    write paths normalise but a mixed-case tag from an import path
+  //    would otherwise silently miss matching here (sibling consumers
+  //    in tag-email.ts and the catch-up endpoint below lowercase both).
   const rules = await db.select().from(emailRoutingRules);
+  const lowerTags = new Set(tags.map((t) => t.toLowerCase().trim()));
   const matchingTargets = new Set<string>();
   for (const r of rules) {
     if (r.action !== "bcc_invoice") continue;
-    if (tags.includes(r.tag.toLowerCase())) {
+    if (lowerTags.has(r.tag.toLowerCase())) {
       matchingTargets.add(r.value);
     }
   }

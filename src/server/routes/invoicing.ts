@@ -858,11 +858,20 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
               .limit(1);
             if (localCust.length > 0) {
               const queues = getQueues();
-              await queues.forwardBcc.add(FORWARD_BCC_JOB, {
-                docType: "salesreceipt",
-                docId: sent.Id,
-                customerId: localCust[0]!.id,
-              });
+              // Deterministic jobId — if the same doc is enqueued twice
+              // (real-time hook + catch-up batch, or operator double-click),
+              // BullMQ deduplicates so the worker only processes once. The
+              // job's own existence check + the unique constraint backstop
+              // the table, but jobId-dedup prevents the duplicate Gmail send.
+              await queues.forwardBcc.add(
+                FORWARD_BCC_JOB,
+                {
+                  docType: "salesreceipt",
+                  docId: sent.Id,
+                  customerId: localCust[0]!.id,
+                },
+                { jobId: `salesreceipt:${sent.Id}` },
+              );
             }
           }
         } catch (err) {
@@ -960,11 +969,16 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
               .limit(1);
             if (localCust.length > 0) {
               const queues = getQueues();
-              await queues.forwardBcc.add(FORWARD_BCC_JOB, {
-                docType: "invoice",
-                docId: invoiceId,
-                customerId: localCust[0]!.id,
-              });
+              // Deterministic jobId — see salesreceipt branch above.
+              await queues.forwardBcc.add(
+                FORWARD_BCC_JOB,
+                {
+                  docType: "invoice",
+                  docId: invoiceId,
+                  customerId: localCust[0]!.id,
+                },
+                { jobId: `invoice:${invoiceId}` },
+              );
             }
           }
         } catch (err) {
@@ -1015,8 +1029,12 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
 
   // ── BCC-forward catch-up batch ──────────────────────────────────────────
   // POST /forward-bcc-todays-batch — enqueue BCC-forward jobs for all of
-  // today's invoices/sales-receipts whose customer has a bcc_invoice routing
-  // rule. Idempotent: the job's unique constraint prevents double-sends.
+  // today's INVOICES whose customer has a bcc_invoice routing rule.
+  // Sales receipts are NOT included: they aren't mirrored in our local
+  // invoices table, so we have no list to iterate over here. The real-time
+  // hook in the salesreceipt send branch covers them at issue time;
+  // missed sales receipts would need a manual re-send through the QB UI.
+  // Idempotent: the job's unique constraint prevents double-sends.
   app.post("/forward-bcc-todays-batch", async (req, reply) => {
     const user = await requireAuth(req);
     if (!isAdmin(user)) {
@@ -1100,11 +1118,15 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
         continue;
       }
 
-      await queues.forwardBcc.add(FORWARD_BCC_JOB, {
-        docType: "invoice",
-        docId: inv.qbInvoiceId,
-        customerId: inv.customerId,
-      });
+      await queues.forwardBcc.add(
+        FORWARD_BCC_JOB,
+        {
+          docType: "invoice",
+          docId: inv.qbInvoiceId,
+          customerId: inv.customerId,
+        },
+        { jobId: `invoice:${inv.qbInvoiceId}` },
+      );
       queued++;
     }
 
