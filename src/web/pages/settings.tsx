@@ -2147,7 +2147,7 @@ function BccForwardingSection() {
   const healthQuery = useQuery<BccHealthData>({
     queryKey: ["bcc-forward", "health"],
     queryFn: async () => {
-      const res = await fetch("/api/invoices/forward-bcc/health");
+      const res = await fetch("/api/invoicing/forward-bcc/health");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json() as Promise<BccHealthData>;
     },
@@ -2156,7 +2156,7 @@ function BccForwardingSection() {
 
   const batchMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch("/api/invoices/forward-bcc-todays-batch", {
+      const res = await fetch("/api/invoicing/forward-bcc-todays-batch", {
         method: "POST",
       });
       if (!res.ok) {
