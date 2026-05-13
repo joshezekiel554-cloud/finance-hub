@@ -16,7 +16,7 @@ import { searchEmails } from "../../integrations/gmail/client.js";
 import { classifyExtensivEmail } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNull, lt, max } from "drizzle-orm";
 import {
   parseShipmentHtml,
   reconcile,
@@ -45,13 +45,16 @@ import {
 } from "../../db/schema/returns.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, isAdmin } from "../lib/auth.js";
 import { resolveRecipientsWithRules } from "../../modules/customer-emails/recipients.js";
 import {
   emailRoutingRules,
   type RoutingRuleAction,
 } from "../../db/schema/email-routing-rules.js";
 import type { Customer } from "../../db/schema/customers.js";
+import { invoiceBccForwards } from "../../db/schema/invoice-bcc-forwards.js";
+import { invoices } from "../../db/schema/invoices.js";
+import { getQueues, FORWARD_BCC_JOB } from "../../jobs/queues.js";
 
 const log = createLogger({ component: "invoicing-route" });
 
@@ -841,6 +844,31 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           },
           "sales receipt emailed",
         );
+
+        // Workaround for QBO's broken per-invoice BillEmailBcc — finance-hub
+        // forwards a copy to each email_routing_rules target matching the
+        // customer's tags. Fire-and-forget; failure here doesn't fail the send.
+        try {
+          const qbCustId = sent.CustomerRef?.value;
+          if (qbCustId) {
+            const localCust = await db
+              .select({ id: customers.id })
+              .from(customers)
+              .where(eq(customers.qbCustomerId, qbCustId))
+              .limit(1);
+            if (localCust.length > 0) {
+              const queues = getQueues();
+              await queues.forwardBcc.add(FORWARD_BCC_JOB, {
+                docType: "salesreceipt",
+                docId: sent.Id,
+                customerId: localCust[0]!.id,
+              });
+            }
+          }
+        } catch (err) {
+          log.warn({ err, salesReceiptId: sent.Id }, "forward-bcc enqueue failed");
+        }
+
         return reply.send({
           outcome: {
             status: "sent",
@@ -917,11 +945,171 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           postSendEmail: async (id) => qbClient.sendInvoiceEmail(id),
         },
       );
+
+      // Workaround for QBO's broken per-invoice BillEmailBcc — finance-hub
+      // forwards a copy to each email_routing_rules target matching the
+      // customer's tags. Fire-and-forget; failure here doesn't fail the send.
+      if (outcome.status === "sent" && !env.SHADOW_MODE) {
+        try {
+          const qbCustId = invoice.CustomerRef?.value;
+          if (qbCustId) {
+            const localCust = await db
+              .select({ id: customers.id })
+              .from(customers)
+              .where(eq(customers.qbCustomerId, qbCustId))
+              .limit(1);
+            if (localCust.length > 0) {
+              const queues = getQueues();
+              await queues.forwardBcc.add(FORWARD_BCC_JOB, {
+                docType: "invoice",
+                docId: invoiceId,
+                customerId: localCust[0]!.id,
+              });
+            }
+          }
+        } catch (err) {
+          log.warn({ err, invoiceId }, "forward-bcc enqueue failed");
+        }
+      }
+
       return reply.send({ outcome, shadowMode: env.SHADOW_MODE });
     } catch (err) {
       log.error({ err, invoiceId }, "send failed");
       return reply.code(500).send({ error: (err as Error).message });
     }
+  });
+
+  // ── BCC-forward health ───────────────────────────────────────────────────
+  // GET /forward-bcc/health — dashboard widget data for BccForwardingSection.
+  app.get("/forward-bcc/health", async (req, reply) => {
+    await requireAuth(req);
+
+    const now = new Date();
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const weekStart = new Date(todayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const [todayRow, weekRow, lastRow] = await Promise.all([
+      db
+        .select({ cnt: count() })
+        .from(invoiceBccForwards)
+        .where(gte(invoiceBccForwards.forwardedAt, todayStart)),
+      db
+        .select({ cnt: count() })
+        .from(invoiceBccForwards)
+        .where(gte(invoiceBccForwards.forwardedAt, weekStart)),
+      db
+        .select({ lastForwardedAt: max(invoiceBccForwards.forwardedAt) })
+        .from(invoiceBccForwards),
+    ]);
+
+    return reply.send({
+      todayCount: todayRow[0]?.cnt ?? 0,
+      weekCount: weekRow[0]?.cnt ?? 0,
+      lastForwardedAt: lastRow[0]?.lastForwardedAt ?? null,
+    });
+  });
+
+  // ── BCC-forward catch-up batch ──────────────────────────────────────────
+  // POST /forward-bcc-todays-batch — enqueue BCC-forward jobs for all of
+  // today's invoices/sales-receipts whose customer has a bcc_invoice routing
+  // rule. Idempotent: the job's unique constraint prevents double-sends.
+  app.post("/forward-bcc-todays-batch", async (req, reply) => {
+    const user = await requireAuth(req);
+    if (!isAdmin(user)) {
+      return reply.code(403).send({ error: "admin only" });
+    }
+
+    const now = new Date();
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+
+    // Load all active bcc_invoice rules so we can filter by tagged customers.
+    const rules = await db
+      .select({ tag: emailRoutingRules.tag })
+      .from(emailRoutingRules)
+      .where(eq(emailRoutingRules.action, "bcc_invoice"));
+    if (rules.length === 0) {
+      return reply.send({ queued: 0, skipped: 0 });
+    }
+    const activeTags = rules.map((r) => r.tag.toLowerCase());
+
+    // Find customers who carry at least one active tag.
+    const taggedCustomers = await db
+      .select({ id: customers.id, tags: customers.tags })
+      .from(customers);
+    const eligibleCustomerIds = new Set<string>(
+      taggedCustomers
+        .filter((c) => {
+          const tags = (c.tags as string[] | null) ?? [];
+          return tags.some((t) => activeTags.includes(t.toLowerCase()));
+        })
+        .map((c) => c.id),
+    );
+    if (eligibleCustomerIds.size === 0) {
+      return reply.send({ queued: 0, skipped: 0 });
+    }
+
+    // Load today's invoices for eligible customers.
+    const todayInvoices = await db
+      .select({
+        id: invoices.id,
+        qbInvoiceId: invoices.qbInvoiceId,
+        customerId: invoices.customerId,
+      })
+      .from(invoices)
+      .where(
+        and(
+          gte(invoices.issueDate, todayStart),
+          lt(invoices.issueDate, tomorrowStart),
+          inArray(invoices.customerId, [...eligibleCustomerIds]),
+        ),
+      );
+
+    // Check which (docType, docId, target) combos are already forwarded.
+    // We enqueue everything and let the job's own existence-check fast-path
+    // skip already-done targets, rather than pre-checking every permutation.
+    const queues = getQueues();
+    let queued = 0;
+    let skipped = 0;
+
+    for (const inv of todayInvoices) {
+      // Check if already fully forwarded (at least one row means it ran;
+      // the job is idempotent so we can re-enqueue safely, but save the
+      // getPdf call by checking first).
+      const alreadyDone = await db
+        .select({ id: invoiceBccForwards.id })
+        .from(invoiceBccForwards)
+        .where(
+          and(
+            eq(invoiceBccForwards.docType, "invoice"),
+            eq(invoiceBccForwards.docId, inv.qbInvoiceId),
+          ),
+        )
+        .limit(1);
+
+      if (alreadyDone.length > 0) {
+        skipped++;
+        continue;
+      }
+
+      await queues.forwardBcc.add(FORWARD_BCC_JOB, {
+        docType: "invoice",
+        docId: inv.qbInvoiceId,
+        customerId: inv.customerId,
+      });
+      queued++;
+    }
+
+    log.info({ queued, skipped }, "forward-bcc-todays-batch enqueued");
+    return reply.send({ queued, skipped });
   });
 };
 
