@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "./lib/cn";
 import { NotificationBell } from "./components/notification-bell";
+import { UserPill } from "./components/user-pill";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -67,7 +68,10 @@ export default function App({ children }: { children: ReactNode }) {
       <main className="flex flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b border-default bg-base px-4 md:px-6">
           <div className="text-sm font-medium text-primary">Welcome back</div>
-          <NotificationBell />
+          <div className="flex items-center gap-3">
+            <NotificationBell />
+            <UserPill />
+          </div>
         </header>
         <div className="flex-1 overflow-y-auto p-4 md:p-6">{children}</div>
       </main>

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { requireAuth } from "../lib/auth.js";
+import { isAdmin, requireAuth } from "../lib/auth.js";
 import oauthRoutes from "./oauth.js";
 import invoicingRoutes from "./invoicing.js";
 import eventsRoute from "./events.js";
@@ -43,6 +43,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         email: user.email,
         name: user.name,
         image: user.image,
+        isAdmin: isAdmin(user),
       },
     };
   });
