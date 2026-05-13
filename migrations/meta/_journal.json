@@ -225,6 +225,13 @@
       "when": 1778600000000,
       "tag": "0031_vocatech_source_event_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "5",
+      "when": 1778667815676,
+      "tag": "0032_invoice_bcc_forwards",
+      "breakpoints": true
     }
   ]
 }
