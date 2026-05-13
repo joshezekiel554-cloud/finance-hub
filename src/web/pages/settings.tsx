@@ -77,6 +77,7 @@ export default function SettingsPage() {
       <StatementPdfSection />
       <ReturnsSection />
       <RoutingRulesSection />
+      <BccForwardingSection />
       <TagEmailSchedulesSection />
       <ImportsSection />
       <VocatechSection />
@@ -2126,4 +2127,131 @@ function formatSecondsAgo(secs: number): string {
   if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
   const hours = Math.floor(mins / 60);
   return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
+// ── BCC forwarding health section ────────────────────────────────────────────
+// Surfaces live data from invoice_bcc_forwards and lets the operator trigger
+// a manual catch-up batch. Status is always "active" — the forwarder runs
+// opportunistically after every QB send, and the batch endpoint handles any
+// docs that slipped through non-finance-hub paths.
+
+type BccHealthData = {
+  todayCount: number;
+  weekCount: number;
+  lastForwardedAt: string | null;
+};
+
+function BccForwardingSection() {
+  const queryClient = useQueryClient();
+
+  const healthQuery = useQuery<BccHealthData>({
+    queryKey: ["bcc-forward", "health"],
+    queryFn: async () => {
+      const res = await fetch("/api/invoices/forward-bcc/health");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<BccHealthData>;
+    },
+    refetchInterval: 60_000,
+  });
+
+  const batchMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/invoices/forward-bcc-todays-batch", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<{ queued: number; skipped: number }>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["bcc-forward", "health"] });
+    },
+  });
+
+  const health = healthQuery.data;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">BCC Forwarding (QBO workaround)</h2>
+          <span className="flex items-center gap-1 text-xs text-accent-success font-medium">
+            <span className="inline-block size-2 rounded-full bg-accent-success" />
+            Active
+          </span>
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <p className="text-xs text-muted">
+          QBO silently drops <code>BillEmailBcc</code> on sent invoices. After
+          every successful QB invoice or sales-receipt send, finance-hub
+          forwards a PDF copy to all matching{" "}
+          <code>bcc_invoice</code> routing-rule targets. The{" "}
+          <code>invoice_bcc_forwards</code> table tracks each send; the unique
+          constraint prevents duplicates.
+        </p>
+
+        {healthQuery.isPending && (
+          <p className="text-xs text-muted">Loading…</p>
+        )}
+        {healthQuery.isError && (
+          <p className="text-xs text-accent-danger">
+            Could not load health data —{" "}
+            {(healthQuery.error as Error).message}
+          </p>
+        )}
+
+        {health && (
+          <div className="grid gap-1 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Forwards today</span>
+              <span className="font-mono font-medium">{health.todayCount}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Forwards last 7 days</span>
+              <span className="font-mono font-medium">{health.weekCount}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Last forwarded</span>
+              <span className="font-mono">
+                {formatRelative(health.lastForwardedAt)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+            Manual catch-up
+          </div>
+          <p className="text-xs text-muted">
+            Enqueues BCC-forward jobs for all of today's invoices whose
+            customer has a matching routing rule. Safe to run multiple times —
+            already-forwarded docs are skipped.
+          </p>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={batchMutation.isPending}
+            onClick={() => batchMutation.mutate()}
+          >
+            {batchMutation.isPending ? "Enqueuing…" : "Send today's batch now"}
+          </Button>
+          {batchMutation.isSuccess && (
+            <p className="text-xs text-accent-success">
+              Enqueued {batchMutation.data.queued}, skipped{" "}
+              {batchMutation.data.skipped} already-done.
+            </p>
+          )}
+          {batchMutation.isError && (
+            <p className="text-xs text-accent-danger">
+              {(batchMutation.error as Error).message}
+            </p>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
 }
