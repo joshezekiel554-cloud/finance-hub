@@ -166,7 +166,7 @@ const REASON_LABELS: Record<DismissReason, string> = {
   other: "Other",
 };
 
-type Tab = "open" | "unparseable" | "sent" | "dismissed";
+type Tab = "open" | "unparseable" | "sent" | "dismissed" | "phone_calls";
 
 // Single source of truth for which tab a row belongs in. Priority order:
 //   1. Dismissed wins (a dismissed row stays under Dismissed regardless).
@@ -271,6 +271,19 @@ export default function InvoicingTodayPage() {
   });
   const terms = termsData?.terms ?? [];
 
+  // Tap the same queryKey the UnmatchedPhoneCommInbox uses so this count
+  // reads from TanStack Query's shared cache — no extra network call.
+  const { data: unmatchedData } = useQuery<{ rows: unknown[] }>({
+    queryKey: ["vocatech", "unmatched"],
+    queryFn: async () => {
+      const res = await fetch("/api/vocatech/unmatched?days=7");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchInterval: 60_000,
+  });
+  const unmatchedCount = unmatchedData?.rows.length ?? 0;
+
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between">
@@ -331,12 +344,6 @@ export default function InvoicingTodayPage() {
         />
       )}
 
-      {/* ──────────────── Unmatched calls & SMS ─────────────────────── */}
-      {/* Vocatech inbox — phone communications from the last 7 days that
-          the matcher couldn't link to a customer. Operator can match
-          (opens customer-picker) or ignore (stamps dismissed_at). */}
-      <UnmatchedPhoneCommInbox />
-
       {/* ──────────────── Orders section ────────────────────────────── */}
       {data && (
         <section className="space-y-3">
@@ -361,6 +368,7 @@ export default function InvoicingTodayPage() {
                 dismissed: data.rows.filter(
                   (r) => classifyRow(r, data.dismissed) === "dismissed",
                 ).length,
+                phone_calls: unmatchedCount,
               }}
             />
             {tab === "unparseable" && (
@@ -373,7 +381,12 @@ export default function InvoicingTodayPage() {
               />
             )}
           </div>
-          {data.rows.length === 0 ? (
+          {tab === "phone_calls" ? (
+            // Vocatech inbox — phone communications from the last 7 days
+            // that the matcher couldn't link to a customer. Operator can
+            // match (opens customer-picker) or ignore (stamps dismissed_at).
+            <UnmatchedPhoneCommInbox />
+          ) : data.rows.length === 0 ? (
             <Card>
               <CardBody>
                 <p className="text-sm text-secondary">
@@ -612,6 +625,7 @@ function TabToggle({
     { key: "unparseable", label: "Unparseable" },
     { key: "sent", label: "Sent" },
     { key: "dismissed", label: "Dismissed" },
+    { key: "phone_calls", label: "Phone calls" },
   ];
   return (
     <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">

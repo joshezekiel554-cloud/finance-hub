@@ -15,10 +15,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PhoneIncoming, PhoneOutgoing, MessageSquare, X, Check } from "lucide-react";
+import {
+  PhoneIncoming,
+  PhoneOutgoing,
+  MessageSquare,
+  X,
+  Check,
+  FileText,
+} from "lucide-react";
 import { Card, CardBody, CardHeader } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { CallRecordingPlayer } from "./call-recording-player";
+import { CallTranscriptModal } from "./call-transcript-modal";
 import { useEventStream } from "../lib/use-event-stream";
 import { cn } from "../lib/cn";
 
@@ -148,6 +157,7 @@ function UnmatchedRow({
   onChanged: () => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
 
   const isCall = row.kind === "call_in" || row.kind === "call_out";
   const inbound = row.kind === "call_in" || row.kind === "sms_in";
@@ -241,6 +251,11 @@ function UnmatchedRow({
               {bodyPreview}
             </p>
           )}
+          {isCall && row.recordingMediaId && (
+            <div className="mt-2">
+              <CallRecordingPlayer phoneCommId={row.id} />
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
               type="button"
@@ -251,6 +266,17 @@ function UnmatchedRow({
               <Check className="size-3.5" />
               Match to customer
             </Button>
+            {isCall && row.transcription && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setTranscriptOpen(true)}
+              >
+                <FileText className="size-3.5" />
+                View transcript
+              </Button>
+            )}
             <Button
               type="button"
               size="sm"
@@ -283,6 +309,13 @@ function UnmatchedRow({
           )}
         </div>
       </div>
+      {isCall && row.transcription && (
+        <CallTranscriptModal
+          open={transcriptOpen}
+          onOpenChange={setTranscriptOpen}
+          transcription={row.transcription}
+        />
+      )}
     </li>
   );
 }
