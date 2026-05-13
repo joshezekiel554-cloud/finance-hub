@@ -20,7 +20,7 @@
 | W2 (1 task) | webhook route + all 4 event handlers + outbound endpoints | ✅ done |
 | W3 (1 bundled task) | backfill job + roster sync job + nightly cron (bundled to avoid merge conflicts on queues.ts/worker.ts/schedule.ts/vocatech.ts) | ✅ done |
 | W4 (parallel ×2) | 4.1 Calls and SMS tab UI, 4.2 Settings section | ✅ done |
-| W5 (1 task) | Activity inline + Today unmatched inbox | not started |
+| W5 (1 task) | Activity inline + Today unmatched inbox | ✅ done |
 
 ## Task status
 
@@ -34,7 +34,7 @@
 | 291 (W3.2) | Roster sync job | sonnet | ✅ completed | bundled in W3, merged `e7730a4` |
 | 292 (W4.1) | Calls and SMS tab | **opus** | ✅ completed | `a07dcb7` + fix `e21c230`, merged `07edc40` |
 | 293 (W4.2) | Settings section | sonnet | ✅ completed | `7deb90e` + fix `7e7aa1d`, merged `9becdd7` |
-| 294 (W5) | Activity inline + unmatched inbox | sonnet | pending | — |
+| 294 (W5) | Activity inline + unmatched inbox | **opus** | ✅ completed | `7340e6a` + fix `7892193`, merged `d2d4007` |
 
 ## Commits on branch
 
@@ -53,6 +53,9 @@
 - `5bcce31` — fix sendMessage + message.received webhook against OpenAPI spec
 - W4.1 (voc/calls-sms-tab): `a07dcb7` + fix `e21c230` (toNumber reset + aria-label), merged `07edc40`
 - W4.2 (voc/settings): `7deb90e` + fix `7e7aa1d` (apostrophe), merged `9becdd7`
+- HMAC verifier fix: `924e695` (`t=` prefix per spec, verified with Vocatech test webhook)
+- W5 (voc/activity-unmatched): `7340e6a` + fix `7892193` (phone body expand, typeahead abort + keyboard nav), merged `d2d4007`
+- getCall(id) → listCalls(date range) swap: `7cf72eb` (the GET /calls/{id} endpoint doesn't exist; recording_media_id extraction now uses paginated list filtered by call_id ±1 day)
 
 ## Migration to run before deploy
 
@@ -81,6 +84,13 @@ Also need `VOCATECH_FROM_NUMBER` in `.env` (a phone number registered to the ten
 - ⏸️ outbound SMS: blocked on `VOCATECH_FROM_NUMBER` env config
 - ⏸️ inbound webhook: not yet tested with a live tunnel
 - ✅ W4 UI shipped: Calls & SMS tab on customer detail + Settings → Vocatech section (health badge, backfill, roster push, webhook test). Real test against Joshua's tenant blocked on (a) Vocatech custom fields config (b) `VOCATECH_FROM_NUMBER` env
+- ✅ Vocatech custom fields (NAME / PHONE / EXTERNAL ID) configured by Vocatech support
+- ✅ VOCATECH_FROM_NUMBER set to 7185697045
+- ✅ Roster sync verified live: 213 b2b customers pushed with fields populated; Merkaz Monsey verified at Vocatech contact id 730925
+- ✅ Recording + AI transcription enabled on Vocatech tenant (new calls only — historical have null transcript/recording)
+- ✅ Cloudflare quick tunnel up + dev webhook (id 48) registered + HMAC fixed (`t=` prefix) + Vocatech test-webhook returns `success: true, status_code: 200`
+- ✅ W5 shipped: Activity tab inline phone-comm entries + Today tab Unmatched Inbox with match/dismiss actions
+- 🎉 **All 8 waves done.**
 
 ## Known issues
 
