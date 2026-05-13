@@ -217,6 +217,11 @@ const sendBodySchema = z.object({
   billEmailTo: z.string().max(2000).optional(),
   billEmailCc: z.string().max(2000).optional(),
   billEmailBcc: z.string().max(2000).optional(),
+  // Optional issue-date override in YYYY-MM-DD form. When omitted the server
+  // defaults to today (America/New_York) so a send always bumps TxnDate to
+  // the send date — matches operator expectation that invoices are dated when
+  // they leave finance-hub, not when they were first drafted in Shopify.
+  txnDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
@@ -758,7 +763,14 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       billEmailTo,
       billEmailCc,
       billEmailBcc,
+      txnDate,
     } = parse.data;
+
+    // Today in America/New_York — matches QBO's default timezone for TxnDate.
+    // If the caller passed an override, use that instead.
+    const effectiveTxnDate =
+      txnDate ??
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 
     const qbClient = new QboClient();
 
@@ -835,6 +847,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
         if (billEmailBcc && billEmailBcc.trim()) {
           patchPayload.BillEmailBcc = { Address: billEmailBcc.trim() };
         }
+        patchPayload.TxnDate = effectiveTxnDate;
         const updated = await qbClient.updateSalesReceipt(patchPayload);
         const sent = await qbClient.sendSalesReceiptEmail(updated.Id);
         log.info(
@@ -946,6 +959,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           billEmailTo,
           billEmailCc,
           billEmailBcc,
+          txnDate: effectiveTxnDate,
           // Live POST hook: forwards the prepared sparse-update payload to
           // QboClient.updateInvoice. Only invoked when shadowMode=false.
           postUpdate: async (payload) => qbClient.updateInvoice(payload),

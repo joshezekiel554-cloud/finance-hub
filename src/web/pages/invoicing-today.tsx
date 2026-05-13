@@ -880,6 +880,14 @@ function ShipmentCard({
     row.qbInvoice?.billEmailBcc ?? "",
   );
   const [emailExpanded, setEmailExpanded] = useState<boolean>(false);
+  // TxnDate (issue date) override. Defaults to today in America/New_York;
+  // operator can edit before sending. Server defaults to today if omitted,
+  // but we surface it in the UI so the operator can see + override.
+  const todayNY = useMemo(
+    () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()),
+    [],
+  );
+  const [txnDate, setTxnDate] = useState<string>(todayNY);
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
 
   const queryClient = useQueryClient();
@@ -1003,6 +1011,9 @@ function ShipmentCard({
             billEmailBcc.trim() !== (row.qbInvoice?.billEmailBcc ?? "")
               ? billEmailBcc.trim()
               : undefined,
+          // Only send the override when it differs from today; server
+          // defaults to today in America/New_York when omitted.
+          txnDate: txnDate !== todayNY ? txnDate : undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -1420,6 +1431,18 @@ function ShipmentCard({
                       setSendResult(null);
                     }}
                     placeholder="-SP for special offer"
+                    className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
+                  />
+                </label>
+                <label className="flex-1 text-xs text-secondary">
+                  <span className="mb-1 block font-medium">Issue date</span>
+                  <input
+                    type="date"
+                    value={txnDate}
+                    onChange={(e) => {
+                      setTxnDate(e.target.value);
+                      setSendResult(null);
+                    }}
                     className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
                   />
                 </label>

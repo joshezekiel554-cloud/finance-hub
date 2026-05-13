@@ -53,6 +53,10 @@ export type QboInvoicePayload = {
   TrackingNum?: string;
   ShipDate?: string;
   ShipMethodRef?: { value: string; name: string };
+  // Optional issue date override (YYYY-MM-DD). Always set by the route layer
+  // to today (or operator-provided override); QBO's sparse update will bump
+  // the invoice's TxnDate accordingly.
+  TxnDate?: string;
   // Optional recomputed due date in YYYY-MM-DD form. Set when the caller
   // changes SalesTermRef AND supplies the new term's DueDays — QBO does
   // NOT auto-recompute DueDate on a sparse update when SalesTermRef
@@ -113,6 +117,9 @@ export type BuildPayloadOptions = {
   billEmailTo?: string;
   billEmailCc?: string;
   billEmailBcc?: string;
+  // YYYY-MM-DD. When set, the payload sets TxnDate accordingly. Always
+  // populated by the route handler (defaults to today in America/New_York).
+  txnDate?: string;
 };
 
 // Pure transform: invoice + actions → sparse update payload. No I/O. The send
@@ -252,6 +259,9 @@ export function buildPayload(
     PrivateNote: "",
     Line: updatedLines,
   };
+  if (options.txnDate) {
+    payload.TxnDate = options.txnDate;
+  }
   if (meta && meta.type === "set_metadata") {
     payload.TrackingNum = meta.trackingNumber;
     payload.ShipDate = meta.shipDate;
@@ -265,13 +275,15 @@ export function buildPayload(
     // Recompute DueDate from TxnDate + DueDays. Skipped if the caller
     // didn't supply DueDays (date-driven terms) or the invoice has no
     // TxnDate (defensive — QBO always populates it on real invoices).
+    // Use the new TxnDate if we're updating it, so DueDate stays consistent.
+    const baseDate = options.txnDate ?? invoice.TxnDate;
     if (
       typeof options.salesTermDueDays === "number" &&
       Number.isFinite(options.salesTermDueDays) &&
       options.salesTermDueDays >= 0 &&
-      invoice.TxnDate
+      baseDate
     ) {
-      const newDueDate = addDaysIso(invoice.TxnDate, options.salesTermDueDays);
+      const newDueDate = addDaysIso(baseDate, options.salesTermDueDays);
       if (newDueDate) payload.DueDate = newDueDate;
     }
   }
@@ -314,6 +326,7 @@ export type SendOptions = {
   billEmailTo?: string;
   billEmailCc?: string;
   billEmailBcc?: string;
+  txnDate?: string;
 };
 
 // Wraps buildPayload with side-effects: shadow-mode logging or live POST.
@@ -334,6 +347,7 @@ export async function sendInvoiceUpdate(
     billEmailTo: opts.billEmailTo,
     billEmailCc: opts.billEmailCc,
     billEmailBcc: opts.billEmailBcc,
+    txnDate: opts.txnDate,
   });
 
   if (opts.shadowMode) {
