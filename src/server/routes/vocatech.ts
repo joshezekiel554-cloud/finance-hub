@@ -41,8 +41,8 @@ import {
 import { customers } from "../../db/schema/customers.js";
 import { verifyVocatechSignature } from "../../integrations/vocatech/webhook-verifier.js";
 import {
-  getCall,
   getMediaUrl,
+  listCalls,
   mapDirection,
   sendMessage,
   testWebhook,
@@ -691,6 +691,7 @@ async function handleCallTranscription(
     .select({
       id: phoneCommunications.id,
       customerId: phoneCommunications.customerId,
+      startedAt: phoneCommunications.startedAt,
     })
     .from(phoneCommunications)
     .where(eq(phoneCommunications.sourceEventId, d.call_id))
@@ -705,25 +706,42 @@ async function handleCallTranscription(
   const row = rows[0]!;
 
   // The per-segment recording_url isn't in the transcription webhook
-  // payload — fetch /calls/{call_id} for the journey, find the first
-  // segment with a recording_url, parse the rec_* id out of it. We store
-  // the id (not the URL) because URLs expire in 30 min; the
-  // /recording-url proxy mints a fresh one on demand.
+  // payload, and Vocatech's OpenAPI spec doesn't expose GET /calls/{id}
+  // (it returns 404). Look up the recording_media_id by paginating the
+  // /calls list filtered to the day of the call. Bracket ±1 day so a
+  // call that straddled the ET midnight boundary still resolves.
+  // We store the rec_* id (not the URL) because Vocatech's media URLs
+  // expire in 30 min; the /recording-url proxy mints a fresh one on
+  // demand.
   let recordingMediaId: string | null = null;
   try {
-    const call = await getCall(d.call_id);
-    for (const seg of call.journey ?? []) {
-      if (seg.recording_url) {
-        const m = seg.recording_url.match(/\/media\/(rec_[A-Za-z0-9_-]+)/);
-        if (m) {
-          recordingMediaId = m[1] ?? null;
-          break;
+    const oneDay = 24 * 60 * 60 * 1000;
+    const callTs = row.startedAt.getTime();
+    const startDate = new Date(callTs - oneDay).toISOString().slice(0, 10);
+    const endDate = new Date(callTs + oneDay).toISOString().slice(0, 10);
+    let page = 1;
+    const MAX_PAGES = 100;
+    outer: while (page <= MAX_PAGES) {
+      const res = await listCalls({ startDate, endDate, direction: "any", page });
+      for (const c of res.calls) {
+        if (c.call_id !== d.call_id) continue;
+        for (const seg of c.journey ?? []) {
+          if (seg.recording_url) {
+            const m = seg.recording_url.match(/\/media\/(rec_[A-Za-z0-9_-]+)/);
+            if (m) {
+              recordingMediaId = m[1] ?? null;
+              break;
+            }
+          }
         }
+        break outer;
       }
+      if (page >= res.meta.total_pages) break;
+      page++;
     }
   } catch (err) {
     // Swallow — transcription text is more important than the recording
-    // id. We can backfill the id later via a separate job if needed.
+    // id. A separate job can backfill the id later if needed.
     log.warn(
       { err, callId: d.call_id },
       "could not load call journey for recording id",
