@@ -24,6 +24,7 @@ type ReceiptRow = BaseReceiptRow & {
 };
 import RmaCreditMemoDialog from "../components/rma-credit-memo-dialog";
 import { ReturnReceiptCard } from "../components/return-receipt-card";
+import { UnmatchedPhoneCommInbox } from "../components/unmatched-phone-comm-inbox";
 
 const invoicingTodayRouteApi = getRouteApi("/invoicing");
 
@@ -329,6 +330,12 @@ export default function InvoicingTodayPage() {
           }}
         />
       )}
+
+      {/* ──────────────── Unmatched calls & SMS ─────────────────────── */}
+      {/* Vocatech inbox — phone communications from the last 7 days that
+          the matcher couldn't link to a customer. Operator can match
+          (opens customer-picker) or ignore (stamps dismissed_at). */}
+      <UnmatchedPhoneCommInbox />
 
       {/* ──────────────── Orders section ────────────────────────────── */}
       {data && (

@@ -715,6 +715,7 @@ export default function CustomerDetailPage() {
             customerId={customer.id}
             activities={recentActivities}
             queryKey={["customer", customerId]}
+            onJumpToCallsSms={() => setTab("calls_sms")}
           />
         )}
         {tab === "emails" && (

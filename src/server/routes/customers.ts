@@ -926,13 +926,24 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     if (!customer) return reply.code(404).send({ error: "customer not found" });
 
     // KPI rollups for the customer detail header strip. Computed in one
-    // round-trip alongside recentActivities so the page paints fast.
-    const [recentActivities, kpiRows] = await Promise.all([
+    // round-trip alongside recentActivities + phone communications so the
+    // page paints fast. Phone communications are merged into the
+    // activity timeline as synthetic entries (kind="phone_call_in" etc.)
+    // — they don't live in the `activities` table because the
+    // ACTIVITY_KINDS enum is strict and a schema change wasn't worth it
+    // for a join-style view.
+    const [activityRows, phoneCommRows, kpiRows] = await Promise.all([
       db
         .select()
         .from(activities)
         .where(eq(activities.customerId, id))
         .orderBy(desc(activities.occurredAt))
+        .limit(50),
+      db
+        .select()
+        .from(phoneCommunications)
+        .where(eq(phoneCommunications.customerId, id))
+        .orderBy(desc(phoneCommunications.startedAt))
         .limit(50),
       db
         .select({
@@ -1010,7 +1021,73 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         }
       : null;
 
-    return reply.send({ customer, recentActivities, kpi: normalizedKpi });
+    // Synthesize Activity-shaped rows for phone communications and merge
+    // them into recentActivities. The frontend's Activity type permits
+    // `kind: ActivityKind | string`, so the synthetic kinds
+    // `phone_call_in` / `phone_call_out` / `phone_sms_in` / `phone_sms_out`
+    // flow through and get rendered by the timeline's KIND_META lookup.
+    const phoneActivities = phoneCommRows.map((p) => {
+      let subject: string;
+      if (p.kind === "call_in") {
+        const ext = p.extensionName ?? "—";
+        const dur = p.durationSeconds != null
+          ? ` (${formatDurationServer(p.durationSeconds)})`
+          : "";
+        subject = `Call from ${p.remoteNumber} → ${ext}${dur}`;
+      } else if (p.kind === "call_out") {
+        const from = p.extensionName ?? "—";
+        const dur = p.durationSeconds != null
+          ? ` (${formatDurationServer(p.durationSeconds)})`
+          : "";
+        subject = `Call to ${p.remoteNumber} from ${from}${dur}`;
+      } else if (p.kind === "sms_in") {
+        subject = `SMS from ${p.remoteNumber}`;
+      } else {
+        subject = `SMS to ${p.remoteNumber}`;
+      }
+
+      const bodyOrTranscriptionPreview =
+        p.body ?? (p.transcription ? p.transcription.slice(0, 200) : null);
+
+      return {
+        id: p.id,
+        customerId: p.customerId,
+        userId: null,
+        kind: `phone_${p.kind}`,
+        occurredAt: p.startedAt.toISOString(),
+        subject,
+        body: bodyOrTranscriptionPreview,
+        bodyHtml: null,
+        source: "vocatech",
+        refType: "phone_communication",
+        refId: p.id,
+        meta: {
+          remoteNumber: p.remoteNumber,
+          extensionName: p.extensionName,
+          durationSeconds: p.durationSeconds,
+          smsStatus: p.smsStatus,
+          phoneLabelMatched: p.phoneLabelMatched,
+        },
+      };
+    });
+
+    // Merge + sort desc by occurredAt; slice to 50. We compute the
+    // timestamp once per row (occurredAt is ISO for phone entries and
+    // Date for activities — `new Date(x)` handles both).
+    const merged = [...activityRows, ...phoneActivities]
+      .map((a) => ({
+        row: a,
+        ts: new Date(a.occurredAt as Date | string).getTime(),
+      }))
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 50)
+      .map((x) => x.row);
+
+    return reply.send({
+      customer,
+      recentActivities: merged,
+      kpi: normalizedKpi,
+    });
   });
 
   // PATCH /api/customers/:id — single-customer update. Used from the
@@ -1806,6 +1883,17 @@ function normalizeDateValue(
   // hydrates Date columns elsewhere.
   const d = new Date(v.replace(" ", "T") + "Z");
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// Compact call-duration formatter for the activity-timeline subject line.
+// "M:SS" — e.g. 154 seconds → "2:34". Mirrors the formatDuration in
+// calls-sms-tab.tsx; duplicated server-side because the subject string
+// is pre-rendered (frontend KIND_META picks an icon and shows the
+// subject verbatim).
+function formatDurationServer(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 // Best-effort batch lookup of QBO Pay-now InvoiceLink for a list of

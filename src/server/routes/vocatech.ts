@@ -31,7 +31,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import {
@@ -607,6 +607,158 @@ const vocatechRoute: FastifyPluginAsync = async (app) => {
     );
     return { jobId: job.id };
   });
+
+  // -------------------------------------------------------------------------
+  // GET /unmatched?days=7 — authenticated; list unmatched phone comms.
+  // -------------------------------------------------------------------------
+  // Powers the Today-tab inbox: phone_communications rows whose
+  // customer_id is NULL and dismissed_at is NULL, filtered to the last N
+  // days. Caps at 200 rows — beyond that and the operator should be
+  // running a phone-roster cleanup, not paging through the inbox.
+  app.get("/unmatched", async (req, reply) => {
+    await requireAuth(req);
+
+    const parsed = z
+      .object({
+        days: z.coerce.number().int().min(1).max(90).default(7),
+      })
+      .safeParse(req.query);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: "invalid query", details: parsed.error.flatten() };
+    }
+
+    const cutoff = new Date(Date.now() - parsed.data.days * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select()
+      .from(phoneCommunications)
+      .where(
+        and(
+          isNull(phoneCommunications.customerId),
+          isNull(phoneCommunications.dismissedAt),
+          gte(phoneCommunications.startedAt, cutoff),
+        ),
+      )
+      .orderBy(desc(phoneCommunications.startedAt))
+      .limit(200);
+
+    return { rows };
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /communications/:id/match  body: { customerId }
+  // -------------------------------------------------------------------------
+  // Operator-driven match for an unmatched call/SMS. Validates the
+  // customer exists, re-runs the phone matcher to populate
+  // phone_label_matched (only if the picked customer actually owns the
+  // remote number — operator authority always wins, but we keep the
+  // label honest: null when the operator overrides the matcher).
+  app.post<{ Params: { id: string } }>(
+    "/communications/:id/match",
+    async (req, reply) => {
+      await requireAuth(req);
+
+      let body: unknown;
+      try {
+        body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+      } catch {
+        reply.code(400);
+        return { error: "invalid JSON" };
+      }
+
+      const parse = z
+        .object({ customerId: z.string().min(1).max(24) })
+        .safeParse(body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "invalid body", details: parse.error.flatten() };
+      }
+
+      // Load the row + verify the customer exists in parallel.
+      const [commRows, custRows] = await Promise.all([
+        db
+          .select()
+          .from(phoneCommunications)
+          .where(eq(phoneCommunications.id, req.params.id))
+          .limit(1),
+        db
+          .select({ id: customers.id })
+          .from(customers)
+          .where(eq(customers.id, parse.data.customerId))
+          .limit(1),
+      ]);
+      const comm = commRows[0];
+      if (!comm) {
+        reply.code(404);
+        return { error: "communication not found" };
+      }
+      if (custRows.length === 0) {
+        reply.code(404);
+        return { error: "customer not found" };
+      }
+
+      // Re-run the matcher. If the matcher resolves to the same customer
+      // we picked, keep its phoneLabel — otherwise the operator overrode
+      // the matcher's opinion and we store the link with phoneLabel=null
+      // (we don't know which of their phones we hit).
+      const matcherResult = await matchPhoneToCustomer(comm.remoteNumber);
+      const phoneLabelMatched =
+        matcherResult && matcherResult.customerId === parse.data.customerId
+          ? matcherResult.phoneLabel
+          : null;
+
+      await db
+        .update(phoneCommunications)
+        .set({
+          customerId: parse.data.customerId,
+          phoneLabelMatched,
+        })
+        .where(eq(phoneCommunications.id, req.params.id));
+
+      // Emit a phone-communication.received event so the now-matched
+      // customer's Calls & SMS tab refreshes if it's open.
+      events.emit("phone-communication.received", {
+        customerId: parse.data.customerId,
+        communicationId: comm.id,
+        kind: comm.kind,
+      });
+
+      return { ok: true };
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // POST /communications/:id/dismiss
+  // -------------------------------------------------------------------------
+  // Operator decided this unmatched call/SMS isn't worth chasing (wrong
+  // number, spam, unrelated). Stamps dismissed_at + dismissed_by_user_id
+  // so the row drops off the inbox query but is preserved for audit.
+  app.post<{ Params: { id: string } }>(
+    "/communications/:id/dismiss",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+
+      const rows = await db
+        .select({ id: phoneCommunications.id })
+        .from(phoneCommunications)
+        .where(eq(phoneCommunications.id, req.params.id))
+        .limit(1);
+      if (rows.length === 0) {
+        reply.code(404);
+        return { error: "communication not found" };
+      }
+
+      await db
+        .update(phoneCommunications)
+        .set({
+          dismissedAt: new Date(),
+          dismissedByUserId: user.id,
+        })
+        .where(eq(phoneCommunications.id, req.params.id));
+
+      return { ok: true };
+    },
+  );
 };
 
 // --- Event dispatcher + handlers --------------------------------------------
