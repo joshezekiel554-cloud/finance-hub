@@ -1,10 +1,13 @@
 // QB sync job processor.
 //
-// Composes syncCustomers + syncInvoices + syncPayments in series (invoices
-// reference customers, payments reference invoices, so order matters). Writes
-// a sync_runs row at start, updates it at end with stats + status. On error
-// the row is marked failed and the error is rethrown so BullMQ records the
-// attempt and applies its retry policy.
+// Composes syncCustomers + syncInvoices + syncPayments + syncCreditMemos in
+// series (invoices reference customers, payments reference invoices,
+// credit memos reference customers; credit-memo recompute updates the
+// customers.unapplied_credit_balance column so it needs an authoritative
+// memo list each cycle). Writes a sync_runs row at start, updates it at
+// end with stats + status. On error the row is marked failed and the
+// error is rethrown so BullMQ records the attempt and applies its retry
+// policy.
 //
 // Shadow mode: this job is read-only against QBO and write-only against our
 // own DB, so it runs identically in shadow and live modes. The flag is
@@ -16,6 +19,7 @@ import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { syncRuns } from "../../db/schema/audit.js";
 import {
+  syncCreditMemos,
   syncCustomers,
   syncInvoices,
   syncPayments,
@@ -36,6 +40,7 @@ export type QbSyncJobResult = {
   customers: SyncStats;
   invoices: SyncStats;
   payments: SyncStats;
+  creditMemos: SyncStats;
   durationMs: number;
 };
 
@@ -55,14 +60,20 @@ export async function processQbSync(
   jobLog.info({ stage: "started", trigger: job.data.trigger ?? "scheduled" }, "qb-sync job started");
 
   try {
-    // Order matters: invoices FK customers; payments resolve via invoice resync.
+    // Order matters: invoices FK customers; payments resolve via invoice resync;
+    // credit memos run last because the recompute reads the freshly-synced
+    // customer set when matching CustomerRef → customer row.
     const customerStats = await syncCustomers();
     const invoiceStats = await syncInvoices();
     const paymentStats = await syncPayments();
+    const creditMemoStats = await syncCreditMemos();
 
     const durationMs = Date.now() - startedAt;
     const totalFailed =
-      customerStats.failed + invoiceStats.failed + paymentStats.failed;
+      customerStats.failed +
+      invoiceStats.failed +
+      paymentStats.failed +
+      creditMemoStats.failed;
     // If individual rows failed but the run completed, mark partial — neither
     // a clean ok nor a hard failure. Helps the dashboard surface drift.
     const status: "ok" | "partial" = totalFailed > 0 ? "partial" : "ok";
@@ -76,6 +87,7 @@ export async function processQbSync(
           customers: customerStats,
           invoices: invoiceStats,
           payments: paymentStats,
+          creditMemos: creditMemoStats,
           durationMs,
         },
       })
@@ -88,6 +100,7 @@ export async function processQbSync(
         customers: customerStats,
         invoices: invoiceStats,
         payments: paymentStats,
+        creditMemos: creditMemoStats,
         durationMs,
       },
       "qb-sync job completed",
@@ -98,6 +111,7 @@ export async function processQbSync(
       customers: customerStats,
       invoices: invoiceStats,
       payments: paymentStats,
+      creditMemos: creditMemoStats,
       durationMs,
     };
   } catch (err) {
