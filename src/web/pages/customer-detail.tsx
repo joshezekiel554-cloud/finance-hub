@@ -22,6 +22,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
+import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 import { CollapsibleCard } from "../components/ui/collapsible-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -86,6 +87,7 @@ type Customer = {
   customerType: "b2b" | "b2c" | null;
   balance: string;
   overdueBalance: string;
+  unappliedCreditBalance: string;
   internalNotes: string | null;
   lastSyncedAt: string | null;
   createdAt: string;
@@ -314,7 +316,11 @@ export default function CustomerDetailPage() {
 
   const { customer, recentActivities, kpi } = data;
   const balance = Number(customer.balance);
-  const overdue = Number(customer.overdueBalance);
+  const credits = Number(customer.unappliedCreditBalance);
+  const overdue = effectiveOverdue(
+    customer.overdueBalance,
+    customer.unappliedCreditBalance,
+  );
 
   return (
     <div className="space-y-4">
@@ -659,6 +665,11 @@ export default function CustomerDetailPage() {
           label="Overdue"
           value={overdue > 0 ? `$${overdue.toFixed(2)}` : "—"}
           tone={overdue > 0 ? "warning" : "neutral"}
+          caption={
+            credits > 0
+              ? `net of $${credits.toFixed(2)} in unapplied credits`
+              : undefined
+          }
         />
         <StatCard
           label="Open invoices"
@@ -798,10 +809,12 @@ function StatCard({
   label,
   value,
   tone,
+  caption,
 }: {
   label: string;
   value: string;
   tone?: "warning" | "neutral";
+  caption?: string;
 }) {
   return (
     <Card>
@@ -815,6 +828,9 @@ function StatCard({
         >
           {value}
         </div>
+        {caption ? (
+          <div className="mt-0.5 text-[10px] text-muted">{caption}</div>
+        ) : null}
       </CardBody>
     </Card>
   );
