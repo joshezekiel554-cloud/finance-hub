@@ -476,6 +476,7 @@ export async function sendStatement(
       primaryEmail: customer.primaryEmail,
       balance: customer.balance,
       overdueBalance: customer.overdueBalance,
+      unappliedCreditBalance: customer.unappliedCreditBalance,
     },
     openInvoices,
     user: { name: userName },
