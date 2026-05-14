@@ -1,5 +1,7 @@
 # Vocatech Integration Implementation Plan
 
+> **STATUS (2026-05-14): ✅ COMPLETE — all 8 waves shipped + live on https://finance.feldart.com**. Live progress + deviations + cutover notes captured in `2026-05-11-vocatech-integration-progress.md` (sibling file). This document is now a historical reference.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Wire Vocatech's cloud PBX into finance-hub — inbound calls + AI summaries + transcripts + recordings flow into a new "Calls and SMS" tab on the customer detail page. SMS send/receive too. B2B customer roster pushes to Vocatech for Callpop name-matching.

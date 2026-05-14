@@ -114,3 +114,24 @@ Patterns that worked well during the URL state + returns redesign + Vocatech pro
 - **Live progress tracker file per project** in `docs/superpowers/plans/<date>-<project>-progress.md`. Updated after every task + pushed to origin so it survives auto-compact.
 - **Push feature branch to origin after every wave merge.** Don't accumulate 200+ unpushed commits. Documented in memory `feedback_git_push_cadence.md`.
 - **Post-plan polish loop** — after operator uses the new feature on real data, expect 5-10 follow-up bugs/UX gaps. Reserve time for it.
+
+---
+
+## Vocatech post-ship polish (deferred from W5 review, 2026-05-13)
+
+Non-blocking items flagged by the W5 opus reviewer + earlier rounds. Capture here so they're not lost.
+
+- **Long-call duration formatting** — `formatDuration(seconds)` outputs `m:ss`; calls over 60 min render as `73:12` instead of `1:13:12`. Affects three places: `customers.ts:formatDurationServer`, `calls-sms-tab.tsx:formatDuration`, `unmatched-phone-comm-inbox.tsx:formatDuration`. Worth deduping into `src/lib/format.ts` while fixing.
+- **Multi-operator-match race surfacing** — currently last-write-wins on `POST /api/vocatech/communications/:id/match`. Add `WHERE customer_id IS NULL` clause to the UPDATE; surface zero-rows-affected as a 409 with a "this row was just matched by another operator" message. Reload the inbox query on 409.
+- **`VocatechWebhook.id` type** — currently typed `string` in client.ts but OpenAPI spec says `integer`. Works at runtime (JS coerces to string in URL paths) but the type is a lie. One-line fix in `src/integrations/vocatech/client.ts`.
+- **`testWebhook` client wrapper response shape** — wrapper claims `{ok: true}` but Vocatech actually returns `{success, status_code, error}`. Settings UI may say "Sent" when Vocatech actually couldn't reach our endpoint. Update wrapper + UI to surface real status.
+- **Webhook attachment storage** — `message.received` payloads include an `attachments[]` array. Currently we capture only the body text; attachments are discarded. A new table `phone_communication_attachments` keyed on `phone_communication_id` + the attachment id, plus a fetch-and-store hook in the handler, would close the gap. Defer until a real attachment-bearing message arrives so we can confirm payload shape.
+- **Additional webhook events** — we only subscribe to 4 of Vocatech's 7 published event types. `call.started`, `call.answered`, and `message.sent` are unsubscribed. Add if useful (e.g. live "incoming call" toast in the UI from `call.started`).
+- **Cloudflared dev tunnel** — still running on local laptop, no longer in active use since prod webhook owns the event stream. Stop the local process (or document for someone wanting to spin it back up for branch testing).
+
+## Production deployment hygiene (deferred from 2026-05-13 cutover)
+
+- **Refresh-local-from-prod script** — convenience tool to mysqldump prod and restore to local. Useful for testing new features against current customer state. ~20-line script, prompts for confirmation since it overwrites local data.
+- **Lock down `/etc/sudoers.d/deploy-bootstrap`** — currently grants `deploy` NOPASSWD sudo for ALL commands. Replace with a scoped allowlist of just the commands we ever use (`apt`, `nginx`, `systemctl`, `certbot`, `mysql`, `tee /etc/nginx/sites-*`, `ln`, `rm /etc/nginx/sites-enabled/*`). Same operational reach, smaller blast radius if the deploy key leaks.
+- **Webhook URL rotation playbook** — if `finance.feldart.com` ever changes (move VPS, switch domain), the Vocatech webhook needs PATCHing. Document the steps in a runbook so it's not on muscle memory: `scripts/smoke/repoint-webhook-to-prod.ts` is the template; secret stays the same on PATCH.
+- **Memurai dev fallback** — local Memurai needs `Start-Service Memurai` from admin PowerShell after a Windows reboot. Currently runs as foreground process from prior session. If we keep using local dev, formalize this in setup docs.
