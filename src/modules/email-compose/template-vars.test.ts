@@ -312,4 +312,68 @@ describe("buildTemplateVars", () => {
       "Hi Acme Ltd, you owe $1,234.56 ($324.00 overdue, oldest 18307 12 days). — Joshua, Feldart",
     );
   });
+
+  describe("overdue net of unapplied credits", () => {
+    it("formats overdue_balance net of unapplied credits", () => {
+      const vars = buildTemplateVars({
+        customer: makeCustomer({
+          overdueBalance: "800.00",
+          unappliedCreditBalance: "200.00",
+        }),
+        openInvoices: [],
+        user: makeUser(),
+      });
+      expect(vars.overdue_balance).toBe("$600.00");
+    });
+
+    it("floors overdue_balance at $0.00 when credits exceed overdue", () => {
+      const vars = buildTemplateVars({
+        customer: makeCustomer({
+          overdueBalance: "100.00",
+          unappliedCreditBalance: "500.00",
+        }),
+        openInvoices: [],
+        user: makeUser(),
+      });
+      expect(vars.overdue_balance).toBe("$0.00");
+    });
+
+    it("emits unapplied_credit_balance formatted", () => {
+      const vars = buildTemplateVars({
+        customer: makeCustomer({
+          overdueBalance: "800.00",
+          unappliedCreditBalance: "200.00",
+        }),
+        openInvoices: [],
+        user: makeUser(),
+      });
+      expect(vars.unapplied_credit_balance).toBe("$200.00");
+    });
+
+    it("emits empty overdue_credit_note when credits are zero", () => {
+      const vars = buildTemplateVars({
+        customer: makeCustomer({
+          overdueBalance: "800.00",
+          unappliedCreditBalance: "0.00",
+        }),
+        openInvoices: [],
+        user: makeUser(),
+      });
+      expect(vars.overdue_credit_note).toBe("");
+    });
+
+    it("emits a parenthetical overdue_credit_note when credits > 0", () => {
+      const vars = buildTemplateVars({
+        customer: makeCustomer({
+          overdueBalance: "800.00",
+          unappliedCreditBalance: "200.00",
+        }),
+        openInvoices: [],
+        user: makeUser(),
+      });
+      expect(vars.overdue_credit_note).toBe(
+        " (after $200.00 in unapplied credits applied)",
+      );
+    });
+  });
 });

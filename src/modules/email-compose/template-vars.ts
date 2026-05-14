@@ -1,12 +1,19 @@
 import type { Customer } from "../../db/schema/customers.js";
 import type { Invoice } from "../../db/schema/invoices.js";
 import type { User } from "../../db/schema/auth.js";
+import { effectiveOverdue } from "../customer-balance/effective-overdue.js";
 
 export type TemplateVars = {
   customer_name: string;
   primary_email: string;
   open_balance: string;
   overdue_balance: string;
+  unapplied_credit_balance: string;
+  // Auto-empty when credits=0; otherwise " (after $X in unapplied
+  // credits applied)" — designed so templates can write
+  // "{{overdue_balance}}{{overdue_credit_note}}" and get the right
+  // behavior in both branches without conditional template logic.
+  overdue_credit_note: string;
   days_overdue: string;
   oldest_unpaid_invoice: string;
   oldest_unpaid_amount: string;
@@ -112,7 +119,14 @@ function pickOldestUnpaid(invoices: Invoice[]): Invoice | null {
 }
 
 export type BuildTemplateVarsInput = {
-  customer: Pick<Customer, "displayName" | "primaryEmail" | "balance" | "overdueBalance">;
+  customer: Pick<
+    Customer,
+    | "displayName"
+    | "primaryEmail"
+    | "balance"
+    | "overdueBalance"
+    | "unappliedCreditBalance"
+  >;
   openInvoices: Invoice[];
   user: Pick<User, "name">;
   oldestUnpaid?: Invoice | null;
@@ -125,11 +139,22 @@ export function buildTemplateVars(input: BuildTemplateVarsInput): TemplateVars {
   const oldest = oldestUnpaid ?? pickOldestUnpaid(openInvoices);
   const days = daysOverdueFor(oldest, today);
 
+  const netOverdue = effectiveOverdue(
+    customer.overdueBalance,
+    customer.unappliedCreditBalance,
+  );
+  const unappliedCreditsFormatted = formatMoney(customer.unappliedCreditBalance);
+  const hasUnappliedCredits = parseAmount(customer.unappliedCreditBalance) > 0;
+
   return {
     customer_name: customer.displayName ?? "",
     primary_email: customer.primaryEmail ?? "",
     open_balance: formatMoney(customer.balance),
-    overdue_balance: formatMoney(customer.overdueBalance),
+    overdue_balance: formatMoney(netOverdue),
+    unapplied_credit_balance: unappliedCreditsFormatted,
+    overdue_credit_note: hasUnappliedCredits
+      ? ` (after ${unappliedCreditsFormatted} in unapplied credits applied)`
+      : "",
     days_overdue: String(days),
     oldest_unpaid_invoice: oldest?.docNumber ?? "",
     oldest_unpaid_amount: formatMoney(oldest?.balance ?? 0),
