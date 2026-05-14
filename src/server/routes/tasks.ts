@@ -202,6 +202,10 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
         commentCount: sql<number>`(SELECT COUNT(*) FROM comments WHERE parent_type = 'task' AND parent_id = \`tasks\`.\`id\`)`,
         watcherCount: sql<number>`(SELECT COUNT(*) FROM task_watchers WHERE task_id = \`tasks\`.\`id\`)`,
         mentionCount: sql<number>`(SELECT COUNT(*) FROM mentions WHERE parent_type = 'task' AND parent_id = \`tasks\`.\`id\` AND mentioned_user_id = ${user.id})`,
+        // Customer display name resolved via subquery so the kanban
+        // card can render "for: Bais Hasforim" without a separate
+        // per-task lookup. NULL when the task isn't customer-scoped.
+        customerName: sql<string | null>`(SELECT display_name FROM customers WHERE id = \`tasks\`.\`customer_id\`)`,
       })
       .from(tasks)
       .where(where)
