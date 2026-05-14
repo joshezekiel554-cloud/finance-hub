@@ -32,7 +32,7 @@ const DEFAULTS: Omit<NewEmailTemplate, "id" | "createdAt" | "updatedAt">[] = [
 
 Hope you're well. Just a gentle reminder that your account currently has \
 an open balance of {{open_balance}}, of which {{overdue_balance}} is past \
-due.
+due{{overdue_credit_note}}.
 
 Your oldest open invoice is {{oldest_unpaid_invoice}} for \
 {{oldest_unpaid_amount}}, now {{days_overdue}} days past due.
@@ -57,8 +57,8 @@ Thanks,
     body: `Hi {{customer_name}},
 
 Following up on my earlier note - your overdue balance with \
-{{company_name}} is now {{overdue_balance}} ({{days_overdue}} days past \
-due on {{oldest_unpaid_invoice}}).
+{{company_name}} is now {{overdue_balance}}{{overdue_credit_note}} \
+({{days_overdue}} days past due on {{oldest_unpaid_invoice}}).
 
 Could you let me know when payment is expected, or if there's an issue \
 on any of the open invoices that needs my attention?
@@ -80,8 +80,8 @@ Thanks,
     body: `Hi {{customer_name}},
 
 Despite our previous reminders, the overdue balance on your account is \
-still outstanding at {{overdue_balance}} (oldest invoice \
-{{oldest_unpaid_invoice}}, {{days_overdue}} days past due).
+still outstanding at {{overdue_balance}}{{overdue_credit_note}} (oldest \
+invoice {{oldest_unpaid_invoice}}, {{days_overdue}} days past due).
 
 I need to hear back from you within 7 days with either payment or a clear \
 plan, otherwise I'll need to put further orders on hold.
@@ -105,7 +105,8 @@ Thanks,
 
 <p>Please find your statement of account attached. Total open balance \
 is <strong>{{open_balance}}</strong>; of that, \
-<strong>{{overdue_balance}}</strong> is past due.</p>
+<strong>{{overdue_balance}}</strong> is past due\
+{{overdue_credit_note}}.</p>
 
 <p>The attached PDF lists every open invoice with a Pay-now link \
 straight to QuickBooks for online payment. Please let me know if \

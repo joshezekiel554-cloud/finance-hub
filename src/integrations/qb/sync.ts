@@ -25,6 +25,7 @@ import {
 import { createLogger } from "../../lib/logger.js";
 import { recordActivity } from "../../modules/crm/index.js";
 import { QboClient } from "./client.js";
+import { aggregateCreditBalanceByQbCustomerId } from "./credit-memo-aggregation.js";
 import type {
   QboCreditMemo,
   QboCustomer,
@@ -562,7 +563,30 @@ export async function syncCreditMemos(client?: QboClient): Promise<SyncStats> {
 
   await emitCreditMemoActivities(memos);
   // No dedicated credit_memos table yet — the activity row is the trace.
+
+  // Recompute customers.unapplied_credit_balance from the now-current
+  // memo balances. Authoritative: a customer with no unapplied credits
+  // gets reset to 0 (handles credits that were applied since last sync).
+  await recomputeUnappliedCreditBalances(memos);
+
   return stats;
+}
+
+// Reset every customer's unapplied_credit_balance to 0, then write the
+// per-customer total for every customer that has open credits. One
+// statement per non-zero customer — volume is small (typically <50
+// customers with unapplied credits at any time).
+async function recomputeUnappliedCreditBalances(
+  memos: QboCreditMemo[],
+): Promise<void> {
+  const totals = aggregateCreditBalanceByQbCustomerId(memos);
+  await db.execute(sql`UPDATE customers SET unapplied_credit_balance = '0'`);
+  for (const [qbCustomerId, total] of totals) {
+    const rounded = (Math.round(total * 100) / 100).toFixed(2);
+    await db.execute(
+      sql`UPDATE customers SET unapplied_credit_balance = ${rounded} WHERE qb_customer_id = ${qbCustomerId}`,
+    );
+  }
 }
 
 async function emitPaymentActivities(payments: QboPayment[]): Promise<void> {
@@ -760,6 +784,19 @@ export async function syncOneCustomer(
       SET c.overdue_balance = COALESCE(i.overdue, 0)
       WHERE c.id = ${financeHubId}
     `);
+  }
+
+  // 5. Refresh unapplied_credit_balance for this customer only. Mirrors
+  //    the bulk recompute in syncCreditMemos but scoped to this one
+  //    customer's open credit memos.
+  if (financeHubId) {
+    const customerMemos = await qb.getCreditMemosForCustomer(qbCustomerId);
+    const totals = aggregateCreditBalanceByQbCustomerId(customerMemos);
+    const total = totals.get(qbCustomerId) ?? 0;
+    const rounded = (Math.round(total * 100) / 100).toFixed(2);
+    await db.execute(
+      sql`UPDATE customers SET unapplied_credit_balance = ${rounded} WHERE id = ${financeHubId}`,
+    );
   }
 
   log.info(

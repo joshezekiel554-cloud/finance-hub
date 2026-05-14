@@ -232,6 +232,13 @@
       "when": 1778667815676,
       "tag": "0032_invoice_bcc_forwards",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1778767145384,
+      "tag": "0033_clever_hellion",
+      "breakpoints": true
     }
   ]
 }

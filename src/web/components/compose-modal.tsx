@@ -103,6 +103,8 @@ function fallbackTemplateVars(ctx: ComposeContext | undefined): TemplateVars {
     primary_email: ctx?.customerEmail ?? "",
     open_balance: "",
     overdue_balance: "",
+    unapplied_credit_balance: "",
+    overdue_credit_note: "",
     days_overdue: "",
     oldest_unpaid_invoice: "",
     oldest_unpaid_amount: "",

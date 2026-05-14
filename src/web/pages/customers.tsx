@@ -21,6 +21,7 @@ import {
   TaskDetailDrawer,
   type DrawerMode as TaskDrawerMode,
 } from "../components/task-detail-drawer";
+import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 
 const customersRouteApi = getRouteApi("/customers");
 
@@ -35,6 +36,7 @@ type CustomerRow = {
   phone: string | null;
   balance: string;
   overdueBalance: string;
+  unappliedCreditBalance: string;
   holdStatus: HoldStatus;
   customerType: CustomerType;
   paymentTerms: string | null;
@@ -664,7 +666,20 @@ export default function CustomersPage() {
             <tbody>
               {visibleRows.map((row) => {
                 const balance = Number(row.balance);
-                const overdue = Number(row.overdueBalance);
+                const rawOverdue = Number(row.overdueBalance);
+                const credits = Number(row.unappliedCreditBalance);
+                // Display nets unapplied credit memos; sort still uses
+                // raw overdueBalance (DB-side) so direction still puts
+                // the largest raw-overdue customers first, which is the
+                // operationally useful ordering.
+                const overdue = effectiveOverdue(
+                  row.overdueBalance,
+                  row.unappliedCreditBalance,
+                );
+                const overdueTooltip =
+                  credits > 0
+                    ? `Overdue net of $${credits.toFixed(2)} in unapplied credits (raw overdue: $${rawOverdue.toFixed(2)})`
+                    : undefined;
                 const checked = selectedIds.has(row.id);
                 const onHold = row.holdStatus === "hold";
                 return (
@@ -737,11 +752,16 @@ export default function CustomersPage() {
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {overdue > 0 ? (
-                        <span className="font-medium text-accent-warning">
+                        <span
+                          className="font-medium text-accent-warning"
+                          title={overdueTooltip}
+                        >
                           ${overdue.toFixed(2)}
                         </span>
                       ) : (
-                        <span className="text-muted">—</span>
+                        <span className="text-muted" title={overdueTooltip}>
+                          —
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">

@@ -50,6 +50,7 @@ import { cn } from "../lib/cn";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { ChaseSearch } from "../lib/search-schemas/chase";
+import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 
 const chaseRouteApi = getRouteApi("/chase");
 
@@ -62,6 +63,7 @@ type ChaseRow = {
   primaryEmail: string | null;
   balance: string;
   overdueBalance: string;
+  unappliedCreditBalance: string;
   holdStatus: "active" | "hold" | "payment_upfront";
   customerType: "b2b" | "b2c" | null;
   paymentTerms: string | null;
@@ -252,7 +254,9 @@ export default function ChasePage() {
   const selectedTotalOverdue = useMemo(() => {
     let sum = 0;
     for (const row of rows) {
-      if (selectedIds.has(row.id)) sum += parseFloat(row.overdueBalance) || 0;
+      if (selectedIds.has(row.id)) {
+        sum += effectiveOverdue(row.overdueBalance, row.unappliedCreditBalance);
+      }
     }
     return sum;
   }, [rows, selectedIds]);
@@ -489,7 +493,16 @@ export default function ChasePage() {
               {rows.map((row) => {
                 const checked = selectedIds.has(row.id);
                 const onHold = row.holdStatus === "hold";
-                const overdue = parseFloat(row.overdueBalance) || 0;
+                const rawOverdue = parseFloat(row.overdueBalance) || 0;
+                const credits = parseFloat(row.unappliedCreditBalance) || 0;
+                const overdue = effectiveOverdue(
+                  row.overdueBalance,
+                  row.unappliedCreditBalance,
+                );
+                const overdueTooltip =
+                  credits > 0
+                    ? `Overdue net of $${credits.toFixed(2)} in unapplied credits (raw overdue: $${rawOverdue.toFixed(2)})`
+                    : undefined;
                 const balance = parseFloat(row.balance) || 0;
                 const result = resultsById[row.id];
                 const sending = rowSendingIds.has(row.id);
@@ -543,7 +556,10 @@ export default function ChasePage() {
                       )}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
-                      <span className="font-bold text-accent-danger">
+                      <span
+                        className="font-bold text-accent-danger"
+                        title={overdueTooltip}
+                      >
                         ${overdue.toFixed(2)}
                       </span>
                     </td>

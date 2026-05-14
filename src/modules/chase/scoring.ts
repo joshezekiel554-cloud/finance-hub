@@ -17,6 +17,7 @@
 
 import type { Customer } from "../../db/schema/customers.js";
 import type { Invoice } from "../../db/schema/invoices.js";
+import { effectiveOverdue } from "../customer-balance/effective-overdue.js";
 import type { Severity, ChaseTier } from "./types.js";
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -70,8 +71,14 @@ export function computeSeverity(customer: Customer, invoices: Invoice[]): Severi
   );
 
   const denormalizedOverdue = parseMoney(customer.overdueBalance);
-  const totalOverdue =
+  const totalRawOverdue =
     denormalizedOverdue > 0 ? denormalizedOverdue : totalOverdueFromInvoices;
+  // Net of unapplied credit memos. effectiveOverdue floors at zero so a
+  // customer whose credits cover overdue drops out of the chase list.
+  const totalOverdue = effectiveOverdue(
+    totalRawOverdue,
+    customer.unappliedCreditBalance,
+  );
 
   let oldestDate: Date | null = null;
   for (const inv of openOverdue) {

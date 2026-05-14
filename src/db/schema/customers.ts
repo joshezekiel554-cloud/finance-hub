@@ -88,6 +88,12 @@ export const customers = mysqlTable(
     overdueBalance: decimal("overdue_balance", { precision: 12, scale: 2 })
       .notNull()
       .default("0"),
+    unappliedCreditBalance: decimal("unapplied_credit_balance", {
+      precision: 12,
+      scale: 2,
+    })
+      .notNull()
+      .default("0"),
     internalNotes: text("internal_notes"),
     lastSyncedAt: timestamp("last_synced_at"),
     vocatechLastPushedAt: timestamp("vocatech_last_pushed_at"),

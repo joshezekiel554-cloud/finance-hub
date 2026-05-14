@@ -40,6 +40,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     billingAddressCountry: null,
     balance: "1000.00",
     overdueBalance: "0.00",
+    unappliedCreditBalance: "0.00",
     internalNotes: null,
     lastSyncedAt: now,
     vocatechLastPushedAt: null,
@@ -247,6 +248,38 @@ describe("computeSeverity", () => {
     );
     // 200 * 5/30 ≈ 33 → LOW
     expect(sev.tier).toBe("LOW");
+  });
+
+  it("nets unapplied credits when credits equal overdue → severity zero", () => {
+    const invoices = [
+      makeInvoice({ balance: "1000.00", dueDate: daysAgo(45) }),
+    ];
+    const sev = computeSeverity(
+      makeCustomer({
+        overdueBalance: "1000.00",
+        unappliedCreditBalance: "1000.00",
+      }),
+      invoices,
+    );
+    expect(sev.totalOverdue).toBe(0);
+    expect(sev.score).toBe(0);
+  });
+
+  it("nets partial unapplied credits", () => {
+    const invoices = [
+      makeInvoice({ balance: "1000.00", dueDate: daysAgo(30) }),
+    ];
+    const sev = computeSeverity(
+      makeCustomer({
+        overdueBalance: "1000.00",
+        unappliedCreditBalance: "400.00",
+      }),
+      invoices,
+    );
+    // effective overdue = 600; days = 30
+    // score = 600 * min(30, 365) / 30 = 600
+    expect(sev.totalOverdue).toBe(600);
+    expect(sev.score).toBe(600);
   });
 });
 
