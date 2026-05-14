@@ -1,0 +1,1 @@
+ALTER TABLE `customers` ADD `unapplied_credit_balance` decimal(12,2) DEFAULT '0' NOT NULL;

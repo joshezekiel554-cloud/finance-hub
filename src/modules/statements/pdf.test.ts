@@ -42,6 +42,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     customerType: "b2b",
     balance: "1500.00",
     overdueBalance: "500.00",
+    unappliedCreditBalance: "0.00",
     internalNotes: null,
     lastSyncedAt: FROZEN,
     vocatechLastPushedAt: null,
