@@ -38,8 +38,8 @@ import { createLogger } from "../../lib/logger.js";
 const log = createLogger({ component: "jobs.vocatech-backfill" });
 
 export type VocatechBackfillJobData = {
-  startDate: string; // ISO yyyy-mm-dd
-  endDate: string;
+  startDate?: string; // ISO yyyy-mm-dd. If omitted, defaults to today UTC.
+  endDate?: string;   // If omitted, defaults to today UTC.
 };
 
 export type VocatechBackfillJobResult = {
@@ -52,8 +52,10 @@ const MAX_PAGES = 10_000;
 export async function vocatechBackfillHandler(
   job: Job<VocatechBackfillJobData>,
 ): Promise<VocatechBackfillJobResult> {
-  const { startDate, endDate } = job.data;
-  log.info({ startDate, endDate }, "backfill starting");
+  const today = new Date().toISOString().slice(0, 10);
+  const startDate = job.data.startDate ?? today;
+  const endDate = job.data.endDate ?? today;
+  log.info({ startDate, endDate, auto: !job.data.startDate }, "backfill starting");
 
   let callsTotal = 0;
   let messagesTotal = 0;

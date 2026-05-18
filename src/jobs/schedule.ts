@@ -12,6 +12,10 @@
 //   tag-email-weekly        0 9 * * 1        09:00 Monday, Europe/London
 //   tag-email-monthly       0 9 1 * *        09:00 1st of month, Europe/London
 //   vocatech-roster-delta   0 2 * * *        02:00 daily, Europe/London
+//   vocatech-auto-backfill  */2 * * * *      every 2 minutes — workaround
+//                                            for outbound-call webhook gap;
+//                                            handler defaults to today UTC
+//                                            when data is empty.
 //
 // Timezone handling: BullMQ's `repeat.tz` applies the cron in that zone, so
 // "0 17 * * *" with tz="Europe/London" fires at 17:00 BST in summer and
@@ -27,8 +31,10 @@ import {
   TAG_EMAIL_MONTHLY_JOB,
   TAG_EMAIL_WEEKLY_JOB,
   TASK_OVERDUE_SCAN_JOB,
+  VOCATECH_BACKFILL_JOB,
   VOCATECH_ROSTER_DELTA_JOB,
 } from "./queues.js";
+import type { VocatechBackfillJobData } from "./definitions/vocatech-backfill.js";
 import type { VocatechRosterSyncJobData } from "./definitions/vocatech-roster-sync.js";
 import { createLogger } from "../lib/logger.js";
 
@@ -143,6 +149,25 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
     cron: "0 2 * * *",
     tz: "Europe/London",
   });
+
+  // Vocatech auto-backfill — every 2 minutes. Workaround for outbound-call
+  // webhook gap (Vocatech tenant doesn't fire call.ended for outbounds, so
+  // calls would otherwise only land via manual backfill). Empty data → the
+  // handler defaults startDate/endDate to today UTC; INSERT IGNORE on
+  // source_event_id makes re-fetching the same day idempotent.
+  //
+  // API cost: 2 calls per fire (listCalls + listMessages page 1) = ~1.4k
+  // requests/day; well within Vocatech's tier. Remove this job once the
+  // webhook gap is fixed upstream.
+  await queues.vocatechBackfill.add(
+    VOCATECH_BACKFILL_JOB,
+    {} as VocatechBackfillJobData,
+    {
+      jobId: `repeat:vocatech-auto-backfill`,
+      repeat: { pattern: "*/2 * * * *" },
+    },
+  );
+  registered.push({ name: "vocatech-auto-backfill", cron: "*/2 * * * *" });
 
   log.info({ jobs: registered }, "repeatable jobs registered");
   return registered;
