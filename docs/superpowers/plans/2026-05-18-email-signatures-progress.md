@@ -108,11 +108,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: RMA dialogs POST to `/api/send` (Task 6a's route), not dedicated handlers. Routes in returns.ts are *preview* only. So 6a already wires the end-to-end path; 10c/10d will plumb `userSignatureId` from the dialogs into the /api/send payload.
 
 ### Task 6f: statements module
-- Status: ☐
-- Owner: —
-- Files: `src/modules/statements/send.ts`
-- Commit: —
-- Notes: —
+- Status: ✅
+- Owner: send-module-6f
+- Files: `src/modules/statements/send.ts`, `src/server/routes/statements.ts`
+- Commit: `a8630ea`
+- Notes: appendSignatures inside the module (spec §9 relaxation — module IS the orchestrator). STATEMENT_ALIAS=accounts@feldart.com hardcoded → alias sig resolves cleanly after Task 11 seed.
 
 ### Task 6g: chase-digest cron job
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:21** — Task 6f ✅ `a8630ea` (send-module-6f). appendSignatures inside statements module. Route TODO from 6c resolved.
 - **2026-05-18 15:18** — Task 6e ✅ N/A (send-route-6e). RMA dialogs send via /api/send (already wired in 6a). Returns.ts has preview routes only. Plan §Spec-adaptations #8 added.
 - **2026-05-18 15:14** — Task 6d ✅ N/A (send-route-6d). Invoices send via QBO native endpoints, not Gmail. No appendSignatures possible without scope-expanding refactor. Plan §Spec-adaptations #7 added.
 - **2026-05-18 15:12** — Task 6c ✅ `ea0b9ed` (send-route-6c). statements.ts (not statement-sends.ts) plumbed. Plan amended for the file-name mistake.
