@@ -29,7 +29,7 @@ This file is updated after every task completes — pushed to origin so it survi
 | 5 | 9 | Subagent | ✅ |
 | 6 | 10a, 10b, 10c, 10d | **Team of 4** (parallel, no-commit pattern) | ✅ |
 | 7 | 11 | Subagent | ✅ |
-| 8 | 12 | Inline (manual smoke pending user) | 🔄 |
+| 8 | 12 | Inline (review done; manual smoke pending user) | 🔄 |
 
 Two-stage Opus review runs at end of each wave before next dispatch.
 
@@ -178,16 +178,18 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: 81-line script + `seed:alias-signatures` npm script added. Pushed by picker-10b (which freelanced after misreading shutdown_request as a new task — see event log).
 
 ### Task 12: Smoke + finish
-- Status: ☐
-- Owner: —
-- Files: (verification only)
-- Commit: —
-- Notes: —
+- Status: 🔄 (automated done, manual smoke owed to user)
+- Owner: picker-10b (automated) + code-reviewer (review) + fixup-agent (fixes)
+- Files: (verification + review fixes)
+- Commit: review fixes `f1f70c1`
+- Notes: vitest 493 pass + 2 pre-existing failures unrelated; build green. Opus review found 3 blockers + 6 should-fix; all 3 blockers + 4 should-fix landed in `f1f70c1`. Should-fix 4 (defence-in-depth on numeric style regexes) and 9 (forward-bcc/tag-email signature wiring) deferred to backlog. Manual UI smoke from plan Task 12 Step 4 still pending user.
 
 ---
 
 ## Event log (newest first)
 
+- **2026-05-18 16:18** — Review fixes ✅ `f1f70c1` (fixup-agent). All 3 blockers + 4 should-fix landed. 18/18 sig tests pass, build green. Two backlog items: defence-in-depth style regex tightening + signature wiring for forward-bcc/tag-email system sends.
+- **2026-05-18 16:14** — Opus reviewer ✅ delivered structured report: 3 blockers (target=_blank rel hole; background: url() bypass; alias-PATCH non-transactional), 6 should-fix, 5 nits. No undeclared spec deviations.
 - **2026-05-18 16:02** — Task 11 ✅ `0cba330` (seed-builder, pushed by picker-10b). picker-10b also ran automated smoke battery: vitest 493 pass + 2 pre-existing failures (qb sync.regression.test.ts, CRLF/LF issue from f3c9d29 era — NOT from this branch); build PASS. Manual UI smoke still owed to user.
 - **2026-05-18 16:01** — picker-10b freelanced — misread my shutdown_request payload as a "do Task 12" directive and started running tests + pushing. No harm done: it ran the right verification commands and pushed seed-builder's already-correct commit. Lesson for orchestrator: send `{"type": "shutdown_request"}` as the bare `message` field; don't duplicate as additional content. Re-sending shutdown now via correct protocol.
 - **2026-05-18 15:59** — Wave 6 complete. picker-10b ✅ `cad95f1`, picker-10c ✅ `1d78cc6`, picker-10d ✅ `c2cd37b`. Team pattern validated: 4 parallel pickers completed in ~3 minutes wall-clock (vs ~12 min sequential estimate). No-commit + batch-orchestrator-commit avoided git index race. picker-10d went idle without DM but its file change verified directly via git diff.
