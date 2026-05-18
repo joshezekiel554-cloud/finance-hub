@@ -85,15 +85,19 @@ describe("composeSignatureHtml", () => {
     );
   });
 
-  it("appends both with user before alias", () => {
+  it("personal sig wins when both are set (alias suppressed)", () => {
     expect(composeSignatureHtml(body, userSig, aliasSig)).toBe(
-      `${body}<br><br>${userSig}<br><br>${aliasSig}`,
+      `${body}<br><br>${userSig}`,
     );
   });
 
-  it("treats empty-string sig as no sig (sanitizer can return empty)", () => {
+  it("treats empty-string user sig as missing → falls back to alias", () => {
     expect(composeSignatureHtml(body, "", aliasSig)).toBe(
       `${body}<br><br>${aliasSig}`,
     );
+  });
+
+  it("no signature appended when both empty", () => {
+    expect(composeSignatureHtml(body, "", "")).toBe(body);
   });
 });

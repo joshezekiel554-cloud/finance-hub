@@ -92,9 +92,10 @@ export function composeSignatureHtml(
   userSig: string | null,
   aliasSig: string | null,
 ): string {
-  const u = userSig && userSig.length > 0 ? `<br><br>${userSig}` : "";
-  const a = aliasSig && aliasSig.length > 0 ? `<br><br>${aliasSig}` : "";
-  return `${bodyHtml}${u}${a}`;
+  const hasUser = !!userSig && userSig.length > 0;
+  const hasAlias = !!aliasSig && aliasSig.length > 0;
+  const chosen = hasUser ? userSig : hasAlias ? aliasSig : null;
+  return chosen ? `${bodyHtml}<br><br>${chosen}` : bodyHtml;
 }
 
 export type AppendContext = {

@@ -60,7 +60,7 @@ export function SignaturePicker({ value, onChange, className }: Props) {
           {r.isDefault ? " (default)" : ""}
         </option>
       ))}
-      <option value="__none__">None (skip personal signature)</option>
+      <option value="__none__">None (use alias signature)</option>
     </select>
   );
 }
