@@ -17,6 +17,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { LogoUploader } from "../components/logo-uploader";
+import { SignatureEditor } from "../components/signature-editor";
 import { cn } from "../lib/cn";
 
 type EmailTemplateContext =
@@ -74,6 +75,8 @@ export default function SettingsPage() {
         </p>
       </div>
       <EmailTemplatesSection />
+      <MySignaturesSection />
+      <AliasSignaturesSection />
       <StatementPdfSection />
       <ReturnsSection />
       <RoutingRulesSection />
@@ -919,6 +922,293 @@ function EmailTemplatesSection() {
           )}
         </div>
       </CardBody>
+    </Card>
+  );
+}
+
+function MySignaturesSection() {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<{
+    id?: string;
+    name: string;
+    html: string;
+    isDefault: boolean;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const { data, isPending } = useQuery<{
+    rows: Array<{ id: string; name: string; html: string; isDefault: boolean }>;
+  }>({
+    queryKey: ["me-signatures"],
+    queryFn: async () => {
+      const res = await fetch("/api/me/signatures");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const rows = data?.rows ?? [];
+
+  const save = async (
+    payload:
+      | { kind: "user"; id?: string; name: string; html: string; isDefault: boolean }
+      | { kind: "alias"; aliasEmail: string; html: string },
+  ) => {
+    if (payload.kind !== "user") return;
+    setSaving(true);
+    try {
+      const body = JSON.stringify({
+        name: payload.name,
+        html: payload.html,
+        isDefault: payload.isDefault,
+      });
+      const res = payload.id
+        ? await fetch(`/api/me/signatures/${payload.id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body,
+          })
+        : await fetch("/api/me/signatures", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+          });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const saved = (await res.json().catch(() => ({}))) as {
+        row?: { html?: string };
+      };
+      if (
+        payload.html.trim().length > 0 &&
+        saved?.row?.html?.length === 0
+      ) {
+        window.alert(
+          "Your signature looked empty after sanitisation — try simpler HTML.",
+        );
+      }
+      await queryClient.invalidateQueries({ queryKey: ["me-signatures"] });
+      setEditing(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const del = async (id: string) => {
+    if (!window.confirm("Delete this signature?")) return;
+    const res = await fetch(`/api/me/signatures/${id}`, { method: "DELETE" });
+    if (!res.ok) return;
+    await queryClient.invalidateQueries({ queryKey: ["me-signatures"] });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-medium">My email signatures</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Personal sign-offs appended to your outbound emails.
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() =>
+              setEditing({ name: "", html: "", isDefault: rows.length === 0 })
+            }
+          >
+            <Plus className="size-3.5" /> Add signature
+          </Button>
+        </div>
+      </CardHeader>
+      <CardBody>
+        {isPending ? (
+          <div className="text-xs text-muted">Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="text-xs text-muted">
+            You don't have any signatures yet — add one to personalise your
+            outbound emails.
+          </div>
+        ) : (
+          <ul className="divide-y divide-default">
+            {rows.map((r) => (
+              <li
+                key={r.id}
+                className="flex items-center justify-between py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">{r.name}</span>
+                  {r.isDefault && (
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium">
+                      Default
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setEditing({
+                        id: r.id,
+                        name: r.name,
+                        html: r.html,
+                        isDefault: r.isDefault,
+                      })
+                    }
+                  >
+                    Edit
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => del(r.id)}>
+                    Delete
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+      {editing && (
+        <SignatureEditor
+          open
+          onOpenChange={(o) => !o && setEditing(null)}
+          initial={{ kind: "user", ...editing }}
+          onSave={save}
+          saving={saving}
+        />
+      )}
+    </Card>
+  );
+}
+
+function AliasSignaturesSection() {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<{
+    aliasEmail: string;
+    html: string;
+    isNew?: boolean;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const { data, isPending } = useQuery<{
+    rows: Array<{
+      aliasEmail: string;
+      html: string;
+      updatedByEmail: string | null;
+      updatedAt: string;
+    }>;
+  }>({
+    queryKey: ["alias-signatures"],
+    queryFn: async () => {
+      const res = await fetch("/api/alias-signatures");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const rows = data?.rows ?? [];
+
+  const save = async (
+    payload:
+      | { kind: "user"; id?: string; name: string; html: string; isDefault: boolean }
+      | { kind: "alias"; aliasEmail: string; html: string },
+  ) => {
+    if (payload.kind !== "alias") return;
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/alias-signatures/${encodeURIComponent(payload.aliasEmail)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ html: payload.html }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const saved = (await res.json().catch(() => ({}))) as {
+        row?: { html?: string };
+      };
+      if (
+        payload.html.trim().length > 0 &&
+        saved?.row?.html?.length === 0
+      ) {
+        window.alert(
+          "Your signature looked empty after sanitisation — try simpler HTML.",
+        );
+      }
+      await queryClient.invalidateQueries({ queryKey: ["alias-signatures"] });
+      setEditing(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-medium">Alias signatures</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Organisation footer appended to every email sent from each alias.
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() =>
+              setEditing({ aliasEmail: "", html: "", isNew: true })
+            }
+          >
+            <Plus className="size-3.5" /> Add alias signature
+          </Button>
+        </div>
+      </CardHeader>
+      <CardBody>
+        {isPending ? (
+          <div className="text-xs text-muted">Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="text-xs text-muted">
+            No alias signatures yet — add one to set the org footer for each
+            sending alias (e.g. accounts@, sales@).
+          </div>
+        ) : (
+          <ul className="divide-y divide-default">
+            {rows.map((r) => (
+              <li
+                key={r.aliasEmail}
+                className="flex items-center justify-between py-2"
+              >
+                <div>
+                  <div className="text-sm">{r.aliasEmail}</div>
+                  <div className="text-[11px] text-muted">
+                    {r.updatedByEmail
+                      ? `Last edited by ${r.updatedByEmail}`
+                      : "Never edited"}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setEditing({ aliasEmail: r.aliasEmail, html: r.html })
+                  }
+                >
+                  Edit
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+      {editing && (
+        <SignatureEditor
+          open
+          onOpenChange={(o) => !o && setEditing(null)}
+          initial={{ kind: "alias", ...editing }}
+          onSave={save}
+          saving={saving}
+        />
+      )}
     </Card>
   );
 }

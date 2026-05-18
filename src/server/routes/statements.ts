@@ -37,6 +37,7 @@ const sendBodySchema = z.object({
   to: z.string().max(2000).optional(),
   cc: z.string().max(2000).optional(),
   bcc: z.string().max(2000).optional(),
+  userSignatureId: z.string().nullable().optional(),
 });
 
 const statementsRoute: FastifyPluginAsync = async (app) => {
@@ -55,7 +56,7 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid body", details: bodyParse.error.flatten() });
     }
     const { id: customerId } = parse.data;
-    const overrides = bodyParse.data;
+    const { userSignatureId, ...overrides } = bodyParse.data;
 
     try {
       const result = await sendStatement({
@@ -65,6 +66,11 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
           Object.values(overrides).some((v) => v !== undefined)
             ? overrides
             : undefined,
+        // Tri-state: string = specific signature, null = explicit skip,
+        // undefined (key absent from body) = fall back to operator default.
+        // Don't collapse undefined → null; AppendContext treats them
+        // differently.
+        userSignatureId,
       });
       return reply.code(200).send(result);
     } catch (err) {

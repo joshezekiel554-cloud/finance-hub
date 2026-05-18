@@ -23,6 +23,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Send, AlertCircle } from "lucide-react";
+import { SignaturePicker } from "./signature-picker";
 import {
   Dialog,
   DialogContent,
@@ -78,6 +79,7 @@ export default function ChaseEmailSendDialog({
 }) {
   const queryClient = useQueryClient();
   const [level, setLevel] = useState<ChaseLevel>(defaultLevel);
+  const [userSignatureId, setUserSignatureId] = useState<string | null>(null);
 
   // Stable string-key for the invoice-id list — TanStack Query needs
   // a deterministic key, and array identity changes per render.
@@ -147,6 +149,7 @@ export default function ChaseEmailSendDialog({
       setBcc("");
       setEdited(false);
       setLevel(defaultLevel);
+      setUserSignatureId(null);
     }
   }, [open, defaultLevel]);
 
@@ -181,6 +184,7 @@ export default function ChaseEmailSendDialog({
           to: to !== d?.recipients.to ? to : undefined,
           cc: cc !== d?.recipients.cc ? cc : undefined,
           bcc: bcc !== d?.recipients.bcc ? bcc : undefined,
+          userSignatureId,
         }),
       });
       if (!res.ok) {
@@ -376,6 +380,10 @@ export default function ChaseEmailSendDialog({
         </div>
 
         <DialogFooter>
+          <div className="mr-auto flex items-center gap-2">
+            <span className="text-xs text-muted">Signature</span>
+            <SignaturePicker value={userSignatureId} onChange={setUserSignatureId} />
+          </div>
           <Button
             variant="ghost"
             size="sm"

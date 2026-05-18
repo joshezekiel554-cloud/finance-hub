@@ -21,6 +21,7 @@ import {
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
+import { SignaturePicker } from "./signature-picker";
 
 type PreviewResponse = {
   subject: string;
@@ -55,6 +56,8 @@ export default function RmaDenialEmailDialog({
   onSent,
 }: RmaDenialEmailDialogProps) {
   const queryClient = useQueryClient();
+
+  const [userSignatureId, setUserSignatureId] = useState<string | null>(null);
 
   // Denial reason state — operator fills this before sending
   const [denialReason, setDenialReason] = useState("");
@@ -122,6 +125,7 @@ export default function RmaDenialEmailDialog({
       setDenialReason("");
       setDebouncedReason("");
       setEdited(false);
+      setUserSignatureId(null);
     }
   }, [open]);
 
@@ -155,6 +159,7 @@ export default function RmaDenialEmailDialog({
           customerId,
           refType: "rma",
           refId: rmaId,
+          userSignatureId,
         }),
       });
       if (!sendRes.ok) {
@@ -314,6 +319,10 @@ export default function RmaDenialEmailDialog({
         </div>
 
         <DialogFooter>
+          <div className="mr-auto flex items-center gap-2">
+            <span className="text-xs text-muted">Signature</span>
+            <SignaturePicker value={userSignatureId} onChange={setUserSignatureId} />
+          </div>
           <Button
             variant="ghost"
             size="sm"

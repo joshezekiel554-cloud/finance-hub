@@ -33,6 +33,7 @@ import { createLogger } from "../../lib/logger.js";
 import { sendEmail } from "../../integrations/gmail/send.js";
 import { listAliases } from "../../integrations/gmail/aliases.js";
 import { recordActivity } from "../../modules/crm/index.js";
+import { appendSignatures } from "../../modules/email-compose/signatures.js";
 
 const log = createLogger({ component: "routes.email-send" });
 
@@ -107,6 +108,10 @@ const sendBodySchema = z.object({
   // outbound mail to the right entity for filter/jump-to purposes.
   refType: z.string().max(64).optional(),
   refId: z.string().max(64).optional(),
+  // User signature selection. `string` → use that specific user signature.
+  // `null` → user explicitly picked "None" (skip user signature entirely).
+  // `undefined`/absent → fall back to the user's default signature (if any).
+  userSignatureId: z.string().nullable().optional(),
 });
 
 // Minimal HTML escape — sufficient since we control the surrounding
@@ -242,6 +247,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       attachments,
       refType: refTypeOverride,
       refId: refIdOverride,
+      userSignatureId,
     } = parse.data;
 
     // Two body shapes converge here:
@@ -254,8 +260,24 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
     //                    or an internal caller. Keep the existing
     //                    bodyToHtml flow that wraps newlines in
     //                    <p>/<br/> tags.
-    const html = isHtml ? sanitizeBodyHtml(body) : bodyToHtml(body);
-    const text = isHtml ? htmlToPlainText(html) : body;
+    const sanitizedHtml = isHtml ? sanitizeBodyHtml(body) : bodyToHtml(body);
+
+    // Append user + alias signatures only on the HTML path. Signatures
+    // are HTML; appending them to a plain-text body would render raw
+    // tags in clients that prefer text/plain. resolveAliasSignature
+    // returns null for unknown aliases, so passing "" when alias is
+    // absent is safe — the email just goes out with no alias signature.
+    const finalHtml = isHtml
+      ? await appendSignatures(db, {
+          bodyHtml: sanitizedHtml,
+          userId: user.id,
+          aliasEmail: alias ?? "",
+          userSignatureId: userSignatureId ?? undefined,
+          skipUserSignature: userSignatureId === null,
+        })
+      : sanitizedHtml;
+
+    const text = isHtml ? htmlToPlainText(finalHtml) : body;
 
     // Decode base64 attachments to Buffers — the integration layer
     // expects raw bytes and base64-encodes them when building MIME.
@@ -272,7 +294,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
         cc,
         bcc,
         subject,
-        html,
+        html: finalHtml,
         text,
         alias,
         threadId,

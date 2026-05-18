@@ -35,6 +35,7 @@ import {
   type TemplateVars,
 } from "../../modules/email-compose/index.js";
 import { EditorField } from "./editor-field";
+import { SignaturePicker } from "./signature-picker";
 
 type GmailAlias = {
   sendAsEmail: string;
@@ -214,6 +215,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
   // Attachments selected for this send. Stored as File so we can show
   // size/name in the chip; serialised to base64 only at send time.
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [userSignatureId, setUserSignatureId] = useState<string | null>(null);
 
   // Hydrate form fields when the modal opens, when context changes, or
   // when the aliases finish loading. We rely on a key generated from the
@@ -245,6 +247,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     setSelectedTemplateId("");
     setErrorMessage(null);
     setAttachments([]);
+    setUserSignatureId(null);
     // formKey is the controlled re-init trigger — we don't want this
     // effect to re-fire on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -304,6 +307,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
         threadId: reply?.threadId,
         customerId: context?.customerId,
         attachments: encodedAttachments,
+        userSignatureId,
       };
       const res = await fetch("/api/send", {
         method: "POST",
@@ -465,8 +469,12 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-default px-5 py-3">
+          <div className="mr-auto flex items-center gap-2">
+            <span className="text-xs text-muted">Signature</span>
+            <SignaturePicker value={userSignatureId} onChange={setUserSignatureId} />
+          </div>
           {errorMessage && (
-            <span className="mr-auto text-xs text-accent-danger">
+            <span className="text-xs text-accent-danger">
               {errorMessage}
             </span>
           )}

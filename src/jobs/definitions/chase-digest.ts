@@ -20,6 +20,8 @@
 import type { Job } from "bullmq";
 import { sendEmail } from "../../integrations/gmail/send.js";
 import { buildDailyDigest } from "../../modules/chase/digest.js";
+import { db } from "../../db/index.js";
+import { appendSignatures } from "../../modules/email-compose/signatures.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -113,11 +115,19 @@ export async function processChaseDigest(
   }
 
   const today = new Date().toISOString().slice(0, 10);
+  // System send — no current user, so signature is alias-only.
+  const aliasEmail = "accounts@feldart.co.uk";
+  const finalHtml = await appendSignatures(db, {
+    bodyHtml: htmlEnvelope(built.digest),
+    userId: null,
+    aliasEmail,
+  });
   const result = await sendEmail({
     to: recipient,
     subject: `${SUBJECT_PREFIX} — ${today}`,
-    html: htmlEnvelope(built.digest),
+    html: finalHtml,
     text: built.digest,
+    alias: aliasEmail,
   });
 
   jobLog.info(

@@ -49,6 +49,7 @@ import {
   renderTemplate,
 } from "../../modules/email-compose/template-vars.js";
 import { sendEmail } from "../../integrations/gmail/send.js";
+import { appendSignatures } from "../../modules/email-compose/signatures.js";
 import { recordActivity } from "../../modules/crm/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
@@ -694,6 +695,35 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       bcc = allBccs.length > 0 ? allBccs.join(", ") : undefined;
     }
 
+    // Chase templates are plain text. Convert to lightweight HTML
+    // (paragraph-per-blank-line) so the email renders with sensible
+    // spacing in clients that prefer the text/html part.
+    const renderedBodyHtml = renderedBody
+      .split(/\n{2,}/)
+      .map(
+        (p) =>
+          `<p>${p
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\n/g, "<br/>")}</p>`,
+      )
+      .join("\n");
+
+    // Append user + alias signatures on the HTML branch only — the
+    // text/plain part stays as-is so clients preferring text don't
+    // see raw signature tags. Chase sends don't currently set an
+    // alias (sendEmail falls back to the Gmail profile), so we pass
+    // "" as aliasEmail; resolveAliasSignature returns null for
+    // unknown aliases, which is the no-op result we want here.
+    const finalHtml = await appendSignatures(db, {
+      bodyHtml: renderedBodyHtml,
+      userId: user.id,
+      aliasEmail: "",
+      userSignatureId: parse.data.userSignatureId ?? undefined,
+      skipUserSignature: parse.data.userSignatureId === null,
+    });
+
     let result;
     try {
       result = await sendEmail({
@@ -701,20 +731,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         cc,
         bcc,
         subject: renderedSubject,
-        // Chase templates are plain text. Convert to lightweight HTML
-        // (paragraph-per-blank-line) so the email renders with sensible
-        // spacing in clients that prefer the text/html part.
-        html: renderedBody
-          .split(/\n{2,}/)
-          .map(
-            (p) =>
-              `<p>${p
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/\n/g, "<br/>")}</p>`,
-          )
-          .join("\n"),
+        html: finalHtml,
         text: renderedBody,
       });
     } catch (err) {
@@ -837,6 +854,10 @@ const sendChaseEmailBodySchema = z.object({
   to: z.string().max(2000).optional(),
   cc: z.string().max(2000).optional(),
   bcc: z.string().max(2000).optional(),
+  // User signature selection. `string` → use that specific user signature.
+  // `null` → user explicitly picked "None" (skip user signature entirely).
+  // `undefined`/absent → fall back to the user's default signature (if any).
+  userSignatureId: z.string().nullable().optional(),
 });
 
 // Normalise the invoiceIds query param shape: it can arrive as a

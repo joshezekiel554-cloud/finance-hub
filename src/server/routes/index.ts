@@ -29,6 +29,7 @@ import rosterTagRoute from "./roster-tag.js";
 import returnsRoute from "./returns.js";
 import seasonsRoute from "./seasons.js";
 import syncRoute from "./sync.js";
+import signaturesRoute from "./signatures.js";
 import tagEmailSchedulesRoute from "./tag-email-schedules.js";
 import vocatechRoute from "./vocatech.js";
 
@@ -81,6 +82,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(rosterTagRoute, { prefix: "/api/roster-tag" });
   await app.register(returnsRoute, { prefix: "/api/rmas" });
   await app.register(seasonsRoute, { prefix: "/api/seasons" });
+  await app.register(signaturesRoute, { prefix: "/api" });
   await app.register(tagEmailSchedulesRoute, {
     prefix: "/api/tag-email-schedules",
   });
