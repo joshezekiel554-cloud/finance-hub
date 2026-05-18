@@ -56,6 +56,7 @@ jobs:
             --exclude='**/*.test.ts' \
             --exclude='**/*.test.tsx' \
             --exclude='vitest.config.*' \
+            --exclude='data' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             ./ deploy@"$VPS_HOST":/home/deploy/finance-hub/
 
