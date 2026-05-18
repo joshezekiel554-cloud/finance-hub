@@ -21,8 +21,8 @@ This file is updated after every task completes — pushed to origin so it survi
 
 | Wave | Tasks | Mode | Status |
 |---|---|---|---|
-| 0 | 1, 2 | Subagent (sequential) | 🔄 |
-| 1 | 3, 4 | Subagent (sequential — Task 4 imports Task 1's schema) | ☐ |
+| 0 | 1, 2 | Subagent (sequential) | ✅ |
+| 1 | 3, 4 | Subagent (sequential — Task 4 imports Task 1's schema) | 🔄 |
 | 2 | 5 | Subagent | ☐ |
 | 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | **Team of 7** | ☐ |
 | 4 | 7, 8 | Subagent (parallel — file-disjoint UI components) | ☐ |
@@ -45,11 +45,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: Clean — no deviations. `tsc -b && tsc-alias && vite build` all green.
 
 ### Task 2: Generate + verify migration
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: migration-runner
 - Files: `migrations/0034_email_signatures.sql`, `migrations/meta/_journal.json`
-- Commit: —
-- Notes: —
+- Commit: `bc6ecb9`
+- Notes: Drizzle-kit generated correct SQL (2 CREATE TABLE, 2 FK ALTERs, 2 INDEXes). `npm run db:migrate` applied cleanly.
 
 ### Task 3: Sanitizer (TDD)
 - Status: ☐
@@ -188,5 +188,6 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 14:53** — Task 2 ✅ `bc6ecb9` (migration-runner). Migration 0034_email_signatures applied cleanly. Wave 0 complete.
 - **2026-05-18 14:51** — Task 1 ✅ `f992d50` (schema-builder). user-signatures + alias-signatures Drizzle tables wired, relations updated, build green.
 - **2026-05-18 14:45** — Plan + progress tracker created. Committed on `feat/email-signatures`. Beginning Wave 0.
