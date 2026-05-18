@@ -22,6 +22,7 @@ The spec was written against an idealised schema. These deviations apply because
 4. **Character counter cap:** **32 KB everywhere.** Spec §3 hardened the cap to 32 KB to fit base64 icons; §7 still referenced 16 KB — resolved to 32 KB so UI matches the server's 413 boundary.
 5. **E2E tests:** deferred — Playwright is not configured in the repo. Replaced by an explicit **Manual smoke checklist** (see end).
 6. **Import paths:** server imports use `.js` extensions on relative paths (post-build resolution); follow the pattern in `src/server/routes/email-templates.ts`.
+7. **Task 6d (invoicing) is N/A** — invoices send through QBO's own `/invoice/{id}/send` and `/salesreceipt/{id}/send` endpoints. QBO renders the body server-side; finance-hub never constructs an HTML body for invoice sends. Signatures cannot be appended without refactoring invoice send off QBO and onto Gmail (which would lose QBO's tracked EmailSent status + DeliveryInfo). Out of scope for this feature. Task marked complete-as-no-op.
 
 ---
 
