@@ -23,6 +23,7 @@ The spec was written against an idealised schema. These deviations apply because
 5. **E2E tests:** deferred — Playwright is not configured in the repo. Replaced by an explicit **Manual smoke checklist** (see end).
 6. **Import paths:** server imports use `.js` extensions on relative paths (post-build resolution); follow the pattern in `src/server/routes/email-templates.ts`.
 7. **Task 6d (invoicing) is N/A** — invoices send through QBO's own `/invoice/{id}/send` and `/salesreceipt/{id}/send` endpoints. QBO renders the body server-side; finance-hub never constructs an HTML body for invoice sends. Signatures cannot be appended without refactoring invoice send off QBO and onto Gmail (which would lose QBO's tracked EmailSent status + DeliveryInfo). Out of scope for this feature. Task marked complete-as-no-op.
+8. **Task 6e (RMA) is N/A** — `src/server/routes/returns.ts` only has *preview* routes that return `{subject, body, recipients}` JSON; the actual send happens client-side when the RMA dialog POSTs to `/api/send` (Task 6a's route). So signatures are already wired end-to-end through Task 6a. Tasks 10c+10d will pass `userSignatureId` from the RMA dialog into the `/api/send` payload.
 
 ---
 

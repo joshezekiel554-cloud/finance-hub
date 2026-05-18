@@ -101,11 +101,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: Invoices send via QBO's `/invoice/{id}/send` and `/salesreceipt/{id}/send` endpoints — QBO renders the body. No finance-hub bodyHtml to append to. Signatures are not applicable. Documented in plan's "Spec adaptations".
 
 ### Task 6e: returns.ts (RMA approval + denial)
-- Status: ☐
-- Owner: —
-- Files: `src/server/routes/returns.ts`
-- Commit: —
-- Notes: —
+- Status: ✅ (N/A — no-op, already wired via 6a)
+- Owner: send-route-6e
+- Files: `src/server/routes/returns.ts` (no changes)
+- Commit: `fffcc44` (empty audit commit)
+- Notes: RMA dialogs POST to `/api/send` (Task 6a's route), not dedicated handlers. Routes in returns.ts are *preview* only. So 6a already wires the end-to-end path; 10c/10d will plumb `userSignatureId` from the dialogs into the /api/send payload.
 
 ### Task 6f: statements module
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:18** — Task 6e ✅ N/A (send-route-6e). RMA dialogs send via /api/send (already wired in 6a). Returns.ts has preview routes only. Plan §Spec-adaptations #8 added.
 - **2026-05-18 15:14** — Task 6d ✅ N/A (send-route-6d). Invoices send via QBO native endpoints, not Gmail. No appendSignatures possible without scope-expanding refactor. Plan §Spec-adaptations #7 added.
 - **2026-05-18 15:12** — Task 6c ✅ `ea0b9ed` (send-route-6c). statements.ts (not statement-sends.ts) plumbed. Plan amended for the file-name mistake.
 - **2026-05-18 15:09** — Task 6b ✅ `77caca8` (send-route-6b). /api/chase/send-chase-email wired; chase route has no alias param so alias-sig skipped (backlog).
