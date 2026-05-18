@@ -86,12 +86,12 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Commit: `77caca8`
 - Notes: User sig appended; alias passes `""` because chase route doesn't carry an alias today (Gmail primary). Future: add alias selector to chase dialog → revisit aliasEmail arg.
 
-### Task 6c: statement-sends.ts (plumb only)
-- Status: ☐
-- Owner: —
-- Files: `src/server/routes/statement-sends.ts`
-- Commit: —
-- Notes: —
+### Task 6c: statements.ts (plumb only)
+- Status: ✅
+- Owner: send-route-6c
+- Files: `src/server/routes/statements.ts` (NOT statement-sends.ts — that's audit-log GETs)
+- Commit: `ea0b9ed`
+- Notes: Body schema bumped + TODO comment for 6f. Plan amended to fix file-name mistake.
 
 ### Task 6d: invoicing.ts (send-invoice)
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:12** — Task 6c ✅ `ea0b9ed` (send-route-6c). statements.ts (not statement-sends.ts) plumbed. Plan amended for the file-name mistake.
 - **2026-05-18 15:09** — Task 6b ✅ `77caca8` (send-route-6b). /api/chase/send-chase-email wired; chase route has no alias param so alias-sig skipped (backlog).
 - **2026-05-18 15:06** — Task 6a ✅ `5e80eee` (send-route-6a). /api/send wired; signatures in both html+text MIME parts.
 - **2026-05-18 15:03** — Wave 3 mode revised: sequential foreground subagents (not team-of-7). Parallel teammates on shared working tree would race on git's index lock; sequential delivers a steady stream of per-task reports that matches the "constantly reporting" requirement better.

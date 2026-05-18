@@ -45,7 +45,7 @@ The spec was written against an idealised schema. These deviations apply because
 - `src/server/routes/index.ts` — register the new route plugin
 - `src/server/routes/email-send.ts` — accept `userSignatureId` in body, call `appendSignatures`
 - `src/server/routes/chase.ts` — same
-- `src/server/routes/statement-sends.ts` — same
+- `src/server/routes/statements.ts` — same
 - `src/server/routes/invoicing.ts` — same (in `send-invoice` handler)
 - `src/server/routes/returns.ts` — same (in `send-approval` and `send-denial` handlers)
 - `src/modules/statements/send.ts` — call `appendSignatures` before delegating to `sendEmail`
@@ -1051,10 +1051,10 @@ git add src/server/routes/chase.ts
 git commit -m "Email signatures: wire into chase send route"
 ```
 
-### Task 6c: statement-sends.ts (route — plumb userSignatureId into module)
+### Task 6c: statements.ts (post handler — statement-sends.ts is unrelated audit log GET) (route — plumb userSignatureId into module)
 
 **Files:**
-- Modify: `src/server/routes/statement-sends.ts`
+- Modify: `src/server/routes/statements.ts`
 
 This route delegates to `src/modules/statements/send.ts`. Per Task 6f's decision, `appendSignatures` is called inside that module — NOT here. This task only adds `userSignatureId` to the body schema and forwards it.
 
@@ -1083,7 +1083,7 @@ await sendStatement(parse.data.customerId, {
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/server/routes/statement-sends.ts
+git add src/server/routes/statements.ts (post handler — statement-sends.ts is unrelated audit log GET)
 git commit -m "Email signatures: plumb userSignatureId through statement send route"
 ```
 
@@ -1113,11 +1113,11 @@ Two handlers in this file: `send-approval` and `send-denial`. Both need the same
 
 **Files:**
 - Modify: `src/modules/statements/send.ts`
-- Re-check: `src/server/routes/statement-sends.ts` (depending on call-site decision)
+- Re-check: `src/server/routes/statements.ts` (depending on call-site decision)
 
 The statements module currently calls `sendEmail()` directly (around line 250). Spec §9 says "never inside modules" — but in this codebase the module IS the orchestrator: the route is a thin wrapper that delegates body-rendering + send to the module. Refactoring the body-build out of the module to satisfy the literal rule expands scope.
 
-**Decision: call `appendSignatures` inside this module, immediately before `sendEmail()`.** Task 6c (`statement-sends.ts` route) is responsible only for plumbing `userSignatureId` and `aliasEmail` through into the module's function signature. Document this exception in the commit message so future readers know spec §9 was relaxed here.
+**Decision: call `appendSignatures` inside this module, immediately before `sendEmail()`.** Task 6c (`statements.ts (post handler — statement-sends.ts is unrelated audit log GET)` route) is responsible only for plumbing `userSignatureId` and `aliasEmail` through into the module's function signature. Document this exception in the commit message so future readers know spec §9 was relaxed here.
 
 - [ ] **Step 1: Read the file. Find `sendStatement(...)` (or whatever the exported function is named) and locate the `sendEmail({...})` call.**
 
@@ -1160,14 +1160,14 @@ await sendEmail({
 
 - [ ] **Step 5: Re-verify Task 6c plumbs `userSignatureId` into the module call**
 
-Open `src/server/routes/statement-sends.ts`. The handler should now pass `userSignatureId: parse.data.userSignatureId ?? null` into the module call, NOT call `appendSignatures` itself.
+Open `src/server/routes/statements.ts`. The handler should now pass `userSignatureId: parse.data.userSignatureId ?? null` into the module call, NOT call `appendSignatures` itself.
 
 - [ ] **Step 6: Type-check + commit**
 
 Run: `npm run build` — PASS.
 
 ```bash
-git add src/modules/statements/send.ts src/server/routes/statement-sends.ts
+git add src/modules/statements/send.ts src/server/routes/statements.ts (post handler — statement-sends.ts is unrelated audit log GET)
 git commit -m "Email signatures: appendSignatures inside statements module (closest to sendEmail)"
 ```
 
