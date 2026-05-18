@@ -26,8 +26,8 @@ This file is updated after every task completes — pushed to origin so it survi
 | 2 | 5 | Subagent | ✅ |
 | 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | Sequential subagents (revised from team — see event log 15:03) | ✅ |
 | 4 | 7, 8 | Subagent (sequential foreground — same rationale as Wave 3) | ✅ |
-| 5 | 9 | Subagent | 🔄 |
-| 6 | 10a, 10b, 10c, 10d | **Team of 4** | ☐ |
+| 5 | 9 | Subagent | ✅ |
+| 6 | 10a, 10b, 10c, 10d | **Team of 4** (parallel, no-commit pattern) | 🔄 |
 | 7 | 11 | Subagent | ☐ |
 | 8 | 12 | Inline (manual smoke) | ☐ |
 
@@ -136,11 +136,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: Plain `<select>` per plan. Existing `./ui/select.tsx` not used (out of scope to retrofit). Auto-pre-selects default on mount.
 
 ### Task 9: Settings page integration
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: settings-wirer
 - Files: `src/web/pages/settings.tsx`
-- Commit: —
-- Notes: —
+- Commit: `74ae464`
+- Notes: Both sections inserted after EmailTemplatesSection (lines 78-79). Empty-sanitization warning implemented in both save handlers. +271 lines.
 
 ### Task 10a: compose-modal picker wiring
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:33** — Task 9 ✅ `74ae464` (settings-wirer). MySignaturesSection + AliasSignaturesSection wired. **Wave 5 complete**.
 - **2026-05-18 15:30** — Task 8 ✅ `790ab73` (picker-builder). SignaturePicker dropdown. Wave 4 complete.
 - **2026-05-18 15:27** — Task 7 ✅ `ecf8b16` (editor-builder). SignatureEditor modal built with project primitives.
 - **2026-05-18 15:24** — Task 6g ✅ `8eec04d` (cron-wirer-6g). chase-digest cron wired with userId:null. **Wave 3 complete**: 5 real wires + 2 N/A.
