@@ -52,11 +52,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: Drizzle-kit generated correct SQL (2 CREATE TABLE, 2 FK ALTERs, 2 INDEXes). `npm run db:migrate` applied cleanly.
 
 ### Task 3: Sanitizer (TDD)
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: sanitizer-tdd
 - Files: `src/modules/email-compose/signatures.ts`, `src/modules/email-compose/signatures.test.ts`
-- Commit: —
-- Notes: —
+- Commit: `c02b552`
+- Notes: 9/9 tests pass. Real-signature smoke deferred (file outside repo).
 
 ### Task 4: composeSignatureHtml + appendSignatures
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 14:56** — Task 3 ✅ `c02b552` (sanitizer-tdd). sanitizeSignatureHtml + 9 vitest cases, all green.
 - **2026-05-18 14:53** — Task 2 ✅ `bc6ecb9` (migration-runner). Migration 0034_email_signatures applied cleanly. Wave 0 complete.
 - **2026-05-18 14:51** — Task 1 ✅ `f992d50` (schema-builder). user-signatures + alias-signatures Drizzle tables wired, relations updated, build green.
 - **2026-05-18 14:45** — Plan + progress tracker created. Committed on `feat/email-signatures`. Beginning Wave 0.
