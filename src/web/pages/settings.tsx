@@ -2107,21 +2107,44 @@ function VocatechSection() {
 
   function configBadge() {
     if (!health) return null;
-    if (fullyConfigured) {
+    if (!fullyConfigured) {
+      const missing: string[] = [];
+      if (!health.apiKeyConfigured) missing.push("API key missing");
+      if (!health.webhookSecretConfigured) missing.push("Webhook secret missing");
       return (
-        <span className="flex items-center gap-1 text-xs text-accent-success font-medium">
-          <span className="inline-block size-2 rounded-full bg-accent-success" />
-          Connected
+        <span className="flex items-center gap-1 text-xs text-accent-danger font-medium">
+          <span className="inline-block size-2 rounded-full bg-accent-danger" />
+          {missing.join(" • ")}
         </span>
       );
     }
-    const missing: string[] = [];
-    if (!health.apiKeyConfigured) missing.push("API key missing");
-    if (!health.webhookSecretConfigured) missing.push("Webhook secret missing");
+    // Fully configured — gauge based on webhook freshness so the operator
+    // sees at a glance whether calls/SMS are actually flowing in real time.
+    const lastMs = health.lastWebhookAt
+      ? Date.parse(health.lastWebhookAt)
+      : null;
+    const ageMs = lastMs ? Date.now() - lastMs : null;
+    const HOUR = 60 * 60 * 1000;
+    if (ageMs !== null && ageMs < HOUR) {
+      return (
+        <span className="flex items-center gap-1 text-xs text-accent-success font-medium">
+          <span className="inline-block size-2 rounded-full bg-accent-success" />
+          Active • last event {formatRelative(health.lastWebhookAt)}
+        </span>
+      );
+    }
+    if (ageMs !== null && ageMs < 24 * HOUR) {
+      return (
+        <span className="flex items-center gap-1 text-xs text-accent-warning font-medium">
+          <span className="inline-block size-2 rounded-full bg-accent-warning" />
+          Quiet • last event {formatRelative(health.lastWebhookAt)}
+        </span>
+      );
+    }
     return (
       <span className="flex items-center gap-1 text-xs text-accent-danger font-medium">
         <span className="inline-block size-2 rounded-full bg-accent-danger" />
-        {missing.join(" • ")}
+        {lastMs ? "No events in 24h" : "No events ever received"}
       </span>
     );
   }
@@ -2147,6 +2170,49 @@ function VocatechSection() {
 
         {health && (
           <>
+            {/* ── Webhook silence banner ───────────────────────────── */}
+            {fullyConfigured &&
+              (() => {
+                const lastMs = health.lastWebhookAt
+                  ? Date.parse(health.lastWebhookAt)
+                  : null;
+                const ageMs = lastMs ? Date.now() - lastMs : null;
+                const silent = ageMs === null || ageMs >= 24 * 60 * 60 * 1000;
+                if (!silent) return null;
+                return (
+                  <div className="rounded border border-accent-danger/40 bg-accent-danger/10 px-3 py-2 text-xs text-accent-danger">
+                    <div className="font-medium">
+                      {lastMs
+                        ? `No webhook events received in 24h (last: ${formatRelative(health.lastWebhookAt)})`
+                        : "No webhook events received yet"}
+                    </div>
+                    <div className="mt-1 text-accent-danger/80">
+                      Calls + SMS should land within seconds of happening. If
+                      that's not the case, check:
+                      <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                        <li>
+                          The webhook(s) below show the URL{" "}
+                          <code className="font-mono">
+                            https://finance.feldart.com/api/vocatech/webhook
+                          </code>{" "}
+                          and are enabled.
+                        </li>
+                        <li>
+                          Hit <strong>Test</strong> next to a webhook below —
+                          Vocatech will POST a sample event we can verify
+                          arrives.
+                        </li>
+                        <li>
+                          If tests work but real calls don't, Vocatech's
+                          event subscription for that webhook may be missing
+                          the call/sms event types.
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                );
+              })()}
+
             {/* ── Configuration status ─────────────────────────────── */}
             <div className="space-y-1.5">
               <div className="text-xs font-medium text-secondary uppercase tracking-wide">
