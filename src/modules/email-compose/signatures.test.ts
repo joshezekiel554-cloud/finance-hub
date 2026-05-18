@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeSignatureHtml } from "./signatures";
+import { composeSignatureHtml, sanitizeSignatureHtml } from "./signatures";
 
 describe("sanitizeSignatureHtml", () => {
   it("strips <script> tags", () => {
@@ -61,5 +61,39 @@ describe("sanitizeSignatureHtml", () => {
     const out = sanitizeSignatureHtml(input);
     expect(out).toContain("min-width:100px");
     expect(out).toContain("opacity:0.8");
+  });
+});
+
+describe("composeSignatureHtml", () => {
+  const body = `<p>Hello</p>`;
+  const userSig = `<div>Best, Josh</div>`;
+  const aliasSig = `<div>Feldart Ltd</div>`;
+
+  it("returns body alone when no signatures", () => {
+    expect(composeSignatureHtml(body, null, null)).toBe(body);
+  });
+
+  it("appends user sig with spacer", () => {
+    expect(composeSignatureHtml(body, userSig, null)).toBe(
+      `${body}<br><br>${userSig}`,
+    );
+  });
+
+  it("appends alias sig with spacer", () => {
+    expect(composeSignatureHtml(body, null, aliasSig)).toBe(
+      `${body}<br><br>${aliasSig}`,
+    );
+  });
+
+  it("appends both with user before alias", () => {
+    expect(composeSignatureHtml(body, userSig, aliasSig)).toBe(
+      `${body}<br><br>${userSig}<br><br>${aliasSig}`,
+    );
+  });
+
+  it("treats empty-string sig as no sig (sanitizer can return empty)", () => {
+    expect(composeSignatureHtml(body, "", aliasSig)).toBe(
+      `${body}<br><br>${aliasSig}`,
+    );
   });
 });
