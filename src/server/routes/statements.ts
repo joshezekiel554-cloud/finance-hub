@@ -37,6 +37,7 @@ const sendBodySchema = z.object({
   to: z.string().max(2000).optional(),
   cc: z.string().max(2000).optional(),
   bcc: z.string().max(2000).optional(),
+  userSignatureId: z.string().nullable().optional(),
 });
 
 const statementsRoute: FastifyPluginAsync = async (app) => {
@@ -55,7 +56,11 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid body", details: bodyParse.error.flatten() });
     }
     const { id: customerId } = parse.data;
-    const overrides = bodyParse.data;
+    const { userSignatureId: _userSignatureId, ...overrides } = bodyParse.data;
+    // TODO(6f): forward bodyParse.data.userSignatureId once
+    // modules/statements/send.ts accepts it. Currently parsed and
+    // discarded so the client contract is stable while the module
+    // signature catches up.
 
     try {
       const result = await sendStatement({
