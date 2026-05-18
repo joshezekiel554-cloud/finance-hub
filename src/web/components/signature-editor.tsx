@@ -156,9 +156,8 @@ export function SignatureEditor({
               title="signature preview"
               // empty sandbox — no parent-origin access
               sandbox=""
-              className="h-72 w-full rounded border border-default"
-              style={{ background: "transparent" }}
-              srcDoc={`<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:transparent;color:#1f2937;font-family:Arial,Helvetica,sans-serif;font-size:14px;">${previewHtml}</body></html>`}
+              className="h-72 w-full rounded border border-default bg-white"
+              srcDoc={`<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;background:#ffffff;color:#1f2937;font-family:Arial,Helvetica,sans-serif;font-size:14px;">${previewHtml}</body></html>`}
             />
           </div>
         </div>
