@@ -40,6 +40,7 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { SignaturePicker } from "./signature-picker";
 import { cn } from "../lib/cn";
 
 type PreviewInvoice = {
@@ -186,6 +187,7 @@ export default function StatementSendDialog({
   const [subjectDraft, setSubjectDraft] = useState<string>("");
   const [bodyDraft, setBodyDraft] = useState<string>("");
   const [edited, setEdited] = useState<boolean>(false);
+  const [userSignatureId, setUserSignatureId] = useState<string | null>(null);
 
   useEffect(() => {
     if (edited) return;
@@ -201,6 +203,7 @@ export default function StatementSendDialog({
       setSubjectDraft("");
       setBodyDraft("");
       setEdited(false);
+      setUserSignatureId(null);
     }
   }, [open]);
 
@@ -231,6 +234,7 @@ export default function StatementSendDialog({
           body: JSON.stringify({
             subject: subjectOverride,
             body: bodyOverride,
+            userSignatureId,
           }),
         },
       );
@@ -343,6 +347,10 @@ export default function StatementSendDialog({
         )}
 
         <DialogFooter>
+          <div className="mr-auto flex items-center gap-2">
+            <span className="text-xs text-muted">Signature</span>
+            <SignaturePicker value={userSignatureId} onChange={setUserSignatureId} />
+          </div>
           <Button
             variant="ghost"
             size="sm"
