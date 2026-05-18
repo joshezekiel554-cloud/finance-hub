@@ -55,6 +55,7 @@ import {
   formatMoney,
   renderTemplate,
 } from "../email-compose/index.js";
+import { appendSignatures } from "../email-compose/signatures.js";
 import {
   renderStatementPdf,
   type StatementCreditMemoInput,
@@ -88,6 +89,13 @@ export type ManagerInput = {
     cc?: string;
     bcc?: string;
   };
+  // Signature picker selection from the send dialog:
+  //   - string  → use that specific user_signatures.id
+  //   - null    → operator chose "no user signature"
+  //   - omitted → fall back to the operator's default signature
+  // The statement send always uses STATEMENT_ALIAS for the alias
+  // signature; that's the only alias this flow ever sends from.
+  userSignatureId?: string | null;
 };
 
 export type SendStatementResult = {
@@ -578,6 +586,20 @@ export async function sendStatement(
     },
   ];
 
+  // Append the operator's user signature + the STATEMENT_ALIAS alias
+  // signature to the body. Spec §9 says "never inside modules" — this
+  // codebase's statements module IS the orchestrator (no upstream
+  // route does the send), so we put the append here, closest to the
+  // sendEmail call. userSignatureId === null is the explicit
+  // "skip user signature" sentinel from the dialog.
+  const finalHtml = await appendSignatures(db, {
+    bodyHtml: renderedBody,
+    userId,
+    aliasEmail: STATEMENT_ALIAS,
+    userSignatureId: input.userSignatureId ?? undefined,
+    skipUserSignature: input.userSignatureId === null,
+  });
+
   let sendResult: Awaited<ReturnType<typeof sendEmail>>;
   try {
     sendResult = await sendEmail({
@@ -585,7 +607,7 @@ export async function sendStatement(
       cc: cc ?? undefined,
       bcc: bcc ?? undefined,
       subject: renderedSubject,
-      html: renderedBody,
+      html: finalHtml,
       text: "(plain text fallback — see HTML)",
       alias: STATEMENT_ALIAS,
       attachments,

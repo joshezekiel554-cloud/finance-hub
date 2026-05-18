@@ -56,11 +56,7 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid body", details: bodyParse.error.flatten() });
     }
     const { id: customerId } = parse.data;
-    const { userSignatureId: _userSignatureId, ...overrides } = bodyParse.data;
-    // TODO(6f): forward bodyParse.data.userSignatureId once
-    // modules/statements/send.ts accepts it. Currently parsed and
-    // discarded so the client contract is stable while the module
-    // signature catches up.
+    const { userSignatureId, ...overrides } = bodyParse.data;
 
     try {
       const result = await sendStatement({
@@ -70,6 +66,11 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
           Object.values(overrides).some((v) => v !== undefined)
             ? overrides
             : undefined,
+        // Tri-state: string = specific signature, null = explicit skip,
+        // undefined (key absent from body) = fall back to operator default.
+        // Don't collapse undefined → null; AppendContext treats them
+        // differently.
+        userSignatureId,
       });
       return reply.code(200).send(result);
     } catch (err) {
