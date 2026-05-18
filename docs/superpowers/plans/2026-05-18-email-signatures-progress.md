@@ -143,11 +143,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: Both sections inserted after EmailTemplatesSection (lines 78-79). Empty-sanitization warning implemented in both save handlers. +271 lines.
 
 ### Task 10a: compose-modal picker wiring
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: picker-10a (team email-sigs-wave6)
 - Files: `src/web/components/compose-modal.tsx`
-- Commit: —
-- Notes: —
+- Commit: `fc055cc`
+- Notes: Picker rendered in footer (mr-auto), userSignatureId in /api/send payload. Moved mr-auto off error span to keep layout. Picker-10a's build verified the combined 4-file state.
 
 ### Task 10b: chase-email-send-dialog picker wiring
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:57** — Wave 6 dispatched: 4 parallel background pickers in team `email-sigs-wave6`. All 4 modified files simultaneously; orchestrator commits one-by-one as notifications arrive. Picker-10a ✅ `fc055cc` (compose modal). Waiting on 10b/10c/10d.
 - **2026-05-18 15:33** — Task 9 ✅ `74ae464` (settings-wirer). MySignaturesSection + AliasSignaturesSection wired. **Wave 5 complete**.
 - **2026-05-18 15:30** — Task 8 ✅ `790ab73` (picker-builder). SignaturePicker dropdown. Wave 4 complete.
 - **2026-05-18 15:27** — Task 7 ✅ `ecf8b16` (editor-builder). SignatureEditor modal built with project primitives.
