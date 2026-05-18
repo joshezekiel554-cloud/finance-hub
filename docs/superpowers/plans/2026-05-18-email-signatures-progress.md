@@ -27,8 +27,8 @@ This file is updated after every task completes — pushed to origin so it survi
 | 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | Sequential subagents (revised from team — see event log 15:03) | ✅ |
 | 4 | 7, 8 | Subagent (sequential foreground — same rationale as Wave 3) | ✅ |
 | 5 | 9 | Subagent | ✅ |
-| 6 | 10a, 10b, 10c, 10d | **Team of 4** (parallel, no-commit pattern) | 🔄 |
-| 7 | 11 | Subagent | ☐ |
+| 6 | 10a, 10b, 10c, 10d | **Team of 4** (parallel, no-commit pattern) | ✅ |
+| 7 | 11 | Subagent | 🔄 |
 | 8 | 12 | Inline (manual smoke) | ☐ |
 
 Two-stage Opus review runs at end of each wave before next dispatch.
@@ -150,25 +150,25 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: Picker rendered in footer (mr-auto), userSignatureId in /api/send payload. Moved mr-auto off error span to keep layout. Picker-10a's build verified the combined 4-file state.
 
 ### Task 10b: chase-email-send-dialog picker wiring
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: picker-10b (team email-sigs-wave6)
 - Files: `src/web/components/chase-email-send-dialog.tsx`
-- Commit: —
-- Notes: —
+- Commit: `cad95f1`
+- Notes: Picker in footer (mr-auto), userSignatureId in /api/chase/send-chase-email payload.
 
 ### Task 10c: rma-approval-email-dialog picker wiring
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: picker-10c (team email-sigs-wave6)
 - Files: `src/web/components/rma-approval-email-dialog.tsx`
-- Commit: —
-- Notes: —
+- Commit: `1d78cc6`
+- Notes: Picker in DialogFooter, userSignatureId in /api/send payload.
 
 ### Task 10d: rma-denial-email-dialog picker wiring
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: picker-10d (team email-sigs-wave6)
 - Files: `src/web/components/rma-denial-email-dialog.tsx`
-- Commit: —
-- Notes: —
+- Commit: `c2cd37b`
+- Notes: Picker in footer, userSignatureId in /api/send payload + reset-on-open useEffect (bonus).
 
 ### Task 11: Gmail seed script
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:59** — Wave 6 complete. picker-10b ✅ `cad95f1`, picker-10c ✅ `1d78cc6`, picker-10d ✅ `c2cd37b`. Team pattern validated: 4 parallel pickers completed in ~3 minutes wall-clock (vs ~12 min sequential estimate). No-commit + batch-orchestrator-commit avoided git index race. picker-10d went idle without DM but its file change verified directly via git diff.
 - **2026-05-18 15:57** — Wave 6 dispatched: 4 parallel background pickers in team `email-sigs-wave6`. All 4 modified files simultaneously; orchestrator commits one-by-one as notifications arrive. Picker-10a ✅ `fc055cc` (compose modal). Waiting on 10b/10c/10d.
 - **2026-05-18 15:33** — Task 9 ✅ `74ae464` (settings-wirer). MySignaturesSection + AliasSignaturesSection wired. **Wave 5 complete**.
 - **2026-05-18 15:30** — Task 8 ✅ `790ab73` (picker-builder). SignaturePicker dropdown. Wave 4 complete.
