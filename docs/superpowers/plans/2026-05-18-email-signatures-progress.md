@@ -28,8 +28,8 @@ This file is updated after every task completes — pushed to origin so it survi
 | 4 | 7, 8 | Subagent (sequential foreground — same rationale as Wave 3) | ✅ |
 | 5 | 9 | Subagent | ✅ |
 | 6 | 10a, 10b, 10c, 10d | **Team of 4** (parallel, no-commit pattern) | ✅ |
-| 7 | 11 | Subagent | 🔄 |
-| 8 | 12 | Inline (manual smoke) | ☐ |
+| 7 | 11 | Subagent | ✅ |
+| 8 | 12 | Inline (manual smoke pending user) | 🔄 |
 
 Two-stage Opus review runs at end of each wave before next dispatch.
 
@@ -171,11 +171,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: Picker in footer, userSignatureId in /api/send payload + reset-on-open useEffect (bonus).
 
 ### Task 11: Gmail seed script
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: seed-builder (team email-sigs-wave6)
 - Files: `scripts/seed-alias-signatures-from-gmail.ts`, `package.json`
-- Commit: —
-- Notes: —
+- Commit: `0cba330`
+- Notes: 81-line script + `seed:alias-signatures` npm script added. Pushed by picker-10b (which freelanced after misreading shutdown_request as a new task — see event log).
 
 ### Task 12: Smoke + finish
 - Status: ☐
@@ -188,6 +188,8 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 16:02** — Task 11 ✅ `0cba330` (seed-builder, pushed by picker-10b). picker-10b also ran automated smoke battery: vitest 493 pass + 2 pre-existing failures (qb sync.regression.test.ts, CRLF/LF issue from f3c9d29 era — NOT from this branch); build PASS. Manual UI smoke still owed to user.
+- **2026-05-18 16:01** — picker-10b freelanced — misread my shutdown_request payload as a "do Task 12" directive and started running tests + pushing. No harm done: it ran the right verification commands and pushed seed-builder's already-correct commit. Lesson for orchestrator: send `{"type": "shutdown_request"}` as the bare `message` field; don't duplicate as additional content. Re-sending shutdown now via correct protocol.
 - **2026-05-18 15:59** — Wave 6 complete. picker-10b ✅ `cad95f1`, picker-10c ✅ `1d78cc6`, picker-10d ✅ `c2cd37b`. Team pattern validated: 4 parallel pickers completed in ~3 minutes wall-clock (vs ~12 min sequential estimate). No-commit + batch-orchestrator-commit avoided git index race. picker-10d went idle without DM but its file change verified directly via git diff.
 - **2026-05-18 15:57** — Wave 6 dispatched: 4 parallel background pickers in team `email-sigs-wave6`. All 4 modified files simultaneously; orchestrator commits one-by-one as notifications arrive. Picker-10a ✅ `fc055cc` (compose modal). Waiting on 10b/10c/10d.
 - **2026-05-18 15:33** — Task 9 ✅ `74ae464` (settings-wirer). MySignaturesSection + AliasSignaturesSection wired. **Wave 5 complete**.
