@@ -23,8 +23,8 @@ This file is updated after every task completes — pushed to origin so it survi
 |---|---|---|---|
 | 0 | 1, 2 | Subagent (sequential) | ✅ |
 | 1 | 3, 4 | Subagent (sequential — Task 4 imports Task 1's schema) | ✅ |
-| 2 | 5 | Subagent | 🔄 |
-| 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | **Team of 7** | ☐ |
+| 2 | 5 | Subagent | ✅ |
+| 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | Sequential subagents (revised from team — see event log 15:03) | 🔄 |
 | 4 | 7, 8 | Subagent (parallel — file-disjoint UI components) | ☐ |
 | 5 | 9 | Subagent | ☐ |
 | 6 | 10a, 10b, 10c, 10d | **Team of 4** | ☐ |
@@ -66,11 +66,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: 14/14 tests pass. composeSignatureHtml pure-tested; appendSignatures DB-layer tested via downstream integration.
 
 ### Task 5: User-signatures CRUD route
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: routes-builder
 - Files: `src/server/routes/signatures.ts`, `src/server/routes/signatures.test.ts`, `src/server/routes/index.ts`
-- Commit: —
-- Notes: —
+- Commit: `4588f29` (+ followup `3475b5e` for missed drizzle snapshot)
+- Notes: 18/18 tests pass. All 6 endpoints (user CRUD + alias GET/PATCH), Zod 413 boundary, transactional default-clear, audit_log on every write.
 
 ### Task 6a: email-send.ts (compose modal route)
 - Status: ☐
@@ -188,6 +188,8 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:03** — Wave 3 mode revised: sequential foreground subagents (not team-of-7). Parallel teammates on shared working tree would race on git's index lock; sequential delivers a steady stream of per-task reports that matches the "constantly reporting" requirement better.
+- **2026-05-18 15:02** — Task 5 ✅ `4588f29` + followup `3475b5e` (routes-builder). 6 CRUD endpoints, 18/18 tests, build green. Followup commit added missing drizzle snapshot (migration-runner oversight in bc6ecb9). Wave 2 complete.
 - **2026-05-18 14:59** — Task 4 ✅ `4cce105` (append-builder). composeSignatureHtml + appendSignatures + resolveUserSignature/resolveAliasSignature; 14/14 tests. Wave 1 complete.
 - **2026-05-18 14:56** — Task 3 ✅ `c02b552` (sanitizer-tdd). sanitizeSignatureHtml + 9 vitest cases, all green.
 - **2026-05-18 14:53** — Task 2 ✅ `bc6ecb9` (migration-runner). Migration 0034_email_signatures applied cleanly. Wave 0 complete.
