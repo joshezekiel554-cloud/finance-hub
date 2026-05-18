@@ -73,11 +73,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: 18/18 tests pass. All 6 endpoints (user CRUD + alias GET/PATCH), Zod 413 boundary, transactional default-clear, audit_log on every write.
 
 ### Task 6a: email-send.ts (compose modal route)
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: send-route-6a
 - Files: `src/server/routes/email-send.ts`
-- Commit: —
-- Notes: —
+- Commit: `5e80eee`
+- Notes: Sig appended into html branch; `text` derived from final post-sig html so MIME parts stay consistent.
 
 ### Task 6b: chase.ts
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:06** — Task 6a ✅ `5e80eee` (send-route-6a). /api/send wired; signatures in both html+text MIME parts.
 - **2026-05-18 15:03** — Wave 3 mode revised: sequential foreground subagents (not team-of-7). Parallel teammates on shared working tree would race on git's index lock; sequential delivers a steady stream of per-task reports that matches the "constantly reporting" requirement better.
 - **2026-05-18 15:02** — Task 5 ✅ `4588f29` + followup `3475b5e` (routes-builder). 6 CRUD endpoints, 18/18 tests, build green. Followup commit added missing drizzle snapshot (migration-runner oversight in bc6ecb9). Wave 2 complete.
 - **2026-05-18 14:59** — Task 4 ✅ `4cce105` (append-builder). composeSignatureHtml + appendSignatures + resolveUserSignature/resolveAliasSignature; 14/14 tests. Wave 1 complete.
