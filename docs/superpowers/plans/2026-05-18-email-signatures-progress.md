@@ -122,11 +122,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: userId:null, alias hard-coded "accounts@feldart.co.uk". Added `alias:` to sendEmail so send + sig-lookup keys align. Followup: signatures land outside `</body>` (htmlEnvelope returns full doc) — renders fine in clients but flagged.
 
 ### Task 7: SignatureEditor modal
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: editor-builder
 - Files: `src/web/components/signature-editor.tsx`
-- Commit: —
-- Notes: —
+- Commit: `ecf8b16`
+- Notes: Uses Dialog/Button/Input primitives; plain <label> (no Label primitive). Mapped color to accent-danger token.
 
 ### Task 8: SignaturePicker dropdown
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:27** — Task 7 ✅ `ecf8b16` (editor-builder). SignatureEditor modal built with project primitives.
 - **2026-05-18 15:24** — Task 6g ✅ `8eec04d` (cron-wirer-6g). chase-digest cron wired with userId:null. **Wave 3 complete**: 5 real wires + 2 N/A.
 - **2026-05-18 15:21** — Task 6f ✅ `a8630ea` (send-module-6f). appendSignatures inside statements module. Route TODO from 6c resolved.
 - **2026-05-18 15:18** — Task 6e ✅ N/A (send-route-6e). RMA dialogs send via /api/send (already wired in 6a). Returns.ts has preview routes only. Plan §Spec-adaptations #8 added.
