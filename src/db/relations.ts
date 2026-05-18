@@ -22,6 +22,7 @@ import {
   aiDigests,
   chaseLog,
 } from "./schema/audit";
+import { userSignatures } from "./schema/user-signatures";
 
 export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
@@ -37,6 +38,11 @@ export const usersRelations = relations(users, ({ many }) => ({
   auditLog: many(auditLog),
   aiInteractions: many(aiInteractions),
   chaseLog: many(chaseLog),
+  userSignatures: many(userSignatures),
+}));
+
+export const userSignaturesRelations = relations(userSignatures, ({ one }) => ({
+  user: one(users, { fields: [userSignatures.userId], references: [users.id] }),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
