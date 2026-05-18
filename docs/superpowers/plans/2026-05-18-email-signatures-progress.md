@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 16:30** — Live-test feedback fixes (orchestrator, in-session). Editor preview iframe wrapped with transparent body so pasted sigs no longer sit in a white card; AliasSignaturesSection now has an "Add alias signature" button + editable alias-email Input in editor's isNew mode + empty-state copy (since user opted out of running the Gmail seed script). User confirmed both work.
 - **2026-05-18 16:18** — Review fixes ✅ `f1f70c1` (fixup-agent). All 3 blockers + 4 should-fix landed. 18/18 sig tests pass, build green. Two backlog items: defence-in-depth style regex tightening + signature wiring for forward-bcc/tag-email system sends.
 - **2026-05-18 16:14** — Opus reviewer ✅ delivered structured report: 3 blockers (target=_blank rel hole; background: url() bypass; alias-PATCH non-transactional), 6 should-fix, 5 nits. No undeclared spec deviations.
 - **2026-05-18 16:02** — Task 11 ✅ `0cba330` (seed-builder, pushed by picker-10b). picker-10b also ran automated smoke battery: vitest 493 pass + 2 pre-existing failures (qb sync.regression.test.ts, CRLF/LF issue from f3c9d29 era — NOT from this branch); build PASS. Manual UI smoke still owed to user.
