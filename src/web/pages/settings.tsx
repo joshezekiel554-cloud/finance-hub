@@ -1085,6 +1085,7 @@ function AliasSignaturesSection() {
   const [editing, setEditing] = useState<{
     aliasEmail: string;
     html: string;
+    isNew?: boolean;
   } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -1144,14 +1145,32 @@ function AliasSignaturesSection() {
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-sm font-medium">Alias signatures</h2>
-        <p className="mt-0.5 text-xs text-muted">
-          Organisation footer appended to every email sent from each alias.
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-medium">Alias signatures</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Organisation footer appended to every email sent from each alias.
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() =>
+              setEditing({ aliasEmail: "", html: "", isNew: true })
+            }
+          >
+            <Plus className="size-3.5" /> Add alias signature
+          </Button>
+        </div>
       </CardHeader>
       <CardBody>
         {isPending ? (
           <div className="text-xs text-muted">Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="text-xs text-muted">
+            No alias signatures yet — add one to set the org footer for each
+            sending alias (e.g. accounts@, sales@).
+          </div>
         ) : (
           <ul className="divide-y divide-default">
             {rows.map((r) => (
