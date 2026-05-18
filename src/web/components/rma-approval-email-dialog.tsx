@@ -20,6 +20,7 @@ import {
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { invalidateAfterRmaChange } from "../lib/invalidate-rma";
+import { SignaturePicker } from "./signature-picker";
 
 type PreviewResponse = {
   subject: string;
@@ -85,6 +86,7 @@ export default function RmaApprovalEmailDialog({
   const [cc, setCc] = useState("");
   const [bcc, setBcc] = useState("");
   const [edited, setEdited] = useState(false);
+  const [userSignatureId, setUserSignatureId] = useState<string | null>(null);
 
   // Seed from preview when it lands (skip if operator already edited)
   useEffect(() => {
@@ -122,6 +124,7 @@ export default function RmaApprovalEmailDialog({
         customerId,
         refType: "rma",
         refId: rmaId,
+        userSignatureId,
       };
       if (pdfDriveId) {
         payload.attachmentDriveId = pdfDriveId;
@@ -249,6 +252,10 @@ export default function RmaApprovalEmailDialog({
         </div>
 
         <DialogFooter>
+          <div className="mr-auto flex items-center gap-2">
+            <span className="text-xs text-muted">Signature</span>
+            <SignaturePicker value={userSignatureId} onChange={setUserSignatureId} />
+          </div>
           <Button
             variant="ghost"
             size="sm"
