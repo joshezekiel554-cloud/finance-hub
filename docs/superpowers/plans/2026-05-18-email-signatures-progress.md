@@ -24,8 +24,8 @@ This file is updated after every task completes — pushed to origin so it survi
 | 0 | 1, 2 | Subagent (sequential) | ✅ |
 | 1 | 3, 4 | Subagent (sequential — Task 4 imports Task 1's schema) | ✅ |
 | 2 | 5 | Subagent | ✅ |
-| 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | Sequential subagents (revised from team — see event log 15:03) | 🔄 |
-| 4 | 7, 8 | Subagent (parallel — file-disjoint UI components) | ☐ |
+| 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | Sequential subagents (revised from team — see event log 15:03) | ✅ |
+| 4 | 7, 8 | Subagent (sequential foreground — same rationale as Wave 3) | 🔄 |
 | 5 | 9 | Subagent | ☐ |
 | 6 | 10a, 10b, 10c, 10d | **Team of 4** | ☐ |
 | 7 | 11 | Subagent | ☐ |
@@ -115,11 +115,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 - Notes: appendSignatures inside the module (spec §9 relaxation — module IS the orchestrator). STATEMENT_ALIAS=accounts@feldart.com hardcoded → alias sig resolves cleanly after Task 11 seed.
 
 ### Task 6g: chase-digest cron job
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: cron-wirer-6g
 - Files: `src/jobs/definitions/chase-digest.ts`
-- Commit: —
-- Notes: —
+- Commit: `8eec04d`
+- Notes: userId:null, alias hard-coded "accounts@feldart.co.uk". Added `alias:` to sendEmail so send + sig-lookup keys align. Followup: signatures land outside `</body>` (htmlEnvelope returns full doc) — renders fine in clients but flagged.
 
 ### Task 7: SignatureEditor modal
 - Status: ☐
@@ -188,6 +188,7 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 15:24** — Task 6g ✅ `8eec04d` (cron-wirer-6g). chase-digest cron wired with userId:null. **Wave 3 complete**: 5 real wires + 2 N/A.
 - **2026-05-18 15:21** — Task 6f ✅ `a8630ea` (send-module-6f). appendSignatures inside statements module. Route TODO from 6c resolved.
 - **2026-05-18 15:18** — Task 6e ✅ N/A (send-route-6e). RMA dialogs send via /api/send (already wired in 6a). Returns.ts has preview routes only. Plan §Spec-adaptations #8 added.
 - **2026-05-18 15:14** — Task 6d ✅ N/A (send-route-6d). Invoices send via QBO native endpoints, not Gmail. No appendSignatures possible without scope-expanding refactor. Plan §Spec-adaptations #7 added.
