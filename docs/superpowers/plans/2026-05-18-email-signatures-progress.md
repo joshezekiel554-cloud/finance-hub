@@ -21,7 +21,7 @@ This file is updated after every task completes — pushed to origin so it survi
 
 | Wave | Tasks | Mode | Status |
 |---|---|---|---|
-| 0 | 1, 2 | Subagent (sequential) | ☐ |
+| 0 | 1, 2 | Subagent (sequential) | 🔄 |
 | 1 | 3, 4 | Subagent (sequential — Task 4 imports Task 1's schema) | ☐ |
 | 2 | 5 | Subagent | ☐ |
 | 3 | 6a, 6b, 6c, 6d, 6e, 6f, 6g | **Team of 7** | ☐ |
@@ -38,11 +38,11 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 ## Task ledger
 
 ### Task 1: Drizzle schema + relations
-- Status: ☐
-- Owner: —
+- Status: ✅
+- Owner: schema-builder
 - Files: `src/db/schema/user-signatures.ts`, `src/db/schema/alias-signatures.ts`, `src/db/schema/index.ts`, `src/db/relations.ts`
-- Commit: —
-- Notes: —
+- Commit: `f992d50`
+- Notes: Clean — no deviations. `tsc -b && tsc-alias && vite build` all green.
 
 ### Task 2: Generate + verify migration
 - Status: ☐
@@ -188,4 +188,5 @@ Two-stage Opus review runs at end of each wave before next dispatch.
 
 ## Event log (newest first)
 
+- **2026-05-18 14:51** — Task 1 ✅ `f992d50` (schema-builder). user-signatures + alias-signatures Drizzle tables wired, relations updated, build green.
 - **2026-05-18 14:45** — Plan + progress tracker created. Committed on `feat/email-signatures`. Beginning Wave 0.
