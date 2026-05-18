@@ -109,6 +109,7 @@ export default function RmaApprovalEmailDialog({
       setCc("");
       setBcc("");
       setEdited(false);
+      setUserSignatureId(null);
     }
   }, [open]);
 

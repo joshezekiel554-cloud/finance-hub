@@ -247,6 +247,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     setSelectedTemplateId("");
     setErrorMessage(null);
     setAttachments([]);
+    setUserSignatureId(null);
     // formKey is the controlled re-init trigger — we don't want this
     // effect to re-fire on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps

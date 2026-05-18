@@ -46,8 +46,11 @@ const signaturesRoute: FastifyPluginAsync = async (app) => {
     const user = await requireAuth(req);
     const parse = createUserSigSchema.safeParse(req.body);
     if (!parse.success) {
+      const isHtmlTooBig = parse.error.issues.some(
+        (i) => i.code === "too_big" && i.path[0] === "html",
+      );
       return reply
-        .code(parse.error.issues.some((i) => i.code === "too_big") ? 413 : 400)
+        .code(isHtmlTooBig ? 413 : 400)
         .send({ error: "invalid body", details: parse.error.flatten() });
     }
     const sanitizedHtml = sanitizeSignatureHtml(parse.data.html);
@@ -92,8 +95,11 @@ const signaturesRoute: FastifyPluginAsync = async (app) => {
     const id = (req.params as { id: string }).id;
     const parse = patchUserSigSchema.safeParse(req.body);
     if (!parse.success) {
+      const isHtmlTooBig = parse.error.issues.some(
+        (i) => i.code === "too_big" && i.path[0] === "html",
+      );
       return reply
-        .code(parse.error.issues.some((i) => i.code === "too_big") ? 413 : 400)
+        .code(isHtmlTooBig ? 413 : 400)
         .send({ error: "invalid body", details: parse.error.flatten() });
     }
 
@@ -132,7 +138,7 @@ const signaturesRoute: FastifyPluginAsync = async (app) => {
         entityType: "user_signature",
         entityId: id,
         before: { name: before.name, isDefault: before.isDefault },
-        after: { ...before, ...update },
+        after: update,
       });
     });
 
@@ -198,8 +204,11 @@ const signaturesRoute: FastifyPluginAsync = async (app) => {
     ).toLowerCase();
     const parse = patchAliasSigSchema.safeParse(req.body);
     if (!parse.success) {
+      const isHtmlTooBig = parse.error.issues.some(
+        (i) => i.code === "too_big" && i.path[0] === "html",
+      );
       return reply
-        .code(parse.error.issues.some((i) => i.code === "too_big") ? 413 : 400)
+        .code(isHtmlTooBig ? 413 : 400)
         .send({ error: "invalid body", details: parse.error.flatten() });
     }
     const sanitizedHtml = sanitizeSignatureHtml(parse.data.html);
@@ -211,27 +220,29 @@ const signaturesRoute: FastifyPluginAsync = async (app) => {
       .limit(1);
     const before = beforeRows[0] ?? null;
 
-    if (before) {
-      await db
-        .update(aliasSignatures)
-        .set({ html: sanitizedHtml, updatedByUserId: user.id })
-        .where(eq(aliasSignatures.aliasEmail, aliasEmail));
-    } else {
-      await db.insert(aliasSignatures).values({
-        aliasEmail,
-        html: sanitizedHtml,
-        updatedByUserId: user.id,
-      });
-    }
+    await db.transaction(async (tx) => {
+      if (before) {
+        await tx
+          .update(aliasSignatures)
+          .set({ html: sanitizedHtml, updatedByUserId: user.id })
+          .where(eq(aliasSignatures.aliasEmail, aliasEmail));
+      } else {
+        await tx.insert(aliasSignatures).values({
+          aliasEmail,
+          html: sanitizedHtml,
+          updatedByUserId: user.id,
+        });
+      }
 
-    await db.insert(auditLog).values({
-      id: nanoid(24),
-      userId: user.id,
-      action: before ? "alias_signature.update" : "alias_signature.create",
-      entityType: "alias_signature",
-      entityId: aliasEmail,
-      before: before ? { html: before.html } : null,
-      after: { html: sanitizedHtml },
+      await tx.insert(auditLog).values({
+        id: nanoid(24),
+        userId: user.id,
+        action: before ? "alias_signature.update" : "alias_signature.create",
+        entityType: "alias_signature",
+        entityId: aliasEmail,
+        before: before ? { html: before.html } : null,
+        after: { html: sanitizedHtml },
+      });
     });
 
     const afterRows = await db

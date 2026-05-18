@@ -29,7 +29,6 @@ const SIGNATURE_SANITIZE_OPTS: sanitizeHtml.IOptions = {
     "*": {
       color: [/^.+$/],
       "background-color": [/^.+$/],
-      background: [/^.+$/],
       "font-family": [/^.+$/],
       "font-size": [/^\d+(\.\d+)?(px|em|rem|pt|%)$/],
       "font-weight": [/^.+$/],
@@ -71,6 +70,14 @@ const SIGNATURE_SANITIZE_OPTS: sanitizeHtml.IOptions = {
       "vertical-align": [/^.+$/],
       display: [/^(block|inline|inline-block|table-cell|none)$/],
     },
+  },
+  transformTags: {
+    a: (tagName, attribs) => ({
+      tagName,
+      attribs: attribs.target === "_blank"
+        ? { ...attribs, rel: "noopener noreferrer" }
+        : attribs,
+    }),
   },
 };
 

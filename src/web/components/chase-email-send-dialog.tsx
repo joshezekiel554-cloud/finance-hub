@@ -149,6 +149,7 @@ export default function ChaseEmailSendDialog({
       setBcc("");
       setEdited(false);
       setLevel(defaultLevel);
+      setUserSignatureId(null);
     }
   }, [open, defaultLevel]);
 

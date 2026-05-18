@@ -128,7 +128,8 @@ export function SignatureEditor({
             <span className="text-sm font-medium text-primary">Preview</span>
             <iframe
               title="signature preview"
-              sandbox="allow-same-origin"
+              // empty sandbox — no parent-origin access
+              sandbox=""
               className="h-72 w-full rounded border border-default bg-white"
               srcDoc={previewHtml}
             />
