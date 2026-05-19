@@ -7,6 +7,7 @@ export * from "./email-templates";
 export * from "./email-routing-rules";
 export * from "./user-signatures";
 export * from "./alias-signatures";
+export * from "./chase-dismissals";
 export * from "./app-settings";
 export * from "./notifications";
 export * from "./audit";
