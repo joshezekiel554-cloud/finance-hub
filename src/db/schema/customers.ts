@@ -1,4 +1,5 @@
 import {
+  boolean,
   decimal,
   index,
   json,
@@ -97,6 +98,10 @@ export const customers = mysqlTable(
     internalNotes: text("internal_notes"),
     lastSyncedAt: timestamp("last_synced_at"),
     vocatechLastPushedAt: timestamp("vocatech_last_pushed_at"),
+    // Autopilot opt-out: when TRUE, this customer is excluded from every
+    // ai_proposal candidate query. Useful for VIPs the operator handles
+    // manually or accounts where AI judgment shouldn't apply.
+    agentModeExcluded: boolean("agent_mode_excluded").notNull().default(false),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
@@ -106,6 +111,9 @@ export const customers = mysqlTable(
     holdStatusIdx: index("idx_customers_hold_status").on(t.holdStatus),
     shopifyIdIdx: index("idx_customers_shopify_id").on(t.shopifyCustomerId),
     customerTypeIdx: index("idx_customers_customer_type").on(t.customerType),
+    agentExcludedIdx: index("idx_customers_agent_excluded").on(
+      t.agentModeExcluded,
+    ),
   }),
 );
 

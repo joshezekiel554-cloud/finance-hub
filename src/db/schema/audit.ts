@@ -139,6 +139,10 @@ export const chaseLog = mysqlTable(
     aiDigestId: varchar("ai_digest_id", { length: 24 }).references(() => aiDigests.id, {
       onDelete: "set null",
     }),
+    // FK back to ai_proposals when this chase originated from an approved
+    // autopilot proposal. Distinct from aiDigestId (which tracks the
+    // chase-digest cron job's AI summary).
+    aiProposalId: varchar("ai_proposal_id", { length: 24 }),
     notes: text("notes"),
   },
   (t) => ({

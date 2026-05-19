@@ -32,6 +32,8 @@ export const TAG_EMAIL_QUEUE = "tag-email";
 export const VOCATECH_BACKFILL_QUEUE = "vocatech-backfill";
 export const VOCATECH_ROSTER_QUEUE = "vocatech-roster";
 export const FORWARD_BCC_QUEUE = "forward-bcc";
+export const AUTOPILOT_SCAN_QUEUE = "autopilot-scan";
+export const AUTOPILOT_EXECUTE_QUEUE = "autopilot-execute";
 
 export const QB_SYNC_JOB = "qb-sync";
 export const GMAIL_POLL_JOB = "gmail-poll";
@@ -44,6 +46,8 @@ export const VOCATECH_BACKFILL_JOB = "vocatech-backfill";
 export const VOCATECH_ROSTER_JOB = "vocatech-roster-full";
 export const VOCATECH_ROSTER_DELTA_JOB = "vocatech-roster-delta";
 export const FORWARD_BCC_JOB = "forward-bcc";
+export const AUTOPILOT_SCAN_JOB = "autopilot-scan";
+export const AUTOPILOT_EXECUTE_JOB = "autopilot-execute";
 
 let cachedConnection: Redis | undefined;
 
@@ -89,6 +93,8 @@ let cachedQueues:
       vocatechBackfill: Queue;
       vocatechRoster: Queue;
       forwardBcc: Queue;
+      autopilotScan: Queue;
+      autopilotExecute: Queue;
     }
   | undefined;
 
@@ -101,6 +107,8 @@ export type Queues = {
   vocatechBackfill: Queue;
   vocatechRoster: Queue;
   forwardBcc: Queue;
+  autopilotScan: Queue;
+  autopilotExecute: Queue;
 };
 
 export function getQueues(): Queues {
@@ -124,6 +132,14 @@ export function getQueues(): Queues {
       defaultJobOptions,
     }),
     forwardBcc: new Queue(FORWARD_BCC_QUEUE, { connection, defaultJobOptions }),
+    autopilotScan: new Queue(AUTOPILOT_SCAN_QUEUE, {
+      connection,
+      defaultJobOptions,
+    }),
+    autopilotExecute: new Queue(AUTOPILOT_EXECUTE_QUEUE, {
+      connection,
+      defaultJobOptions,
+    }),
   };
   return cachedQueues;
 }
@@ -141,6 +157,8 @@ export async function closeQueues(): Promise<void> {
       cachedQueues.vocatechBackfill.close(),
       cachedQueues.vocatechRoster.close(),
       cachedQueues.forwardBcc.close(),
+      cachedQueues.autopilotScan.close(),
+      cachedQueues.autopilotExecute.close(),
     ]);
     cachedQueues = undefined;
   }

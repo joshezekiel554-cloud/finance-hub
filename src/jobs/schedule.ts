@@ -24,6 +24,7 @@
 
 import type { Queues } from "./queues.js";
 import {
+  AUTOPILOT_SCAN_JOB,
   CHASE_DIGEST_JOB,
   GMAIL_POLL_JOB,
   QB_SYNC_JOB,
@@ -34,6 +35,7 @@ import {
   VOCATECH_BACKFILL_JOB,
   VOCATECH_ROSTER_DELTA_JOB,
 } from "./queues.js";
+import type { AutopilotScanJobData } from "./definitions/autopilot-scan.js";
 import type { VocatechBackfillJobData } from "./definitions/vocatech-backfill.js";
 import type { VocatechRosterSyncJobData } from "./definitions/vocatech-roster-sync.js";
 import { createLogger } from "../lib/logger.js";
@@ -168,6 +170,24 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
     },
   );
   registered.push({ name: "vocatech-auto-backfill", cron: "*/2 * * * *" });
+
+  // Autopilot scan — every 4 hours, Europe/London (00/04/08/12/16/20).
+  // Runs deterministic SQL across 5 candidate categories; NO AI calls
+  // during the scheduled scan (drafting happens on-demand when the
+  // operator clicks "Draft for selected" on the /autopilot page).
+  await queues.autopilotScan.add(
+    AUTOPILOT_SCAN_JOB,
+    { trigger: "cron" } as AutopilotScanJobData,
+    {
+      jobId: `repeat:${AUTOPILOT_SCAN_JOB}`,
+      repeat: { pattern: "0 */4 * * *", tz: "Europe/London" },
+    },
+  );
+  registered.push({
+    name: AUTOPILOT_SCAN_JOB,
+    cron: "0 */4 * * *",
+    tz: "Europe/London",
+  });
 
   log.info({ jobs: registered }, "repeatable jobs registered");
   return registered;

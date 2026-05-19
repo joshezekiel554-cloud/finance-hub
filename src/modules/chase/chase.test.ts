@@ -44,6 +44,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     internalNotes: null,
     lastSyncedAt: now,
     vocatechLastPushedAt: null,
+    agentModeExcluded: false,
     createdAt: now,
     updatedAt: now,
     ...overrides,

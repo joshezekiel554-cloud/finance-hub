@@ -83,6 +83,7 @@ export default function SettingsPage() {
       <BccForwardingSection />
       <TagEmailSchedulesSection />
       <ImportsSection />
+      <AutopilotSection />
       <VocatechSection />
     </div>
   );
@@ -2604,6 +2605,152 @@ function BccForwardingSection() {
           {batchMutation.isError && (
             <p className="text-xs text-accent-danger">
               {(batchMutation.error as Error).message}
+            </p>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// ── Autopilot section ─────────────────────────────────────────────────────────
+
+type AiProposal = { status: string };
+
+const AUTOPILOT_CATEGORIES: { key: string; label: string }[] = [
+  { key: "chase_next", label: "Chase next" },
+  { key: "cadence_statement", label: "Cadence: statement" },
+  { key: "cadence_cold", label: "Cadence: cold" },
+  { key: "ops_rma_stalled", label: "Ops: RMA stalled" },
+  { key: "ops_cron_fail", label: "Ops: cron fail" },
+];
+
+function AutopilotSection() {
+  const queryClient = useQueryClient();
+
+  const proposalsQuery = useQuery<AiProposal[]>({
+    queryKey: ["autopilot", "proposals"],
+    queryFn: async () => {
+      const res = await fetch("/api/autopilot/proposals");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as { proposals?: AiProposal[] } | AiProposal[];
+      return Array.isArray(json) ? json : (json.proposals ?? []);
+    },
+    refetchInterval: 60_000,
+  });
+
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/autopilot/scan", { method: "POST" });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["autopilot", "proposals"] });
+    },
+  });
+
+  const proposals = proposalsQuery.data ?? [];
+  const pendingCount = proposals.filter((p) => p.status === "pending").length;
+  const draftedCount = proposals.filter((p) => p.status === "drafted").length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">Autopilot</h2>
+          <Link
+            to="/autopilot"
+            className="flex items-center gap-1 text-xs text-secondary hover:text-primary"
+          >
+            View autopilot page
+            <ArrowRight className="size-3" />
+          </Link>
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-5">
+        {/* Status overview */}
+        <div>
+          <div className="text-xs font-medium text-secondary uppercase tracking-wide mb-2">
+            Status
+          </div>
+          <div className="grid gap-1 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Last scan</span>
+              <span className="font-mono text-muted">—</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Pending proposals</span>
+              <span className="font-mono font-medium">
+                {proposalsQuery.isPending ? "…" : pendingCount}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">Drafted (awaiting approval)</span>
+              <span className="font-mono font-medium">
+                {proposalsQuery.isPending ? "…" : draftedCount}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-secondary">30-day AI cost</span>
+              <span className="font-mono text-muted">— (cost tracking coming)</span>
+            </div>
+          </div>
+          {proposalsQuery.isError && (
+            <p className="mt-1 text-xs text-accent-danger">
+              Could not load proposals — {(proposalsQuery.error as Error).message}
+            </p>
+          )}
+        </div>
+
+        {/* Settings (v0: visual only) */}
+        <div>
+          <div className="text-xs font-medium text-secondary uppercase tracking-wide mb-2">
+            Settings{" "}
+            <span className="normal-case font-normal text-muted">(v0: not yet persisted)</span>
+          </div>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs text-secondary">Daily soft budget cap (USD)</label>
+              <Input
+                type="number"
+                defaultValue={20}
+                min={0}
+                step={1}
+                className="w-28 text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <div className="text-xs text-secondary">Enable by category</div>
+              {AUTOPILOT_CATEGORIES.map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" defaultChecked className="size-3.5" />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="space-y-1.5">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={scanMutation.isPending}
+            onClick={() => scanMutation.mutate()}
+          >
+            {scanMutation.isPending ? "Running…" : "Run autopilot now"}
+          </Button>
+          {scanMutation.isSuccess && (
+            <p className="text-xs text-accent-success">Scan enqueued.</p>
+          )}
+          {scanMutation.isError && (
+            <p className="text-xs text-accent-danger">
+              {(scanMutation.error as Error).message}
             </p>
           )}
         </div>
