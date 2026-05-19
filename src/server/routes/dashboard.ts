@@ -1,107 +1,280 @@
-// Dashboard stats endpoint. Single round-trip rollup for the Home page
-// — open balance, overdue balance, customers to chase, my open tasks,
-// today's email volume in/out.
+// Dashboard widget endpoints.
 //
-// All queries are aggregates against indexed columns, so the whole bundle
-// returns in tens of milliseconds. Returned per-call rather than cached
-// because the page is an at-a-glance dashboard — operators expect the
-// numbers to track reality on each visit.
+// Five GET endpoints, one per dashboard widget, each cached/polled
+// independently by its widget on the frontend (30s + on-focus refetch).
+// Plus dismiss / undismiss for the chase queue (permanent dismissal
+// stored in chase_dismissals; undismissed only via the customer detail
+// page).
+//
+// Replaces the prior single GET /stats aggregate endpoint — that was a
+// stat-tile rollup we don't need anymore now that every widget owns
+// its own data fetch.
 
 import type { FastifyPluginAsync } from "fastify";
-import { and, eq, gt, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailLog, tasks } from "../../db/schema/crm.js";
+import { rmas } from "../../db/schema/returns.js";
+import { invoices } from "../../db/schema/invoices.js";
+import { auditLog } from "../../db/schema/audit.js";
+import { chaseDismissals } from "../../db/schema/chase-dismissals.js";
+import { computeSeverity } from "../../modules/chase/scoring.js";
 import { requireAuth } from "../lib/auth.js";
 
 const dashboardRoute: FastifyPluginAsync = async (app) => {
-  app.get("/stats", async (req, reply) => {
+  // ── My Tasks ───────────────────────────────────────────────────────────
+  app.get("/tasks", async (req, reply) => {
     const user = await requireAuth(req);
-
-    // Today, anchored to Europe/London midnight. Format matches what
-    // emailDate stores (UTC TIMESTAMP), but we want the day boundary in
-    // London. Pull today's London Y-M-D, then convert back to a UTC
-    // Date so the WHERE clause compares correctly.
-    const londonYmd = new Intl.DateTimeFormat("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      timeZone: "Europe/London",
-    }).format(new Date());
-    // London is UTC+0 in winter, UTC+1 in summer. Compute the actual
-    // London-midnight-as-UTC by formatting back. Simpler: use a query
-    // that compares against a date string, since MySQL handles tz
-    // conversion via CONVERT_TZ — but our installs may not have the
-    // tz tables loaded. So we approximate: take the start of the
-    // London day in UTC by parsing the formatted date as a local
-    // ISO and then offsetting. The offset is small (1 hour at most)
-    // and emails are timestamped to the second, so even the worst
-    // case undercounts by ~1 hour either side. Acceptable for an
-    // at-a-glance dashboard tile.
-    const todayLondonMidnight = new Date(`${londonYmd}T00:00:00Z`);
-
-    const [
-      openRows,
-      overdueRows,
-      chaseCountRows,
-      myTasksRows,
-      emailsInRows,
-      emailsOutRows,
-    ] = await Promise.all([
-      db
-        .select({
-          total: sql<string>`COALESCE(SUM(${customers.balance}), 0)`,
-        })
-        .from(customers)
-        .where(gt(customers.balance, "0")),
-      db
-        .select({
-          total: sql<string>`COALESCE(SUM(${customers.overdueBalance}), 0)`,
-        })
-        .from(customers)
-        .where(gt(customers.overdueBalance, "0")),
-      db
-        .select({ count: sql<number>`COUNT(*)` })
-        .from(customers)
-        .where(gt(customers.overdueBalance, "0")),
-      db
-        .select({ count: sql<number>`COUNT(*)` })
-        .from(tasks)
-        .where(
-          and(
-            eq(tasks.assigneeUserId, user.id),
-            inArray(tasks.status, ["open", "in_progress", "blocked"]),
-          ),
+    const rows = await db
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        dueAt: tasks.dueAt,
+        status: tasks.status,
+        priority: tasks.priority,
+        customerId: tasks.customerId,
+        customerName: sql<string | null>`(
+          SELECT ${customers.displayName} FROM ${customers}
+          WHERE ${customers.id} = ${tasks.customerId}
+        )`,
+      })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.assigneeUserId, user.id),
+          inArray(tasks.status, ["open", "in_progress", "blocked"]),
         ),
-      db
-        .select({ count: sql<number>`COUNT(*)` })
-        .from(emailLog)
-        .where(
-          and(
-            eq(emailLog.direction, "inbound"),
-            gte(emailLog.emailDate, todayLondonMidnight),
-          ),
-        ),
-      db
-        .select({ count: sql<number>`COUNT(*)` })
-        .from(emailLog)
-        .where(
-          and(
-            eq(emailLog.direction, "outbound"),
-            gte(emailLog.emailDate, todayLondonMidnight),
-          ),
-        ),
-    ]);
-
-    return reply.send({
-      openBalance: Number(openRows[0]?.total ?? 0),
-      overdueBalance: Number(overdueRows[0]?.total ?? 0),
-      customersOverdue: Number(chaseCountRows[0]?.count ?? 0),
-      myOpenTasks: Number(myTasksRows[0]?.count ?? 0),
-      emailsInToday: Number(emailsInRows[0]?.count ?? 0),
-      emailsOutToday: Number(emailsOutRows[0]?.count ?? 0),
-    });
+      )
+      .orderBy(sql`${tasks.dueAt} IS NULL`, asc(tasks.dueAt))
+      .limit(10);
+    return reply.send({ rows });
   });
+
+  // ── Unactioned B2B Emails Today ────────────────────────────────────────
+  app.get("/emails", async (req, reply) => {
+    await requireAuth(req);
+
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const rows = await db
+      .select({
+        id: emailLog.id,
+        threadId: emailLog.threadId,
+        subject: emailLog.subject,
+        snippet: emailLog.snippet,
+        emailDate: emailLog.emailDate,
+        customerId: emailLog.customerId,
+        customerName: customers.displayName,
+      })
+      .from(emailLog)
+      .innerJoin(customers, eq(customers.id, emailLog.customerId))
+      .where(
+        and(
+          eq(emailLog.direction, "inbound"),
+          gte(emailLog.emailDate, todayStart),
+          eq(customers.customerType, "b2b"),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${emailLog} AS reply
+            WHERE reply.thread_id = ${emailLog.threadId}
+              AND reply.direction = 'outbound'
+              AND reply.email_date > ${emailLog.emailDate}
+          )`,
+        ),
+      )
+      .orderBy(desc(emailLog.emailDate))
+      .limit(10);
+    return reply.send({ rows });
+  });
+
+  // ── RMAs in Flight ─────────────────────────────────────────────────────
+  app.get("/rmas", async (req, reply) => {
+    await requireAuth(req);
+    const rows = await db
+      .select({
+        id: rmas.id,
+        rmaNumber: rmas.rmaNumber,
+        status: rmas.status,
+        totalValue: rmas.totalValue,
+        updatedAt: rmas.updatedAt,
+        customerId: rmas.customerId,
+        customerName: customers.displayName,
+      })
+      .from(rmas)
+      .innerJoin(customers, eq(customers.id, rmas.customerId))
+      .where(
+        inArray(rmas.status, [
+          "draft",
+          "approved",
+          "awaiting_warehouse_number",
+          "sent_to_warehouse",
+          "received",
+        ]),
+      )
+      .orderBy(desc(rmas.updatedAt))
+      .limit(50);
+    return reply.send({ rows });
+  });
+
+  // ── Customers on Hold ──────────────────────────────────────────────────
+  app.get("/holds", async (req, reply) => {
+    await requireAuth(req);
+    const rows = await db
+      .select({
+        id: customers.id,
+        displayName: customers.displayName,
+        holdStatus: customers.holdStatus,
+        overdueBalance: customers.overdueBalance,
+        // Derive "held since" from the most recent audit_log row that
+        // flipped to the current hold status. NULL for legacy holds with
+        // no audit trail.
+        heldSinceAt: sql<string | null>`(
+          SELECT MAX(${auditLog.occurredAt}) FROM ${auditLog}
+          WHERE ${auditLog.action} = 'customer.hold_toggle'
+            AND ${auditLog.entityType} = 'customer'
+            AND ${auditLog.entityId} = ${customers.id}
+            AND JSON_UNQUOTE(JSON_EXTRACT(${auditLog.after}, '$.holdStatus')) = ${customers.holdStatus}
+        )`,
+      })
+      .from(customers)
+      .where(inArray(customers.holdStatus, ["hold", "payment_upfront"]))
+      .orderBy(desc(customers.overdueBalance))
+      .limit(50);
+    return reply.send({ rows });
+  });
+
+  // ── Chase Queue ────────────────────────────────────────────────────────
+  app.get("/chase", async (req, reply) => {
+    await requireAuth(req);
+
+    // 1. Pull every non-dismissed customer with overdueBalance > 0.
+    //    Uses NOT IN subquery — cheaper than leftJoin + isNull at scale,
+    //    and the chase_dismissals row count stays small.
+    const overdueRows = await db
+      .select()
+      .from(customers)
+      .where(
+        and(
+          gt(customers.overdueBalance, "0"),
+          sql`${customers.id} NOT IN (SELECT ${chaseDismissals.customerId} FROM ${chaseDismissals})`,
+        ),
+      );
+
+    if (overdueRows.length === 0) {
+      return reply.send({ rows: [] });
+    }
+
+    // 2. Fetch all open invoices for these customers in ONE query
+    //    (batched, not N+1). Group by customerId in memory.
+    const customerIds = overdueRows.map((c) => c.id);
+    const allInvoices = await db
+      .select()
+      .from(invoices)
+      .where(
+        and(inArray(invoices.customerId, customerIds), gt(invoices.balance, "0")),
+      );
+    const invoicesByCustomer = new Map<string, typeof allInvoices>();
+    for (const inv of allInvoices) {
+      if (!inv.customerId) continue;
+      const list = invoicesByCustomer.get(inv.customerId) ?? [];
+      list.push(inv);
+      invoicesByCustomer.set(inv.customerId, list);
+    }
+
+    // 3. Score + shape rows.
+    const enriched = overdueRows.map((c) => {
+      const sev = computeSeverity(c, invoicesByCustomer.get(c.id) ?? []);
+      return {
+        customerId: c.id,
+        customerName: c.displayName,
+        tier: sev.tier,
+        score: sev.score,
+        daysOverdue: sev.daysOverdue,
+        totalOverdue: sev.totalOverdue,
+        oldestUnpaidDate: sev.oldestUnpaidDate,
+        primaryEmail: c.primaryEmail,
+      };
+    });
+
+    // 4. Sort by tier rank then daysOverdue desc, take top 10.
+    const tierRank = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;
+    enriched.sort((a, b) => {
+      const t = tierRank[a.tier] - tierRank[b.tier];
+      return t !== 0 ? t : b.daysOverdue - a.daysOverdue;
+    });
+
+    return reply.send({ rows: enriched.slice(0, 10) });
+  });
+
+  // ── Dismiss chase row (permanent until undismissed) ────────────────────
+  app.post<{ Params: { customerId: string } }>(
+    "/chase/:customerId/dismiss",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const { customerId } = req.params;
+
+      const existing = await db
+        .select({ id: customers.id })
+        .from(customers)
+        .where(eq(customers.id, customerId))
+        .limit(1);
+      if (!existing[0]) {
+        return reply.code(404).send({ error: "customer not found" });
+      }
+
+      await db.transaction(async (tx) => {
+        await tx
+          .insert(chaseDismissals)
+          .values({
+            customerId,
+            dismissedByUserId: user.id,
+          })
+          .onDuplicateKeyUpdate({
+            set: {
+              dismissedAt: sql`CURRENT_TIMESTAMP`,
+              dismissedByUserId: user.id,
+            },
+          });
+        await tx.insert(auditLog).values({
+          id: nanoid(24),
+          userId: user.id,
+          action: "chase_dismissal.create",
+          entityType: "customer",
+          entityId: customerId,
+          before: null,
+          after: { dismissed: true },
+        });
+      });
+      return reply.send({ ok: true });
+    },
+  );
+
+  // ── Undismiss (only surface: customer detail page badge) ───────────────
+  app.delete<{ Params: { customerId: string } }>(
+    "/chase/:customerId/dismiss",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const { customerId } = req.params;
+
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(chaseDismissals)
+          .where(eq(chaseDismissals.customerId, customerId));
+        await tx.insert(auditLog).values({
+          id: nanoid(24),
+          userId: user.id,
+          action: "chase_dismissal.delete",
+          entityType: "customer",
+          entityId: customerId,
+          before: { dismissed: true },
+          after: null,
+        });
+      });
+      return reply.send({ ok: true });
+    },
+  );
 };
 
 export default dashboardRoute;
