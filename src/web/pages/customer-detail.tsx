@@ -83,6 +83,7 @@ type Customer = {
   additionalPhones: Array<{ label: string; number: string }> | null;
   paymentTerms: string | null;
   holdStatus: "active" | "hold" | "payment_upfront";
+  agentModeExcluded: boolean;
   shopifyCustomerId: string | null;
   customerType: "b2b" | "b2c" | null;
   balance: string;
@@ -317,6 +318,23 @@ export default function CustomerDetailPage() {
     },
   });
 
+  const agentModeMutation = useMutation({
+    mutationFn: async (excluded: boolean) => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ agentModeExcluded: excluded }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    },
+  });
+
   if (isPending) {
     return <div className="text-sm text-muted">Loading…</div>;
   }
@@ -352,6 +370,15 @@ export default function CustomerDetailPage() {
         customerName={customer.displayName}
         holdStatus={customer.holdStatus}
       />
+
+      <button
+        type="button"
+        onClick={() => agentModeMutation.mutate(!customer.agentModeExcluded)}
+        disabled={agentModeMutation.isPending}
+        className="text-xs hover:underline disabled:opacity-50"
+      >
+        Autopilot: {customer.agentModeExcluded ? "OFF (excluded)" : "ON"} — click to flip
+      </button>
 
       {kpi?.hasChaseDismissal && (
         <div className="flex items-center justify-between gap-2 rounded border border-default bg-subtle px-3 py-2 text-xs">

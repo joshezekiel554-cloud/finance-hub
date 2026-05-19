@@ -45,6 +45,7 @@ import { Card, CardBody } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { useEventStream } from "../lib/use-event-stream";
 import { cn } from "../lib/cn";
+import { AiProposalBadge } from "./autopilot/ai-proposal-badge";
 
 export type ActivityKind =
   | "email_in"
@@ -94,6 +95,7 @@ export type Activity = {
   source: string;
   refType: string | null;
   refId: string | null;
+  aiProposalId: string | null;
   // Normalized payload. Written by the QB sync for QBO events; written by
   // the returns service for RMA events. Extended fields are optional so
   // old rows without them still render cleanly.
@@ -384,6 +386,7 @@ export function ActivityTimeline({
                             Open in Calls & SMS
                           </button>
                         )}
+                        {activity.aiProposalId && <AiProposalBadge proposalId={activity.aiProposalId} />}
                         <span className="text-muted">via {activity.source}</span>
                       </div>
                       {hasBody && isExpanded && (

@@ -162,6 +162,7 @@ const patchBodySchema = z.object({
   // render it verbatim.
   paymentTerms: z.string().max(64).nullable().optional(),
   internalNotes: z.string().max(10_000).optional(),
+  agentModeExcluded: z.boolean().optional(),
 });
 
 const customersRoute: FastifyPluginAsync = async (app) => {
