@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardBody, CardHeader } from "../ui/card";
+import { Button } from "../ui/button";
 import { WidgetHeader } from "./widget-header";
+import { CustomerPickerDialog } from "./customer-picker-dialog";
 
-type EmailRow = {
+type LinkedRow = {
   id: string;
   threadId: string | null;
   subject: string | null;
@@ -11,6 +14,15 @@ type EmailRow = {
   emailDate: string;
   customerId: string;
   customerName: string;
+};
+
+type UnlinkedRow = {
+  id: string;
+  threadId: string | null;
+  subject: string | null;
+  snippet: string | null;
+  emailDate: string;
+  fromAddress: string | null;
 };
 
 function relativeTimeShort(iso: string): string {
@@ -23,7 +35,10 @@ function relativeTimeShort(iso: string): string {
 }
 
 export function EmailsWidget() {
-  const { data, isPending, isError } = useQuery<{ rows: EmailRow[] }>({
+  const queryClient = useQueryClient();
+  const [linking, setLinking] = useState<UnlinkedRow | null>(null);
+
+  const linkedQuery = useQuery<{ rows: LinkedRow[] }>({
     queryKey: ["dashboard", "emails"],
     queryFn: async () => {
       const res = await fetch("/api/dashboard/emails");
@@ -34,51 +49,152 @@ export function EmailsWidget() {
     refetchOnWindowFocus: true,
   });
 
-  const rows = data?.rows ?? [];
+  const unlinkedQuery = useQuery<{ rows: UnlinkedRow[] }>({
+    queryKey: ["dashboard", "emails", "unlinked"],
+    queryFn: async () => {
+      const res = await fetch("/api/dashboard/emails/unlinked");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const linkMutation = useMutation({
+    mutationFn: async (args: {
+      emailId: string;
+      customerId: string;
+      rememberAddress: boolean;
+    }) => {
+      const res = await fetch(
+        `/api/dashboard/emails/${encodeURIComponent(args.emailId)}/link-to-customer`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            customerId: args.customerId,
+            rememberAddress: args.rememberAddress,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "emails"] });
+      queryClient.invalidateQueries({
+        queryKey: ["dashboard", "emails", "unlinked"],
+      });
+      setLinking(null);
+    },
+  });
+
+  const linked = linkedQuery.data?.rows ?? [];
+  const unlinked = unlinkedQuery.data?.rows ?? [];
+  const total = linked.length + unlinked.length;
 
   return (
     <Card>
       <CardHeader>
-        <WidgetHeader title="Unactioned emails today" count={rows.length} />
+        <WidgetHeader
+          title="Unactioned emails today"
+          count={total}
+        />
       </CardHeader>
       <CardBody>
-        {isPending ? (
+        {linkedQuery.isPending && unlinkedQuery.isPending ? (
           <div className="space-y-2">
             <div className="h-6 rounded bg-subtle animate-pulse" />
             <div className="h-6 rounded bg-subtle animate-pulse" />
           </div>
-        ) : isError ? (
+        ) : linkedQuery.isError ? (
           <div className="text-xs text-accent-danger">
             Failed to load emails.
           </div>
-        ) : rows.length === 0 ? (
+        ) : total === 0 ? (
           <div className="text-xs text-muted">Inbox zero for today.</div>
         ) : (
-          <ul className="divide-y divide-default">
-            {rows.map((e) => (
-              <li key={e.id} className="py-2 first:pt-0 last:pb-0">
-                <Link
-                  to="/customers/$customerId"
-                  params={{ customerId: e.customerId }}
-                  className="block text-sm hover:text-accent-info"
-                >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="font-medium text-primary truncate">
-                      {e.customerName}
-                    </span>
-                    <span className="text-xs text-muted shrink-0">
-                      {relativeTimeShort(e.emailDate)}
-                    </span>
-                  </div>
-                  <div className="text-xs text-secondary truncate">
-                    {e.subject ?? "(no subject)"}
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <div className="space-y-3">
+            {linked.length > 0 && (
+              <ul className="divide-y divide-default">
+                {linked.map((e) => (
+                  <li key={e.id} className="py-2 first:pt-0">
+                    <Link
+                      to="/customers/$customerId"
+                      params={{ customerId: e.customerId }}
+                      className="block text-sm hover:text-accent-info"
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium text-primary truncate">
+                          {e.customerName}
+                        </span>
+                        <span className="text-xs text-muted shrink-0">
+                          {relativeTimeShort(e.emailDate)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-secondary truncate">
+                        {e.subject ?? "(no subject)"}
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {unlinked.length > 0 && (
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted mb-1">
+                  Unlinked ({unlinked.length})
+                </div>
+                <ul className="divide-y divide-default">
+                  {unlinked.map((e) => (
+                    <li
+                      key={e.id}
+                      className="flex items-center gap-2 py-2 first:pt-0"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="font-medium text-primary truncate">
+                            {e.fromAddress ?? "(no address)"}
+                          </span>
+                          <span className="text-xs text-muted shrink-0">
+                            {relativeTimeShort(e.emailDate)}
+                          </span>
+                        </div>
+                        <div className="text-xs text-secondary truncate">
+                          {e.subject ?? "(no subject)"}
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setLinking(e)}
+                      >
+                        Link
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         )}
       </CardBody>
+
+      {linking && (
+        <CustomerPickerDialog
+          open
+          onOpenChange={(o) => !o && setLinking(null)}
+          fromAddress={linking.fromAddress}
+          saving={linkMutation.isPending}
+          onSelect={async (customerId, rememberAddress) => {
+            await linkMutation.mutateAsync({
+              emailId: linking.id,
+              customerId,
+              rememberAddress,
+            });
+          }}
+        />
+      )}
     </Card>
   );
 }

@@ -13,6 +13,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { and, asc, desc, eq, gt, gte, inArray, isNull, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { z } from "zod";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailLog, tasks } from "../../db/schema/crm.js";
@@ -80,6 +81,9 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
           // manually tagged — those customers should still show up
           // here, not vanish into the gap.
           sql`(${customers.customerType} = 'b2b' OR ${customers.customerType} IS NULL)`,
+          // Honour the per-customer-inbox "Actioned" flag too — if you
+          // marked an email actioned there, it should also clear here.
+          isNull(emailLog.actionedAt),
           sql`NOT EXISTS (
             SELECT 1 FROM ${emailLog} AS reply
             WHERE reply.thread_id = ${emailLog.threadId}
@@ -92,6 +96,138 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
       .limit(10);
     return reply.send({ rows });
   });
+
+  // ── Unlinked inbound emails today (no customerId resolved) ─────────────
+  // Filters out obvious system/marketing senders so the operator sees just
+  // the "this looks like a customer email — link it" candidates.
+  app.get("/emails/unlinked", async (req, reply) => {
+    await requireAuth(req);
+
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const rows = await db
+      .select({
+        id: emailLog.id,
+        threadId: emailLog.threadId,
+        subject: emailLog.subject,
+        snippet: emailLog.snippet,
+        emailDate: emailLog.emailDate,
+        fromAddress: emailLog.fromAddress,
+      })
+      .from(emailLog)
+      .where(
+        and(
+          eq(emailLog.direction, "inbound"),
+          gte(emailLog.emailDate, todayStart),
+          isNull(emailLog.customerId),
+          isNull(emailLog.actionedAt),
+          // Exclude common no-reply senders
+          sql`${emailLog.fromAddress} NOT LIKE 'noreply%'`,
+          sql`${emailLog.fromAddress} NOT LIKE 'no-reply%'`,
+          sql`${emailLog.fromAddress} NOT LIKE 'donotreply%'`,
+          // Exclude known system / vendor / marketing domains
+          sql`${emailLog.fromAddress} NOT LIKE '%@shopify.com'`,
+          sql`${emailLog.fromAddress} NOT LIKE '%@klaviyo.com'`,
+          sql`${emailLog.fromAddress} NOT LIKE '%@stripe.com'`,
+          sql`${emailLog.fromAddress} NOT LIKE '%@hetzner.com'`,
+          sql`${emailLog.fromAddress} NOT LIKE '%@hetzner.de'`,
+          // Shopify order placed-by notifications start with this prefix
+          sql`(${emailLog.subject} IS NULL OR ${emailLog.subject} NOT LIKE '[Feldart] Order%')`,
+        ),
+      )
+      .orderBy(desc(emailLog.emailDate))
+      .limit(20);
+    return reply.send({ rows });
+  });
+
+  // ── Link an unlinked email to a customer ───────────────────────────────
+  // Optionally appends the sender's address to the customer's
+  // billing_emails array (default true) so future emails from that
+  // address auto-resolve in the gmail-poll matcher.
+  const linkBodySchema = z.object({
+    customerId: z.string().min(1).max(24),
+    rememberAddress: z.boolean().optional().default(true),
+  });
+
+  app.post<{ Params: { emailId: string } }>(
+    "/emails/:emailId/link-to-customer",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const { emailId } = req.params;
+      const parse = linkBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid body", details: parse.error.flatten() });
+      }
+      const { customerId, rememberAddress } = parse.data;
+
+      const emailRows = await db
+        .select({
+          id: emailLog.id,
+          customerId: emailLog.customerId,
+          fromAddress: emailLog.fromAddress,
+        })
+        .from(emailLog)
+        .where(eq(emailLog.id, emailId))
+        .limit(1);
+      const email = emailRows[0];
+      if (!email) {
+        return reply.code(404).send({ error: "email not found" });
+      }
+
+      const customerRows = await db
+        .select({
+          id: customers.id,
+          billingEmails: customers.billingEmails,
+        })
+        .from(customers)
+        .where(eq(customers.id, customerId))
+        .limit(1);
+      const customer = customerRows[0];
+      if (!customer) {
+        return reply.code(404).send({ error: "customer not found" });
+      }
+
+      await db.transaction(async (tx) => {
+        await tx
+          .update(emailLog)
+          .set({ customerId })
+          .where(eq(emailLog.id, emailId));
+
+        if (rememberAddress && email.fromAddress) {
+          const existing = Array.isArray(customer.billingEmails)
+            ? (customer.billingEmails as string[])
+            : [];
+          const newAddr = email.fromAddress.toLowerCase();
+          if (!existing.map((e) => e.toLowerCase()).includes(newAddr)) {
+            await tx
+              .update(customers)
+              .set({ billingEmails: [...existing, newAddr] })
+              .where(eq(customers.id, customerId));
+          }
+        }
+
+        await tx.insert(auditLog).values({
+          id: nanoid(24),
+          userId: user.id,
+          action: "email.link_to_customer",
+          entityType: "email_log",
+          entityId: emailId,
+          before: { customerId: email.customerId },
+          after: {
+            customerId,
+            rememberedAddress: rememberAddress && !!email.fromAddress
+              ? email.fromAddress
+              : null,
+          },
+        });
+      });
+
+      return reply.send({ ok: true });
+    },
+  );
 
   // ── Emails debug — counts at each filter stage (admin diagnostic) ──────
   app.get("/emails-debug", async (req, reply) => {
