@@ -35,6 +35,7 @@ import { rmas } from "../../db/schema/returns.js";
 import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { tasks } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
+import { chaseDismissals } from "../../db/schema/chase-dismissals.js";
 import { nanoid } from "nanoid";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
@@ -991,6 +992,12 @@ const customersRoute: FastifyPluginAsync = async (app) => {
             FROM ${statementSends}
             WHERE ${statementSends.customerId} = ${id}
           )`,
+          hasChaseDismissal: sql<boolean>`(
+            EXISTS (
+              SELECT 1 FROM ${chaseDismissals}
+              WHERE ${chaseDismissals.customerId} = ${id}
+            )
+          )`,
         })
         .from(customers)
         .where(eq(customers.id, id))
@@ -1018,6 +1025,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
               : kpi.oldestUnpaidInvoiceDueDate.toISOString().slice(0, 10)
             : null,
           hasPendingRma: Boolean(kpi.hasPendingRma),
+          hasChaseDismissal: Boolean(kpi.hasChaseDismissal),
           openInvoiceCount: Number(kpi.openInvoiceCount ?? 0),
           openTaskCount: Number(kpi.openTaskCount ?? 0),
         }
