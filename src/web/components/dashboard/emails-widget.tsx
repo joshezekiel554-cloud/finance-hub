@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../ui/card";
 import { Button } from "../ui/button";
 import { WidgetHeader } from "./widget-header";
@@ -88,6 +89,67 @@ export function EmailsWidget() {
     },
   });
 
+  // Dismiss = mark actionedAt via the existing per-customer-inbox endpoint
+  // (PATCH /api/email-log/:id { actioned: true }). Optimistic remove so the
+  // row vanishes immediately; the dashboard /emails filter already excludes
+  // actioned rows so the next refetch confirms.
+  const dismissMutation = useMutation({
+    mutationFn: async (emailId: string) => {
+      const res = await fetch(
+        `/api/email-log/${encodeURIComponent(emailId)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ actioned: true }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onMutate: async (emailId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["dashboard", "emails"] });
+      await queryClient.cancelQueries({
+        queryKey: ["dashboard", "emails", "unlinked"],
+      });
+      const prevLinked = queryClient.getQueryData<{ rows: LinkedRow[] }>([
+        "dashboard",
+        "emails",
+      ]);
+      const prevUnlinked = queryClient.getQueryData<{ rows: UnlinkedRow[] }>([
+        "dashboard",
+        "emails",
+        "unlinked",
+      ]);
+      if (prevLinked) {
+        queryClient.setQueryData(["dashboard", "emails"], {
+          rows: prevLinked.rows.filter((r) => r.id !== emailId),
+        });
+      }
+      if (prevUnlinked) {
+        queryClient.setQueryData(["dashboard", "emails", "unlinked"], {
+          rows: prevUnlinked.rows.filter((r) => r.id !== emailId),
+        });
+      }
+      return { prevLinked, prevUnlinked };
+    },
+    onError: (_err, _emailId, ctx) => {
+      if (ctx?.prevLinked) {
+        queryClient.setQueryData(["dashboard", "emails"], ctx.prevLinked);
+      }
+      if (ctx?.prevUnlinked) {
+        queryClient.setQueryData(
+          ["dashboard", "emails", "unlinked"],
+          ctx.prevUnlinked,
+        );
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "emails"] });
+      queryClient.invalidateQueries({
+        queryKey: ["dashboard", "emails", "unlinked"],
+      });
+    },
+  });
+
   const linked = linkedQuery.data?.rows ?? [];
   const unlinked = unlinkedQuery.data?.rows ?? [];
   const total = linked.length + unlinked.length;
@@ -117,11 +179,14 @@ export function EmailsWidget() {
             {linked.length > 0 && (
               <ul className="divide-y divide-default">
                 {linked.map((e) => (
-                  <li key={e.id} className="py-2 first:pt-0">
+                  <li
+                    key={e.id}
+                    className="flex items-start gap-2 py-2 first:pt-0"
+                  >
                     <Link
                       to="/customers/$customerId"
                       params={{ customerId: e.customerId }}
-                      className="block text-sm hover:text-accent-info"
+                      className="flex-1 min-w-0 text-sm hover:text-accent-info"
                     >
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="font-medium text-primary truncate">
@@ -135,6 +200,15 @@ export function EmailsWidget() {
                         {e.subject ?? "(no subject)"}
                       </div>
                     </Link>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => dismissMutation.mutate(e.id)}
+                      disabled={dismissMutation.isPending}
+                      title="Dismiss (mark actioned)"
+                    >
+                      <X className="size-3.5" />
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -149,7 +223,7 @@ export function EmailsWidget() {
                   {unlinked.map((e) => (
                     <li
                       key={e.id}
-                      className="flex items-center gap-2 py-2 first:pt-0"
+                      className="flex items-center gap-1 py-2 first:pt-0"
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-baseline justify-between gap-2">
@@ -170,6 +244,15 @@ export function EmailsWidget() {
                         onClick={() => setLinking(e)}
                       >
                         Link
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => dismissMutation.mutate(e.id)}
+                        disabled={dismissMutation.isPending}
+                        title="Dismiss (mark actioned)"
+                      >
+                        <X className="size-3.5" />
                       </Button>
                     </li>
                   ))}
