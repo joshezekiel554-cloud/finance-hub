@@ -1,9 +1,20 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
+import { useState } from "react";
 import { Card, CardBody, CardHeader } from "../ui/card";
 import { Button } from "../ui/button";
 import { WidgetHeader } from "./widget-header";
+
+type AutopilotProposal = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  tier: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  status: "pending" | "drafted" | "approved" | "rejected" | "sent";
+  category: string;
+  reason: string;
+};
 
 type ChaseRow = {
   customerId: string;
@@ -32,6 +43,7 @@ function formatMoney(n: number): string {
 
 export function ChaseWidget() {
   const queryClient = useQueryClient();
+  const [showAiSuggestions, setShowAiSuggestions] = useState(false);
 
   const { data, isPending, isError } = useQuery<{ rows: ChaseRow[] }>({
     queryKey: ["dashboard", "chase"],
@@ -78,6 +90,50 @@ export function ChaseWidget() {
     },
   });
 
+  const { data: proposalsData } = useQuery<{ proposals: AutopilotProposal[] }>({
+    queryKey: ["autopilot", "proposals"],
+    queryFn: async () => {
+      const res = await fetch("/api/autopilot/proposals");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const draftMutation = useMutation({
+    mutationFn: async (proposalIds: string[]) => {
+      const res = await fetch("/api/autopilot/proposals/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalIds }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["autopilot"] });
+    },
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: async (proposalId: string) => {
+      const res = await fetch(
+        `/api/autopilot/proposals/${encodeURIComponent(proposalId)}/approve`,
+        { method: "POST" },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["autopilot"] });
+    },
+  });
+
+  const aiSuggestions = (proposalsData?.proposals ?? []).filter(
+    (p) =>
+      (p.status === "pending" || p.status === "drafted") &&
+      (p.category === "chase_next" || p.category === "cadence_cold"),
+  );
+
   const rows = data?.rows ?? [];
 
   return (
@@ -88,8 +144,74 @@ export function ChaseWidget() {
           count={rows.length}
           link="/chase"
         />
+        {aiSuggestions.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAiSuggestions((v) => !v)}
+            className="mt-1 flex items-center gap-1 text-xs text-accent-info hover:underline"
+          >
+            {aiSuggestions.length} AI suggestion{aiSuggestions.length !== 1 ? "s" : ""}
+            {showAiSuggestions ? (
+              <ChevronUp className="size-3" />
+            ) : (
+              <ChevronDown className="size-3" />
+            )}
+          </button>
+        )}
       </CardHeader>
       <CardBody>
+        {showAiSuggestions && aiSuggestions.length > 0 && (
+          <div className="mb-3 rounded border border-accent-info/20 bg-accent-info/5 p-2">
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent-info">
+              AI suggestions
+            </div>
+            <ul className="divide-y divide-default">
+              {aiSuggestions.map((p) => (
+                <li
+                  key={p.id}
+                  className="flex items-center gap-2 py-1.5 first:pt-0 last:pb-0"
+                >
+                  <span
+                    className={`text-[10px] font-semibold rounded px-1.5 py-0.5 shrink-0 ${TIER_STYLES[p.tier]}`}
+                  >
+                    {p.tier}
+                  </span>
+                  <Link
+                    to="/customers/$customerId"
+                    params={{ customerId: p.customerId }}
+                    className="flex-1 min-w-0 text-sm hover:text-accent-info"
+                  >
+                    <div className="font-medium text-primary truncate">{p.customerName}</div>
+                    <div className="text-xs text-muted">
+                      {p.category === "chase_next" ? "Chase next" : "Cadence cold"}
+                    </div>
+                  </Link>
+                  {p.status === "pending" ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => draftMutation.mutate([p.id])}
+                      disabled={draftMutation.isPending}
+                      className="text-xs"
+                    >
+                      Draft
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => approveMutation.mutate(p.id)}
+                      disabled={approveMutation.isPending}
+                      className="text-xs text-accent-info"
+                    >
+                      Approve &amp; Send
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {isPending ? (
           <div className="space-y-2">
             <div className="h-6 rounded bg-subtle animate-pulse" />
