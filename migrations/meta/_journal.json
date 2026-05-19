@@ -253,6 +253,13 @@
       "when": 1779190247292,
       "tag": "0035_chase_dismissals",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "5",
+      "when": 1779205101833,
+      "tag": "0036_autopilot",
+      "breakpoints": true
     }
   ]
 }

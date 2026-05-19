@@ -74,6 +74,9 @@ export const activities = mysqlTable(
     refType: varchar("ref_type", { length: 64 }),
     refId: varchar("ref_id", { length: 64 }),
     meta: json("meta").$type<Record<string, unknown>>(),
+    // FK back to ai_proposals when this activity originated from an
+    // approved autopilot proposal. Nullable; non-null = AI-originated.
+    aiProposalId: varchar("ai_proposal_id", { length: 24 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
@@ -288,6 +291,8 @@ export const emailLog = mysqlTable(
       () => users.id,
       { onDelete: "set null" },
     ),
+    // FK back to ai_proposals for AI-originated outbound emails.
+    aiProposalId: varchar("ai_proposal_id", { length: 24 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
@@ -329,6 +334,8 @@ export const statementSends = mysqlTable(
     statementType: mysqlEnum("statement_type", ["open_items", "balance_forward"])
       .notNull()
       .default("open_items"),
+    // FK back to ai_proposals for AI-originated statement sends.
+    aiProposalId: varchar("ai_proposal_id", { length: 24 }),
   },
   (t) => ({
     customerIdIdx: index("idx_statement_sends_customer_id").on(t.customerId),
