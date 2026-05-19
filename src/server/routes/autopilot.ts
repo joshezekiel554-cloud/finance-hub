@@ -297,11 +297,30 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
   });
 
   // ── POST /proposals/:id/approve ───────────────────────────────────────
+  // Body (all optional):
+  //   editedArgs: Record<string, unknown>
+  //     — if present, REPLACES drafted_action.args before execution.
+  //       Lets the operator tweak the AI-drafted subject/body in the UI
+  //       and have the edited values fire (instead of the original draft).
+  //       Tool name stays the same (operator can't switch tools mid-approve).
   app.post<{ Params: { id: string }; Querystring: { force?: string } }>(
     "/proposals/:id/approve",
     async (req, reply) => {
       const user = await requireAuth(req);
       const force = req.query.force === "true";
+
+      const bodySchema = z
+        .object({
+          editedArgs: z.record(z.string(), z.unknown()).optional(),
+        })
+        .optional();
+      const parse = bodySchema.safeParse(req.body ?? {});
+      if (!parse.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid body", details: parse.error.flatten() });
+      }
+      const editedArgs = parse.data?.editedArgs;
 
       const rows = await db
         .select()
@@ -316,9 +335,6 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
           .send({ error: `cannot approve from status ${p.status}` });
       }
 
-      // Stale-data guard: only enforce if the proposal is drafted (pending
-      // means deterministic category — eligibility already implied by being
-      // visible in the candidate list, but re-check anyway).
       if (!force) {
         const stillEligibleFn = STILL_ELIGIBLE[p.category as AiProposalCategory];
         if (stillEligibleFn) {
@@ -330,6 +346,21 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
             });
           }
         }
+      }
+
+      // If operator edited the draft, persist the new args + preview
+      // before queueing execution. Audit trail: ai_proposals.drafted_action
+      // becomes the OPERATOR-APPROVED version; the original AI output is
+      // overwritten (a follow-up could keep an edit history).
+      if (editedArgs && p.draftedAction) {
+        const existing = p.draftedAction as { tool: string; args: Record<string, unknown> };
+        await db
+          .update(aiProposals)
+          .set({
+            draftedAction: { tool: existing.tool, args: editedArgs },
+            draftedPreview: JSON.stringify(editedArgs).slice(0, 2000),
+          })
+          .where(eq(aiProposals.id, p.id));
       }
 
       await db
