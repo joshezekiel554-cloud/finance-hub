@@ -246,6 +246,13 @@
       "when": 1779113223151,
       "tag": "0034_email_signatures",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "5",
+      "when": 1779190247292,
+      "tag": "0035_chase_dismissals",
+      "breakpoints": true
     }
   ]
 }
