@@ -93,6 +93,102 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
     return reply.send({ rows });
   });
 
+  // ── Emails debug — counts at each filter stage (admin diagnostic) ──────
+  app.get("/emails-debug", async (req, reply) => {
+    await requireAuth(req);
+
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const [
+      totalInboundToday,
+      withLinkedCustomer,
+      withCustomerTypeB2bOrNull,
+      withoutLaterReply,
+      sampleRows,
+    ] = await Promise.all([
+      db
+        .select({ n: sql<number>`COUNT(*)` })
+        .from(emailLog)
+        .where(
+          and(
+            eq(emailLog.direction, "inbound"),
+            gte(emailLog.emailDate, todayStart),
+          ),
+        ),
+      db
+        .select({ n: sql<number>`COUNT(*)` })
+        .from(emailLog)
+        .innerJoin(customers, eq(customers.id, emailLog.customerId))
+        .where(
+          and(
+            eq(emailLog.direction, "inbound"),
+            gte(emailLog.emailDate, todayStart),
+          ),
+        ),
+      db
+        .select({ n: sql<number>`COUNT(*)` })
+        .from(emailLog)
+        .innerJoin(customers, eq(customers.id, emailLog.customerId))
+        .where(
+          and(
+            eq(emailLog.direction, "inbound"),
+            gte(emailLog.emailDate, todayStart),
+            sql`(${customers.customerType} = 'b2b' OR ${customers.customerType} IS NULL)`,
+          ),
+        ),
+      db
+        .select({ n: sql<number>`COUNT(*)` })
+        .from(emailLog)
+        .innerJoin(customers, eq(customers.id, emailLog.customerId))
+        .where(
+          and(
+            eq(emailLog.direction, "inbound"),
+            gte(emailLog.emailDate, todayStart),
+            sql`(${customers.customerType} = 'b2b' OR ${customers.customerType} IS NULL)`,
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${emailLog} AS reply
+              WHERE reply.thread_id = ${emailLog.threadId}
+                AND reply.direction = 'outbound'
+                AND reply.email_date > ${emailLog.emailDate}
+            )`,
+          ),
+        ),
+      db
+        .select({
+          id: emailLog.id,
+          emailDate: emailLog.emailDate,
+          customerId: emailLog.customerId,
+          threadId: emailLog.threadId,
+          subject: emailLog.subject,
+          customerType: customers.customerType,
+          customerName: customers.displayName,
+        })
+        .from(emailLog)
+        .leftJoin(customers, eq(customers.id, emailLog.customerId))
+        .where(
+          and(
+            eq(emailLog.direction, "inbound"),
+            gte(emailLog.emailDate, todayStart),
+          ),
+        )
+        .orderBy(desc(emailLog.emailDate))
+        .limit(20),
+    ]);
+
+    return reply.send({
+      todayStartUtc: todayStart.toISOString(),
+      stage1_totalInboundToday: Number(totalInboundToday[0]?.n ?? 0),
+      stage2_withLinkedCustomer: Number(withLinkedCustomer[0]?.n ?? 0),
+      stage3_withCustomerTypeB2bOrNull: Number(withCustomerTypeB2bOrNull[0]?.n ?? 0),
+      stage4_withoutLaterReply: Number(withoutLaterReply[0]?.n ?? 0),
+      sampleRows: sampleRows.map((r) => ({
+        ...r,
+        emailDate: r.emailDate instanceof Date ? r.emailDate.toISOString() : r.emailDate,
+      })),
+    });
+  });
+
   // ── RMAs in Flight ─────────────────────────────────────────────────────
   app.get("/rmas", async (req, reply) => {
     await requireAuth(req);
