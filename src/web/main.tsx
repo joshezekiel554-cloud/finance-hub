@@ -27,6 +27,7 @@ import ReturnNewPage from "./pages/return-new";
 import ReturnDetailPage from "./pages/return-detail";
 import CreditMemoCreatePage from "./pages/credit-memo-create";
 import SeasonsPage from "./pages/seasons";
+import AutopilotPage from "./pages/autopilot";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { tasksSearchSchema } from "./lib/search-schemas/tasks";
@@ -177,6 +178,12 @@ const seasonsRoute = createRoute({
   component: SeasonsPage,
 });
 
+const autopilotRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/autopilot",
+  component: AutopilotPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -195,6 +202,7 @@ const routeTree = rootRoute.addChildren([
   returnDetailRoute,
   creditMemoCreateRoute,
   seasonsRoute,
+  autopilotRoute,
 ]);
 
 const router = createRouter({ routeTree });
