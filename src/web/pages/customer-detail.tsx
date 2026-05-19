@@ -103,6 +103,7 @@ type CustomerKpi = {
   oldestUnpaidInvoiceDueDate: string | null;
   openTaskCount: number;
   hasPendingRma: boolean;
+  hasChaseDismissal: boolean;
   lastContactedAt: string | null;
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
@@ -277,6 +278,20 @@ export default function CustomerDetailPage() {
   const [pendingTarget, setPendingTarget] = useState<StatusTarget | null>(
     null,
   );
+  const undismissChaseMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(
+        `/api/dashboard/chase/${encodeURIComponent(customerId)}/dismiss`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "chase"] });
+    },
+  });
+
   const holdToggleMutation = useMutation({
     mutationFn: async (targetState: StatusTarget) => {
       const res = await fetch(`/api/customers/${customerId}/hold-toggle`, {
@@ -337,6 +352,23 @@ export default function CustomerDetailPage() {
         customerName={customer.displayName}
         holdStatus={customer.holdStatus}
       />
+
+      {kpi?.hasChaseDismissal && (
+        <div className="flex items-center justify-between gap-2 rounded border border-default bg-subtle px-3 py-2 text-xs">
+          <span className="text-secondary">
+            Dismissed from chase queue — won't surface on the dashboard
+            until undismissed.
+          </span>
+          <button
+            type="button"
+            onClick={() => undismissChaseMutation.mutate()}
+            disabled={undismissChaseMutation.isPending}
+            className="text-accent-info hover:underline disabled:opacity-50"
+          >
+            {undismissChaseMutation.isPending ? "Undismissing…" : "Undismiss"}
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">

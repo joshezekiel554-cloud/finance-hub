@@ -44,3 +44,6 @@ coverage/
 # misc
 nul
 scripts/smoke/
+
+# Visual companion sessions (superpowers:brainstorming)
+.superpowers/
