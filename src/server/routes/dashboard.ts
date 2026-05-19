@@ -75,7 +75,11 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
         and(
           eq(emailLog.direction, "inbound"),
           gte(emailLog.emailDate, todayStart),
-          eq(customers.customerType, "b2b"),
+          // Include B2B AND not-yet-classified customers; only exclude
+          // explicit B2C. customer_type lands NULL on QB sync until
+          // manually tagged — those customers should still show up
+          // here, not vanish into the gap.
+          sql`(${customers.customerType} = 'b2b' OR ${customers.customerType} IS NULL)`,
           sql`NOT EXISTS (
             SELECT 1 FROM ${emailLog} AS reply
             WHERE reply.thread_id = ${emailLog.threadId}
