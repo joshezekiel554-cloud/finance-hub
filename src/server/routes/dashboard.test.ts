@@ -23,7 +23,7 @@ describe("chase widget sort order", () => {
       { tier: "HIGH", daysOverdue: 100 },
       { tier: "CRITICAL", daysOverdue: 5 },
     ]);
-    expect(sorted[0].tier).toBe("CRITICAL");
+    expect(sorted[0]?.tier).toBe("CRITICAL");
   });
 
   it("within same tier, higher daysOverdue comes first", () => {
