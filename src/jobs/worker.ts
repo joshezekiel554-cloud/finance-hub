@@ -21,7 +21,9 @@ import { processTagEmail } from "./definitions/tag-email.js";
 import { vocatechBackfillHandler } from "./definitions/vocatech-backfill.js";
 import { vocatechRosterSyncHandler } from "./definitions/vocatech-roster-sync.js";
 import { forwardBccHandler } from "./definitions/forward-bcc.js";
+import { autopilotScanHandler } from "./definitions/autopilot-scan.js";
 import {
+  AUTOPILOT_SCAN_QUEUE,
   CHASE_QUEUE,
   FORWARD_BCC_QUEUE,
   GMAIL_QUEUE,
@@ -52,6 +54,7 @@ const TAG_EMAIL_CONCURRENCY = 1;
 const VOCATECH_BACKFILL_CONCURRENCY = 1;
 const VOCATECH_ROSTER_CONCURRENCY = 1;
 const FORWARD_BCC_CONCURRENCY = 2;
+const AUTOPILOT_SCAN_CONCURRENCY = 1;
 
 function buildWorkers(): Worker[] {
   const connection = connectionOptions();
@@ -104,6 +107,12 @@ function buildWorkers(): Worker[] {
     { connection, concurrency: FORWARD_BCC_CONCURRENCY },
   );
 
+  const autopilotScanWorker = new Worker(
+    AUTOPILOT_SCAN_QUEUE,
+    async (job: Job) => autopilotScanHandler(job),
+    { connection, concurrency: AUTOPILOT_SCAN_CONCURRENCY },
+  );
+
   for (const w of [
     qbWorker,
     gmailWorker,
@@ -113,6 +122,7 @@ function buildWorkers(): Worker[] {
     vocatechBackfillWorker,
     vocatechRosterWorker,
     forwardBccWorker,
+    autopilotScanWorker,
   ]) {
     w.on("failed", (job, err) => {
       log.error(
