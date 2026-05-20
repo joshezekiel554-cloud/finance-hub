@@ -1,7 +1,10 @@
 # Autopilot Voice/Tone Calibration — Design Spec
 
 **Date:** 2026-05-20
-**Status:** Approved (design); spec awaiting user review
+**Status:** SUPERSEDED by `2026-05-20-ai-training-suite-design.md` — voice/tone
+is now Wave A of the full AI-training suite (voice + company-knowledge +
+per-customer judgment + learn-from-edits). Kept for #1 detail; the umbrella
+spec is the source of truth.
 **Branch context:** new branch off `main` (`feat/autopilot-voice-tone`)
 
 ---
