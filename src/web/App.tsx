@@ -7,6 +7,7 @@ import {
   Receipt,
   CheckSquare,
   Sparkles,
+  GraduationCap,
   Settings,
   AlertCircle,
   RotateCcw,
@@ -27,6 +28,7 @@ const navItems = [
   { to: "/returns", label: "Returns", icon: RotateCcw },
   { to: "/seasons", label: "Seasons", icon: CalendarRange },
   { to: "/agent", label: "Agent", icon: Sparkles },
+  { to: "/ai-training", label: "AI Training", icon: GraduationCap },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
