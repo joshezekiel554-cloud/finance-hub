@@ -41,6 +41,7 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     overdueBalance: "324.00",
     unappliedCreditBalance: "0.00",
     internalNotes: null,
+    aiCustomerContext: null,
     lastSyncedAt: now,
     vocatechLastPushedAt: null,
     agentModeExcluded: false,

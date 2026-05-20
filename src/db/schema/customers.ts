@@ -96,6 +96,10 @@ export const customers = mysqlTable(
       .notNull()
       .default("0"),
     internalNotes: text("internal_notes"),
+    // Operator-authored, AI-visible context for this customer (#4). Injected
+    // into the customer's autopilot drafts + skip decisions. Distinct from
+    // internal_notes, which is human-only and never sent to the model.
+    aiCustomerContext: text("ai_customer_context"),
     lastSyncedAt: timestamp("last_synced_at"),
     vocatechLastPushedAt: timestamp("vocatech_last_pushed_at"),
     // Autopilot opt-out: when TRUE, this customer is excluded from every

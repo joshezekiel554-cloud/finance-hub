@@ -260,6 +260,13 @@
       "when": 1779205101833,
       "tag": "0036_autopilot",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "5",
+      "when": 1779281542169,
+      "tag": "0037_fast_riptide",
+      "breakpoints": true
     }
   ]
 }
