@@ -8,6 +8,7 @@ import {
   aiCompanyFacts,
   FACT_TAG_GLOBAL,
 } from "../../db/schema/ai-company-facts.js";
+import { aiLearnedCorrections } from "../../db/schema/ai-learned-corrections.js";
 
 // Baked-in fallback so drafts have a Feldart voice before the operator
 // seeds/customizes app_settings.ai_voice_guide.
@@ -85,7 +86,20 @@ export async function buildDraftContext(
     else if (tags.includes(category)) categoryFacts.push(f.fact);
   }
 
-  // 3. per-customer context (#4)
+  // 3. active learned corrections (#2), partitioned by tag
+  const correctionRows = await db
+    .select()
+    .from(aiLearnedCorrections)
+    .where(eq(aiLearnedCorrections.status, "active"));
+  const globalCorrections: string[] = [];
+  const categoryCorrections: string[] = [];
+  for (const c of correctionRows) {
+    const tags = c.tags ?? [];
+    if (tags.includes(FACT_TAG_GLOBAL)) globalCorrections.push(c.correction);
+    else if (tags.includes(category)) categoryCorrections.push(c.correction);
+  }
+
+  // 4. per-customer context (#4)
   let customerContext: string | null = null;
   if (customerId) {
     const cRows = await db
@@ -97,7 +111,7 @@ export async function buildDraftContext(
     customerContext = v && v.trim().length > 0 ? v : null;
   }
 
-  // 4. example template
+  // 5. example template
   let exampleTemplate: string | null = null;
   const slug = exampleSlugFor(category, summary);
   if (slug) {
@@ -113,8 +127,8 @@ export async function buildDraftContext(
     voiceGuide,
     globalFacts,
     categoryFacts,
-    globalCorrections: [], // Wave C (#2) populates
-    categoryCorrections: [], // Wave C (#2) populates
+    globalCorrections,
+    categoryCorrections,
     customerContext,
     exampleTemplate,
   };

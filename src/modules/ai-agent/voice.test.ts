@@ -10,9 +10,9 @@ type Mock = ReturnType<typeof vi.fn>;
 // Drizzle chain stub. Query order in buildDraftContext:
 //   1. voice guide   .from().where().limit(1)
 //   2. facts         .from().where()            (awaited, no limit)
-//   3. customer ctx  .from().where().limit(1)   (only when customerId)
-//   4. example       .from().where().limit(1)   (only when slug)
-// .where() returns an object that is both awaitable AND has .limit().
+//   3. corrections   .from().where()            (awaited, no limit)
+//   4. customer ctx  .from().where().limit(1)   (only when customerId)
+//   5. example       .from().where().limit(1)   (only when slug)
 function chain(rows: unknown[]) {
   const c: Record<string, unknown> = {};
   c.from = () => c;
@@ -32,32 +32,41 @@ describe("buildDraftContext", () => {
     (db.select as Mock)
       .mockReturnValueOnce(chain([])) // voice guide: none
       .mockReturnValueOnce(chain([])) // facts: none
+      .mockReturnValueOnce(chain([])) // corrections: none
       .mockReturnValueOnce(chain([{ body: "L3 BODY" }])); // example
     const ctx = await buildDraftContext("chase_next", { tier: "CRITICAL" }, null);
     expect(ctx.voiceGuide).toBe(DEFAULT_VOICE_GUIDE);
     expect(ctx.exampleTemplate).toBe("L3 BODY");
   });
 
-  it("partitions facts into global vs category by tag", async () => {
+  it("partitions facts and corrections by tag", async () => {
     (db.select as Mock)
       .mockReturnValueOnce(chain([{ value: "G" }])) // voice guide
       .mockReturnValueOnce(
         chain([
           { fact: "We close in August", tags: ["global"], active: true },
           { fact: "Chase: mention orders-on-hold", tags: ["chase_next"], active: true },
-          { fact: "RMA fact", tags: ["ops_rma_stalled"], active: true },
         ]),
       ) // facts
+      .mockReturnValueOnce(
+        chain([
+          { correction: "Never say 'kindly'", tags: ["global"], status: "active" },
+          { correction: "Chase: no legal threats at L1", tags: ["chase_next"], status: "active" },
+        ]),
+      ) // corrections
       .mockReturnValueOnce(chain([{ body: "L1 BODY" }])); // example
     const ctx = await buildDraftContext("chase_next", { tier: "MEDIUM" }, null);
     expect(ctx.globalFacts).toEqual(["We close in August"]);
     expect(ctx.categoryFacts).toEqual(["Chase: mention orders-on-hold"]);
+    expect(ctx.globalCorrections).toEqual(["Never say 'kindly'"]);
+    expect(ctx.categoryCorrections).toEqual(["Chase: no legal threats at L1"]);
   });
 
   it("loads customer context when customerId is provided", async () => {
     (db.select as Mock)
       .mockReturnValueOnce(chain([{ value: "G" }])) // voice guide
       .mockReturnValueOnce(chain([])) // facts
+      .mockReturnValueOnce(chain([])) // corrections
       .mockReturnValueOnce(chain([{ ctx: "Pays late but always pays" }])); // customer (cadence_cold: no example)
     const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
     expect(ctx.customerContext).toBe("Pays late but always pays");
@@ -67,18 +76,20 @@ describe("buildDraftContext", () => {
     (db.select as Mock)
       .mockReturnValueOnce(chain([{ value: "G" }]))
       .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([{ ctx: "" }]));
     const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
     expect(ctx.customerContext).toBeNull();
   });
 
-  it("leaves corrections empty (Wave C) and does not query templates for cadence_cold", async () => {
+  it("leaves corrections empty when none are active; no template query for cadence_cold", async () => {
     (db.select as Mock)
       .mockReturnValueOnce(chain([{ value: "G" }])) // voice guide
-      .mockReturnValueOnce(chain([])); // facts (no customer, no example)
+      .mockReturnValueOnce(chain([])) // facts
+      .mockReturnValueOnce(chain([])); // corrections (no customer, no example)
     const ctx = await buildDraftContext("cadence_cold", {}, null);
     expect(ctx.globalCorrections).toEqual([]);
     expect(ctx.categoryCorrections).toEqual([]);
-    expect((db.select as Mock).mock.calls.length).toBe(2);
+    expect((db.select as Mock).mock.calls.length).toBe(3);
   });
 });
