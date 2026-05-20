@@ -7,6 +7,11 @@ import {
   ProposalCard,
   type Proposal,
 } from "../components/autopilot/proposal-card";
+import ComposeModal, {
+  type ComposeContext,
+} from "../components/compose-modal";
+
+const CHASE_ALIAS = "accounts@feldart.com";
 
 // Categories that don't need an AI draft step.
 const NO_DRAFT_CATEGORIES = new Set([
@@ -21,6 +26,55 @@ const ESTIMATED_DRAFT_COST_USD = 0.05;
 export default function AutopilotPage() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Compose-modal edit-and-send state.
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeContext, setComposeContext] = useState<ComposeContext | null>(
+    null,
+  );
+  const [editingProposalId, setEditingProposalId] = useState<string | null>(
+    null,
+  );
+
+  // Open the full composer pre-filled with a proposal's AI draft. Fetches
+  // the customer's primary email (not in the candidate summary) so the To
+  // field is seeded.
+  const openEditAndSend = async (proposal: Proposal) => {
+    const args = (proposal.draftedAction?.args ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const subject = typeof args.subject === "string" ? args.subject : "";
+    const bodyHtml = typeof args.body === "string" ? args.body : "";
+    const customerName =
+      (proposal.candidateSummary as { customerName?: string }).customerName ??
+      "";
+
+    let customerEmail = "";
+    try {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(proposal.entityId)}`,
+      );
+      if (res.ok) {
+        const json = (await res.json()) as {
+          customer?: { primaryEmail?: string | null };
+        };
+        customerEmail = json.customer?.primaryEmail ?? "";
+      }
+    } catch {
+      // Non-fatal — operator can fill the To field manually.
+    }
+
+    setEditingProposalId(proposal.id);
+    setComposeContext({
+      customerId: proposal.entityType === "customer" ? proposal.entityId : undefined,
+      customerName,
+      customerEmail,
+      aiProposalId: proposal.id,
+      prefill: { subject, bodyHtml, alias: CHASE_ALIAS },
+    });
+    setComposeOpen(true);
+  };
 
   const { data, isPending } = useQuery<{ rows: Proposal[] }>({
     queryKey: ["autopilot", "proposals"],
@@ -178,6 +232,7 @@ export default function AutopilotPage() {
                         }
                         setSelected(next);
                       }}
+                      onEditAndSend={openEditAndSend}
                     />
                   ))}
                 </CardBody>
@@ -204,12 +259,38 @@ export default function AutopilotPage() {
                       }
                       setSelected(next);
                     }}
+                    onEditAndSend={openEditAndSend}
                   />
                 ))}
               </CardBody>
             </Card>
           )}
         </>
+      )}
+
+      {composeContext && (
+        <ComposeModal
+          open={composeOpen}
+          onOpenChange={(o) => {
+            setComposeOpen(o);
+            if (!o) {
+              setComposeContext(null);
+              setEditingProposalId(null);
+            }
+          }}
+          context={composeContext}
+          onSent={async () => {
+            // Composer already sent the email via /api/send. Close out the
+            // proposal (marks executed + writes chase_log for dedup).
+            if (editingProposalId) {
+              await fetch(
+                `/api/autopilot/proposals/${encodeURIComponent(editingProposalId)}/mark-executed`,
+                { method: "POST" },
+              ).catch(() => {});
+              queryClient.invalidateQueries({ queryKey: ["autopilot"] });
+            }
+          }}
+        />
       )}
     </div>
   );

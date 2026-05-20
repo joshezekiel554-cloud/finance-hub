@@ -112,6 +112,11 @@ const sendBodySchema = z.object({
   // `null` → user explicitly picked "None" (skip user signature entirely).
   // `undefined`/absent → fall back to the user's default signature (if any).
   userSignatureId: z.string().nullable().optional(),
+  // Set when this send originated from an autopilot proposal edited via
+  // the composer. Recorded in the audit trail for traceability; the
+  // proposal itself is closed out separately via
+  // POST /api/autopilot/proposals/:id/mark-executed.
+  aiProposalId: z.string().max(24).optional(),
 });
 
 // Minimal HTML escape — sufficient since we control the surrounding
@@ -248,6 +253,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       refType: refTypeOverride,
       refId: refIdOverride,
       userSignatureId,
+      aiProposalId,
     } = parse.data;
 
     // Two body shapes converge here:
@@ -330,6 +336,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
         inReplyTo: inReplyTo ?? null,
         threadId: threadId ?? null,
         customerId: customerId ?? null,
+        aiProposalId: aiProposalId ?? null,
         from: result.from,
         attachmentCount: attachments?.length ?? 0,
       },

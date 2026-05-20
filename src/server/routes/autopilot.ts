@@ -10,8 +10,10 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../../db/index.js";
+import { chaseLog } from "../../db/schema/audit.js";
 import {
   AI_PROPOSAL_CATEGORIES,
   aiProposals,
@@ -377,6 +379,67 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
         proposalId: p.id,
         userId: user.id,
       } as AutopilotExecuteJobData);
+
+      return reply.send({ ok: true });
+    },
+  );
+
+  // ── POST /proposals/:id/mark-executed ─────────────────────────────────
+  // Used by the "Edit & Send" flow: the operator sent the email via the
+  // full compose modal (/api/send), so the underlying action already
+  // happened — we just close out the proposal WITHOUT running the tool
+  // (avoids a double-send). For chase categories we still write the
+  // chase_log row the tool would have written, so the 7-day re-propose
+  // dedup keeps working.
+  app.post<{ Params: { id: string } }>(
+    "/proposals/:id/mark-executed",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const rows = await db
+        .select()
+        .from(aiProposals)
+        .where(eq(aiProposals.id, req.params.id))
+        .limit(1);
+      const p = rows[0];
+      if (!p) return reply.code(404).send({ error: "not found" });
+
+      await db.transaction(async (tx) => {
+        await tx
+          .update(aiProposals)
+          .set({
+            status: "executed",
+            decidedAt: sql`CURRENT_TIMESTAMP`,
+            decidedByUserId: user.id,
+            executedAt: sql`CURRENT_TIMESTAMP`,
+          })
+          .where(eq(aiProposals.id, p.id));
+
+        // Replicate the chase tool's chase_log side effect for chase
+        // categories so dedup holds even when sent via the composer.
+        if (
+          (p.category === "chase_next" || p.category === "cadence_cold") &&
+          p.entityType === "customer"
+        ) {
+          const tier = (p.candidateSummary as { tier?: string }).tier;
+          const severity =
+            tier === "CRITICAL"
+              ? "critical"
+              : tier === "HIGH"
+                ? "high"
+                : tier === "MEDIUM"
+                  ? "medium"
+                  : "low";
+          await tx.insert(chaseLog).values({
+            id: nanoid(24),
+            customerId: p.entityId,
+            userId: user.id,
+            method: "email",
+            severity,
+            aiProposalId: p.id,
+            notes: "Autopilot proposal sent via composer",
+          });
+        }
+      });
 
       return reply.send({ ok: true });
     },
