@@ -22,7 +22,8 @@
     "db:studio": "drizzle-kit studio",
     "test": "vitest",
     "typecheck": "tsc --noEmit",
-    "seed:alias-signatures": "tsx scripts/seed-alias-signatures-from-gmail.ts"
+    "seed:alias-signatures": "tsx scripts/seed-alias-signatures-from-gmail.ts",
+    "seed:voice-guide": "tsx scripts/seed-voice-guide.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
