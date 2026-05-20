@@ -23,7 +23,9 @@ import { vocatechRosterSyncHandler } from "./definitions/vocatech-roster-sync.js
 import { forwardBccHandler } from "./definitions/forward-bcc.js";
 import { autopilotScanHandler } from "./definitions/autopilot-scan.js";
 import { autopilotExecuteHandler } from "./definitions/autopilot-execute.js";
+import { aiCorrectionsDistillHandler } from "./definitions/ai-corrections-distill.js";
 import {
+  AI_CORRECTIONS_QUEUE,
   AUTOPILOT_EXECUTE_QUEUE,
   AUTOPILOT_SCAN_QUEUE,
   CHASE_QUEUE,
@@ -58,6 +60,7 @@ const VOCATECH_ROSTER_CONCURRENCY = 1;
 const FORWARD_BCC_CONCURRENCY = 2;
 const AUTOPILOT_SCAN_CONCURRENCY = 1;
 const AUTOPILOT_EXECUTE_CONCURRENCY = 2;
+const AI_CORRECTIONS_CONCURRENCY = 1;
 
 function buildWorkers(): Worker[] {
   const connection = connectionOptions();
@@ -122,6 +125,12 @@ function buildWorkers(): Worker[] {
     { connection, concurrency: AUTOPILOT_EXECUTE_CONCURRENCY },
   );
 
+  const aiCorrectionsWorker = new Worker(
+    AI_CORRECTIONS_QUEUE,
+    async (job: Job) => aiCorrectionsDistillHandler(job),
+    { connection, concurrency: AI_CORRECTIONS_CONCURRENCY },
+  );
+
   for (const w of [
     qbWorker,
     gmailWorker,
@@ -133,6 +142,7 @@ function buildWorkers(): Worker[] {
     forwardBccWorker,
     autopilotScanWorker,
     autopilotExecuteWorker,
+    aiCorrectionsWorker,
   ]) {
     w.on("failed", (job, err) => {
       log.error(
@@ -166,6 +176,9 @@ function buildWorkers(): Worker[] {
     vocatechBackfillWorker,
     vocatechRosterWorker,
     forwardBccWorker,
+    autopilotScanWorker,
+    autopilotExecuteWorker,
+    aiCorrectionsWorker,
   ];
 }
 

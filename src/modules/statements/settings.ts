@@ -44,6 +44,11 @@ export type AppSettingsMap = {
   // time. Stored as a string per the app_settings schema; coerced to
   // Number when read.
   damage_cm_number_next: string;
+  // AI training keys (not statement settings, but AppSettingsMap mirrors
+  // all of APP_SETTING_KEYS so loadAppSettings can index by any canonical
+  // key without a type error).
+  ai_voice_guide: string;
+  ai_corrections_cron_enabled: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -66,6 +71,8 @@ const DEFAULTS: AppSettingsMap = {
   // Continues the legacy QBO range — operator can adjust via /settings
   // if they want to start a different sequence.
   damage_cm_number_next: "38771",
+  ai_voice_guide: "",
+  ai_corrections_cron_enabled: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

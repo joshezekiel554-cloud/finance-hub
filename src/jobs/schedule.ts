@@ -24,6 +24,7 @@
 
 import type { Queues } from "./queues.js";
 import {
+  AI_CORRECTIONS_DISTILL_JOB,
   AUTOPILOT_SCAN_JOB,
   CHASE_DIGEST_JOB,
   GMAIL_POLL_JOB,
@@ -186,6 +187,23 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
   registered.push({
     name: AUTOPILOT_SCAN_JOB,
     cron: "0 */4 * * *",
+    tz: "Europe/London",
+  });
+
+  // Learn-from-edits distill — Monday 08:00 Europe/London. Gated inside the
+  // handler by app_settings.ai_corrections_cron_enabled (default off), so this
+  // repeatable always exists but no-ops until the operator enables it.
+  await queues.aiCorrections.add(
+    AI_CORRECTIONS_DISTILL_JOB,
+    { trigger: "cron" },
+    {
+      jobId: `repeat:${AI_CORRECTIONS_DISTILL_JOB}`,
+      repeat: { pattern: "0 8 * * 1", tz: "Europe/London" },
+    },
+  );
+  registered.push({
+    name: AI_CORRECTIONS_DISTILL_JOB,
+    cron: "0 8 * * 1",
     tz: "Europe/London",
   });
 

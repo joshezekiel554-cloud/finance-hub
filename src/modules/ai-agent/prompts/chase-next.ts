@@ -1,3 +1,6 @@
+import type { BuiltPrompt, DraftContext } from "../voice.js";
+import { composeSystem, composeCustomerBlock } from "../voice.js";
+
 export const TOOL_NAME = "send_chase_email";
 
 type ChaseSummary = {
@@ -32,19 +35,28 @@ function formatLastChase(lastChaseAt: string | null): string {
   return `Last chased: ${d.toLocaleDateString("en-US", { dateStyle: "medium" })}.`;
 }
 
-export function buildPrompt(summary: Record<string, unknown>): string {
+export function buildPrompt(
+  summary: Record<string, unknown>,
+  context: DraftContext,
+): BuiltPrompt {
   const s = summary as ChaseSummary;
 
-  return `You are the accounts team at Feldart. You are preparing a chase email
-for an overdue customer account.
+  const system = composeSystem(
+    "You are the accounts team at Feldart, preparing a chase email for an overdue customer account.",
+    context,
+  );
 
-## Account situation
+  const exampleBlock = context.exampleTemplate
+    ? `\n## Reference email to match the tone of\n${context.exampleTemplate}\n`
+    : "";
+
+  const user = `## Account situation
 Customer: ${s.customerName} (ID: ${s.customerId})
 Overdue balance: ${formatCurrency(s.overdueBalance)}
 Days overdue: ${s.daysOverdue}
 Severity tier: ${s.tier}
 ${formatLastChase(s.lastChaseAt)}
-
+${composeCustomerBlock(context)}${exampleBlock}
 ## Tone instructions
 ${TONE_INSTRUCTIONS[s.tier]}
 
@@ -53,16 +65,17 @@ Call the \`${TOOL_NAME}\` tool with:
 - customerId: "${s.customerId}"
 - tier: "${s.tier}"
 - subject: a concise subject line matching the tier's urgency
-- body: an HTML email body of 3–5 short paragraphs. Use <p> tags.
-  Mirror the style of the Feldart chase templates (first-person, signed off
-  with the accounts team, no marketing language, plain business English).
-  Do NOT include a signature block — it is appended automatically.
+- body: an HTML email body of 3-5 short paragraphs. Use <p> tags. Adapt the
+  reference email and Feldart voice above to this customer's situation. Do
+  NOT include a signature block — it is appended automatically.
 
 ## Skip condition
-If the account situation clearly indicates the customer has already paid or
-a chase would be inappropriate (e.g. daysOverdue is 0 or balance is 0),
-return plain JSON instead of calling the tool:
+If the account situation clearly indicates the customer has already paid or a
+chase would be inappropriate (e.g. daysOverdue is 0 or balance is 0), return
+plain JSON instead of calling the tool:
 {"skip": true, "reason": "<one sentence>"}
 
 Act now.`;
+
+  return { system, user };
 }
