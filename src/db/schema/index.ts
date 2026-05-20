@@ -11,6 +11,7 @@ export * from "./chase-dismissals";
 export * from "./ai-proposals";
 export * from "./ai-scans";
 export * from "./ai-company-facts";
+export * from "./ai-learned-corrections";
 export * from "./app-settings";
 export * from "./notifications";
 export * from "./audit";

@@ -267,6 +267,13 @@
       "when": 1779281542169,
       "tag": "0037_fast_riptide",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1779282873787,
+      "tag": "0038_magenta_toad",
+      "breakpoints": true
     }
   ]
 }
