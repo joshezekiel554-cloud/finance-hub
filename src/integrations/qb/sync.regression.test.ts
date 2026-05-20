@@ -17,7 +17,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(resolve(here, "sync.ts"), "utf8");
+// Normalize CRLF→LF so the LF-based string markers below match regardless of
+// the checkout's line endings (git autocrlf gives CRLF on Windows).
+const source = readFileSync(resolve(here, "sync.ts"), "utf8").replace(
+  /\r\n/g,
+  "\n",
+);
 
 // Fields that finance-hub is authoritative on. The QB sync should
 // neither write them on UPDATE nor claim transitions for them in the
