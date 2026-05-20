@@ -31,6 +31,12 @@ import { getAnthropicClient } from "../../integrations/anthropic/client.js";
 import { trackUsage } from "../../integrations/anthropic/cost-tracker.js";
 import { getToolByName } from "../../modules/ai-agent/tools.js";
 import { createLogger } from "../../lib/logger.js";
+import {
+  buildDraftContext,
+  type BuiltPrompt,
+  type DraftContext,
+} from "../../modules/ai-agent/voice.js";
+import { toSystemParam } from "../../modules/ai-agent/prompts/system-param.js";
 
 import {
   buildPrompt as buildChaseNextPrompt,
@@ -66,7 +72,7 @@ const log = createLogger({ module: "routes.autopilot" });
 const PROMPTS: Record<
   AiProposalCategory,
   {
-    build: (s: Record<string, unknown>) => string;
+    build: (s: Record<string, unknown>, ctx: DraftContext) => BuiltPrompt;
     toolNames: string[];
   }
 > = {
@@ -203,16 +209,25 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
               },
             }));
 
+            const customerId =
+              p.entityType === "customer" ? p.entityId : null;
+            const context = await buildDraftContext(
+              cat,
+              p.candidateSummary as Record<string, unknown>,
+              customerId,
+            );
+            const built = prompt.build(
+              p.candidateSummary as Record<string, unknown>,
+              context,
+            );
+            const systemParam = toSystemParam(built.system);
+
             const response = await anthropic.messages.create({
               model: SONNET,
               max_tokens: 2000,
               tools,
-              messages: [
-                {
-                  role: "user",
-                  content: prompt.build(p.candidateSummary as Record<string, unknown>),
-                },
-              ],
+              ...(systemParam ? { system: systemParam } : {}),
+              messages: [{ role: "user", content: built.user }],
             });
 
             // Cost tracking (writes ai_interactions row).
