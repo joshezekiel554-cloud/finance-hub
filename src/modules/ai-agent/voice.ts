@@ -3,6 +3,11 @@ import { db } from "../../db/index.js";
 import { appSettings } from "../../db/schema/app-settings.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
 import type { AiProposalCategory } from "../../db/schema/ai-proposals.js";
+import { customers } from "../../db/schema/customers.js";
+import {
+  aiCompanyFacts,
+  FACT_TAG_GLOBAL,
+} from "../../db/schema/ai-company-facts.js";
 
 // Baked-in fallback so drafts have a Feldart voice before the operator
 // seeds/customizes app_settings.ai_voice_guide.
@@ -55,8 +60,9 @@ function exampleSlugFor(
 export async function buildDraftContext(
   category: AiProposalCategory,
   summary: Record<string, unknown>,
-  _customerId: string | null,
+  customerId: string | null,
 ): Promise<DraftContext> {
+  // 1. voice guide
   const guideRows = await db
     .select()
     .from(appSettings)
@@ -66,6 +72,32 @@ export async function buildDraftContext(
   const voiceGuide =
     stored && stored.trim().length > 0 ? stored : DEFAULT_VOICE_GUIDE;
 
+  // 2. company facts (active), partitioned by tag
+  const factRows = await db
+    .select()
+    .from(aiCompanyFacts)
+    .where(eq(aiCompanyFacts.active, true));
+  const globalFacts: string[] = [];
+  const categoryFacts: string[] = [];
+  for (const f of factRows) {
+    const tags = f.tags ?? [];
+    if (tags.includes(FACT_TAG_GLOBAL)) globalFacts.push(f.fact);
+    else if (tags.includes(category)) categoryFacts.push(f.fact);
+  }
+
+  // 3. per-customer context (#4)
+  let customerContext: string | null = null;
+  if (customerId) {
+    const cRows = await db
+      .select({ ctx: customers.aiCustomerContext })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .limit(1);
+    const v = cRows[0]?.ctx;
+    customerContext = v && v.trim().length > 0 ? v : null;
+  }
+
+  // 4. example template
   let exampleTemplate: string | null = null;
   const slug = exampleSlugFor(category, summary);
   if (slug) {
@@ -79,11 +111,47 @@ export async function buildDraftContext(
 
   return {
     voiceGuide,
-    globalFacts: [],
-    categoryFacts: [],
-    globalCorrections: [],
-    categoryCorrections: [],
-    customerContext: null, // Wave B (#4) populates from customers.ai_customer_context
+    globalFacts,
+    categoryFacts,
+    globalCorrections: [], // Wave C (#2) populates
+    categoryCorrections: [], // Wave C (#2) populates
+    customerContext,
     exampleTemplate,
   };
+}
+
+// Assemble the system prompt: role + voice guide + facts + (Wave C)
+// corrections. Centralised so builders don't hand-roll it and so Wave C's
+// corrections slot in here without touching the builders.
+export function composeSystem(roleIntro: string, context: DraftContext): string {
+  const parts: string[] = [
+    roleIntro,
+    `## How Feldart writes\n${context.voiceGuide}`,
+  ];
+  const facts = [...context.globalFacts, ...context.categoryFacts];
+  if (facts.length > 0) {
+    parts.push(
+      `## Things to know about Feldart\n${facts.map((f) => `- ${f}`).join("\n")}`,
+    );
+  }
+  const corrections = [
+    ...context.globalCorrections,
+    ...context.categoryCorrections,
+  ];
+  if (corrections.length > 0) {
+    parts.push(
+      `## Style corrections to apply\n${corrections
+        .map((c) => `- ${c}`)
+        .join("\n")}`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+// Per-customer block for the user message (empty when no context). Only the
+// customer-facing builders include this; warehouse/internal builders pass a
+// null-customerId context so this returns "".
+export function composeCustomerBlock(context: DraftContext): string {
+  if (!context.customerContext) return "";
+  return `\n## What we know about this customer\n${context.customerContext}\n`;
 }
