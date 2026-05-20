@@ -1,4 +1,5 @@
 import type { BuiltPrompt, DraftContext } from "../voice.js";
+import { composeSystem, composeCustomerBlock } from "../voice.js";
 
 export const TOOL_NAME = "send_statement";
 
@@ -19,16 +20,16 @@ export function buildPrompt(
     ? `last sent ${s.daysSinceLastStatement} days ago`
     : "never sent a statement";
 
-  const system = `You are an accounts assistant at Feldart deciding whether to send a statement of open invoices to a customer, and writing the short cover note that accompanies it.
-
-## How Feldart writes
-${context.voiceGuide}`;
+  const system = composeSystem(
+    "You are an accounts assistant at Feldart deciding whether to send a statement of open invoices to a customer, and writing the short cover note that accompanies it.",
+    context,
+  );
 
   const user = `Customer: ${s.customerName}
 Open invoices: ${s.openInvoiceCount}
 Total open balance: $${s.totalOpenBalance.toFixed(2)}
 Statement history: ${lastSent}
-
+${composeCustomerBlock(context)}
 Decide whether sending a statement is worthwhile right now.
 
 Rules:

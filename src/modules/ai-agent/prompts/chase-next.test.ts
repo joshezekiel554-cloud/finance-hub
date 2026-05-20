@@ -40,4 +40,14 @@ describe("chase-next buildPrompt", () => {
     expect(user).not.toContain("EXAMPLE_TEMPLATE_MARKER");
     expect(user).not.toContain("Reference email to match");
   });
+
+  it("includes facts in system and customer context in user", () => {
+    const { system, user } = buildPrompt(summary, {
+      ...ctx,
+      globalFacts: ["GLOBAL_FACT_MARKER"],
+      customerContext: "CUSTOMER_CTX_MARKER",
+    });
+    expect(system).toContain("GLOBAL_FACT_MARKER");
+    expect(user).toContain("CUSTOMER_CTX_MARKER");
+  });
 });

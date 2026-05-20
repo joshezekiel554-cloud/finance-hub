@@ -42,4 +42,18 @@ describe("cadence builders", () => {
     expect(system).toContain("VOICE_MARK");
     expect(user).toContain("Acme");
   });
+
+  it("cold: facts in system, customer context in user", () => {
+    const { system, user } = buildCold(
+      {
+        customerName: "Acme",
+        openBalance: 500,
+        daysSinceLastPayment: 60,
+        daysSinceLastContact: 30,
+      },
+      { ...ctx, globalFacts: ["GLOBAL_FACT_MARKER"], customerContext: "CUSTOMER_CTX_MARKER" },
+    );
+    expect(system).toContain("GLOBAL_FACT_MARKER");
+    expect(user).toContain("CUSTOMER_CTX_MARKER");
+  });
 });

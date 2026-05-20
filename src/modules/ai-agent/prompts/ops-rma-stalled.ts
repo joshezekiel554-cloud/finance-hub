@@ -1,4 +1,5 @@
 import type { BuiltPrompt, DraftContext } from "../voice.js";
+import { composeSystem } from "../voice.js";
 
 export const TOOL_NAMES = [
   "nudge_warehouse_email",
@@ -25,10 +26,10 @@ export function buildPrompt(
   // Warehouse branch writes an outbound email -> Feldart voice. Admin branch
   // writes an internal notification -> no voice context (empty system).
   const system = isWarehouseCase
-    ? `You are an operations assistant at Feldart writing a brief warehouse nudge email.
-
-## How Feldart writes
-${context.voiceGuide}`
+    ? composeSystem(
+        "You are an operations assistant at Feldart writing a brief warehouse nudge email.",
+        context,
+      )
     : "";
 
   const user = isWarehouseCase

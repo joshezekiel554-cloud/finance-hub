@@ -1,4 +1,5 @@
 import type { BuiltPrompt, DraftContext } from "../voice.js";
+import { composeSystem, composeCustomerBlock } from "../voice.js";
 
 export const TOOL_NAME = "send_check_in_email";
 
@@ -23,16 +24,16 @@ export function buildPrompt(
       ? "no prior contact on record"
       : `last contact ${s.daysSinceLastContact} days ago`;
 
-  const system = `You are an accounts assistant at Feldart deciding whether to send a gentle check-in email to a customer who has gone quiet.
-
-## How Feldart writes
-${context.voiceGuide}`;
+  const system = composeSystem(
+    "You are an accounts assistant at Feldart deciding whether to send a gentle check-in email to a customer who has gone quiet.",
+    context,
+  );
 
   const user = `Customer: ${s.customerName}
 Open balance: $${s.openBalance.toFixed(2)}
 Payment activity: ${paymentLabel}
 Contact activity: ${contactLabel}
-
+${composeCustomerBlock(context)}
 Context: This customer has an outstanding balance but has not paid or been contacted in a while. The goal is NOT to chase or pressure — check in warmly, acknowledge the silence without passive-aggression, and open a door in case there is anything they need or any reason for the gap.
 
 Rules:

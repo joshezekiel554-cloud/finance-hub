@@ -1,4 +1,5 @@
 import type { BuiltPrompt, DraftContext } from "../voice.js";
+import { composeSystem, composeCustomerBlock } from "../voice.js";
 
 export const TOOL_NAME = "send_chase_email";
 
@@ -40,10 +41,10 @@ export function buildPrompt(
 ): BuiltPrompt {
   const s = summary as ChaseSummary;
 
-  const system = `You are the accounts team at Feldart, preparing a chase email for an overdue customer account.
-
-## How Feldart writes
-${context.voiceGuide}`;
+  const system = composeSystem(
+    "You are the accounts team at Feldart, preparing a chase email for an overdue customer account.",
+    context,
+  );
 
   const exampleBlock = context.exampleTemplate
     ? `\n## Reference email to match the tone of\n${context.exampleTemplate}\n`
@@ -55,7 +56,7 @@ Overdue balance: ${formatCurrency(s.overdueBalance)}
 Days overdue: ${s.daysOverdue}
 Severity tier: ${s.tier}
 ${formatLastChase(s.lastChaseAt)}
-${exampleBlock}
+${composeCustomerBlock(context)}${exampleBlock}
 ## Tone instructions
 ${TONE_INSTRUCTIONS[s.tier]}
 

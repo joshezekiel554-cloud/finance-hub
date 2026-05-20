@@ -39,4 +39,13 @@ describe("ops builders", () => {
     expect(system).toBe("");
     expect(user).toContain("qb_full");
   });
+
+  it("warehouse branch includes facts in system, no customer block", () => {
+    const { system, user } = buildRma(
+      { rmaNumber: "RMA-1", customerName: "Acme", status: "sent_to_warehouse", daysInState: 20 },
+      { ...ctx, globalFacts: ["WAREHOUSE_FACT"], customerContext: "SHOULD_NOT_APPEAR" },
+    );
+    expect(system).toContain("WAREHOUSE_FACT");
+    expect(user).not.toContain("SHOULD_NOT_APPEAR");
+  });
 });
