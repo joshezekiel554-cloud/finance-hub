@@ -90,6 +90,7 @@ type Customer = {
   overdueBalance: string;
   unappliedCreditBalance: string;
   internalNotes: string | null;
+  aiCustomerContext: string | null;
   lastSyncedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -379,6 +380,11 @@ export default function CustomerDetailPage() {
       >
         Autopilot: {customer.agentModeExcluded ? "OFF (excluded)" : "ON"} — click to flip
       </button>
+
+      <AiContextCard
+        customerId={customer.id}
+        initial={customer.aiCustomerContext}
+      />
 
       {kpi?.hasChaseDismissal && (
         <div className="flex items-center justify-between gap-2 rounded border border-default bg-subtle px-3 py-2 text-xs">
@@ -909,6 +915,69 @@ const TERMS_PRESETS = [
   "Net 90",
   "Due on Receipt",
 ];
+
+function AiContextCard({
+  customerId,
+  initial,
+}: {
+  customerId: string;
+  initial: string | null;
+}) {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState(initial ?? "");
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation<unknown, Error, void>({
+    mutationFn: async () => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ aiCustomerContext: draft }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  return (
+    <div className="rounded-lg border border-default bg-subtle p-3">
+      <div className="mb-1 text-sm font-medium">AI context for autopilot</div>
+      <p className="mb-2 text-xs text-secondary">
+        What autopilot should know/do for this customer (tone, "don't
+        auto-chase", payment quirks). Sent to the AI — keep secrets out;
+        human-only notes go in the activity timeline.
+      </p>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={3}
+        placeholder="e.g. Pays late but always pays — stay warm, don't escalate."
+        className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+      />
+      <div className="mt-2 flex items-center justify-end gap-2">
+        {error ? (
+          <span className="text-xs text-accent-danger">{error}</span>
+        ) : null}
+        <Button
+          variant="primary"
+          size="sm"
+          loading={mutation.isPending}
+          onClick={() => mutation.mutate()}
+        >
+          Save
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function TermsCard({
   customerId,
