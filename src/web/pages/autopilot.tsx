@@ -96,6 +96,20 @@ export default function AutopilotPage() {
       queryClient.invalidateQueries({ queryKey: ["autopilot"] }),
   });
 
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/autopilot/proposals/clear", {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<{ ok: boolean; deleted: number }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["autopilot"] });
+      setSelected(new Set());
+    },
+  });
+
   const draftMutation = useMutation({
     mutationFn: async (proposalIds: string[]) => {
       const res = await fetch("/api/autopilot/proposals/draft", {
@@ -147,13 +161,30 @@ export default function AutopilotPage() {
             {pendingCount} pending · {draftedCount} drafted
           </p>
         </div>
-        <Button
-          variant="primary"
-          onClick={() => scanMutation.mutate()}
-          loading={scanMutation.isPending}
-        >
-          <RefreshCw className="size-3.5" /> Run autopilot now
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Clear all current autopilot suggestions? Executed (already-sent) ones are kept. A fresh scan will repopulate.",
+                )
+              ) {
+                clearMutation.mutate();
+              }
+            }}
+            loading={clearMutation.isPending}
+          >
+            Clear suggestions
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => scanMutation.mutate()}
+            loading={scanMutation.isPending}
+          >
+            <RefreshCw className="size-3.5" /> Run autopilot now
+          </Button>
+        </div>
       </div>
 
       {selected.size > 0 && (

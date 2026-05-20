@@ -13,7 +13,7 @@ import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../../db/index.js";
-import { chaseLog } from "../../db/schema/audit.js";
+import { auditLog, chaseLog } from "../../db/schema/audit.js";
 import {
   AI_PROPOSAL_CATEGORIES,
   aiProposals,
@@ -500,6 +500,33 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
       return reply.send({ ok: true });
     },
   );
+
+  // ── POST /proposals/clear ─────────────────────────────────────────────
+  // Bulk-clear the active suggestion queue so a fresh scan starts clean.
+  // Removes all NON-executed proposals; executed ones are kept so their
+  // audit trail + the AI badge on already-sent emails stay intact.
+  app.post("/proposals/clear", async (req, reply) => {
+    const user = await requireAuth(req);
+    const counted = await db
+      .select({ n: sql<number>`COUNT(*)` })
+      .from(aiProposals)
+      .where(sql`${aiProposals.status} <> 'executed'`);
+    const deleted = Number(counted[0]?.n ?? 0);
+    await db
+      .delete(aiProposals)
+      .where(sql`${aiProposals.status} <> 'executed'`);
+    await db.insert(auditLog).values({
+      id: nanoid(24),
+      userId: user.id,
+      action: "ai_proposal.bulk_clear",
+      entityType: "ai_proposal",
+      entityId: "*",
+      before: { deleted },
+      after: null,
+    });
+    log.info({ userId: user.id, deleted }, "autopilot suggestions cleared");
+    return reply.send({ ok: true, deleted });
+  });
 
   // Reference unused imports so tsc doesn't complain about ops_rma_stalled
   // not having TOOL_NAME — it exports TOOL_NAMES instead, which is used
