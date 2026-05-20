@@ -1,3 +1,5 @@
+import type { BuiltPrompt, DraftContext } from "../voice.js";
+
 export const TOOL_NAME = "create_admin_notification";
 
 type CronFailSummary = {
@@ -48,7 +50,10 @@ function relativeTime(iso: string): string {
   return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
 }
 
-export function buildPrompt(summary: Record<string, unknown>): string {
+export function buildPrompt(
+  summary: Record<string, unknown>,
+  _context: DraftContext,
+): BuiltPrompt {
   const s = summary as CronFailSummary;
   const hint = INVESTIGATION_HINTS[s.jobKind];
   const when = relativeTime(s.lastFailureAt);
@@ -56,7 +61,7 @@ export function buildPrompt(summary: Record<string, unknown>): string {
     ? "\n\nNote: the error pattern looks potentially transient (rate limit / network reset). You MAY skip with reason if you believe it will self-resolve."
     : "";
 
-  return `You are an ops assistant monitoring background cron jobs.
+  const user = `You are an ops assistant monitoring background cron jobs.
 
 Job: ${s.jobKind}
 Failed twice in a row. Last failure: ${when} (${s.lastFailureAt})
@@ -77,4 +82,6 @@ If you decide to skip: respond with plain JSON only — no tool call:
   {"skip": true, "reason": "<one sentence>"}
 
 Do not explain your reasoning outside of the skip reason. Act directly.`;
+
+  return { system: "", user };
 }
