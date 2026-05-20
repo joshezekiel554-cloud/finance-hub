@@ -364,6 +364,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         overdueBalance: customers.overdueBalance,
         unappliedCreditBalance: customers.unappliedCreditBalance,
         holdStatus: customers.holdStatus,
+        agentModeExcluded: customers.agentModeExcluded,
         customerType: customers.customerType,
         paymentTerms: customers.paymentTerms,
         tags: customers.tags,
@@ -526,6 +527,64 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     log.info(
       { userId: user.id, count: ids.length, changed: auditRows.length, customerType },
       "bulk-tagged customers",
+    );
+
+    return reply.send({ updated: auditRows.length, total: ids.length });
+  });
+
+  // PATCH /api/customers/bulk-agent-mode — bulk toggle autopilot inclusion
+  // (agent_mode_excluded) for the selected customers. Mirrors bulk-tag:
+  // one audit row per customer whose value actually changed.
+  app.patch("/bulk-agent-mode", async (req, reply) => {
+    const user = await requireAuth(req);
+    const schema = z.object({
+      ids: z.array(z.string().min(1).max(24)).min(1).max(1000),
+      excluded: z.boolean(),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const { ids, excluded } = parse.data;
+
+    const before = await db
+      .select({
+        id: customers.id,
+        agentModeExcluded: customers.agentModeExcluded,
+      })
+      .from(customers)
+      .where(inArray(customers.id, ids));
+
+    await db
+      .update(customers)
+      .set({ agentModeExcluded: excluded })
+      .where(inArray(customers.id, ids));
+
+    const auditRows = before
+      .filter((r) => r.agentModeExcluded !== excluded)
+      .map((r) => ({
+        id: nanoid(24),
+        userId: user.id,
+        action: "customer.bulk_agent_mode" as const,
+        entityType: "customer" as const,
+        entityId: r.id,
+        before: { agentModeExcluded: r.agentModeExcluded },
+        after: { agentModeExcluded: excluded },
+      }));
+    if (auditRows.length > 0) {
+      await db.insert(auditLog).values(auditRows);
+    }
+
+    log.info(
+      {
+        userId: user.id,
+        count: ids.length,
+        changed: auditRows.length,
+        excluded,
+      },
+      "bulk agent-mode toggled",
     );
 
     return reply.send({ updated: auditRows.length, total: ids.length });

@@ -38,6 +38,7 @@ type CustomerRow = {
   overdueBalance: string;
   unappliedCreditBalance: string;
   holdStatus: HoldStatus;
+  agentModeExcluded: boolean;
   customerType: CustomerType;
   paymentTerms: string | null;
   lastSyncedAt: string | null;
@@ -225,6 +226,22 @@ export default function CustomersPage() {
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       setSelectedIds(new Set());
       setSweepMode(false);
+    },
+  });
+
+  const bulkAgentModeMutation = useMutation({
+    mutationFn: async (input: { ids: string[]; excluded: boolean }) => {
+      const res = await fetch("/api/customers/bulk-agent-mode", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<{ updated: number; total: number }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      setSelectedIds(new Set());
     },
   });
 
@@ -577,6 +594,36 @@ export default function CustomersPage() {
               >
                 Mark as B2C
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={
+                  selectedIds.size === 0 || bulkAgentModeMutation.isPending
+                }
+                onClick={() =>
+                  bulkAgentModeMutation.mutate({
+                    ids: Array.from(selectedIds),
+                    excluded: false,
+                  })
+                }
+              >
+                Autopilot on
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={
+                  selectedIds.size === 0 || bulkAgentModeMutation.isPending
+                }
+                onClick={() =>
+                  bulkAgentModeMutation.mutate({
+                    ids: Array.from(selectedIds),
+                    excluded: true,
+                  })
+                }
+              >
+                Autopilot off
+              </Button>
             </div>
           </CardBody>
         </Card>
@@ -792,7 +839,10 @@ export default function CustomersPage() {
                       {row.paymentTerms ?? "—"}
                     </td>
                     <td className="px-3 py-2">
-                      <StatusBadge status={row.holdStatus} />
+                      <div className="flex flex-col items-start gap-1">
+                        <StatusBadge status={row.holdStatus} />
+                        <AutopilotBadge excluded={row.agentModeExcluded} />
+                      </div>
                     </td>
                     <td className="px-1 py-2">
                       <button
@@ -866,6 +916,16 @@ function StatusBadge({ status }: { status: HoldStatus }) {
     return <Badge tone="high">Payment upfront</Badge>;
   }
   return <Badge tone="success">Active</Badge>;
+}
+
+// Small per-row autopilot indicator. "off" = excluded from AI proposals
+// (agent_mode_excluded). Shown in the status cell beside the hold pill.
+function AutopilotBadge({ excluded }: { excluded: boolean }) {
+  return excluded ? (
+    <Badge tone="medium">Autopilot off</Badge>
+  ) : (
+    <Badge tone="neutral">Autopilot on</Badge>
+  );
 }
 
 // Tasks column cell — shows count with urgency colour coding (Item 2).
