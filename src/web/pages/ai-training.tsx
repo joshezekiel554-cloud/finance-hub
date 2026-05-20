@@ -127,6 +127,7 @@ export default function AiTrainingPage() {
       </Card>
 
       <CompanyFactsCard />
+      <CorrectionsCard />
     </div>
   );
 }
@@ -285,6 +286,180 @@ function CompanyFactsCard() {
             </Button>
           </div>
         </div>
+        {error ? (
+          <p className="mt-2 text-sm text-accent-danger">{error}</p>
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+type Correction = {
+  id: string;
+  correction: string;
+  tags: string[];
+  status: "proposed" | "active" | "rejected" | "retired";
+};
+
+function CorrectionsCard() {
+  const queryClient = useQueryClient();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const q = useQuery<{ corrections: Correction[] }>({
+    queryKey: ["ai-corrections"],
+    queryFn: async () => {
+      const res = await fetch("/api/ai-training/corrections");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+  const settings = useQuery<{ settings: Record<string, string> }>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+  const cronOn =
+    settings.data?.settings["ai_corrections_cron_enabled"] === "true";
+
+  const onErr = (e: unknown) =>
+    setError(e instanceof Error ? e.message : String(e));
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["ai-corrections"] });
+
+  const distill = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/ai-training/corrections/distill", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(b.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as { proposed: number; reason?: string };
+    },
+    onSuccess: (r) => {
+      setError(null);
+      setMsg(
+        r.proposed > 0
+          ? `Proposed ${r.proposed} correction(s).`
+          : (r.reason ?? "Nothing to propose."),
+      );
+      invalidate();
+    },
+    onError: onErr,
+  });
+
+  const decide = useMutation({
+    mutationFn: async (v: { id: string; status: Correction["status"] }) => {
+      const res = await fetch(`/api/ai-training/corrections/${v.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: v.status }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+    },
+    onError: onErr,
+  });
+
+  const toggleCron = useMutation({
+    mutationFn: async (next: boolean) => {
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ai_corrections_cron_enabled: next ? "true" : "",
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] }),
+    onError: onErr,
+  });
+
+  const rows = q.data?.corrections ?? [];
+  return (
+    <Card>
+      <CardHeader>Learned corrections</CardHeader>
+      <CardBody>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="text-xs text-secondary">
+            Distilled from your edits to AI drafts. Approve to inject into
+            future drafts.
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={distill.isPending}
+            onClick={() => distill.mutate()}
+          >
+            Learn from my recent edits
+          </Button>
+        </div>
+        {msg ? <p className="mb-2 text-xs text-secondary">{msg}</p> : null}
+
+        <div className="space-y-2">
+          {rows.map((c) => (
+            <div
+              key={c.id}
+              className={`flex items-start justify-between gap-3 rounded border border-default p-2 ${c.status === "active" ? "" : "opacity-70"}`}
+            >
+              <div className="min-w-0">
+                <div className="text-sm">{c.correction}</div>
+                <div className="mt-1 text-xs text-secondary">
+                  {c.tags.join(", ") || "—"} · {c.status}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-1">
+                {c.status === "proposed" ? (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => decide.mutate({ id: c.id, status: "active" })}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        decide.mutate({ id: c.id, status: "rejected" })
+                      }
+                    >
+                      Reject
+                    </Button>
+                  </>
+                ) : c.status === "active" ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => decide.mutate({ id: c.id, status: "retired" })}
+                  >
+                    Retire
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <label className="mt-4 flex items-center gap-2 border-t border-default pt-3 text-xs text-secondary">
+          <input
+            type="checkbox"
+            checked={cronOn}
+            onChange={(e) => toggleCron.mutate(e.target.checked)}
+          />
+          Auto-distill weekly (Monday 8am)
+        </label>
         {error ? (
           <p className="mt-2 text-sm text-accent-danger">{error}</p>
         ) : null}
