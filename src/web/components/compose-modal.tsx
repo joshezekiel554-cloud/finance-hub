@@ -83,12 +83,24 @@ export type ComposeContext = {
     // sender (which goes to the To field instead).
     cc?: string;
   };
+  // When the composer is opened to edit-and-send an AI autopilot draft:
+  // seeds the subject + body, and tags the resulting email_log row +
+  // closes out the proposal via onSent.
+  prefill?: {
+    subject: string;
+    bodyHtml: string;
+    alias?: string;
+  };
+  aiProposalId?: string;
 };
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   context?: ComposeContext;
+  // Fired after a successful send. Used by the autopilot edit-and-send
+  // flow to mark the proposal executed once the composer has sent.
+  onSent?: (result: { messageId: string; threadId: string }) => void;
 };
 
 const PREFERRED_DEFAULT_ALIAS = "accounts@feldart.com";
@@ -176,7 +188,7 @@ function buildReplyQuoteHtml(reply: ComposeContext["inReplyTo"]): string {
   return `<p></p><p>----- Original message from ${fromEsc} -----</p><blockquote>${bodyEsc}</blockquote>`;
 }
 
-export default function ComposeModal({ open, onOpenChange, context }: Props) {
+export default function ComposeModal({ open, onOpenChange, context, onSent }: Props) {
   const queryClient = useQueryClient();
   const reply = context?.inReplyTo;
 
@@ -222,8 +234,9 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
   // open + parent identity so re-opening the modal in reply-to mode for
   // a different message resets the form. Without this the previous
   // draft would persist across opens.
+  const prefill = context?.prefill;
   const formKey = open
-    ? `${reply?.messageId ?? "new"}::${context?.customerId ?? "anon"}`
+    ? `${reply?.messageId ?? "new"}::${context?.customerId ?? "anon"}::${context?.aiProposalId ?? ""}`
     : "";
 
   useEffect(() => {
@@ -236,14 +249,15 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
     // Reply-all prefills the cc; otherwise start blank.
     setCc(reply?.cc ?? "");
     setBcc("");
-    // If there are reply-all recipients, expose the cc/bcc row by default
-    // so the operator can see + edit before sending.
     setShowCcBcc(Boolean(reply?.cc));
-    setSubject(reply ? `Re: ${reply.subject}` : "");
-    // Body is now HTML (the editor's native format). Reply mode pre-
-    // fills with a blockquote of the parent message; compose-new opens
-    // empty.
-    setBody(reply ? buildReplyQuoteHtml(reply) : "");
+    // Prefill (autopilot edit-and-send) wins over reply/empty seeding.
+    if (prefill) {
+      setSubject(prefill.subject);
+      setBody(prefill.bodyHtml);
+    } else {
+      setSubject(reply ? `Re: ${reply.subject}` : "");
+      setBody(reply ? buildReplyQuoteHtml(reply) : "");
+    }
     setSelectedTemplateId("");
     setErrorMessage(null);
     setAttachments([]);
@@ -259,9 +273,15 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
   useEffect(() => {
     if (!open) return;
     if (from) return;
+    // Prefill alias (autopilot draft was scoped to a specific sending
+    // alias) takes precedence over the generic default.
+    if (prefill?.alias) {
+      setFrom(prefill.alias);
+      return;
+    }
     const def = pickDefaultAlias(aliases);
     if (def) setFrom(def);
-  }, [open, aliases, from]);
+  }, [open, aliases, from, prefill?.alias]);
 
   function applyTemplate(templateId: string): void {
     setSelectedTemplateId(templateId);
@@ -308,6 +328,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
         customerId: context?.customerId,
         attachments: encodedAttachments,
         userSignatureId,
+        aiProposalId: context?.aiProposalId,
       };
       const res = await fetch("/api/send", {
         method: "POST",
@@ -322,7 +343,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
       }
       return (await res.json()) as { messageId: string; threadId: string };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       if (context?.customerId) {
         queryClient.invalidateQueries({
           queryKey: ["customer-emails", context.customerId],
@@ -331,6 +352,7 @@ export default function ComposeModal({ open, onOpenChange, context }: Props) {
           queryKey: ["customer", context.customerId],
         });
       }
+      onSent?.(result);
       onOpenChange(false);
     },
     onError: (err) => {
