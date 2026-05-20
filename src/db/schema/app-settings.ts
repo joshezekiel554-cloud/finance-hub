@@ -69,5 +69,11 @@ export const APP_SETTING_KEYS = [
   // legacy QBO range. Operator can edit in /settings → Returns to
   // adjust the seed or recover from an accidental increment.
   "damage_cm_number_next",
+  // AI voice/style guide consumed by autopilot draft prompts. Free prose,
+  // editable on the /ai-training page; seeded by scripts/seed-voice-guide.ts.
+  "ai_voice_guide",
+  // "true"/"" flag — enables the weekly learn-from-edits distill cron
+  // (Wave C). Default off; added now so the KV key is recognized.
+  "ai_corrections_cron_enabled",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

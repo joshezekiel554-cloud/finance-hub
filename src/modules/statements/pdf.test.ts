@@ -91,6 +91,8 @@ const SETTINGS: AppSettingsMap = {
   rma_shipping_fee_item_id: "",
   rma_restocking_fee_item_id: "",
   damage_cm_number_next: "38771",
+  ai_voice_guide: "",
+  ai_corrections_cron_enabled: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -182,6 +184,8 @@ describe("renderStatementPdf", () => {
         rma_shipping_fee_item_id: "",
         rma_restocking_fee_item_id: "",
         damage_cm_number_next: "38771",
+        ai_voice_guide: "",
+        ai_corrections_cron_enabled: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,
