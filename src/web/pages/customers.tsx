@@ -477,18 +477,16 @@ export default function CustomersPage() {
           )}
         </div>
 
-        {tab === "uncategorized" && (
-          <Button
-            variant={sweepMode ? "primary" : "secondary"}
-            size="sm"
-            onClick={() => {
-              setSweepMode((v) => !v);
-              setSelectedIds(new Set());
-            }}
-          >
-            {sweepMode ? "Exit sweep" : "Bulk-tag sweep"}
-          </Button>
-        )}
+        <Button
+          variant={sweepMode ? "primary" : "secondary"}
+          size="sm"
+          onClick={() => {
+            setSweepMode((v) => !v);
+            setSelectedIds(new Set());
+          }}
+        >
+          {sweepMode ? "Exit bulk edit" : "Bulk edit"}
+        </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
