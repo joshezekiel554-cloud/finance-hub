@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Paperclip, Send } from "lucide-react";
+import { Paperclip, Send, Sparkles } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -92,6 +92,11 @@ export type ComposeContext = {
     alias?: string;
   };
   aiProposalId?: string;
+  // When set, the compose modal renders an "AI draft" panel (notes + Generate)
+  // that POSTs to /api/email-log/<id>/draft-reply. Distinct from inReplyTo:
+  // inReplyTo carries the threading metadata for the outbound; this is the
+  // inbound-row handle the AI uses to load thread + customer context.
+  draftReplyForEmailLogId?: string;
 };
 
 type Props = {
@@ -228,6 +233,11 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
   // size/name in the chip; serialised to base64 only at send time.
   const [attachments, setAttachments] = useState<File[]>([]);
   const [userSignatureId, setUserSignatureId] = useState<string | null>(null);
+  // AI draft panel — only used when context.draftReplyForEmailLogId is set.
+  // aiNotes is the operator's optional steer ("send back X, sorry Y"); empty
+  // string means a clean draft. generating is the per-call spinner.
+  const [aiNotes, setAiNotes] = useState<string>("");
+  const [generating, setGenerating] = useState<boolean>(false);
 
   // Hydrate form fields when the modal opens, when context changes, or
   // when the aliases finish loading. We rely on a key generated from the
@@ -262,6 +272,8 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
     setErrorMessage(null);
     setAttachments([]);
     setUserSignatureId(null);
+    setAiNotes("");
+    setGenerating(false);
     // formKey is the controlled re-init trigger — we don't want this
     // effect to re-fire on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -282,6 +294,57 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
     const def = pickDefaultAlias(aliases);
     if (def) setFrom(def);
   }, [open, aliases, from, prefill?.alias]);
+
+  async function handleGenerateAiDraft(): Promise<void> {
+    const sourceId = context?.draftReplyForEmailLogId;
+    if (!sourceId) return;
+    // Confirm replacing existing body content. We treat the reply quote
+    // alone as empty for this check (the quote auto-renders on reply mode
+    // and isn't "the operator's draft"). If the operator has typed real
+    // content, ask before overwriting.
+    const replyQuoteOnly = buildReplyQuoteHtml(reply);
+    const hasUserContent =
+      body.trim().length > 0 && body.trim() !== replyQuoteOnly.trim();
+    if (hasUserContent) {
+      const ok =
+        typeof window !== "undefined" &&
+        window.confirm("Replace the current draft with a fresh AI draft?");
+      if (!ok) return;
+    }
+    setGenerating(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch(
+        `/api/email-log/${encodeURIComponent(sourceId)}/draft-reply`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            aiNotes.trim().length > 0 ? { notes: aiNotes.trim() } : {},
+          ),
+        },
+      );
+      if (!res.ok) {
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(json.error ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { subject: string; body: string };
+      // The model returns plain prose with blank-line paragraphs. Convert
+      // to TipTap-friendly HTML and re-append the reply quote so the
+      // operator still sees the parent message at the bottom.
+      const draftHtml = plainTextToHtml(data.body) + buildReplyQuoteHtml(reply);
+      setSubject(data.subject);
+      setBody(draftHtml);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error ? err.message : "AI draft failed",
+      );
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   function applyTemplate(templateId: string): void {
     setSelectedTemplateId(templateId);
@@ -464,6 +527,37 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
                 ))}
               </select>
             </FieldRow>
+
+            {context?.draftReplyForEmailLogId && (
+              <div className="rounded-md border border-accent-primary/30 bg-accent-primary/5 p-3">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-primary">
+                  <Sparkles className="size-3.5 text-accent-primary" />
+                  AI draft
+                </div>
+                <textarea
+                  value={aiNotes}
+                  onChange={(e) => setAiNotes(e.target.value)}
+                  placeholder="Notes for AI (optional) — leave blank for a clean draft. e.g. 'send back X, sorry Y, will get sorted'"
+                  className="w-full resize-y rounded-md border border-default bg-base p-2 text-sm text-primary placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+                  rows={2}
+                  disabled={generating}
+                />
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-[11px] text-muted">
+                    Uses voice guide, facts, customer context + thread history.
+                  </span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleGenerateAiDraft}
+                    disabled={generating}
+                  >
+                    <Sparkles className="size-3.5" />
+                    {generating ? "Generating…" : "Generate"}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div>
               <span className="mb-1 block text-xs font-medium text-secondary">
