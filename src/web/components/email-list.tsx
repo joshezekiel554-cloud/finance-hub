@@ -12,6 +12,7 @@ import {
   ChevronDown,
   Reply,
   ReplyAll,
+  Sparkles,
   X,
 } from "lucide-react";
 import { Card, CardBody } from "./ui/card";
@@ -662,6 +663,38 @@ export function EmailList({
                             <ReplyAll className="size-3.5" />
                             Reply all
                           </Button>
+                          {email.direction === "inbound" && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() =>
+                                setComposeContext({
+                                  customerId,
+                                  customerName,
+                                  customerEmail: customerEmail ?? undefined,
+                                  inReplyTo: {
+                                    messageId:
+                                      email.messageIdHeader ??
+                                      email.gmailMessageId,
+                                    threadId: email.threadId ?? "",
+                                    subject: email.subject ?? "",
+                                    from:
+                                      email.fromAddress ??
+                                      customerEmail ??
+                                      "",
+                                    bodyExcerpt: email.body
+                                      ? email.body.slice(0, 1000)
+                                      : "",
+                                  },
+                                  draftReplyForEmailLogId: email.id,
+                                })
+                              }
+                              title="Open compose with the AI draft panel"
+                            >
+                              <Sparkles className="size-3.5" />
+                              Draft reply
+                            </Button>
+                          )}
                         </div>
                       )}
                     </div>
