@@ -44,6 +44,12 @@ export const customerDetailSearchSchema = z.object({
   // ---- Returns tab (prefix "rma") ----
   rmaStatus: z.enum(["all", ...RMA_STATUSES]).catch("all"),
   rmaType: z.enum(["all", ...RMA_RETURN_TYPES]).catch("all"),
+
+  // Dashboard widget "Draft reply" deep-link: when this is set, the page
+  // opens the compose modal in AI-draft mode for the named email_log row.
+  // The page clears the param from the URL on first read so it doesn't
+  // persist across navigations.
+  draftReplyFor: z.string().optional().catch(undefined),
 });
 
 export type CustomerDetailSearch = z.infer<typeof customerDetailSearchSchema>;

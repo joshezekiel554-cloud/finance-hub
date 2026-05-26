@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams, Link, getRouteApi } from "@tanstack/react-router";
+import { useParams, Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { CustomerDetailSearch } from "../lib/search-schemas/customer-detail";
@@ -50,6 +50,9 @@ import ChaseEmailSendDialog, {
 import ComposeModal, {
   type ComposeContext,
 } from "../components/compose-modal";
+import CustomerAiCard, {
+  type CardAction as AiCardAction,
+} from "../components/customer-ai-card";
 import {
   TaskDetailDrawer,
   type DrawerMode as TaskDrawerMode,
@@ -144,9 +147,25 @@ type ShopifyTagsResponse = {
   tags: string[];
 };
 
+// Plain text from the AI card's action args → TipTap-friendly HTML.
+// Blank-line-separated paragraphs become <p>; intra-paragraph newlines
+// become <br/>. Matches the compose-modal's plainTextToHtml helper.
+function aiBodyToHtml(text: string): string {
+  if (!text) return "";
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped
+    .split(/\n{2,}/)
+    .map((p) => `<p>${p.replace(/\n/g, "<br/>") || "<br/>"}</p>`)
+    .join("");
+}
+
 export default function CustomerDetailPage() {
   const { customerId } = useParams({ from: "/customers/$customerId" });
   const search = customerDetailRouteApi.useSearch();
+  const navigate = useNavigate();
   const { setFilter } = useFilterNavigate<CustomerDetailSearch>("/customers/$customerId");
   useFilterPersistence("/customers/$customerId");
 
@@ -182,10 +201,14 @@ export default function CustomerDetailPage() {
     level: 1 | 2 | 3;
     invoiceCount: number;
   } | null>(null);
-  // Compose-new dialog state. Distinct from the reply path that lives
-  // inside <EmailList> — this is "operator wants to start a fresh
-  // outbound email to the customer with no thread context."
-  const [composeOpen, setComposeOpen] = useState(false);
+  // Compose dialog state. The context shape carries everything the
+  // ComposeModal needs to render in either "fresh outbound" (just
+  // customer info) or "AI draft reply" (with draftReplyForEmailLogId)
+  // mode. Null = closed. The various entry points (header "Email
+  // customer" button, AI-card actions, ?draftReplyFor query param)
+  // all set this state shape.
+  const [composeContext, setComposeContext] =
+    useState<ComposeContext | null>(null);
   // Task drawer state — null when closed, else { mode: "create"|"edit", ...}.
   // Reused across the header "+ New task" button, the Tasks tab, and
   // any future entry points (email-row, RMA detail). Always opened
@@ -219,6 +242,23 @@ export default function CustomerDetailPage() {
       return res.json();
     },
   });
+
+  // ?draftReplyFor=<emailLogId> — dashboard "Draft reply" button deep-links
+  // here. On first read we open compose in AI-draft mode then clear the
+  // param so refreshes don't re-open. Tolerates the customer query being
+  // mid-flight by waiting until we have the row.
+  useEffect(() => {
+    const draftFor = search.draftReplyFor;
+    if (!draftFor || !data) return;
+    setComposeContext({
+      customerId: data.customer.id,
+      customerName: data.customer.displayName,
+      customerEmail: data.customer.primaryEmail ?? undefined,
+      draftReplyForEmailLogId: draftFor,
+    });
+    setFilter("draftReplyFor", undefined, { history: "replace" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.draftReplyFor, data?.customer.id]);
 
   const tagsQuery = useQuery<ShopifyTagsResponse>({
     queryKey: ["shopify-tags", customerId],
@@ -356,6 +396,50 @@ export default function CustomerDetailPage() {
     customer.unappliedCreditBalance,
   );
 
+  // AI card action handler. Each kind maps to an existing surface — no
+  // parallel autopilot logic. send_* opens the compose modal pre-filled;
+  // view_* navigates to the relevant detail page. Unknown args shapes
+  // degrade gracefully (compose opens blank if the model omitted body).
+  function handleAiCardAction(action: AiCardAction): void {
+    switch (action.kind) {
+      case "send_chase_email":
+      case "send_check_in_email": {
+        const subject =
+          typeof action.args.subject === "string" ? action.args.subject : "";
+        const bodyText =
+          typeof action.args.body === "string" ? action.args.body : "";
+        setComposeContext({
+          customerId: customer.id,
+          customerName: customer.displayName,
+          customerEmail: customer.primaryEmail ?? undefined,
+          prefill:
+            subject || bodyText
+              ? { subject, bodyHtml: aiBodyToHtml(bodyText) }
+              : undefined,
+        });
+        return;
+      }
+      case "send_statement":
+        setStatementDialogOpen(true);
+        return;
+      case "view_rma": {
+        const rmaId =
+          typeof action.args.rmaId === "string"
+            ? action.args.rmaId
+            : typeof action.args.id === "string"
+              ? (action.args.id as string)
+              : null;
+        if (rmaId) {
+          void navigate({ to: `/returns/${rmaId}` });
+        }
+        return;
+      }
+      case "view_cron_failure":
+        void navigate({ to: "/settings" });
+        return;
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Link
@@ -380,6 +464,11 @@ export default function CustomerDetailPage() {
       >
         Autopilot: {customer.agentModeExcluded ? "OFF (excluded)" : "ON"} — click to flip
       </button>
+
+      <CustomerAiCard
+        customerId={customer.id}
+        onAction={handleAiCardAction}
+      />
 
       <AiContextCard
         customerId={customer.id}
@@ -524,7 +613,13 @@ export default function CustomerDetailPage() {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => setComposeOpen(true)}
+              onClick={() =>
+                setComposeContext({
+                  customerId: customer.id,
+                  customerName: customer.displayName,
+                  customerEmail: customer.primaryEmail ?? undefined,
+                })
+              }
               title="Compose a new email to this customer (attachments optional)"
               disabled={!customer.primaryEmail}
             >
@@ -613,21 +708,17 @@ export default function CustomerDetailPage() {
         }
       />
 
-      {/* Compose-new email to this customer. ComposeModal already
-          handles the no-thread-context branch (title flips to "New
-          email"); we just hand it the customer context so TO is
-          pre-filled and the resulting email_log row links back here. */}
-      {composeOpen ? (
+      {/* Compose modal — opens from: header "Email customer" button,
+          AI-card action buttons (with prefill), or the ?draftReplyFor
+          query param (which seeds an AI draft panel for replying to a
+          specific inbound from the dashboard). Closed = state is null. */}
+      {composeContext ? (
         <ComposeModal
-          open={composeOpen}
-          onOpenChange={setComposeOpen}
-          context={
-            {
-              customerId: customer.id,
-              customerName: customer.displayName,
-              customerEmail: customer.primaryEmail ?? undefined,
-            } satisfies ComposeContext
-          }
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setComposeContext(null);
+          }}
+          context={composeContext}
         />
       ) : null}
 
