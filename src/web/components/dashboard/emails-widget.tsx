@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { Sparkles, X } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../ui/card";
 import { Button } from "../ui/button";
 import { WidgetHeader } from "./widget-header";
@@ -199,6 +199,16 @@ export function EmailsWidget() {
                       <div className="text-xs text-secondary truncate">
                         {e.subject ?? "(no subject)"}
                       </div>
+                    </Link>
+                    <Link
+                      to="/customers/$customerId"
+                      params={{ customerId: e.customerId }}
+                      search={{ draftReplyFor: e.id }}
+                      className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs hover:bg-elevated"
+                      title="Open compose with AI draft panel for this email"
+                    >
+                      <Sparkles className="size-3" />
+                      Draft reply
                     </Link>
                     <Button
                       variant="ghost"
