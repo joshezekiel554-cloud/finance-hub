@@ -12,6 +12,7 @@ import {
   AlertCircle,
   RotateCcw,
   CalendarRange,
+  Bot,
   LogOut,
 } from "lucide-react";
 import { cn } from "./lib/cn";
@@ -27,6 +28,7 @@ const navItems = [
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/returns", label: "Returns", icon: RotateCcw },
   { to: "/seasons", label: "Seasons", icon: CalendarRange },
+  { to: "/autopilot", label: "Autopilot", icon: Bot },
   { to: "/agent", label: "Agent", icon: Sparkles },
   { to: "/ai-training", label: "AI Training", icon: GraduationCap },
   { to: "/settings", label: "Settings", icon: Settings },
