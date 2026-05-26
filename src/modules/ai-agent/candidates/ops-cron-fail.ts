@@ -27,7 +27,13 @@ function checkConsecutiveFailures(rows: SyncRow[]): boolean {
   return true;
 }
 
-export async function findCandidates(): Promise<Candidate[]> {
+export async function findCandidates(
+  customerId?: string,
+): Promise<Candidate[]> {
+  // Cron failures are global (per sync kind), not per-customer. When the
+  // caller scopes to a single customer, this rule simply doesn't apply.
+  if (customerId) return [];
+
   const candidates: Candidate[] = [];
 
   for (const kind of SYNC_KINDS) {

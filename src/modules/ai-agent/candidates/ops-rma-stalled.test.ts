@@ -83,6 +83,24 @@ describe("findCandidates", () => {
     expect(first.entityId).toBe("rma_abc123");
     expect(first.summary.daysInState).toBeGreaterThanOrEqual(20);
   });
+
+  it("when customerId is passed, result only includes RMAs for that customer", async () => {
+    const row = {
+      id: "rma_scope",
+      rmaNumber: "RMA-SCOPE",
+      status: "draft",
+      updatedAt: daysAgo(20),
+      sentToWarehouseAt: null,
+      receivedAtWarehouseAt: null,
+      customerName: "Scoped Co",
+    };
+    const chain = makeChain([row]);
+    vi.mocked(db.select).mockReturnValue(chain as unknown as ReturnType<typeof db.select>);
+
+    const results = await findCandidates("cust-scope");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entityId).toBe("rma_scope");
+  });
 });
 
 describe("isStillEligible", () => {

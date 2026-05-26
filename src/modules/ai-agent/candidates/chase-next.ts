@@ -14,7 +14,9 @@ export type Candidate = {
 const CHASE_COOLDOWN_DAYS = 7;
 const ACTIONABLE_TIERS = new Set(["CRITICAL", "HIGH", "MEDIUM"]);
 
-export async function findCandidates(): Promise<Candidate[]> {
+export async function findCandidates(
+  customerId?: string,
+): Promise<Candidate[]> {
   // 1. All overdue, non-excluded customers.
   const overdueRows = await db
     .select()
@@ -23,6 +25,7 @@ export async function findCandidates(): Promise<Candidate[]> {
       and(
         gt(customers.overdueBalance, "0"),
         eq(customers.agentModeExcluded, false),
+        customerId ? eq(customers.id, customerId) : undefined,
       ),
     );
 
