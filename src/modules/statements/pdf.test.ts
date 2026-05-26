@@ -94,6 +94,7 @@ const SETTINGS: AppSettingsMap = {
   damage_cm_number_next: "38771",
   ai_voice_guide: "",
   ai_corrections_cron_enabled: "",
+  autopilot_scan_cron_enabled: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -187,6 +188,7 @@ describe("renderStatementPdf", () => {
         damage_cm_number_next: "38771",
         ai_voice_guide: "",
         ai_corrections_cron_enabled: "",
+        autopilot_scan_cron_enabled: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

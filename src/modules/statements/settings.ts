@@ -49,6 +49,7 @@ export type AppSettingsMap = {
   // key without a type error).
   ai_voice_guide: string;
   ai_corrections_cron_enabled: string;
+  autopilot_scan_cron_enabled: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -73,6 +74,7 @@ const DEFAULTS: AppSettingsMap = {
   damage_cm_number_next: "38771",
   ai_voice_guide: "",
   ai_corrections_cron_enabled: "",
+  autopilot_scan_cron_enabled: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

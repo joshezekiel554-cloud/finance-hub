@@ -75,5 +75,9 @@ export const APP_SETTING_KEYS = [
   // "true"/"" flag — enables the weekly learn-from-edits distill cron
   // (Wave C). Default off; added now so the KV key is recognized.
   "ai_corrections_cron_enabled",
+  // "true"/"" flag — enables the autopilot scan cron (default off).
+  // Manual "Run autopilot now" triggers bypass this gate (they pass
+  // trigger="manual" to the handler).
+  "autopilot_scan_cron_enabled",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];
