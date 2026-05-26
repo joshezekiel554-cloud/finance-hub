@@ -28,6 +28,7 @@ import {
   markGmailAsRead,
 } from "../../integrations/gmail/client.js";
 import { BUSINESS_EMAILS } from "../../integrations/gmail/business-emails.js";
+import { generateDraftReply } from "../../modules/ai-agent/draft-reply.js";
 
 const log = createLogger({ component: "routes.email-log" });
 
@@ -43,6 +44,10 @@ const BULK_ACTION_MAX = 500;
 const bulkPatchBodySchema = z.object({
   ids: z.array(z.string().min(1).max(64)).min(1).max(BULK_ACTION_MAX),
   actioned: z.boolean(),
+});
+
+const draftReplyBodySchema = z.object({
+  notes: z.string().max(2000).optional(),
 });
 
 const toTaskBodySchema = z.object({
@@ -351,6 +356,44 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
     );
 
     return reply.send({ taskId });
+  });
+
+  // POST /api/email-log/:id/draft-reply { notes? }
+  // Generates an AI reply to an inbound email. Returns {subject, body} for
+  // the compose modal to pre-fill — no email is sent here. The optional
+  // operator `notes` steer the model and are persisted onto the source row
+  // (email_log.draft_ai_notes) so the learn-from-edits distiller can later
+  // pair "what the operator asked for" with "what was actually sent".
+  app.post("/:id/draft-reply", async (req, reply) => {
+    await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const parse = draftReplyBodySchema.safeParse(req.body ?? {});
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    try {
+      const result = await generateDraftReply(
+        id,
+        parse.data.notes ?? null,
+      );
+      return reply.send(result);
+    } catch (err) {
+      log.error({ err, emailLogId: id }, "draft-reply failed");
+      const message =
+        err instanceof Error ? err.message : "draft-reply failed";
+      // 404 for "not found" / 400 for shape mismatches, 500 otherwise.
+      const code =
+        /not found/i.test(message)
+          ? 404
+          : /no linked customer|no threadId|only supports inbound/i.test(
+                message,
+              )
+            ? 400
+            : 500;
+      return reply.code(code).send({ error: message });
+    }
   });
 };
 
