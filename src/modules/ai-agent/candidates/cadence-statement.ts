@@ -13,7 +13,9 @@ export type Candidate = {
 const STATEMENT_CADENCE_DAYS = 30;
 const LARGE_DAYS = 9999;
 
-export async function findCandidates(): Promise<Candidate[]> {
+export async function findCandidates(
+  customerId?: string,
+): Promise<Candidate[]> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - STATEMENT_CADENCE_DAYS);
 
@@ -31,7 +33,12 @@ export async function findCandidates(): Promise<Candidate[]> {
       and(eq(invoices.customerId, customers.id), gt(invoices.balance, sql`0`)),
     )
     .leftJoin(statementSends, eq(statementSends.customerId, customers.id))
-    .where(eq(customers.agentModeExcluded, false))
+    .where(
+      and(
+        eq(customers.agentModeExcluded, false),
+        customerId ? eq(customers.id, customerId) : undefined,
+      ),
+    )
     .groupBy(customers.id, customers.displayName)
     .having(
       or(

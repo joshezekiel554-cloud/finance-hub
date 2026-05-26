@@ -291,6 +291,12 @@ export const emailLog = mysqlTable(
       () => users.id,
       { onDelete: "set null" },
     ),
+    // Operator-supplied notes that steered the AI draft reply. Persisted so
+    // the learn-from-edits distiller can later pair "what the operator told
+    // the AI to do" with "what the AI produced" and "what was actually sent".
+    // Stored on the inbound row we replied to (the row the operator clicked
+    // "Draft reply" on), since that's the unambiguous handle at draft time.
+    draftAiNotes: text("draft_ai_notes"),
     // FK back to ai_proposals for AI-originated outbound emails.
     aiProposalId: varchar("ai_proposal_id", { length: 24 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),

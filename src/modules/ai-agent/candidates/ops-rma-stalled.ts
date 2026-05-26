@@ -30,7 +30,9 @@ function daysAgo(date: Date): number {
   return Math.floor((Date.now() - date.getTime()) / 86_400_000);
 }
 
-export async function findCandidates(): Promise<Candidate[]> {
+export async function findCandidates(
+  customerId?: string,
+): Promise<Candidate[]> {
   const cutoff = cutoffDate();
 
   const rows = await db
@@ -49,6 +51,7 @@ export async function findCandidates(): Promise<Candidate[]> {
       and(
         inArray(rmas.status, [...STALLED_STATUSES] as RmaStatus[]),
         eq(customers.agentModeExcluded, false),
+        customerId ? eq(rmas.customerId, customerId) : undefined,
         or(
           // sent_to_warehouse: gate on sentToWarehouseAt
           and(

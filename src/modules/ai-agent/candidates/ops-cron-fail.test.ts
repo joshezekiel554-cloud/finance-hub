@@ -68,6 +68,22 @@ describe("findCandidates", () => {
 
     expect(candidates).toHaveLength(0);
   });
+
+  it("when customerId is passed, returns [] (cron failures are global, not per-customer)", async () => {
+    // Seed rows that WOULD produce a candidate in the global case
+    rowQueue.push([
+      row("failed", new Date("2026-05-19T10:00:00Z"), "Connection timeout after 30s"),
+      row("failed", new Date("2026-05-19T08:00:00Z"), "Connection timeout after 30s"),
+      row("ok", new Date("2026-05-19T06:00:00Z")),
+    ]);
+    for (let i = 1; i < SYNC_KINDS.length; i++) rowQueue.push([]);
+
+    const candidates = await findCandidates("cust-scope");
+
+    // Customer scope short-circuits — no DB calls, no candidates
+    expect(candidates).toHaveLength(0);
+    expect(mockDb.select).not.toHaveBeenCalled();
+  });
 });
 
 describe("isStillEligible", () => {

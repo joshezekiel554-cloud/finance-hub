@@ -144,6 +144,22 @@ describe("findCandidates", () => {
     expect((result[0]!.summary as { daysSinceLastPayment: number }).daysSinceLastPayment).toBe(99999);
     expect((result[0]!.summary as { daysSinceLastContact: number }).daysSinceLastContact).toBe(99999);
   });
+
+  it("when customerId is passed, result only includes that customer", async () => {
+    mockDbSelect([
+      {
+        id: "cust-scope",
+        displayName: "Scoped Co",
+        overdueBalance: "950.00",
+        lastPayment: daysAgo(70),
+        lastContact: daysAgo(40),
+      },
+    ]);
+
+    const result = await findCandidates("cust-scope");
+    expect(result).toHaveLength(1);
+    expect(result[0]!.entityId).toBe("cust-scope");
+  });
 });
 
 describe("isStillEligible", () => {

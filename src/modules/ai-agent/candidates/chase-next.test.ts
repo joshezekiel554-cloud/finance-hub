@@ -226,6 +226,27 @@ describe("findCandidates", () => {
     // Only one db.select call (the customer query) — no invoice/chaseLog queries
     expect(vi.mocked(db.select)).toHaveBeenCalledTimes(1);
   });
+
+  it("when customerId is passed, result only includes that customer", async () => {
+    const customer = makeCustomer({
+      id: "cust-scope",
+      displayName: "Scoped Co",
+      overdueBalance: "60000.00",
+      unappliedCreditBalance: "0.00",
+    });
+    const inv = makeInvoice({
+      id: "inv-scope",
+      customerId: "cust-scope",
+      balance: "60000.00",
+      dueDate: daysAgo(120),
+    });
+
+    mockFindCandidatesDB([customer], [inv], []);
+
+    const results = await findCandidates("cust-scope");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entityId).toBe("cust-scope");
+  });
 });
 
 // ── isStillEligible ──────────────────────────────────────────────────────────

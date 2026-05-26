@@ -91,8 +91,10 @@ async function queryCandidates(customerId?: string): Promise<Candidate[]> {
   }));
 }
 
-export async function findCandidates(): Promise<Candidate[]> {
-  return queryCandidates();
+export async function findCandidates(
+  customerId?: string,
+): Promise<Candidate[]> {
+  return queryCandidates(customerId);
 }
 
 export async function isStillEligible(entityId: string): Promise<boolean> {

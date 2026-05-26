@@ -93,6 +93,23 @@ describe("findCandidates", () => {
     expect(results[0]!.summary.daysSinceLastStatement).toBeGreaterThan(30);
     expect(results[0]!.summary.lastStatementSentAt).toBe(oldSend.toISOString());
   });
+
+  it("when customerId is passed, result only includes that customer", async () => {
+    const chain = makeQueryChain([
+      {
+        customerId: "cust-scope",
+        customerName: "Scoped Co",
+        openInvoiceCount: "2",
+        totalOpenBalance: "3000.00",
+        lastStatementSentAt: null,
+      },
+    ]);
+    vi.mocked(db.select).mockReturnValue(chain);
+
+    const results = await findCandidates("cust-scope");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entityId).toBe("cust-scope");
+  });
 });
 
 describe("isStillEligible", () => {
