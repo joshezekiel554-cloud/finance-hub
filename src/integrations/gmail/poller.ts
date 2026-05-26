@@ -7,6 +7,7 @@ import { oauthTokens } from "~/db/schema/oauth.js";
 import { extensivReceipts } from "~/db/schema/returns.js";
 import { createLogger } from "~/lib/logger.js";
 import { recordActivity } from "~/modules/crm/index.js";
+import { autoActionPriorInbounds } from "~/modules/crm/auto-action-emails.js";
 import { classifyExtensivEmail } from "~/modules/returns/extensiv-receipt-classifier.js";
 import { matchReceiptToRma } from "~/modules/returns/rma-matcher.js";
 import { linkCustomerReplyIfRmaThread } from "~/modules/returns/rma-customer-reply-linker.js";
@@ -373,6 +374,16 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
     // caught inside and never propagate to the main poll loop.
     await maybeProcessExtensivReceipt(email);
 
+    // When we (Feldart) send an outbound reply, mark prior inbounds in the
+    // same thread as actioned. Errors swallowed by the helper.
+    if (direction === "outbound") {
+      await autoActionPriorInbounds({
+        customerId,
+        threadId: email.threadId ?? null,
+        sentAt: occurredAt,
+      });
+    }
+
     if (customerId) {
       matched++;
       try {
@@ -585,6 +596,14 @@ export async function syncEmailsForCustomer(
         "per-customer sync — email_log insert failed",
       );
       continue;
+    }
+
+    if (direction === "outbound") {
+      await autoActionPriorInbounds({
+        customerId,
+        threadId: email.threadId ?? null,
+        sentAt: occurredAt,
+      });
     }
 
     try {

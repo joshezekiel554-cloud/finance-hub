@@ -18,6 +18,7 @@ import { statementSends } from "../../db/schema/crm.js";
 import { sendEmail } from "../../integrations/gmail/send.js";
 import { appendSignatures } from "../email-compose/signatures.js";
 import { sendStatement } from "../statements/send.js";
+import { autoActionPriorInbounds } from "../crm/auto-action-emails.js";
 import { createLogger } from "../../lib/logger.js";
 
 const log = createLogger({ module: "ai-agent.tools" });
@@ -82,9 +83,11 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
       // (sendEmail itself doesn't write to email_log — that's done by the
       // gmail poller's outbound classification. We pre-write here so the
       // AI provenance badge lights up immediately on the customer page.)
+      const sentAt = new Date();
       await db.insert(emailLog).values({
         id: nanoid(24),
         gmailMessageId: result.messageId,
+        threadId: result.threadId || null,
         customerId: customer.id,
         userId: ctx.userId,
         direction: "outbound",
@@ -93,8 +96,13 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
         toAddress: customer.primaryEmail,
         subject: args.subject,
         snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
-        emailDate: new Date(),
+        emailDate: sentAt,
         aiProposalId: ctx.proposalId,
+      });
+      await autoActionPriorInbounds({
+        customerId: customer.id,
+        threadId: result.threadId || null,
+        sentAt,
       });
       // chase_log row — drives the 7-day-no-chase dedup in chase-next
       // candidate finder.
@@ -191,9 +199,11 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
         html: finalHtml,
         alias: aliasEmail,
       });
+      const sentAt = new Date();
       await db.insert(emailLog).values({
         id: nanoid(24),
         gmailMessageId: result.messageId,
+        threadId: result.threadId || null,
         customerId: customer.id,
         userId: ctx.userId,
         direction: "outbound",
@@ -202,8 +212,13 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
         toAddress: customer.primaryEmail,
         subject: args.subject,
         snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
-        emailDate: new Date(),
+        emailDate: sentAt,
         aiProposalId: ctx.proposalId,
+      });
+      await autoActionPriorInbounds({
+        customerId: customer.id,
+        threadId: result.threadId || null,
+        sentAt,
       });
       return { ok: true };
     } catch (err) {

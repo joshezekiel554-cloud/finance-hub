@@ -33,6 +33,7 @@ import { createLogger } from "../../lib/logger.js";
 import { sendEmail } from "../../integrations/gmail/send.js";
 import { listAliases } from "../../integrations/gmail/aliases.js";
 import { recordActivity } from "../../modules/crm/index.js";
+import { autoActionPriorInbounds } from "../../modules/crm/auto-action-emails.js";
 import { appendSignatures } from "../../modules/email-compose/signatures.js";
 
 const log = createLogger({ component: "routes.email-send" });
@@ -370,6 +371,14 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
           emailRefType: "email_send",
           emailRefId: result.messageId,
         },
+      });
+      // Mark prior inbounds in this thread as actioned immediately — the
+      // poller will catch up later but the unactioned list should update
+      // the moment the operator hits Send. Idempotent.
+      await autoActionPriorInbounds({
+        customerId,
+        threadId: result.threadId || null,
+        sentAt: new Date(),
       });
     }
 
