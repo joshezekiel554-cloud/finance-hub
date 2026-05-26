@@ -126,9 +126,73 @@ export default function AiTrainingPage() {
         </CardBody>
       </Card>
 
+      <AutopilotScanCronCard />
       <CompanyFactsCard />
       <CorrectionsCard />
     </div>
+  );
+}
+
+// Autopilot scan cron toggle. The schedule is always registered in BullMQ;
+// the handler short-circuits when this flag is not "true" (default off).
+// Manual "Run autopilot now" triggers always run regardless.
+function AutopilotScanCronCard() {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const settings = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+  const enabled =
+    settings.data?.settings["autopilot_scan_cron_enabled"] === "true";
+
+  const toggle = useMutation({
+    mutationFn: async (next: boolean) => {
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          autopilot_scan_cron_enabled: next ? "true" : "",
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] }),
+    onError: (e: unknown) =>
+      setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  return (
+    <Card>
+      <CardHeader>Autopilot scan cron</CardHeader>
+      <CardBody>
+        <p className="text-xs text-secondary">
+          When ON, the autopilot scan runs every 4 hours (00/04/08/12/16/20
+          Europe/London) and creates proposals in the /autopilot queue. When
+          OFF (default), only manual "Run autopilot now" triggers fire scans.
+          Customer-page AI summaries and per-email Draft reply continue to
+          work either way — they're pull-based and don't depend on this.
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-xs text-secondary">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => toggle.mutate(e.target.checked)}
+            disabled={toggle.isPending || settings.isPending}
+          />
+          Run autopilot scan every 4 hours
+        </label>
+        {error ? (
+          <p className="mt-2 text-sm text-accent-danger">{error}</p>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }
 
