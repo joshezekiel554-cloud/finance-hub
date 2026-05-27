@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
@@ -23,9 +23,40 @@ const NO_DRAFT_CATEGORIES = new Set([
 // in a follow-up.
 const ESTIMATED_DRAFT_COST_USD = 0.05;
 
+type SortKey = "urgency" | "name" | "oldest" | "newest";
+
+// Tier rank for urgency sort. Proposals without a tier (cadence_*, ops_*)
+// fall to 0 — they sort below tiered chase proposals. daysOverdue acts as
+// the within-tier tiebreaker.
+const TIER_RANK: Record<string, number> = {
+  CRITICAL: 4,
+  HIGH: 3,
+  MEDIUM: 2,
+  LOW: 1,
+};
+
+function urgencyScore(p: Proposal): number {
+  const sum = p.candidateSummary as Record<string, unknown>;
+  const tier = typeof sum.tier === "string" ? (TIER_RANK[sum.tier] ?? 0) : 0;
+  const days =
+    typeof sum.daysOverdue === "number" ? sum.daysOverdue : 0;
+  const daysInState =
+    typeof sum.daysInState === "number" ? sum.daysInState : 0;
+  // Tier dominates; days metrics tiebreak.
+  return tier * 10_000 + days + daysInState;
+}
+
+function customerName(p: Proposal): string {
+  return (
+    (p.candidateSummary as { customerName?: string }).customerName ??
+    p.entityId
+  );
+}
+
 export default function AutopilotPage() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sortKey, setSortKey] = useState<SortKey>("urgency");
 
   // Compose-modal edit-and-send state.
   const [composeOpen, setComposeOpen] = useState(false);
@@ -129,17 +160,46 @@ export default function AutopilotPage() {
   const rows = data?.rows ?? [];
 
   // Group customer-typed proposals by entityId; non-customer kept separate.
-  const byCustomer = new Map<string, Proposal[]>();
-  const nonCustomer: Proposal[] = [];
-  for (const p of rows) {
-    if (p.entityType === "customer") {
-      const list = byCustomer.get(p.entityId) ?? [];
-      list.push(p);
-      byCustomer.set(p.entityId, list);
-    } else {
-      nonCustomer.push(p);
+  // Then sort the OUTER customer groups by the active sort key — within a
+  // group, proposals stay in API order (no within-group sort yet).
+  const { sortedCustomerEntries, nonCustomer } = useMemo(() => {
+    const byCustomer = new Map<string, Proposal[]>();
+    const nonCust: Proposal[] = [];
+    for (const p of rows) {
+      if (p.entityType === "customer") {
+        const list = byCustomer.get(p.entityId) ?? [];
+        list.push(p);
+        byCustomer.set(p.entityId, list);
+      } else {
+        nonCust.push(p);
+      }
     }
-  }
+    const entries = Array.from(byCustomer.entries());
+    const compareByKey = (
+      a: [string, Proposal[]],
+      b: [string, Proposal[]],
+    ): number => {
+      if (sortKey === "name") {
+        return customerName(a[1][0]!).localeCompare(customerName(b[1][0]!));
+      }
+      if (sortKey === "oldest") {
+        const minA = Math.min(...a[1].map((p) => Date.parse(p.createdAt)));
+        const minB = Math.min(...b[1].map((p) => Date.parse(p.createdAt)));
+        return minA - minB;
+      }
+      if (sortKey === "newest") {
+        const maxA = Math.max(...a[1].map((p) => Date.parse(p.createdAt)));
+        const maxB = Math.max(...b[1].map((p) => Date.parse(p.createdAt)));
+        return maxB - maxA;
+      }
+      // urgency (default): group score = max urgencyScore in the group
+      const scoreA = Math.max(...a[1].map(urgencyScore));
+      const scoreB = Math.max(...b[1].map(urgencyScore));
+      return scoreB - scoreA;
+    };
+    entries.sort(compareByKey);
+    return { sortedCustomerEntries: entries, nonCustomer: nonCust };
+  }, [rows, sortKey]);
 
   const pendingCount = rows.filter((r) => r.status === "pending").length;
   const draftedCount = rows.filter((r) => r.status === "drafted").length;
@@ -162,6 +222,19 @@ export default function AutopilotPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-secondary">
+            Sort
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              className="h-8 rounded-md border border-default bg-base px-2 text-xs text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+            >
+              <option value="urgency">Most urgent</option>
+              <option value="name">Customer name</option>
+              <option value="oldest">Oldest first</option>
+              <option value="newest">Newest first</option>
+            </select>
+          </label>
           <Button
             variant="secondary"
             onClick={() => {
@@ -232,7 +305,7 @@ export default function AutopilotPage() {
         </Card>
       ) : (
         <>
-          {Array.from(byCustomer.entries()).map(([custId, props]) => {
+          {sortedCustomerEntries.map(([custId, props]) => {
             const customerName =
               (props[0]!.candidateSummary as { customerName?: string })
                 .customerName ?? custId;
