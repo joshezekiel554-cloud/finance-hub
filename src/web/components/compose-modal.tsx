@@ -443,7 +443,11 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "fixed left-auto right-0 top-0 z-50 flex h-full w-full max-w-2xl translate-x-0 translate-y-0 flex-col rounded-none border-l border-default bg-base p-0 shadow-xl",
+          // Mobile: full-screen (inset-0, no left border, no max width).
+          // Desktop: slide-over from the right edge with max-w-2xl.
+          "fixed z-50 flex flex-col bg-base p-0 shadow-xl",
+          "inset-0 rounded-none",
+          "md:left-auto md:right-0 md:top-0 md:bottom-auto md:h-full md:w-full md:max-w-2xl md:border-l md:border-default",
         )}
       >
         <div className="flex items-start justify-between border-b border-default px-5 py-4">
@@ -584,9 +588,20 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-default px-5 py-3">
+        {/* Footer action row. On mobile, the row sits at the viewport
+            bottom with safe-area-inset padding for the iOS home
+            indicator and a translucent backdrop so the body content
+            scrolling beneath remains visible. The Signature label is
+            hidden on mobile to leave room for Cancel + Send. */}
+        <div
+          className={cn(
+            "flex flex-wrap items-center justify-end gap-2 border-t border-default px-4 py-3 md:px-5",
+            "bg-base/95 backdrop-blur supports-[backdrop-filter]:bg-base/85",
+            "pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3",
+          )}
+        >
           <div className="mr-auto flex items-center gap-2">
-            <span className="text-xs text-muted">Signature</span>
+            <span className="hidden text-xs text-muted md:inline">Signature</span>
             <SignaturePicker value={userSignatureId} onChange={setUserSignatureId} />
           </div>
           {errorMessage && (

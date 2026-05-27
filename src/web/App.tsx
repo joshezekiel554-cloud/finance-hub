@@ -14,12 +14,14 @@ import {
   CalendarRange,
   Bot,
   LogOut,
+  Menu,
 } from "lucide-react";
 import { cn } from "./lib/cn";
 import { NotificationBell } from "./components/notification-bell";
 import { UserPill } from "./components/user-pill";
+import { MobileNavDrawer, type NavItem } from "./components/mobile-nav-drawer";
 
-const navItems = [
+const navItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/customers", label: "Customers", icon: Users },
   { to: "/invoicing", label: "Today", icon: FileText },
@@ -35,8 +37,11 @@ const navItems = [
 ];
 
 export default function App({ children }: { children: ReactNode }) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
   return (
     <div className="flex min-h-screen bg-base text-primary">
+      {/* Desktop sidebar — unchanged */}
       <aside className="hidden w-60 shrink-0 border-r border-default bg-subtle md:flex md:flex-col">
         <div className="flex h-14 items-center gap-2 border-b border-default px-4">
           <div className="size-7 rounded-md bg-accent-primary/10 ring-1 ring-accent-primary/30" />
@@ -69,16 +74,62 @@ export default function App({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="flex flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b border-default bg-base px-4 md:px-6">
+      <main className="flex min-w-0 flex-1 flex-col">
+        {/* Desktop top header — unchanged structure, hidden on mobile */}
+        <header className="hidden h-14 items-center justify-between border-b border-default bg-base px-6 md:flex">
           <div className="text-sm font-medium text-primary">Welcome back</div>
           <div className="flex items-center gap-3">
             <NotificationBell />
             <UserPill />
           </div>
         </header>
+
+        {/* Mobile top app bar — sticky, hamburger left, bell+user right.
+            Per-page MobileAppBar components render BELOW this when a page
+            wants its own title + back chevron; that bar overlays the
+            children area, so this default sits behind it. To avoid the
+            stacked-bars look, pages that render their own MobileAppBar
+            should also `hidden`-flag the wrapper below via a portal or
+            by setting their own app-bar to position: sticky which wins
+            in the same scroll container. We keep this default for top-
+            level routes that don't override. */}
+        <header
+          className={cn(
+            "md:hidden sticky top-0 z-20",
+            "flex h-14 items-center gap-2 px-3",
+            "border-b border-default",
+            "bg-base/95 backdrop-blur supports-[backdrop-filter]:bg-base/85",
+          )}
+        >
+          <button
+            type="button"
+            aria-label="Open menu"
+            onClick={() => setDrawerOpen(true)}
+            className="-ml-1 flex h-10 w-10 items-center justify-center rounded-md text-primary hover:bg-elevated"
+          >
+            <Menu className="size-5" />
+          </button>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="size-6 shrink-0 rounded-md bg-accent-primary/10 ring-1 ring-accent-primary/30" />
+            <span className="truncate text-sm font-semibold tracking-tight">
+              Finance Hub
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <NotificationBell />
+            <UserPill />
+          </div>
+        </header>
+
         <div className="flex-1 overflow-y-auto p-4 md:p-6">{children}</div>
       </main>
+
+      <MobileNavDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        items={navItems}
+        footer={<SignOutFooter />}
+      />
     </div>
   );
 }

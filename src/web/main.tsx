@@ -12,6 +12,7 @@ import {
 import App from "./App";
 import HomePage from "./pages/home";
 import InvoicingTodayPage from "./pages/invoicing-today";
+import InvoicingTodayDetailPage from "./pages/invoicing-today-detail";
 import CustomersPage from "./pages/customers";
 import CustomerDetailPage from "./pages/customer-detail";
 import TasksPage from "./pages/tasks";
@@ -74,6 +75,12 @@ const invoicingTodayRoute = createRoute({
   component: InvoicingTodayPage,
   validateSearch: invoicingTodaySearchSchema,
   beforeLoad: restoreSearchOnEmpty("/invoicing"),
+});
+
+const invoicingTodayDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/invoicing/$gmailId",
+  component: InvoicingTodayDetailPage,
 });
 
 const customersRoute = createRoute({
@@ -194,6 +201,7 @@ const aiTrainingRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
+  invoicingTodayDetailRoute,
   customersRoute,
   customerDetailRoute,
   tasksRoute,

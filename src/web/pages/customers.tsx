@@ -17,6 +17,11 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/cn";
 import { SyncQbBadge } from "../components/sync-qb-badge";
+import { CustomerRowMobile } from "../components/customer-row-mobile";
+import {
+  StickyActionBar,
+  StickyActionBarSpacer,
+} from "../components/sticky-action-bar";
 import {
   TaskDetailDrawer,
   type DrawerMode as TaskDrawerMode,
@@ -540,7 +545,7 @@ export default function CustomersPage() {
       </div>
 
       {sweepMode && (
-        <Card>
+        <Card className="hidden md:block">
           <CardBody className="flex flex-wrap items-center gap-3 py-3 text-sm">
             <span className="text-secondary">
               {selectedIds.size} of {visibleRows.length} selected
@@ -627,7 +632,50 @@ export default function CustomersPage() {
         </Card>
       )}
 
-      <Card>
+      {/* Mobile list — replaces the table below md. Cards instead of rows.
+          Sweep mode flips each row into a checkbox-tap-to-select pattern. */}
+      <div className="space-y-2 md:hidden">
+        <div className="px-1 text-xs text-secondary">
+          {isPending
+            ? "Loading…"
+            : `${visibleRows.length}${data?.hasMore ? "+" : ""} customers`}
+        </div>
+        {isError && (
+          <div className="rounded-md border border-accent-danger/30 bg-accent-danger/10 p-3 text-sm text-accent-danger">
+            {(error as Error)?.message ?? "Failed to load customers"}
+          </div>
+        )}
+        {visibleRows.map((row) => (
+          <CustomerRowMobile
+            key={row.id}
+            id={row.id}
+            displayName={row.displayName}
+            primaryEmail={row.primaryEmail}
+            balance={Number(row.balance)}
+            overdueBalance={effectiveOverdue(
+              row.overdueBalance,
+              row.unappliedCreditBalance,
+            )}
+            daysOverdue={row.daysOverdue}
+            holdStatus={row.holdStatus}
+            agentModeExcluded={row.agentModeExcluded}
+            customerType={row.customerType}
+            unactionedEmailCount={row.unactionedEmailCount}
+            selectable={sweepMode}
+            selected={selectedIds.has(row.id)}
+            onToggleSelect={toggleId}
+          />
+        ))}
+        {!isPending && visibleRows.length === 0 && (
+          <div className="rounded-md border border-default bg-subtle p-8 text-center text-sm text-muted">
+            No customers match.
+          </div>
+        )}
+        {sweepMode && <StickyActionBarSpacer />}
+      </div>
+
+      {/* Desktop table — unchanged structure. */}
+      <Card className="hidden md:block">
         <CardHeader>
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium text-secondary">
@@ -888,6 +936,72 @@ export default function CustomersPage() {
           queryClient.invalidateQueries({ queryKey: ["customers"] });
         }}
       />
+
+      {/* Mobile bulk-edit footer. Mirrors the desktop sweep bar but
+          surfaces only the three most-used actions; B2B/B2C tagging
+          sits behind the "Tag…" overflow which uses native confirm
+          for now (a bottom sheet here is overkill for v1). */}
+      {sweepMode && (
+        <StickyActionBar>
+          <span className="mr-1 shrink-0 text-xs text-secondary">
+            {selectedIds.size}
+          </span>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="flex-1"
+            disabled={
+              selectedIds.size === 0 || bulkAgentModeMutation.isPending
+            }
+            onClick={() =>
+              bulkAgentModeMutation.mutate({
+                ids: Array.from(selectedIds),
+                excluded: true,
+              })
+            }
+          >
+            🤖 Off
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="flex-1"
+            disabled={
+              selectedIds.size === 0 || bulkAgentModeMutation.isPending
+            }
+            onClick={() =>
+              bulkAgentModeMutation.mutate({
+                ids: Array.from(selectedIds),
+                excluded: false,
+              })
+            }
+          >
+            🤖 On
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            className="flex-1"
+            disabled={selectedIds.size === 0 || bulkTagMutation.isPending}
+            onClick={() => {
+              if (typeof window === "undefined") return;
+              const tag = window.prompt(
+                "Tag selected customers as B2B or B2C?",
+                "b2b",
+              );
+              if (!tag) return;
+              const normalized = tag.toLowerCase();
+              if (normalized !== "b2b" && normalized !== "b2c") return;
+              bulkTagMutation.mutate({
+                ids: Array.from(selectedIds),
+                customerType: normalized,
+              });
+            }}
+          >
+            Tag…
+          </Button>
+        </StickyActionBar>
+      )}
     </div>
   );
 }
