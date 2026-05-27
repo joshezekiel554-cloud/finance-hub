@@ -130,6 +130,18 @@ textarea {
   font-family: inherit;
 }
 
+/* iOS Safari auto-zooms when focusing a form control whose computed
+ * font-size is below 16px. Bump form-control font-size on mobile so
+ * the page doesn't lurch sideways every time the operator taps an
+ * input. Desktop keeps the smaller scale. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--c-accent-primary);
   outline-offset: 2px;
@@ -165,6 +177,14 @@ textarea {
   from { opacity: 1; transform: translateX(0); }
   to { opacity: 0; transform: translateX(16px); }
 }
+@keyframes ui-slide-in-left {
+  from { opacity: 0; transform: translateX(-100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes ui-slide-out-left {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-100%); }
+}
 
 .ui-fade[data-state="open"] {
   animation: ui-fade-in 150ms ease-out;
@@ -183,6 +203,12 @@ textarea {
 }
 .ui-slide-in-right[data-state="closed"] {
   animation: ui-slide-out-right 140ms ease-in;
+}
+.ui-slide-in-left[data-state="open"] {
+  animation: ui-slide-in-left 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.ui-slide-in-left[data-state="closed"] {
+  animation: ui-slide-out-left 160ms ease-in;
 }
 
 @media (prefers-reduced-motion: reduce) {
