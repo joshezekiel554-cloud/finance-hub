@@ -8,6 +8,7 @@ import { AlertCircle, CheckCircle2, Mail, MessageSquare, Package, Truck } from "
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { ShipmentRowMobile } from "../components/invoicing/shipment-row-mobile";
 import { cn } from "../lib/cn";
 // ReturnReceiptReviewDialog intentionally NOT removed here — Phase 5 (Task 5.1) handles deletion.
 import ReturnReceiptReviewDialog, {
@@ -286,21 +287,27 @@ export default function InvoicingTodayPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Today</h1>
-          <p className="mt-1 text-sm text-secondary">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight md:text-2xl">Today</h1>
+          <p className="mt-1 hidden text-sm text-secondary md:block">
             Feldart's pending workload — orders to ship out and returns
             received from the warehouse, last 7 days.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 md:gap-3">
           {data === undefined ? (
             <Badge tone="neutral">…</Badge>
           ) : data.shadowMode ? (
-            <Badge tone="info">Shadow mode — no QBO writes</Badge>
+            <Badge tone="info">
+              <span className="md:hidden">Shadow</span>
+              <span className="hidden md:inline">Shadow mode — no QBO writes</span>
+            </Badge>
           ) : (
-            <Badge tone="critical">LIVE — writes to QBO enabled</Badge>
+            <Badge tone="critical">
+              <span className="md:hidden">LIVE</span>
+              <span className="hidden md:inline">LIVE — writes to QBO enabled</span>
+            </Badge>
           )}
           <Button variant="secondary" size="sm" onClick={() => refetch()} disabled={isFetching}>
             {isFetching ? "Refreshing…" : "Refresh"}
@@ -401,13 +408,47 @@ export default function InvoicingTodayPage() {
                 tab === "unparseable" ? (
                   <UnparseableCard key={row.gmailId} row={row} />
                 ) : (
-                  <ShipmentCard
-                    key={row.gmailId}
-                    row={row}
-                    shadowMode={data.shadowMode}
-                    terms={terms}
-                    dismissedRecord={data.dismissed[row.gmailId] ?? null}
-                  />
+                  <div key={row.gmailId}>
+                    {/* Mobile: compact tap-target row → /invoicing/$gmailId */}
+                    <div className="md:hidden">
+                      <ShipmentRowMobile
+                        gmailId={row.gmailId}
+                        poNumber={row.parsed.poNumber}
+                        customerName={
+                          row.qbInvoice?.customerName ??
+                          row.shopifyOrder?.customerEmail ??
+                          "(unknown)"
+                        }
+                        qbInvoice={
+                          row.qbInvoice
+                            ? {
+                                docType: row.qbInvoice.docType,
+                                docNumber: row.qbInvoice.docNumber,
+                                totalAmt: row.qbInvoice.totalAmt,
+                                currency: row.qbInvoice.currency,
+                                emailStatus: row.qbInvoice.emailStatus,
+                              }
+                            : null
+                        }
+                        carrier={row.parsed.carrierShort}
+                        reconcileSummary={
+                          row.reconcileResult
+                            ? { addsNeedingPrice: row.reconcileResult.summary.addsNeedingPrice }
+                            : null
+                        }
+                        dismissed={Boolean(data.dismissed[row.gmailId])}
+                      />
+                    </div>
+                    {/* Desktop: full inline shipment card unchanged */}
+                    <div className="hidden md:block">
+                      <ShipmentCard
+                        row={row}
+                        shadowMode={data.shadowMode}
+                        terms={terms}
+                        dismissedRecord={data.dismissed[row.gmailId] ?? null}
+                      />
+                    </div>
+                  </div>
                 ),
               )
           )}
@@ -628,22 +669,24 @@ function TabToggle({
     { key: "phone_calls", label: "Phone calls" },
   ];
   return (
-    <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
-      {tabs.map((t) => (
-        <button
-          key={t.key}
-          type="button"
-          onClick={() => onChange(t.key)}
-          className={cn(
-            "rounded px-3 py-1 transition-colors",
-            tab === t.key
-              ? "bg-base font-medium text-primary shadow-sm"
-              : "text-secondary hover:text-primary",
-          )}
-        >
-          {t.label} ({counts[t.key]})
-        </button>
-      ))}
+    <div className="-mx-1 flex max-w-full overflow-x-auto px-1 md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+      <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onChange(t.key)}
+            className={cn(
+              "whitespace-nowrap rounded px-3 py-1 transition-colors",
+              tab === t.key
+                ? "bg-base font-medium text-primary shadow-sm"
+                : "text-secondary hover:text-primary",
+            )}
+          >
+            {t.label} ({counts[t.key]})
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
