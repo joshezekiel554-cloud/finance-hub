@@ -42,6 +42,9 @@ export type SyncStats = {
   updated: number;
   skipped: number;
   failed: number;
+  // Local invoices soft-voided because they no longer exist in QBO
+  // (deleted upstream). Only the invoice syncs populate this.
+  voided: number;
 };
 
 const emptyStats = (): SyncStats => ({
@@ -50,6 +53,7 @@ const emptyStats = (): SyncStats => ({
   updated: 0,
   skipped: 0,
   failed: 0,
+  voided: 0,
 });
 
 // -------- syncCustomers --------
@@ -326,6 +330,24 @@ export async function syncInvoices(client?: QboClient): Promise<SyncStats> {
     }
   }
 
+  // Reconcile deletions: any local invoice whose qbInvoiceId is absent from
+  // this full fetch was deleted in QBO (voided invoices are still returned,
+  // at balance 0 — only deletes vanish). Soft-void them so they drop off
+  // statements, open balance, and the open-invoice count.
+  //
+  // SAFETY: getInvoices() is a complete, paginated fetch of every non-deleted
+  // invoice in the realm. A genuinely populated realm should never return an
+  // empty set; if it does (transient QBO blip) we must NOT mass-void the whole
+  // table, so we skip reconciliation entirely on an empty fetch.
+  const presentQbInvoiceIds = new Set(qboInvoices.map((inv) => inv.Id));
+  if (presentQbInvoiceIds.size > 0) {
+    stats.voided = await reconcileDeletedInvoices(presentQbInvoiceIds);
+  } else {
+    log.warn(
+      "skipping invoice deletion-reconciliation: QBO returned zero invoices",
+    );
+  }
+
   // Recompute customers.overdue_balance from the now-current invoices
   // table. QBO's Customer.Balance gives us open AR (which we sync
   // directly) but doesn't expose overdue separately — we derive it from
@@ -528,6 +550,90 @@ async function syncInvoiceLines(
   if (rows.length > 0) {
     await db.insert(invoiceLines).values(rows);
   }
+}
+
+// -------- deletion reconciliation --------
+
+// Pure decision function: given the local invoice rows and the set of QBO
+// invoice ids present in the latest *complete* fetch, return the rows that no
+// longer exist in QBO (deleted upstream) and aren't already void. Extracted
+// so the deletion logic is unit-testable without a DB (the surrounding sync
+// is heavily DB-coupled). An empty `presentQbInvoiceIds` voids every non-void
+// row passed in — callers scope the input (and guard the global path against
+// an empty fetch) so this stays safe.
+type ReconcilableInvoice = Pick<
+  Invoice,
+  "id" | "qbInvoiceId" | "status" | "balance"
+>;
+
+export function selectInvoicesToVoid<T extends ReconcilableInvoice>(
+  localInvoices: T[],
+  presentQbInvoiceIds: Set<string>,
+): T[] {
+  return localInvoices.filter(
+    (inv) => !presentQbInvoiceIds.has(inv.qbInvoiceId) && inv.status !== "void",
+  );
+}
+
+// DB-coupled wrapper: loads local invoice rows (optionally scoped to one
+// customer), runs selectInvoicesToVoid, then soft-voids each missing row
+// (status='void', balance='0') and writes an audit_log entry. Returns the
+// count voided. Does NOT guard against an empty `presentQbInvoiceIds` — the
+// global caller guards (an empty realm-wide fetch is treated as suspect),
+// while the per-customer caller intentionally allows empty so a customer
+// whose every invoice was deleted gets them all voided.
+async function reconcileDeletedInvoices(
+  presentQbInvoiceIds: Set<string>,
+  opts: { customerId?: string } = {},
+): Promise<number> {
+  const localRows = await db
+    .select({
+      id: invoices.id,
+      qbInvoiceId: invoices.qbInvoiceId,
+      status: invoices.status,
+      balance: invoices.balance,
+      customerId: invoices.customerId,
+      docNumber: invoices.docNumber,
+    })
+    .from(invoices)
+    .where(
+      opts.customerId ? eq(invoices.customerId, opts.customerId) : undefined,
+    );
+
+  const toVoid = selectInvoicesToVoid(localRows, presentQbInvoiceIds);
+  if (toVoid.length === 0) return 0;
+
+  for (const inv of toVoid) {
+    await db
+      .update(invoices)
+      .set({ status: "void", balance: "0", lastSyncedAt: new Date() })
+      .where(eq(invoices.id, inv.id));
+
+    await db.insert(auditLog).values({
+      id: nanoid(24),
+      action: "qb_sync.invoice.void_deleted",
+      entityType: "invoice",
+      entityId: inv.id,
+      before: {
+        status: inv.status,
+        balance: inv.balance,
+        qbInvoiceId: inv.qbInvoiceId,
+        docNumber: inv.docNumber,
+      },
+      after: { status: "void", balance: "0" },
+    });
+
+    log.info(
+      {
+        invoice_id: inv.id,
+        qb_invoice_id: inv.qbInvoiceId,
+        doc_number: inv.docNumber,
+      },
+      "soft-voided invoice deleted in QBO",
+    );
+  }
+
+  return toVoid.length;
 }
 
 // -------- syncPayments --------
@@ -749,6 +855,21 @@ export async function syncOneCustomer(
         "syncOneCustomer: invoice upsert failed",
       );
     }
+  }
+
+  // Reconcile deletions for THIS customer only. findInvoicesForCustomer is a
+  // complete fetch of the customer's invoices, so any local row of theirs not
+  // in the set was deleted in QBO → soft-void it. Unlike the global path we
+  // intentionally do NOT skip on an empty set: a customer whose every invoice
+  // was deleted legitimately returns zero, and we want those voided. Scoping
+  // the WHERE to this customer keeps that safe. This is what makes the
+  // "Refresh from QB" button fix a stuck deleted invoice on demand.
+  const reconcileCustomerId = customerIdMap.get(qbCustomerId);
+  if (reconcileCustomerId) {
+    const presentIds = new Set(qboInvoices.map((inv) => inv.Id));
+    invoiceStats.voided = await reconcileDeletedInvoices(presentIds, {
+      customerId: reconcileCustomerId,
+    });
   }
 
   // 3. Payments for this customer (activities only — no payments table)
