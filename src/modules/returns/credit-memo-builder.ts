@@ -146,8 +146,19 @@ export async function buildAndPushCreditMemo(
       ItemRef: { value: string };
       Qty: number;
       UnitPrice: number;
+      TaxCodeRef: { value: string };
     };
   }> = [];
+
+  // Per-line taxability. In Feldart's QBO realm (US Automated Sales Tax) a
+  // line with NO explicit TaxCodeRef defaults to taxable — omitting the
+  // txn-level TxnTaxDetail block is NOT enough to make the CM non-taxable.
+  // So we stamp every line "TAX"/"NON" explicitly, mirroring the /process-
+  // return path (returns.ts) and the b2b sender. When applyTax is off all
+  // lines are NON → QBO computes zero tax regardless of customer/item
+  // defaults. When on, all lines are TAX so the taxable subtotal matches
+  // the dialog preview (goods − shipping − restocking).
+  const lineTaxCode = input.applyTax ? "TAX" : "NON";
 
   // One line per returned item.
   //
@@ -170,6 +181,7 @@ export async function buildAndPushCreditMemo(
         ItemRef: { value: item.qbItemId },
         Qty: qty,
         UnitPrice: unitPrice,
+        TaxCodeRef: { value: lineTaxCode },
       },
     });
   }
@@ -188,6 +200,7 @@ export async function buildAndPushCreditMemo(
           ItemRef: { value: shippingItemId },
           Qty: 1,
           UnitPrice: -shippingAmt,
+          TaxCodeRef: { value: lineTaxCode },
         },
       });
     }
@@ -207,6 +220,7 @@ export async function buildAndPushCreditMemo(
           ItemRef: { value: restockItemId },
           Qty: 1,
           UnitPrice: -restockAmt,
+          TaxCodeRef: { value: lineTaxCode },
         },
       });
     }
