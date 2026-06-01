@@ -507,4 +507,73 @@ describe("buildAndPushCreditMemo", () => {
     expect(line.SalesItemLineDetail.Qty).toBe(3);
     expect(line.SalesItemLineDetail.UnitPrice).toBe(25);
   });
+
+  // -------------------------------------------------------------------------
+  // Sales-tax behavior. In Feldart's QBO realm (US Automated Sales Tax) a
+  // line with NO explicit TaxCodeRef defaults to taxable — omitting the
+  // txn-level TxnTaxDetail is NOT enough to make a CM non-taxable. Each line
+  // must carry TaxCodeRef = "TAX"/"NON" explicitly, mirroring the /process-
+  // return path and the b2b sender.
+  // -------------------------------------------------------------------------
+  type TaxLine = {
+    Description: string;
+    SalesItemLineDetail: { TaxCodeRef?: { value: string } };
+  };
+
+  it("marks every line NON when applyTax is false", async () => {
+    await buildAndPushCreditMemo({
+      rma: makeRma(),
+      items: [makeItem()],
+      shippingDeduction: "5.00",
+      restockingFee: "10.00",
+      applyTax: false,
+      taxCodeRef: null,
+    });
+    const payload = getLastPayload<{
+      Line: TaxLine[];
+      TxnTaxDetail?: unknown;
+    }>();
+    for (const line of payload.Line) {
+      expect(line.SalesItemLineDetail.TaxCodeRef).toEqual({ value: "NON" });
+    }
+    expect(payload.TxnTaxDetail).toBeUndefined();
+  });
+
+  it("defaults to NON lines when applyTax is omitted", async () => {
+    await buildAndPushCreditMemo({
+      rma: makeRma(),
+      items: [makeItem()],
+      shippingDeduction: null,
+      restockingFee: null,
+    });
+    const payload = getLastPayload<{
+      Line: TaxLine[];
+      TxnTaxDetail?: unknown;
+    }>();
+    expect(payload.Line[0]!.SalesItemLineDetail.TaxCodeRef).toEqual({
+      value: "NON",
+    });
+    expect(payload.TxnTaxDetail).toBeUndefined();
+  });
+
+  it("marks every line TAX and sets TxnTaxCodeRef when applyTax is true", async () => {
+    await buildAndPushCreditMemo({
+      rma: makeRma(),
+      items: [makeItem()],
+      shippingDeduction: "5.00",
+      restockingFee: "10.00",
+      applyTax: true,
+      taxCodeRef: "qb-tax-7",
+    });
+    const payload = getLastPayload<{
+      Line: TaxLine[];
+      TxnTaxDetail?: { TxnTaxCodeRef: { value: string } };
+    }>();
+    for (const line of payload.Line) {
+      expect(line.SalesItemLineDetail.TaxCodeRef).toEqual({ value: "TAX" });
+    }
+    expect(payload.TxnTaxDetail).toEqual({
+      TxnTaxCodeRef: { value: "qb-tax-7" },
+    });
+  });
 });
