@@ -2448,10 +2448,12 @@ function InvoicesPanel({
       .filter((r: InvoiceRow) => {
         if (statusFilter === "all") return true;
         const balance = Number(r.balance);
+        // Void invoices carry balance 0, so they must be excluded BEFORE the
+        // `balance <= 0` test — otherwise they'd be classed as Paid and leak
+        // into the Paid tab (they belong only under the Void tab).
         const isPaid =
-          r.status === "paid" ||
-          r.status === "applied" ||
-          balance <= 0;
+          r.status !== "void" &&
+          (r.status === "paid" || r.status === "applied" || balance <= 0);
         if (statusFilter === "open") return balance > 0;
         if (statusFilter === "paid") return isPaid;
         if (statusFilter === "overdue") return r.status === "overdue";
@@ -3230,11 +3232,13 @@ function InvoiceStatusBadge({
   status: string | null;
   isPaid: boolean;
 }) {
+  // Void first: a void invoice has balance 0 → isPaid would otherwise win and
+  // render a green "Paid" badge, making the Void state unreachable.
+  if (status === "void") return <Badge tone="medium">Void</Badge>;
   if (isPaid) return <Badge tone="success">Paid</Badge>;
   if (status === "overdue") return <Badge tone="critical">Overdue</Badge>;
   if (status === "partial") return <Badge tone="high">Partial</Badge>;
   if (status === "sent") return <Badge tone="info">Sent</Badge>;
-  if (status === "void") return <Badge tone="medium">Void</Badge>;
   if (status === "draft") return <Badge tone="medium">Draft</Badge>;
   if (status === "open") return <Badge tone="info">Open</Badge>;
   if (status === "applied") return <Badge tone="success">Applied</Badge>;

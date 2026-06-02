@@ -170,7 +170,7 @@ export function buildChaseDigestUserPrompt(accounts: ChaseAccount[]): string {
     } else {
       prompt += "- Last chased: never\n";
     }
-    prompt += `- Hold status: ${a.hold_status ?? "YES"}\n`;
+    prompt += `- Hold status: ${a.hold_status ?? "unknown"}\n`;
     if (a.action_plan && a.action_plan.trim()) {
       prompt += `- Existing AI Action Plan:\n${a.action_plan.trim()}\n`;
     } else {

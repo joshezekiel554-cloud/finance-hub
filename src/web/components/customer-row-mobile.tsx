@@ -27,7 +27,10 @@ type Props = {
 };
 
 function formatMoney(n: number): string {
-  return `£${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  // USD with 2dp — matches the desktop customer list/detail (`$${x.toFixed(2)}`).
+  // (Was previously `£` with 0 fraction digits, which showed the wrong currency
+  // and rounded pence off the AR figures the operator acts on.)
+  return `$${n.toFixed(2)}`;
 }
 
 function tierFromDaysOverdue(d: number | null): "critical" | "high" | "medium" | null {
