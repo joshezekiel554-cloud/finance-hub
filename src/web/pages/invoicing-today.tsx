@@ -1136,17 +1136,21 @@ function ShipmentCard({
   );
   const [unreadAck, setUnreadAck] = useState(false);
 
-  const flaggedRemoveIds = useMemo(
-    () =>
-      isInvoiceDoc
-        ? editedActions
-            .filter((a): a is Extract<ReconcileAction, { type: "remove" }> =>
-              a.type === "remove",
-            )
-            .map((a) => a.lineId)
-        : [],
-    [editedActions, isInvoiceDoc],
-  );
+  const flaggedRemoveIds = useMemo(() => {
+    if (!isInvoiceDoc) return [];
+    // ReconcileTable collapses invoice lines by SKU, so it renders ONE verify
+    // checkbox per SKU — for the LAST remove action of that SKU (last-write
+    // wins when it builds its display map). Mirror that here (dedupe removes to
+    // the last lineId per SKU) so the gate counts exactly the checkboxes the
+    // operator can actually tick. Without this, a duplicate-SKU invoice with
+    // two removed lines would count two flags but show one checkbox, leaving
+    // Send permanently stuck.
+    const lastRemoveBySku = new Map<string, string>();
+    for (const a of editedActions) {
+      if (a.type === "remove") lastRemoveBySku.set(a.sku.toUpperCase(), a.lineId);
+    }
+    return Array.from(lastRemoveBySku.values());
+  }, [editedActions, isInvoiceDoc]);
   const hasUnreadRows = isInvoiceDoc && row.unparsedRows.length > 0;
   const parseGapActive = flaggedRemoveIds.length > 0 || hasUnreadRows;
   const unresolvedFlagCount =
