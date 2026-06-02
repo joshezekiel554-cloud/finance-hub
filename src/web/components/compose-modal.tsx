@@ -448,6 +448,13 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
           "fixed z-50 flex flex-col bg-base p-0 shadow-xl",
           "inset-0 rounded-none",
           "md:left-auto md:right-0 md:top-0 md:bottom-auto md:h-full md:w-full md:max-w-2xl md:border-l md:border-default",
+          // The base DialogContent centers normal dialogs with
+          // `-translate-x-1/2 -translate-y-1/2`. This modal anchors itself
+          // instead (inset-0 / md:right-0 md:top-0), so that inherited
+          // translate must be cancelled — otherwise the container is shifted
+          // up by half its (full-viewport) height, pushing the header and the
+          // Send footer off-screen ("opens too high, can't see it or send").
+          "translate-x-0 translate-y-0",
         )}
       >
         <div className="flex items-start justify-between border-b border-default px-5 py-4">

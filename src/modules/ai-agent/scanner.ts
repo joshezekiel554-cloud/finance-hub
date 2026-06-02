@@ -73,6 +73,11 @@ export async function runScan(
         and(
           inArray(aiProposals.entityId, entityIds),
           eq(aiProposals.entityType, candidates[0]!.entityType),
+          // Scope the block to THIS category. Without it, any active proposal
+          // of one category (e.g. chase_next) for a customer suppressed every
+          // other category (e.g. cadence_statement) for that same customer —
+          // distinct, both-valid actions were silently lost.
+          eq(aiProposals.category, category),
           or(
             inArray(aiProposals.status, ["pending", "drafting", "drafted"]),
             and(

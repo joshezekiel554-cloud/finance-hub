@@ -31,6 +31,7 @@ import {
   dismissExtensivReceipt,
   confirmExtensivReceipt,
 } from "../../modules/returns/rma-service.js";
+import { validateTransition } from "../../modules/returns/rma-state.js";
 import returnsPhotosRoute from "./returns-photos.js";
 import {
   lookupItemPriceForCustomer,
@@ -128,7 +129,10 @@ const issueCreditMemoBodySchema = z.object({
     .array(
       z.object({
         itemId: z.string().min(1),
-        receivedQuantity: z.string().min(1),
+        // Numeric guard: a non-numeric override (e.g. "" or "abc") would
+        // parseFloat → NaN and reach QBO as Qty: NaN. Require a non-negative
+        // decimal string.
+        receivedQuantity: z.string().regex(/^\d+(\.\d+)?$/),
       }),
     )
     .optional(),
@@ -180,8 +184,15 @@ const processReturnBodySchema = z.object({
         qbItemId: z.string().min(1),
         sku: z.string().min(1).max(64),
         description: z.string().max(2000),
-        quantity: z.string().min(1),
-        unitPrice: z.string().min(1),
+        // Numeric guards: previously `.min(1)` only checked string length, so
+        // "abc" passed and parseFloat → NaN flowed into the QBO payload as
+        // Qty/UnitPrice/Amount. quantity must be a positive decimal; unitPrice
+        // allows a leading "-" so operators can enter negative deduction lines
+        // (shipping/restocking) by hand on this path.
+        quantity: z.string().regex(/^\d+(\.\d+)?$/).refine((v) => parseFloat(v) > 0, {
+          message: "quantity must be greater than 0",
+        }),
+        unitPrice: z.string().regex(/^-?\d+(\.\d+)?$/),
         taxable: z.boolean(),
       }),
     )
@@ -600,6 +611,21 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         return {
           error: `Credit memo ${rma.creditMemoDocNumber ?? rma.qboCreditMemoId} already issued for this RMA — refresh the page`,
         };
+      }
+
+      // State-machine guard. issue_credit_memo is only valid from "received"
+      // (or "approved" for damage RMAs). Without this, /process-return could
+      // issue a real QBO credit memo against a denied / cancelled / draft RMA
+      // — the inline path previously skipped the validateTransition check that
+      // the rma-service issueCreditMemo path enforces.
+      const transition = validateTransition({
+        currentStatus: rma.status,
+        returnType: rma.returnType,
+        action: "issue_credit_memo",
+      });
+      if (!transition.ok) {
+        reply.code(409);
+        return { error: transition.reason };
       }
 
       const customerRows = await db
