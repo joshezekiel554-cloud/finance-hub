@@ -24,6 +24,7 @@
 // rarely an issue in practice.
 
 import type { Job } from "bullmq";
+import { eq } from "drizzle-orm";
 import {
   listCalls,
   listMessages,
@@ -44,6 +45,9 @@ export type VocatechBackfillJobData = {
 
 export type VocatechBackfillJobResult = {
   calls: number;
+  // Existing rows enriched in place with newly-available
+  // summary/transcription/recording (re-run / one-off back-enrichment).
+  callsEnriched: number;
   messages: number;
 };
 
@@ -58,6 +62,7 @@ export async function vocatechBackfillHandler(
   log.info({ startDate, endDate, auto: !job.data.startDate }, "backfill starting");
 
   let callsTotal = 0;
+  let callsEnriched = 0;
   let messagesTotal = 0;
 
   // ---- Calls ----------------------------------------------------------------
@@ -70,10 +75,21 @@ export async function vocatechBackfillHandler(
       const kind = dbDirection === "outbound" ? "call_out" : "call_in";
 
       let transcription: string | null = null;
+      let summary: string | null = null;
       let recordingMediaId: string | null = null;
       const segWithTranscription = c.journey?.find((s) => s.transcription);
       if (segWithTranscription) {
         transcription = segWithTranscription.transcription ?? null;
+      }
+      // AI summary — the journey segment carries it (client type:
+      // VocatechCallJourneySegment.summary). The webhook path stores the
+      // call-level summary in `body`; mirror that here. Previously this was
+      // hardcoded to null, so NO backfilled call ever got a summary (and
+      // backfill is the primary populator) — that's why summaries never
+      // appeared. Harmless when the list omits it (stays null).
+      const segWithSummary = c.journey?.find((s) => s.summary);
+      if (segWithSummary) {
+        summary = segWithSummary.summary ?? null;
       }
       const segWithRecording = c.journey?.find((s) => s.recording_url);
       if (segWithRecording?.recording_url) {
@@ -92,7 +108,7 @@ export async function vocatechBackfillHandler(
         direction: dbDirection,
         startedAt: new Date(c.start_time),
         durationSeconds: c.duration,
-        body: null,
+        body: summary,
         transcription,
         recordingMediaId,
         groupNumber: c.group_number ?? null,
@@ -105,10 +121,32 @@ export async function vocatechBackfillHandler(
       // UPDATE/REPLACE row counts, not IGNORE-rejected inserts).
       if (result[0].affectedRows === 1) {
         callsTotal++;
+      } else if (summary || transcription || recordingMediaId) {
+        // Row already existed (a prior backfill, or a call.ended webhook that
+        // landed before transcription completed). Enrich it with whatever new
+        // data the list now carries. We ONLY set the fields we actually have,
+        // so we never null out data the webhook already delivered, and we
+        // never touch customerId / phoneLabelMatched (an operator may have
+        // manually matched this call). This is what lets a one-off backfill
+        // over historical dates back-fill summaries/recordings onto calls
+        // that were ingested before the summary was available.
+        const enrich: Partial<{
+          body: string;
+          transcription: string;
+          recordingMediaId: string;
+        }> = {};
+        if (summary) enrich.body = summary;
+        if (transcription) enrich.transcription = transcription;
+        if (recordingMediaId) enrich.recordingMediaId = recordingMediaId;
+        await db
+          .update(phoneCommunications)
+          .set(enrich)
+          .where(eq(phoneCommunications.sourceEventId, c.call_id));
+        callsEnriched++;
       }
     }
 
-    await job.updateProgress({ calls: callsTotal, messages: messagesTotal });
+    await job.updateProgress({ calls: callsTotal, callsEnriched, messages: messagesTotal });
 
     if (page >= res.meta.total_pages) break;
     page++;
@@ -150,7 +188,7 @@ export async function vocatechBackfillHandler(
       }
     }
 
-    await job.updateProgress({ calls: callsTotal, messages: messagesTotal });
+    await job.updateProgress({ calls: callsTotal, callsEnriched, messages: messagesTotal });
     if (msgPage >= res.meta.total_pages) break;
     msgPage++;
     if (msgPage > MAX_PAGES) {
@@ -158,6 +196,6 @@ export async function vocatechBackfillHandler(
     }
   }
 
-  log.info({ callsTotal, messagesTotal }, "backfill complete");
-  return { calls: callsTotal, messages: messagesTotal };
+  log.info({ callsTotal, callsEnriched, messagesTotal }, "backfill complete");
+  return { calls: callsTotal, callsEnriched, messages: messagesTotal };
 }
