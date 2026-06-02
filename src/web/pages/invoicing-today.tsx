@@ -80,6 +80,9 @@ type Row = {
   receivedAt: string | null;
   parseConfidence: number;
   parseMissingFields: string[];
+  // Items-table rows the parser couldn't read ("{sku} — {rawQty}"). Drives
+  // the parse-gap flag on this row. Empty when nothing was missed.
+  unparsedRows: string[];
   emailSubject: string;
   emailFrom: string;
   emailSnippet: string;

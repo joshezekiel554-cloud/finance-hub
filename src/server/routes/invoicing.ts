@@ -69,6 +69,9 @@ export type InvoicingTodayRow = {
   receivedAt: string | null;
   parseConfidence: number;
   parseMissingFields: string[];
+  // Items-table rows that looked like line items but couldn't be read (see
+  // ParseResult.unparsedRows). Drives the review-screen parse-gap flag.
+  unparsedRows: string[];
   // Raw email metadata + plain-text body (capped at 8 KB) so unparseable
   // rows can render a useful preview without a separate fetch.
   emailSubject: string;
@@ -1223,6 +1226,7 @@ async function buildRow(
     receivedAt: receivedAt?.toISOString() ?? null,
     parseConfidence: parseResult.confidence,
     parseMissingFields: parseResult.missingFields,
+    unparsedRows: parseResult.unparsedRows,
     emailSubject: email.subject,
     emailFrom: email.from,
     emailSnippet: email.snippet,
