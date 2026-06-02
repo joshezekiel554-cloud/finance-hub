@@ -50,6 +50,8 @@ export function parseShipmentHtml(html: string): ParseResult {
   // matchOne (which collapses empty captures to null).
   const shippingCostRaw = matchShippingCost(flat);
 
+  const { items: lineItems, unparsedRows } = parseLineItems(html);
+
   const shipment: ParsedShipment = {
     poNumber,
     shopifyOrderNumber: deriveShopifyOrderNumber(poNumber),
@@ -60,7 +62,7 @@ export function parseShipmentHtml(html: string): ParseResult {
     trackingNumber,
     shipDate: usDateToIso(shipDateRaw),
     shippingCost: normalizeShippingCost(shippingCostRaw),
-    lineItems: parseLineItems(html),
+    lineItems,
   };
 
   const missingFields: string[] = [];
@@ -77,6 +79,7 @@ export function parseShipmentHtml(html: string): ParseResult {
     shipment,
     confidence,
     missingFields,
+    unparsedRows,
     decodedHtml: html,
   };
 }
@@ -149,33 +152,98 @@ function normalizeShippingCost(value: string | null): string | null {
   return trimmed;
 }
 
-// Pulls SKU + qty rows from the order-summary HTML table. Skips the header row
-// (Item / Quantity). Tolerant to whitespace and case-insensitive tag names.
-// Zero quantities are preserved — the reconciler interprets qty=0 as a split
-// shipment signal and proposes a remove-from-invoice action.
-function parseLineItems(html: string): ParsedLineItem[] {
+// Pulls SKU + qty rows from the order-summary HTML table, AND records rows
+// that look like items but couldn't be read (the parse-gap signal).
+//
+// Scoping: we first identify the items table (the <table> with the most
+// numeric-quantity rows — robust to header styling) and only parse rows there.
+// This stops us pulling phantom "items" from layout tables, and lets us
+// confidently flag a row with a SKU but an unreadable quantity as a possible
+// miss. If no items table can be identified (e.g. malformed email), we fall
+// back to scanning the whole document for items and flag NOTHING — an empty
+// `unparsedRows` is correct rather than a stream of false positives.
+//
+// Header rows (<th>, or literal "Item"/"Quantity"/"SKU"/"Qty" cells) are never
+// items and never flagged. Zero quantities are preserved — the reconciler
+// reads qty=0 as a split-shipment signal.
+const NUMERIC_QTY = /^-?\d+(\.\d+)?$/;
+
+function parseLineItems(html: string): {
+  items: ParsedLineItem[];
+  unparsedRows: string[];
+} {
   const items: ParsedLineItem[] = [];
+  const unparsedRows: string[] = [];
+
+  const itemsTable = extractItemsTable(html);
+  const scope = itemsTable ?? html;
+  const collectUnparsed = itemsTable !== null;
+
+  for (const cells of iterRows(scope, { skipHeaderRows: true })) {
+    if (cells.length < 2) continue;
+    const sku = cells[0]!;
+    const qty = cells[1]!;
+    if (isHeaderLabel(sku) && isHeaderLabel(qty)) continue;
+    if (NUMERIC_QTY.test(qty)) {
+      if (sku.length > 0) items.push({ sku, quantity: qty });
+      continue;
+    }
+    // Non-numeric quantity but a SKU is present, inside the items table: this
+    // row was meant to be a line item and we couldn't read it. Record it.
+    if (collectUnparsed && sku.length > 0) {
+      unparsedRows.push(`${sku} — ${qty}`);
+    }
+  }
+
+  return { items, unparsedRows };
+}
+
+// Yields the trimmed cell-text arrays for each <tr> in the given HTML. When
+// skipHeaderRows is set, rows containing a <th> cell are skipped entirely
+// (they are headers, never data).
+function* iterRows(
+  html: string,
+  opts: { skipHeaderRows: boolean },
+): Generator<string[]> {
   const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
-
   let rowMatch: RegExpExecArray | null;
   while ((rowMatch = rowRe.exec(html)) !== null) {
     const rowHtml = rowMatch[1] ?? "";
+    if (opts.skipHeaderRows && /<th[\s>]/i.test(rowHtml)) continue;
     const cells: string[] = [];
     let cellMatch: RegExpExecArray | null;
     cellRe.lastIndex = 0;
     while ((cellMatch = cellRe.exec(rowHtml)) !== null) {
       cells.push((cellMatch[1] ?? "").replace(/<[^>]+>/g, "").trim());
     }
-    if (cells.length < 2) continue;
-    const sku = cells[0]!;
-    const qty = cells[1]!;
-    // Skip the header row: header cells use <th>, not <td>. Header text is
-    // "Item" / "Quantity"; reject any row that doesn't have a numeric qty.
-    if (!/^-?\d+(\.\d+)?$/.test(qty)) continue;
-    if (sku.length === 0) continue;
-    items.push({ sku, quantity: qty });
+    yield cells;
   }
+}
 
-  return items;
+// Picks the <table> with the most numeric-quantity data rows — that's the
+// items table regardless of how its header is styled. Returns its full HTML,
+// or null when no table has any numeric-qty rows.
+function extractItemsTable(html: string): string | null {
+  const tableRe = /<table[\s\S]*?<\/table>/gi;
+  let best: string | null = null;
+  let bestScore = 0;
+  let m: RegExpExecArray | null;
+  while ((m = tableRe.exec(html)) !== null) {
+    const tableHtml = m[0];
+    let score = 0;
+    for (const cells of iterRows(tableHtml, { skipHeaderRows: true })) {
+      if (cells.length >= 2 && NUMERIC_QTY.test(cells[1]!)) score++;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = tableHtml;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+function isHeaderLabel(s: string): boolean {
+  const v = s.trim().toLowerCase();
+  return v === "item" || v === "quantity" || v === "sku" || v === "qty";
 }

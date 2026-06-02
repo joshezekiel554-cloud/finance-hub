@@ -143,3 +143,54 @@ describe("parseShipmentHtml — edge cases", () => {
     expect(result.shipment.shopifyOrderNumber).toBeNull();
   });
 });
+
+describe("parseShipmentHtml — unparsed item rows (parse-gap signal)", () => {
+  const base = `
+    PO Number: SHOP55555<br/>
+    Transaction Number: 44444<br/>
+    to your customer Gap Co via UPS.
+    Carrier: UPS<br/>
+    Tracking Number: TRK9<br/>
+    Ship Date: 3/3/2026<br/>
+    Shipping Cost: <br/>`;
+
+  it("captures an items-table row whose quantity is unreadable", () => {
+    const html =
+      base +
+      `<table>
+        <tr><th>Item</th><th>Quantity</th></tr>
+        <tr><td>GOODSKU</td><td>2.00</td></tr>
+        <tr><td>BADSKU</td><td>1 ea</td></tr>
+      </table>`;
+    const result = parseShipmentHtml(html);
+    // The clean row still parses; the unreadable one is recorded, not dropped.
+    expect(result.shipment.lineItems).toEqual([
+      { sku: "GOODSKU", quantity: "2.00" },
+    ]);
+    expect(result.unparsedRows).toEqual(["BADSKU — 1 ea"]);
+  });
+
+  it("does not flag the header row or empty-SKU rows", () => {
+    const html =
+      base +
+      `<table>
+        <tr><th>Item</th><th>Quantity</th></tr>
+        <tr><td>SKUA</td><td>1.00</td></tr>
+        <tr><td></td><td>oops</td></tr>
+      </table>`;
+    const result = parseShipmentHtml(html);
+    // <th> header skipped; empty-SKU row is layout noise, not a missed item.
+    expect(result.unparsedRows).toEqual([]);
+    expect(result.shipment.lineItems).toEqual([{ sku: "SKUA", quantity: "1.00" }]);
+  });
+
+  it("reports no unparsed rows on a clean fixture", () => {
+    const result = parseShipmentEml(loadFixture());
+    expect(result.unparsedRows).toEqual([]);
+  });
+
+  it("reports no unparsed rows when there is no items table (no false positives)", () => {
+    const result = parseShipmentHtml("<html>not a shipment notification</html>");
+    expect(result.unparsedRows).toEqual([]);
+  });
+});

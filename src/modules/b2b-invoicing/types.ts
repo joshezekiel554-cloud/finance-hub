@@ -44,6 +44,12 @@ export type ParseResult = {
   // Field names that the regex parser failed to extract. Empty array on a
   // perfect parse.
   missingFields: string[];
+  // Rows in the items table that look like an item (non-empty SKU cell) but
+  // whose quantity couldn't be read, so they were NOT turned into line items.
+  // Each entry is the row's visible text ("{sku} — {rawQty}"). Empty unless
+  // the items table was positively identified AND a row failed to parse — it
+  // is the "possible parse gap" signal that drives the review-screen flag.
+  unparsedRows: string[];
   // Decoded HTML body, retained for re-parsing/debugging. Not persisted.
   decodedHtml: string;
 };
