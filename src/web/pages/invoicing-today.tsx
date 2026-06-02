@@ -80,6 +80,9 @@ type Row = {
   receivedAt: string | null;
   parseConfidence: number;
   parseMissingFields: string[];
+  // Items-table rows the parser couldn't read ("{sku} — {rawQty}"). Drives
+  // the parse-gap flag on this row. Empty when nothing was missed.
+  unparsedRows: string[];
   emailSubject: string;
   emailFrom: string;
   emailSnippet: string;
@@ -1118,6 +1121,50 @@ function ShipmentCard({
     [editedActions],
   );
 
+  // --- Parse-gap verification (B2B invoices only) ---------------------------
+  // Surface possible shipment-parser misses and make the operator verify them
+  // against the source email before Send unlocks. Two flag sources:
+  //   1. Any line we'd REMOVE ("not shipped") — could be a genuinely-shipped
+  //      line the parser dropped (→ silent under-billing).
+  //   2. Rows in the email's items table we couldn't read (`unparsedRows`).
+  // Sales receipts are settled (the send path ignores line actions), so they
+  // are never gated. `flaggedRemoveIds` recomputes from editedActions, so
+  // "Keep instead" (which converts a remove → keep) drops a line from the set.
+  const isInvoiceDoc = row.qbInvoice?.docType === "invoice";
+  const [verifiedLineIds, setVerifiedLineIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [unreadAck, setUnreadAck] = useState(false);
+
+  const flaggedRemoveIds = useMemo(() => {
+    if (!isInvoiceDoc) return [];
+    // ReconcileTable collapses invoice lines by SKU, so it renders ONE verify
+    // checkbox per SKU — for the LAST remove action of that SKU (last-write
+    // wins when it builds its display map). Mirror that here (dedupe removes to
+    // the last lineId per SKU) so the gate counts exactly the checkboxes the
+    // operator can actually tick. Without this, a duplicate-SKU invoice with
+    // two removed lines would count two flags but show one checkbox, leaving
+    // Send permanently stuck.
+    const lastRemoveBySku = new Map<string, string>();
+    for (const a of editedActions) {
+      if (a.type === "remove") lastRemoveBySku.set(a.sku.toUpperCase(), a.lineId);
+    }
+    return Array.from(lastRemoveBySku.values());
+  }, [editedActions, isInvoiceDoc]);
+  const hasUnreadRows = isInvoiceDoc && row.unparsedRows.length > 0;
+  const parseGapActive = flaggedRemoveIds.length > 0 || hasUnreadRows;
+  const unresolvedFlagCount =
+    flaggedRemoveIds.filter((id) => !verifiedLineIds.has(id)).length +
+    (hasUnreadRows && !unreadAck ? 1 : 0);
+
+  const toggleVerify = (lineId: string) =>
+    setVerifiedLineIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(lineId)) next.delete(lineId);
+      else next.add(lineId);
+      return next;
+    });
+
   // Edit the final qty for an existing invoice line. Handles every
   // transition between keep / qty_change / remove based on what the
   // operator types:
@@ -1431,6 +1478,33 @@ function ShipmentCard({
 
         {row.reconcileResult && (
           <>
+            {parseGapActive && (
+              <div className="space-y-2">
+                <ParseGapBanner
+                  unresolved={unresolvedFlagCount}
+                  removeCount={flaggedRemoveIds.length}
+                  unreadCount={hasUnreadRows ? row.unparsedRows.length : 0}
+                />
+                {hasUnreadRows && (
+                  <label className="flex cursor-pointer items-start gap-2 text-xs text-secondary">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={unreadAck}
+                      onChange={(e) => {
+                        setUnreadAck(e.target.checked);
+                        setSendResult(null);
+                      }}
+                    />
+                    <span>
+                      Checked the email — the {row.unparsedRows.length} unreadable
+                      row{row.unparsedRows.length > 1 ? "s are" : " is"} accounted for
+                    </span>
+                  </label>
+                )}
+                <SourceEmailPanel row={row} />
+              </div>
+            )}
             <ReconcileTable
               row={row}
               editedActions={editedActions}
@@ -1439,6 +1513,8 @@ function ShipmentCard({
               onAddPriceChange={updateAddPrice}
               onAddQtyChange={updateAddQty}
               onRemoveAddLine={removeAddLine}
+              verifiedLineIds={verifiedLineIds}
+              onToggleVerify={toggleVerify}
             />
             <AddLinePicker onPick={addQbItemLine} />
             <EmailRecipients
@@ -1574,6 +1650,15 @@ function ShipmentCard({
                     </span>
                   </>
                 )}
+                {unresolvedFlagCount > 0 && (
+                  <>
+                    {" "}
+                    · <span className="text-accent-warning">
+                      verify {unresolvedFlagCount} flagged item
+                      {unresolvedFlagCount > 1 ? "s" : ""}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -1581,7 +1666,11 @@ function ShipmentCard({
               <Button
                 variant="primary"
                 size="sm"
-                disabled={blockingAdds.length > 0 || sendMutation.isPending}
+                disabled={
+                  blockingAdds.length > 0 ||
+                  unresolvedFlagCount > 0 ||
+                  sendMutation.isPending
+                }
                 onClick={() => sendMutation.mutate()}
               >
                 {sendMutation.isPending
@@ -2007,6 +2096,8 @@ function ReconcileTable({
   onAddPriceChange,
   onAddQtyChange,
   onRemoveAddLine,
+  verifiedLineIds,
+  onToggleVerify,
 }: {
   row: Row;
   editedActions: ReconcileAction[];
@@ -2015,6 +2106,10 @@ function ReconcileTable({
   onAddPriceChange: (sku: string, newPrice: number) => void;
   onAddQtyChange: (sku: string, newQty: number) => void;
   onRemoveAddLine: (sku: string) => void;
+  // Parse-gap verification: which removed lines the operator has verified
+  // against the source email, and a toggle. Empty set / no-op on receipts.
+  verifiedLineIds: Set<string>;
+  onToggleVerify: (lineId: string) => void;
 }) {
   if (!row.qbInvoice || !row.reconcileResult) return null;
 
@@ -2209,7 +2304,7 @@ function ReconcileTable({
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <ActionBadge action={action} />
                     {isAdd && (
                       <button
@@ -2229,6 +2324,31 @@ function ReconcileTable({
                           <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
                         </svg>
                       </button>
+                    )}
+                    {/* Parse-gap controls on a flagged removal (invoices only —
+                        receipts render read-only). "Keep instead" restores the
+                        line to its original invoice qty via the shared qty
+                        handler (remove + same qty → keep). The verify checkbox
+                        clears this line's send gate. */}
+                    {isRemove && lineId && !isReadOnly && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onLineQtyChange(lineId, r.currentQty ?? 0)}
+                          className="rounded-md border border-default px-2 py-0.5 text-[11px] text-secondary hover:bg-elevated"
+                          title="It was actually shipped — keep it on the invoice"
+                        >
+                          Keep instead
+                        </button>
+                        <label className="flex cursor-pointer items-center gap-1 text-[11px] text-muted">
+                          <input
+                            type="checkbox"
+                            checked={verifiedLineIds.has(lineId)}
+                            onChange={() => onToggleVerify(lineId)}
+                          />
+                          verified
+                        </label>
+                      </>
                     )}
                   </div>
                 </td>
@@ -2250,6 +2370,142 @@ function ReconcileTable({
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+function ParseGapBanner({
+  unresolved,
+  removeCount,
+  unreadCount,
+}: {
+  unresolved: number;
+  removeCount: number;
+  unreadCount: number;
+}) {
+  const resolved = unresolved === 0;
+  const parts: string[] = [];
+  if (removeCount > 0)
+    parts.push(`${removeCount} line${removeCount > 1 ? "s" : ""} marked "not shipped"`);
+  if (unreadCount > 0)
+    parts.push(`${unreadCount} unreadable row${unreadCount > 1 ? "s" : ""} in the email`);
+  return (
+    <div
+      className={cn(
+        "rounded-md border px-3 py-2 text-xs leading-relaxed",
+        resolved
+          ? "border-accent-success/40 bg-accent-success/10 text-accent-success"
+          : "border-accent-warning/50 bg-accent-warning/10 text-accent-warning",
+      )}
+    >
+      {resolved ? (
+        <span>
+          <span className="font-medium">Verified.</span> All flagged items checked
+          against the email — safe to send.
+        </span>
+      ) : (
+        <span>
+          <span className="font-medium">Possible parse gap — verify before sending.</span>{" "}
+          {parts.join(" · ")}. If an item was actually shipped, sending now would
+          drop it and under-bill the customer. Open the source email below, then
+          tick each flagged line (or use “Keep instead”).
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Verify aid: the email's parsed items + any unreadable rows side-by-side with
+// what we parsed, plus a collapsible plain-text view of the full email. The
+// body is the text/plain part (server caps it at 8 KB) so it renders safely in
+// a <pre> — no HTML injection.
+function SourceEmailPanel({ row }: { row: Row }) {
+  const [open, setOpen] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+  return (
+    <div className="rounded-md border border-dashed border-default bg-elevated/30 px-3 py-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-xs font-medium text-secondary hover:text-primary"
+      >
+        {open ? "▴" : "▾"} View source email (verify)
+      </button>
+      {open && (
+        <div className="mt-2 space-y-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">
+                Email items
+              </div>
+              <table className="w-full text-xs">
+                <tbody>
+                  {row.parsed.lineItems.map((li) => (
+                    <tr key={li.sku} className="border-t border-default/60">
+                      <td className="py-1 font-mono">{li.sku}</td>
+                      <td className="py-1 text-right tabular-nums">{li.quantity}</td>
+                    </tr>
+                  ))}
+                  {row.unparsedRows.map((u, i) => (
+                    <tr
+                      key={`unparsed-${i}`}
+                      className="border-t border-default/60 text-accent-danger"
+                    >
+                      <td className="py-1" colSpan={2}>
+                        ⚠ {u}{" "}
+                        <span className="opacity-70">(couldn’t read qty)</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">
+                What we parsed
+              </div>
+              <table className="w-full text-xs">
+                <tbody>
+                  {row.parsed.lineItems.map((li) => (
+                    <tr key={li.sku} className="border-t border-default/60">
+                      <td className="py-1 font-mono">{li.sku}</td>
+                      <td className="py-1 text-right tabular-nums">{li.quantity}</td>
+                    </tr>
+                  ))}
+                  {row.unparsedRows.length > 0 && (
+                    <tr className="border-t border-default/60 text-muted">
+                      <td className="py-1" colSpan={2}>
+                        ({row.unparsedRows.length} row
+                        {row.unparsedRows.length > 1 ? "s" : ""} not parsed)
+                      </td>
+                    </tr>
+                  )}
+                  {row.parsed.lineItems.length === 0 &&
+                    row.unparsedRows.length === 0 && (
+                      <tr>
+                        <td className="py-1 text-muted">—</td>
+                      </tr>
+                    )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowFull((v) => !v)}
+              className="text-xs text-secondary hover:text-primary"
+            >
+              {showFull ? "▴" : "▾"} Show full email
+            </button>
+            {showFull && (
+              <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-default bg-base p-2 text-[11px] text-secondary">
+                {row.emailBody || "(no email body captured)"}
+              </pre>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
