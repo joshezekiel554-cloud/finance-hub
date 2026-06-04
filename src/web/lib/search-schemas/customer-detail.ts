@@ -4,8 +4,10 @@
 // filters use namespace prefixes (inv*, email*) so switching tabs preserves
 // the other tabs' filter state.
 //
-// Tasks/Activity/Orders/Notes: no list-style filter state — omitted.
+// Tasks/Activity/Orders: no list-style filter state — omitted.
 // Returns: filter state lives inside ReturnsPanel sub-component, not page-level.
+// (Notes is no longer a tab — it lives in the context rail; a stale ?tab=notes
+//  falls back to Activity via .catch below.)
 
 import { z } from "zod";
 import { RMA_STATUSES, RMA_RETURN_TYPES } from "../../../db/schema/returns";
@@ -18,7 +20,6 @@ export const customerDetailSearchSchema = z.object({
       "invoices",
       "orders",
       "tasks",
-      "notes",
       "returns",
       "calls_sms",
     ])

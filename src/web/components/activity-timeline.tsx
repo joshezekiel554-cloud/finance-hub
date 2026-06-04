@@ -46,6 +46,10 @@ import { Badge } from "./ui/badge";
 import { useEventStream } from "../lib/use-event-stream";
 import { cn } from "../lib/cn";
 import { AiProposalBadge } from "./autopilot/ai-proposal-badge";
+import {
+  groupActivitiesByDay,
+  formatDayLabel,
+} from "./activity-timeline-group.js";
 
 export type ActivityKind =
   | "email_in"
@@ -298,122 +302,168 @@ export function ActivityTimeline({
         </div>
       )}
 
-      <Card>
-        <CardBody className="p-0">
-          <ul className="divide-y divide-default">
-            {filtered.map((activity) => {
-              const m = metaFor(activity.kind);
-              const isExpanded = expanded.has(activity.id);
-              const hasBody = Boolean(activity.body);
-              const isPhoneComm = PHONE_COMM_KINDS.has(activity.kind);
-              return (
-                <li key={activity.id} className="px-4 py-3 text-sm">
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={cn(
-                        "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full",
-                        m.tone === "info" && "bg-accent-info/10 text-accent-info",
-                        m.tone === "success" &&
-                          "bg-accent-success/10 text-accent-success",
-                        m.tone === "medium" &&
-                          "bg-accent-warning/10 text-accent-warning",
-                        m.tone === "neutral" && "bg-elevated text-secondary",
-                      )}
-                    >
-                      <m.icon className="size-3.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <button
-                          type="button"
-                          disabled={!hasBody}
-                          onClick={() => {
-                            if (hasBody) toggleExpanded(activity.id);
-                          }}
+      {filtered.length === 0 ? (
+        <Card>
+          <CardBody className="py-6 text-center text-sm text-muted">
+            No activities match the selected filters.
+          </CardBody>
+        </Card>
+      ) : (
+        <div className="space-y-5">
+          {groupActivitiesByDay(filtered).map((group) => (
+            <div key={group.dayKey}>
+              <div className="mb-2 ml-11 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                {formatDayLabel(group.items[0]!.occurredAt)}
+              </div>
+              {/* Day's events on a single connector line. The line sits behind
+                  the nodes (which have an opaque bg) at the node centre. */}
+              <div className="relative">
+                <div
+                  aria-hidden
+                  className="absolute bottom-3 left-[15px] top-3 w-0.5 bg-default"
+                />
+                <div className="space-y-2.5">
+                  {group.items.map((activity) => {
+                    const m = metaFor(activity.kind);
+                    const isExpanded = expanded.has(activity.id);
+                    const hasBody = Boolean(activity.body);
+                    const isPhoneComm = PHONE_COMM_KINDS.has(activity.kind);
+                    const isPayment = activity.kind === "qbo_payment";
+                    return (
+                      <div
+                        key={activity.id}
+                        className="relative grid grid-cols-[32px_1fr] gap-3"
+                      >
+                        <div
                           className={cn(
-                            "min-w-0 flex-1 truncate text-left font-medium",
-                            hasBody && "cursor-pointer hover:text-accent-primary",
+                            "z-10 mt-0.5 flex size-8 items-center justify-center rounded-full border-2 bg-base",
+                            m.tone === "info" &&
+                              "border-accent-info/40 text-accent-info",
+                            m.tone === "success" &&
+                              "border-accent-success/50 text-accent-success",
+                            m.tone === "medium" &&
+                              "border-accent-warning/40 text-accent-warning",
+                            m.tone === "neutral" &&
+                              "border-default text-secondary",
                           )}
                         >
-                          {hasBody && (
-                            <span className="mr-1 inline-block align-middle text-muted">
-                              {isExpanded ? (
-                                <ChevronDown className="inline size-3" />
-                              ) : (
-                                <ChevronRight className="inline size-3" />
-                              )}
-                            </span>
-                          )}
-                          {activity.subject ?? m.label}
-                        </button>
-                        <span className="shrink-0 text-xs text-muted">
-                          {formatTime(activity.occurredAt)}
-                        </span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-secondary">
-                        <Badge tone={m.tone}>{m.label}</Badge>
-                        {activity.meta?.amount !== undefined &&
-                          activity.meta.amount > 0 && (
-                            <Badge tone="neutral">
-                              {formatAmount(
-                                activity.meta.amount,
-                                activity.meta.currency,
-                              )}
-                            </Badge>
-                          )}
-                        {activity.meta?.docNumber && (
-                          <span className="text-muted">
-                            #{activity.meta.docNumber}
-                          </span>
-                        )}
-                        {isPhoneComm && activity.meta?.phoneLabelMatched && (
-                          <Badge tone="neutral">
-                            {activity.meta.phoneLabelMatched}
-                          </Badge>
-                        )}
-                        {isPhoneComm && activity.meta?.smsStatus && (
-                          <Badge tone="neutral">{activity.meta.smsStatus}</Badge>
-                        )}
-                        <PdfLink kind={activity.kind} qbId={activity.meta?.qbId} />
-                        <RmaLink refType={activity.refType} refId={activity.refId} />
-                        {isPhoneComm && onJumpToCallsSms && (
-                          <button
-                            type="button"
-                            onClick={onJumpToCallsSms}
-                            className="inline-flex items-center gap-1 text-accent-primary hover:underline"
-                          >
-                            <ArrowUpRight className="size-3" />
-                            Open in Calls & SMS
-                          </button>
-                        )}
-                        {activity.aiProposalId && <AiProposalBadge proposalId={activity.aiProposalId} />}
-                        <span className="text-muted">via {activity.source}</span>
-                      </div>
-                      {hasBody && isExpanded && (
-                        <div className="mt-2 whitespace-pre-wrap rounded-md border border-default bg-subtle p-3 text-xs text-secondary">
-                          {activity.body}
+                          <m.icon className="size-3.5" />
                         </div>
-                      )}
-                      {/* Expanded RMA meta — e.g. credit memo doc number */}
-                      {activity.kind === "rma_credit_memo_issued" &&
-                        activity.meta?.creditMemoDocNumber && (
-                          <div className="mt-1 text-xs text-muted">
-                            CM #{activity.meta.creditMemoDocNumber}
+                        <div
+                          className={cn(
+                            "min-w-0 rounded-lg border px-3 py-2 text-sm",
+                            isPayment
+                              ? "border-accent-success/30 bg-accent-success/5"
+                              : "border-default bg-base",
+                          )}
+                        >
+                          <div className="flex items-baseline justify-between gap-2">
+                            <button
+                              type="button"
+                              disabled={!hasBody}
+                              onClick={() => {
+                                if (hasBody) toggleExpanded(activity.id);
+                              }}
+                              className={cn(
+                                "min-w-0 flex-1 truncate text-left font-medium",
+                                hasBody &&
+                                  "cursor-pointer hover:text-accent-primary",
+                              )}
+                            >
+                              {hasBody && (
+                                <span className="mr-1 inline-block align-middle text-muted">
+                                  {isExpanded ? (
+                                    <ChevronDown className="inline size-3" />
+                                  ) : (
+                                    <ChevronRight className="inline size-3" />
+                                  )}
+                                </span>
+                              )}
+                              {activity.subject ?? m.label}
+                            </button>
+                            <span className="shrink-0 text-xs text-muted">
+                              {formatClock(activity.occurredAt)} ·{" "}
+                              {sourceLabel(activity.source)}
+                            </span>
                           </div>
-                        )}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-            {filtered.length === 0 && (
-              <li className="px-4 py-6 text-center text-sm text-muted">
-                No activities match the selected filters.
-              </li>
-            )}
-          </ul>
-        </CardBody>
-      </Card>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-secondary">
+                            {activity.meta?.amount !== undefined &&
+                              activity.meta.amount > 0 && (
+                                <span
+                                  className={cn(
+                                    "font-semibold",
+                                    isPayment
+                                      ? "text-accent-success"
+                                      : "text-primary",
+                                  )}
+                                >
+                                  {isPayment ? "+" : ""}
+                                  {formatAmount(
+                                    activity.meta.amount,
+                                    activity.meta.currency,
+                                  )}
+                                </span>
+                              )}
+                            {activity.meta?.docNumber && (
+                              <span className="text-muted">
+                                #{activity.meta.docNumber}
+                              </span>
+                            )}
+                            {isPhoneComm && activity.meta?.phoneLabelMatched && (
+                              <Badge tone="neutral">
+                                {activity.meta.phoneLabelMatched}
+                              </Badge>
+                            )}
+                            {isPhoneComm && activity.meta?.smsStatus && (
+                              <Badge tone="neutral">
+                                {activity.meta.smsStatus}
+                              </Badge>
+                            )}
+                            <PdfLink
+                              kind={activity.kind}
+                              qbId={activity.meta?.qbId}
+                            />
+                            <RmaLink
+                              refType={activity.refType}
+                              refId={activity.refId}
+                            />
+                            {isPhoneComm && onJumpToCallsSms && (
+                              <button
+                                type="button"
+                                onClick={onJumpToCallsSms}
+                                className="inline-flex items-center gap-1 text-accent-primary hover:underline"
+                              >
+                                <ArrowUpRight className="size-3" />
+                                Open in Calls &amp; SMS
+                              </button>
+                            )}
+                            {activity.aiProposalId && (
+                              <AiProposalBadge
+                                proposalId={activity.aiProposalId}
+                              />
+                            )}
+                          </div>
+                          {activity.kind === "rma_credit_memo_issued" &&
+                            activity.meta?.creditMemoDocNumber && (
+                              <div className="mt-1 text-xs text-muted">
+                                CM #{activity.meta.creditMemoDocNumber}
+                              </div>
+                            )}
+                          {hasBody && isExpanded && (
+                            <div className="mt-2 whitespace-pre-wrap rounded-md border border-default bg-subtle p-3 text-xs text-secondary">
+                              {activity.body}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -488,29 +538,30 @@ function formatAmount(amount: number, currency: string | null | undefined): stri
   return `$${amount.toFixed(2)}`;
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  const now = Date.now();
-  const diffMs = now - d.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return `${diffDay}d ago`;
-  // Older than a week: include time so multiple same-day emails render
-  // in a readable order. Year only when older than a year ago — keeps
-  // recent rows tight ("25 Nov, 14:32" vs "25 Nov 2025, 14:32").
-  const datePart = d.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: diffDay > 365 ? "numeric" : undefined,
-  });
-  const timePart = d.toLocaleTimeString(undefined, {
-    hour: "2-digit",
+// Per-item clock — the day header carries the date, so each event just shows
+// its time. "4:30 PM".
+function formatClock(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "numeric",
     minute: "2-digit",
-    hour12: false,
   });
-  return `${datePart}, ${timePart}`;
+}
+
+// Friendly source label for the per-item byline.
+function sourceLabel(source: string): string {
+  switch (source) {
+    case "qbo_sync":
+      return "QB sync";
+    case "user_action":
+      return "you";
+    case "app_send":
+      return "sent";
+    case "gmail_poll":
+    case "gmail":
+      return "Gmail";
+    case "vocatech":
+      return "phone";
+    default:
+      return source;
+  }
 }

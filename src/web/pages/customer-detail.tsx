@@ -7,20 +7,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Pause,
-  Play,
   Mail,
   FileText,
   CheckCircle2,
   Pencil,
   X,
-  ShoppingBag,
-  CreditCard,
-  ExternalLink,
   Send,
   RotateCcw,
   Plus,
   ClipboardList,
+  MoreHorizontal,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "../components/ui/dropdown-menu";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 import { CollapsibleCard } from "../components/ui/collapsible-card";
@@ -126,10 +129,11 @@ type TabKey =
   | "invoices"
   | "orders"
   | "tasks"
-  | "notes"
   | "returns"
   | "calls_sms";
 
+// Notes are no longer a tab — they live in the always-visible context rail
+// (and every manual note still appears in the Activity timeline).
 const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "Activity" },
   { key: "emails", label: "Emails" },
@@ -137,15 +141,8 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "invoices", label: "Invoices" },
   { key: "orders", label: "Orders" },
   { key: "tasks", label: "Tasks" },
-  { key: "notes", label: "Notes" },
   { key: "returns", label: "Returns" },
 ];
-
-type ShopifyTagsResponse = {
-  matched: boolean;
-  shopifyCustomerId?: string;
-  tags: string[];
-};
 
 // Plain text from the AI card's action args → TipTap-friendly HTML.
 // Blank-line-separated paragraphs become <p>; intra-paragraph newlines
@@ -259,15 +256,6 @@ export default function CustomerDetailPage() {
     setFilter("draftReplyFor", undefined, { history: "replace" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.draftReplyFor, data?.customer.id]);
-
-  const tagsQuery = useQuery<ShopifyTagsResponse>({
-    queryKey: ["shopify-tags", customerId],
-    queryFn: async () => {
-      const res = await fetch(`/api/customers/${customerId}/shopify-tags`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-  });
 
   // Current authenticated operator — used by TaskDetailDrawer for
   // mention resolution + watcher self-attribution. Same query the
@@ -456,25 +444,6 @@ export default function CustomerDetailPage() {
         holdStatus={customer.holdStatus}
       />
 
-      <button
-        type="button"
-        onClick={() => agentModeMutation.mutate(!customer.agentModeExcluded)}
-        disabled={agentModeMutation.isPending}
-        className="text-xs hover:underline disabled:opacity-50"
-      >
-        Autopilot: {customer.agentModeExcluded ? "OFF (excluded)" : "ON"} — click to flip
-      </button>
-
-      <CustomerAiCard
-        customerId={customer.id}
-        onAction={handleAiCardAction}
-      />
-
-      <AiContextCard
-        customerId={customer.id}
-        initial={customer.aiCustomerContext}
-      />
-
       {kpi?.hasChaseDismissal && (
         <div className="flex items-center justify-between gap-2 rounded border border-default bg-subtle px-3 py-2 text-xs">
           <span className="text-secondary">
@@ -497,17 +466,20 @@ export default function CustomerDetailPage() {
           <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
             {customer.displayName}
           </h1>
-          <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-secondary">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm text-secondary">
             {customer.primaryEmail && (
               <span className="inline-flex items-center gap-1">
-                <Mail className="size-3.5" />
+                <Mail className="size-3.5 text-muted" />
                 {customer.primaryEmail}
               </span>
             )}
-            {customer.paymentTerms && (
-              <span>Terms: {customer.paymentTerms}</span>
+            {customer.phone && (
+              <span className="text-muted">· {customer.phone}</span>
             )}
             <CustomerTypeBadge type={customer.customerType} />
+            {customer.paymentTerms && (
+              <Badge tone="neutral">{customer.paymentTerms}</Badge>
+            )}
             {customer.holdStatus === "hold" ? (
               <Badge tone="critical">
                 <Pause className="mr-1 size-3" />
@@ -535,49 +507,86 @@ export default function CustomerDetailPage() {
                 RMA in flight
               </Badge>
             ) : null}
+            {kpi?.openTaskCount && kpi.openTaskCount > 0 ? (
+              <Badge
+                tone="neutral"
+                title="Open tasks for this customer — see the Tasks tab"
+              >
+                {kpi.openTaskCount} open task{kpi.openTaskCount === 1 ? "" : "s"}
+              </Badge>
+            ) : null}
             {kpi?.lastContactedAt ? (
               <span
                 className="text-xs text-muted"
                 title={new Date(kpi.lastContactedAt).toLocaleString()}
               >
-                Last contacted {detailRelativeTime(kpi.lastContactedAt)}
+                · last contacted {detailRelativeTime(kpi.lastContactedAt)}
               </span>
             ) : null}
           </div>
-          <CustomerRecipientsRow
-            primaryEmail={customer.primaryEmail}
-            billingEmails={customer.billingEmails ?? []}
-            phone={customer.phone}
-            shopifyCustomerId={customer.shopifyCustomerId}
-          />
-          <ShopifyTagsRow tagsQuery={tagsQuery} />
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          {/* Row 1 — account-state actions: hold-toggle + (when not on
-              hold) payment-upfront-toggle + per-customer QB refresh.
-              These change the operational state of the customer rather
-              than firing an outbound message, so they live above the
-              messaging row. */}
+          {/* Account-state row: refresh + hold toggle + a "more" menu for the
+              less-frequent state changes (payment-upfront, autopilot). */}
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <StatusActions
-              holdStatus={customer.holdStatus}
+            <SyncCustomerButton customerId={customer.id} />
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={holdToggleMutation.isPending}
-              onRequest={(target) => {
-                setPendingTarget(target);
+              onClick={() => {
+                setPendingTarget(
+                  customer.holdStatus === "hold" ? "active" : "hold",
+                );
                 setHoldDialogOpen(true);
               }}
-            />
-            {/* Per-customer QB refresh — fast path for "I need fresh
-                data before sending a statement". Doesn't touch other
-                customers. */}
-            <SyncCustomerButton customerId={customer.id} />
+            >
+              <Pause className="size-3.5" />
+              {customer.holdStatus === "hold" ? "Take off hold" : "Put on hold"}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="More account actions"
+                >
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {customer.holdStatus !== "hold" && (
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setPendingTarget(
+                        customer.holdStatus === "payment_upfront"
+                          ? "active"
+                          : "payment_upfront",
+                      );
+                      setHoldDialogOpen(true);
+                    }}
+                  >
+                    {customer.holdStatus === "payment_upfront"
+                      ? "Set to active"
+                      : "Set to payment upfront"}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  disabled={agentModeMutation.isPending}
+                  onSelect={() =>
+                    agentModeMutation.mutate(!customer.agentModeExcluded)
+                  }
+                >
+                  {customer.agentModeExcluded
+                    ? "Autopilot: turn on"
+                    : "Autopilot: turn off"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-          {/* Row 2 — outbound messaging. Each gated on having something
-              to send (balance for statement/chase, primary email for
-              compose). Held customers are still chase-able so the
-              chase + statement gates intentionally don't block on
-              holdStatus. */}
+          {/* Messaging row — the primary outbound actions. Each gated on
+              having something to send. Held customers are still chase-able. */}
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               variant="secondary"
@@ -607,9 +616,6 @@ export default function CustomerDetailPage() {
               <Send className="size-3.5" />
               Send chase email
             </Button>
-            {/* Compose-new — operator-initiated outbound with no
-                thread context. Distinct from the per-row Reply button
-                on the Email tab. */}
             <Button
               variant="secondary"
               size="sm"
@@ -626,12 +632,8 @@ export default function CustomerDetailPage() {
               <Mail className="size-3.5" />
               New email
             </Button>
-            {/* New task — opens the task drawer in create mode with
-                customerId pre-filled. Same drawer the /tasks page
-                uses, so all its features (assignee, watchers, due,
-                priority, tags, mentions) come along automatically. */}
             <Button
-              variant="secondary"
+              variant="primary"
               size="sm"
               onClick={() =>
                 setTaskDrawer({
@@ -815,183 +817,120 @@ export default function CustomerDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
-        <StatCard label="Open balance" value={`$${balance.toFixed(2)}`} />
-        <StatCard
-          label="Overdue"
-          value={overdue > 0 ? `$${overdue.toFixed(2)}` : "—"}
-          tone={overdue > 0 ? "warning" : "neutral"}
-          caption={
-            credits > 0
-              ? `net of $${credits.toFixed(2)} in unapplied credits`
-              : undefined
-          }
-        />
-        <StatCard
-          label="Open invoices"
-          value={
-            kpi?.openInvoiceCount && kpi.openInvoiceCount > 0
-              ? String(kpi.openInvoiceCount)
-              : "—"
-          }
-        />
-        <StatCard
-          label="Open tasks"
-          value={
-            kpi?.openTaskCount && kpi.openTaskCount > 0
-              ? String(kpi.openTaskCount)
-              : "—"
-          }
-        />
-        <StatCard
-          label="RMA in flight"
-          value={kpi?.hasPendingRma ? "Yes" : "—"}
-          tone={kpi?.hasPendingRma ? "warning" : "neutral"}
-        />
-        <TermsCard
-          customerId={customer.id}
-          currentTerms={customer.paymentTerms}
-        />
-      </div>
-
-      <RecipientsAndTagsSection customer={customer} />
-
-      <div className="border-b border-default">
-        <nav
-          className="-mx-4 flex gap-1 overflow-x-auto px-4 md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
-          aria-label="Customer sections"
-        >
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={cn(
-                "shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm transition-colors",
-                tab === t.key
-                  ? "border-accent-primary font-medium text-primary"
-                  : "border-transparent text-secondary hover:text-primary",
-              )}
+      <div className="flex flex-col gap-4 md:flex-row md:items-start">
+        {/* Main work column — the section tabs + active tab content. */}
+        <div className="min-w-0 flex-1">
+          <div className="border-b border-default">
+            <nav
+              className="-mx-4 flex gap-1 overflow-x-auto px-4 md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
+              aria-label="Customer sections"
             >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setTab(t.key)}
+                  className={cn(
+                    "shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm transition-colors",
+                    tab === t.key
+                      ? "border-accent-primary font-medium text-primary"
+                      : "border-transparent text-secondary hover:text-primary",
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </nav>
+          </div>
 
-      <div>
-        {tab === "activity" && (
-          <ActivityTimeline
-            customerId={customer.id}
-            activities={recentActivities}
-            queryKey={["customer", customerId]}
-            onJumpToCallsSms={() => setTab("calls_sms")}
-          />
-        )}
-        {tab === "emails" && (
-          <EmailList
-            customerId={customer.id}
-            customerName={customer.displayName}
-            customerEmail={customer.primaryEmail}
-            onTaskCreated={(taskId) =>
-              setTaskDrawer({ mode: "edit", taskId })
-            }
-            direction={emailDirection}
-            actioned={emailActioned}
-            onDirectionChange={(v) => setFilter("emailDirection", v, { history: "push" })}
-            onActionedChange={(v) => setFilter("emailActioned", v, { history: "push" })}
-          />
-        )}
-        {tab === "invoices" && (
-          <InvoicesPanel
-            customerId={customer.id}
-            customerName={customer.displayName}
-            onBulkChase={(invoiceIds) => setChaseDialog({ invoiceIds })}
-            invStatus={invStatus}
-            invType={invType}
-            invSearch={invSearch}
-            invSort={invSort}
-            invDir={invDir}
-            onSetInvStatus={(v) => setFilter("invStatus", v, { history: "push" })}
-            onSetInvType={(v) => setFilter("invType", v, { history: "push" })}
-            onSetInvSearch={(v) => setFilter("invSearch", v)}
-            onSetInvSort={(v) => setFilter("invSort", v, { history: "push" })}
-            onSetInvDir={(v) => setFilter("invDir", v, { history: "push" })}
-          />
-        )}
-        {tab === "orders" && <PlaceholderPanel label="Orders" />}
-        {tab === "tasks" && (
-          <TasksPanel
-            tasks={tasksQuery.data?.rows ?? []}
-            isPending={tasksQuery.isPending}
-            isError={tasksQuery.isError}
-            error={tasksQuery.error}
-            onAdd={() =>
-              setTaskDrawer({
-                mode: "create",
-                defaults: { customerId },
-              })
-            }
-            onOpen={(taskId) =>
-              setTaskDrawer({ mode: "edit", taskId })
-            }
-          />
-        )}
-        {tab === "returns" && (
-          <ReturnsPanel
-            customerId={customer.id}
-            rmaStatus={rmaStatus}
-            rmaType={rmaType}
-            onRmaStatusChange={(v) => setFilter("rmaStatus", v, { history: "push" })}
-            onRmaTypeChange={(v) => setFilter("rmaType", v, { history: "push" })}
-          />
-        )}
-        {tab === "notes" && (
-          <NotesPanel
-            customerId={customer.id}
-            notes={recentActivities.filter((a) => a.kind === "manual_note")}
-          />
-        )}
-        {tab === "calls_sms" && (
-          <CallsSmsTab
-            customerId={customer.id}
-            primaryPhone={customer.phone}
-            additionalPhones={customer.additionalPhones}
-          />
-        )}
+          <div className="mt-4">
+            {tab === "activity" && (
+              <ActivityTimeline
+                customerId={customer.id}
+                activities={recentActivities}
+                queryKey={["customer", customerId]}
+                onJumpToCallsSms={() => setTab("calls_sms")}
+              />
+            )}
+            {tab === "emails" && (
+              <EmailList
+                customerId={customer.id}
+                customerName={customer.displayName}
+                customerEmail={customer.primaryEmail}
+                onTaskCreated={(taskId) =>
+                  setTaskDrawer({ mode: "edit", taskId })
+                }
+                direction={emailDirection}
+                actioned={emailActioned}
+                onDirectionChange={(v) => setFilter("emailDirection", v, { history: "push" })}
+                onActionedChange={(v) => setFilter("emailActioned", v, { history: "push" })}
+              />
+            )}
+            {tab === "invoices" && (
+              <InvoicesPanel
+                customerId={customer.id}
+                customerName={customer.displayName}
+                onBulkChase={(invoiceIds) => setChaseDialog({ invoiceIds })}
+                invStatus={invStatus}
+                invType={invType}
+                invSearch={invSearch}
+                invSort={invSort}
+                invDir={invDir}
+                onSetInvStatus={(v) => setFilter("invStatus", v, { history: "push" })}
+                onSetInvType={(v) => setFilter("invType", v, { history: "push" })}
+                onSetInvSearch={(v) => setFilter("invSearch", v)}
+                onSetInvSort={(v) => setFilter("invSort", v, { history: "push" })}
+                onSetInvDir={(v) => setFilter("invDir", v, { history: "push" })}
+              />
+            )}
+            {tab === "orders" && <PlaceholderPanel label="Orders" />}
+            {tab === "tasks" && (
+              <TasksPanel
+                tasks={tasksQuery.data?.rows ?? []}
+                isPending={tasksQuery.isPending}
+                isError={tasksQuery.isError}
+                error={tasksQuery.error}
+                onAdd={() =>
+                  setTaskDrawer({
+                    mode: "create",
+                    defaults: { customerId },
+                  })
+                }
+                onOpen={(taskId) =>
+                  setTaskDrawer({ mode: "edit", taskId })
+                }
+              />
+            )}
+            {tab === "returns" && (
+              <ReturnsPanel
+                customerId={customer.id}
+                rmaStatus={rmaStatus}
+                rmaType={rmaType}
+                onRmaStatusChange={(v) => setFilter("rmaStatus", v, { history: "push" })}
+                onRmaTypeChange={(v) => setFilter("rmaType", v, { history: "push" })}
+              />
+            )}
+            {tab === "calls_sms" && (
+              <CallsSmsTab
+                customerId={customer.id}
+                primaryPhone={customer.phone}
+                additionalPhones={customer.additionalPhones}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Persistent context rail. Stacks below the main column on mobile. */}
+        <CustomerContextRail
+          customer={customer}
+          kpi={kpi}
+          overdue={overdue}
+          balance={balance}
+          notes={recentActivities.filter((a) => a.kind === "manual_note")}
+          onAction={handleAiCardAction}
+        />
       </div>
     </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  tone,
-  caption,
-}: {
-  label: string;
-  value: string;
-  tone?: "warning" | "neutral";
-  caption?: string;
-}) {
-  return (
-    <Card>
-      <CardBody className="py-3">
-        <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
-        <div
-          className={cn(
-            "mt-0.5 text-lg font-semibold tabular-nums",
-            tone === "warning" && "text-accent-warning",
-          )}
-        >
-          {value}
-        </div>
-        {caption ? (
-          <div className="mt-0.5 text-[10px] text-muted">{caption}</div>
-        ) : null}
-      </CardBody>
-    </Card>
   );
 }
 
@@ -1041,10 +980,11 @@ function AiContextCard({
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
+  // Renders as inner content only — the rail wraps it in a collapsible
+  // <details> whose summary provides the "AI context" title.
   return (
-    <div className="rounded-lg border border-default bg-subtle p-3">
-      <div className="mb-1 text-sm font-medium">AI context for autopilot</div>
-      <p className="mb-2 text-xs text-secondary">
+    <div className="space-y-2">
+      <p className="text-xs text-secondary">
         What autopilot should know/do for this customer (tone, "don't
         auto-chase", payment quirks). Sent to the AI — keep secrets out;
         human-only notes go in the activity timeline.
@@ -1056,7 +996,7 @@ function AiContextCard({
         placeholder="e.g. Pays late but always pays — stay warm, don't escalate."
         className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
       />
-      <div className="mt-2 flex items-center justify-end gap-2">
+      <div className="flex items-center justify-end gap-2">
         {error ? (
           <span className="text-xs text-accent-danger">{error}</span>
         ) : null}
@@ -1215,46 +1155,6 @@ function CustomerTypeBadge({ type }: { type: "b2b" | "b2c" | null }) {
 // customer. The "b2b" tag is highlighted with the info tone so it's
 // visually distinct from the other (neutral) tags — that's the tag
 // hold/release toggles, so it deserves emphasis.
-function ShopifyTagsRow({
-  tagsQuery,
-}: {
-  tagsQuery: ReturnType<typeof useQuery<ShopifyTagsResponse>>;
-}) {
-  if (tagsQuery.isPending) {
-    return (
-      <div className="mt-2 text-xs text-muted">Loading Shopify tags…</div>
-    );
-  }
-  if (tagsQuery.isError || !tagsQuery.data) {
-    return null;
-  }
-  const { matched, tags } = tagsQuery.data;
-  if (!matched) {
-    return (
-      <div className="mt-2 text-xs text-muted">No matched Shopify customer</div>
-    );
-  }
-  if (tags.length === 0) {
-    return (
-      <div className="mt-2 text-xs text-muted">
-        Shopify customer matched, no tags set
-      </div>
-    );
-  }
-  return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-      <span className="text-xs uppercase tracking-wide text-muted">
-        Shopify tags:
-      </span>
-      {tags.map((t) => (
-        <Badge key={t} tone={t === "b2b" ? "info" : "neutral"}>
-          {t}
-        </Badge>
-      ))}
-    </div>
-  );
-}
-
 function PlaceholderPanel({ label }: { label: string }) {
   return (
     <Card>
@@ -1344,7 +1244,10 @@ function TasksPanel({
 // activity via the standard recordActivity path; on success we
 // invalidate ["customer", customerId] so the new note appears in
 // recentActivities → flows back into this panel.
-function NotesPanel({
+// Prominent, always-visible notes card for the context rail. Reuses the
+// manual-note POST path; shows the most recent notes (the rest stay in the
+// Activity timeline). Replaces the old standalone Notes tab.
+function NotesRailCard({
   customerId,
   notes,
 }: {
@@ -1353,6 +1256,7 @@ function NotesPanel({
 }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const createMutation = useMutation({
@@ -1365,92 +1269,189 @@ function NotesPanel({
           body: JSON.stringify({ body }),
         },
       );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
       return res.json() as Promise<{ activityId: string | null }>;
     },
     onSuccess: () => {
-      // Customer detail GET returns recentActivities; the new note
-      // appears there. Activity timeline also subscribes to the same
-      // key. SSE event fires from the activity-ingester too, so
-      // anyone with an open page sees it.
-      queryClient.invalidateQueries({
-        queryKey: ["customer", customerId],
-      });
+      queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
       setDraft("");
+      setAdding(false);
       setError(null);
     },
-    onError: (err) => {
-      setError(err instanceof Error ? err.message : "Failed to save note");
-    },
+    onError: (err) =>
+      setError(err instanceof Error ? err.message : "Failed to save note"),
   });
 
+  const recent = notes.slice(0, 3);
+
   return (
-    <div className="space-y-3">
-      <Card>
-        <CardBody className="space-y-2 py-3">
-          <span className="text-xs font-medium text-secondary">
-            Add a note
-          </span>
+    <div className="rounded-xl border-[1.5px] border-accent-warning/40 bg-accent-warning/5 p-3.5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide text-accent-warning">
+          Notes
+        </span>
+        {!adding && (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="text-xs font-medium text-accent-warning hover:underline"
+          >
+            + Add
+          </button>
+        )}
+      </div>
+
+      {adding && (
+        <div className="mb-3 space-y-2">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={3}
-            placeholder="Internal note about this customer — visible to the team in the activity timeline."
-            className="w-full rounded-md border border-default bg-base px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+            autoFocus
+            placeholder="Internal note — visible to the team in the activity timeline."
+            className="w-full rounded-md border border-accent-warning/40 bg-base px-2.5 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-warning/40"
           />
           {error ? (
             <div className="text-xs text-accent-danger">{error}</div>
           ) : null}
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setAdding(false);
+                setDraft("");
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
             <Button
               variant="primary"
               size="sm"
-              onClick={() => createMutation.mutate(draft.trim())}
-              disabled={
-                draft.trim().length === 0 || createMutation.isPending
-              }
               loading={createMutation.isPending}
+              disabled={draft.trim().length === 0 || createMutation.isPending}
+              onClick={() => createMutation.mutate(draft.trim())}
             >
               Save note
             </Button>
           </div>
-        </CardBody>
-      </Card>
+        </div>
+      )}
 
-      {notes.length === 0 ? (
-        <Card>
-          <CardBody className="py-6 text-center text-sm text-muted">
-            No notes yet.
-          </CardBody>
-        </Card>
+      {recent.length === 0 ? (
+        !adding && (
+          <p className="text-xs text-secondary">No notes yet — add the first.</p>
+        )
       ) : (
-        <Card>
-          <CardBody className="space-y-3">
-            {notes.map((n) => (
-              <div
-                key={n.id}
-                className="border-b border-default pb-3 last:border-b-0"
-              >
-                <div className="text-xs text-muted">
-                  {new Date(n.occurredAt).toLocaleString()}
-                </div>
-                {n.subject ? (
-                  <div className="mt-1 font-medium">{n.subject}</div>
-                ) : null}
-                {n.body ? (
-                  <p className="mt-1 whitespace-pre-wrap text-sm text-secondary">
-                    {n.body}
-                  </p>
-                ) : null}
+        <div className="space-y-2.5">
+          {recent.map((n) => (
+            <div
+              key={n.id}
+              className="border-t border-accent-warning/20 pt-2.5 first:border-t-0 first:pt-0"
+            >
+              <div className="whitespace-pre-wrap text-sm text-primary">
+                {n.body}
               </div>
-            ))}
-          </CardBody>
-        </Card>
+              <div className="mt-0.5 text-[11px] text-muted">
+                {new Date(n.occurredAt).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </div>
+            </div>
+          ))}
+          {notes.length > recent.length && (
+            <div className="text-[11px] text-muted">
+              +{notes.length - recent.length} more in the Activity timeline
+            </div>
+          )}
+        </div>
       )}
     </div>
+  );
+}
+
+// Compact KPI pair for the rail (overdue + balance/open).
+function KpiRailCard({
+  overdue,
+  balance,
+  openInvoices,
+}: {
+  overdue: number;
+  balance: number;
+  openInvoices: number | null;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2.5">
+      <div className="rounded-xl border border-default bg-base p-3">
+        <div className="text-[10px] uppercase tracking-wide text-muted">
+          Overdue
+        </div>
+        <div
+          className={cn(
+            "mt-0.5 text-lg font-semibold tabular-nums",
+            overdue > 0 && "text-accent-danger",
+          )}
+        >
+          {overdue > 0 ? `$${overdue.toFixed(2)}` : "—"}
+        </div>
+      </div>
+      <div className="rounded-xl border border-default bg-base p-3">
+        <div className="text-[10px] uppercase tracking-wide text-muted">
+          Balance
+        </div>
+        <div className="mt-0.5 text-lg font-semibold tabular-nums">
+          ${balance.toFixed(2)}
+        </div>
+        {openInvoices != null && openInvoices > 0 ? (
+          <div className="text-[10px] text-muted">{openInvoices} open</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// The persistent context rail: KPIs → AI summary → Notes → AI context
+// (collapsible) → recipients/terms. Composed from the existing rail pieces.
+function CustomerContextRail({
+  customer,
+  kpi,
+  overdue,
+  balance,
+  notes,
+  onAction,
+}: {
+  customer: Customer;
+  kpi: CustomerKpi | null;
+  overdue: number;
+  balance: number;
+  notes: Activity[];
+  onAction: (action: AiCardAction) => void;
+}) {
+  return (
+    <aside className="flex w-full flex-col gap-3 md:w-[330px] md:shrink-0">
+      <KpiRailCard
+        overdue={overdue}
+        balance={balance}
+        openInvoices={kpi?.openInvoiceCount ?? null}
+      />
+      <CustomerAiCard customerId={customer.id} onAction={onAction} />
+      <NotesRailCard customerId={customer.id} notes={notes} />
+      <details className="rounded-xl border border-default bg-subtle">
+        <summary className="cursor-pointer list-none px-3.5 py-2.5 text-xs font-semibold uppercase tracking-wide text-secondary [&::-webkit-details-marker]:hidden">
+          AI context for autopilot
+        </summary>
+        <div className="px-3.5 pb-3.5">
+          <AiContextCard
+            customerId={customer.id}
+            initial={customer.aiCustomerContext}
+          />
+        </div>
+      </details>
+      <RecipientsAndTagsSection customer={customer} />
+      <TermsCard customerId={customer.id} currentTerms={customer.paymentTerms} />
+    </aside>
   );
 }
 
@@ -1459,159 +1460,6 @@ function NotesPanel({
 // chase), phone (read-only for now), and the linked Shopify customer
 // id (with a deep link to the Shopify admin if the env tells us the
 // store domain). Kept compact — the heading row above is dense already.
-function CustomerRecipientsRow({
-  primaryEmail,
-  billingEmails,
-  phone,
-  shopifyCustomerId,
-}: {
-  primaryEmail: string | null;
-  billingEmails: string[];
-  phone: string | null;
-  shopifyCustomerId: string | null;
-}) {
-  // Drop the primary from the billing list — it's already shown above
-  // as the canonical TO. Lower-case dedup defends against QBO drift
-  // (some customers have the same address in both fields, just cased
-  // differently).
-  const ccEmails = billingEmails.filter(
-    (e) =>
-      e &&
-      (!primaryEmail ||
-        e.trim().toLowerCase() !== primaryEmail.trim().toLowerCase()),
-  );
-  const shopDomain =
-    typeof window !== "undefined"
-      ? // The dev server doesn't know about the Shopify store domain on
-        // the client side; fall back to a search URL that resolves on
-        // the operator's logged-in admin tab.
-        "admin.shopify.com"
-      : null;
-  const shopifyHref =
-    shopifyCustomerId && shopDomain
-      ? `https://${shopDomain}/store/feldart/customers/${encodeURIComponent(shopifyCustomerId)}`
-      : null;
-
-  if (
-    ccEmails.length === 0 &&
-    !phone &&
-    !shopifyCustomerId
-  ) {
-    return null;
-  }
-
-  return (
-    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-      {ccEmails.length > 0 ? (
-        <span className="inline-flex items-center gap-1">
-          <Mail className="size-3" />
-          Also sent to:{" "}
-          <span className="text-secondary">
-            {ccEmails.map((e, i) => (
-              <span key={e}>
-                {i > 0 ? ", " : ""}
-                <span title={e}>{e}</span>
-              </span>
-            ))}
-          </span>
-        </span>
-      ) : null}
-      {phone ? (
-        <span className="inline-flex items-center gap-1 text-secondary">
-          <CreditCard className="size-3 text-muted" />
-          {phone}
-        </span>
-      ) : null}
-      {shopifyCustomerId ? (
-        <span className="inline-flex items-center gap-1">
-          <ShoppingBag className="size-3" />
-          Shopify:{" "}
-          {shopifyHref ? (
-            <a
-              href={shopifyHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-mono text-accent-primary hover:underline"
-            >
-              {shopifyCustomerId}
-              <ExternalLink className="ml-0.5 inline size-3" />
-            </a>
-          ) : (
-            <span className="font-mono text-secondary">
-              {shopifyCustomerId}
-            </span>
-          )}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-// Three-way status action buttons. The current state's button is
-// hidden; the other two are shown — Hold = danger styling, others =
-// secondary. Click → fires onRequest with the target which the parent
-// pipes into the confirm dialog.
-function StatusActions({
-  holdStatus,
-  disabled,
-  onRequest,
-}: {
-  holdStatus: "active" | "hold" | "payment_upfront";
-  disabled: boolean;
-  onRequest: (target: "active" | "hold" | "payment_upfront") => void;
-}) {
-  // Two state-aware toggles:
-  //   - hold-toggle (always visible): "Put on hold" when not held;
-  //     "Take off hold" when held.
-  //   - payment-upfront-toggle (hidden when held): "Set to payment
-  //     upfront" when active; "Set to active" when upfront. Hidden
-  //     during hold because operator must take off hold first —
-  //     mixing payment-upfront with hold is operationally
-  //     contradictory.
-  const isHeld = holdStatus === "hold";
-  const isUpfront = holdStatus === "payment_upfront";
-  return (
-    <>
-      <Button
-        variant={isHeld ? "secondary" : "danger"}
-        size="sm"
-        onClick={() => onRequest(isHeld ? "active" : "hold")}
-        disabled={disabled}
-      >
-        {isHeld ? (
-          <Play className="size-3.5" />
-        ) : (
-          <Pause className="size-3.5" />
-        )}
-        {isHeld ? "Take off hold" : "Put on hold"}
-      </Button>
-      {!isHeld ? (
-        isUpfront ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => onRequest("active")}
-            disabled={disabled}
-          >
-            <Play className="size-3.5" />
-            Set to active
-          </Button>
-        ) : (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => onRequest("payment_upfront")}
-            disabled={disabled}
-          >
-            <CreditCard className="size-3.5" />
-            Set to payment upfront
-          </Button>
-        )
-      ) : null}
-    </>
-  );
-}
-
 // "Recipients & tags" section. Two stacked cards — one for invoice
 // recipients, one for statement recipients — each editable. Plus a
 // tags chip input with auto-BCC hints when a tag matches an
@@ -1643,7 +1491,7 @@ function RecipientsAndTagsSection({ customer }: { customer: Customer }) {
       : (customer.tags ?? []).slice(0, 3).join(", ") +
         (tagCount > 3 ? ` (+${tagCount - 3})` : "");
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div className="flex flex-col gap-3">
       <CollapsibleCard
         title="Invoice recipients"
         summary={invoiceSummary}
