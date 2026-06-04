@@ -20,7 +20,14 @@ import {
   RotateCcw,
   Plus,
   ClipboardList,
+  MoreHorizontal,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "../components/ui/dropdown-menu";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 import { CollapsibleCard } from "../components/ui/collapsible-card";
@@ -260,15 +267,6 @@ export default function CustomerDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.draftReplyFor, data?.customer.id]);
 
-  const tagsQuery = useQuery<ShopifyTagsResponse>({
-    queryKey: ["shopify-tags", customerId],
-    queryFn: async () => {
-      const res = await fetch(`/api/customers/${customerId}/shopify-tags`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-  });
-
   // Current authenticated operator — used by TaskDetailDrawer for
   // mention resolution + watcher self-attribution. Same query the
   // /tasks page uses; cached for 5 min so hopping between customer
@@ -478,17 +476,20 @@ export default function CustomerDetailPage() {
           <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
             {customer.displayName}
           </h1>
-          <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-secondary">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm text-secondary">
             {customer.primaryEmail && (
               <span className="inline-flex items-center gap-1">
-                <Mail className="size-3.5" />
+                <Mail className="size-3.5 text-muted" />
                 {customer.primaryEmail}
               </span>
             )}
-            {customer.paymentTerms && (
-              <span>Terms: {customer.paymentTerms}</span>
+            {customer.phone && (
+              <span className="text-muted">· {customer.phone}</span>
             )}
             <CustomerTypeBadge type={customer.customerType} />
+            {customer.paymentTerms && (
+              <Badge tone="neutral">{customer.paymentTerms}</Badge>
+            )}
             {customer.holdStatus === "hold" ? (
               <Badge tone="critical">
                 <Pause className="mr-1 size-3" />
@@ -529,65 +530,72 @@ export default function CustomerDetailPage() {
                 className="text-xs text-muted"
                 title={new Date(kpi.lastContactedAt).toLocaleString()}
               >
-                Last contacted {detailRelativeTime(kpi.lastContactedAt)}
+                · last contacted {detailRelativeTime(kpi.lastContactedAt)}
               </span>
             ) : null}
           </div>
-          <CustomerRecipientsRow
-            primaryEmail={customer.primaryEmail}
-            billingEmails={customer.billingEmails ?? []}
-            phone={customer.phone}
-            shopifyCustomerId={customer.shopifyCustomerId}
-          />
-          <ShopifyTagsRow tagsQuery={tagsQuery} />
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          {/* Row 1 — account-state actions: hold-toggle + (when not on
-              hold) payment-upfront-toggle + per-customer QB refresh.
-              These change the operational state of the customer rather
-              than firing an outbound message, so they live above the
-              messaging row. */}
+          {/* Account-state row: refresh + hold toggle + a "more" menu for the
+              less-frequent state changes (payment-upfront, autopilot). */}
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <StatusActions
-              holdStatus={customer.holdStatus}
+            <SyncCustomerButton customerId={customer.id} />
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={holdToggleMutation.isPending}
-              onRequest={(target) => {
-                setPendingTarget(target);
+              onClick={() => {
+                setPendingTarget(
+                  customer.holdStatus === "hold" ? "active" : "hold",
+                );
                 setHoldDialogOpen(true);
               }}
-            />
-            {/* Per-customer QB refresh — fast path for "I need fresh
-                data before sending a statement". Doesn't touch other
-                customers. */}
-            <SyncCustomerButton customerId={customer.id} />
-            <button
-              type="button"
-              onClick={() =>
-                agentModeMutation.mutate(!customer.agentModeExcluded)
-              }
-              disabled={agentModeMutation.isPending}
-              title="Whether autopilot may act on this customer"
-              className="rounded-md border border-default px-2.5 py-1.5 text-xs text-secondary hover:bg-elevated disabled:opacity-50"
             >
-              Autopilot:{" "}
-              <span
-                className={cn(
-                  "font-medium",
-                  customer.agentModeExcluded
-                    ? "text-muted"
-                    : "text-accent-success",
+              <Pause className="size-3.5" />
+              {customer.holdStatus === "hold" ? "Take off hold" : "Put on hold"}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="More account actions"
+                >
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {customer.holdStatus !== "hold" && (
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setPendingTarget(
+                        customer.holdStatus === "payment_upfront"
+                          ? "active"
+                          : "payment_upfront",
+                      );
+                      setHoldDialogOpen(true);
+                    }}
+                  >
+                    {customer.holdStatus === "payment_upfront"
+                      ? "Set to active"
+                      : "Set to payment upfront"}
+                  </DropdownMenuItem>
                 )}
-              >
-                {customer.agentModeExcluded ? "off" : "on"}
-              </span>
-            </button>
+                <DropdownMenuItem
+                  onSelect={() =>
+                    agentModeMutation.mutate(!customer.agentModeExcluded)
+                  }
+                >
+                  {customer.agentModeExcluded
+                    ? "Autopilot: turn on"
+                    : "Autopilot: turn off"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-          {/* Row 2 — outbound messaging. Each gated on having something
-              to send (balance for statement/chase, primary email for
-              compose). Held customers are still chase-able so the
-              chase + statement gates intentionally don't block on
-              holdStatus. */}
+          {/* Messaging row — the primary outbound actions. Each gated on
+              having something to send. Held customers are still chase-able. */}
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               variant="secondary"
@@ -617,9 +625,6 @@ export default function CustomerDetailPage() {
               <Send className="size-3.5" />
               Send chase email
             </Button>
-            {/* Compose-new — operator-initiated outbound with no
-                thread context. Distinct from the per-row Reply button
-                on the Email tab. */}
             <Button
               variant="secondary"
               size="sm"
@@ -636,12 +641,8 @@ export default function CustomerDetailPage() {
               <Mail className="size-3.5" />
               New email
             </Button>
-            {/* New task — opens the task drawer in create mode with
-                customerId pre-filled. Same drawer the /tasks page
-                uses, so all its features (assignee, watchers, due,
-                priority, tags, mentions) come along automatically. */}
             <Button
-              variant="secondary"
+              variant="primary"
               size="sm"
               onClick={() =>
                 setTaskDrawer({
