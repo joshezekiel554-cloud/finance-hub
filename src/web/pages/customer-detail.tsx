@@ -573,6 +573,7 @@ export default function CustomerDetailPage() {
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem
+                  disabled={agentModeMutation.isPending}
                   onSelect={() =>
                     agentModeMutation.mutate(!customer.agentModeExcluded)
                   }
