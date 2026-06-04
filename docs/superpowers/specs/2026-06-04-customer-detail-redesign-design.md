@@ -48,8 +48,15 @@ flow; those move into the rail.
    cards.
 2. **AI summary** (`CustomerAiCard`): condensed, with regenerate + suggested
    next action.
-3. **Notes** (prominent, amber-accented card): always visible, inline-editable
-   (✎ edit → textarea → save). Backed by `customer.internalNotes`.
+3. **Notes** (prominent, amber-accented card): always visible. Surfaces the
+   customer's **manual notes** — the `manual_note` *activities* — with an inline
+   "add note" box (a textarea + Save). Shows the most recent notes (each with
+   its timestamp), with the newest prominent; if there are more than a few, the
+   rest are reachable by filtering the Activity timeline to "Note". Reuses the
+   existing `POST /api/customers/:id/notes` path + `["customer", id]`
+   invalidation (same as today's `NotesPanel`). NOTE: this is the manual-note
+   feed operators actually use — **not** the unused `customer.internalNotes`
+   field, which stays out of scope.
 4. **AI context** (`AiContextCard`): a collapsible `<details>`, collapsed by
    default.
 5. **Recipients & account meta:** statement/chase recipients, phone, terms,
@@ -76,10 +83,13 @@ presentation rework:
 
 ## Notes behaviour
 
-Notes are the rail card described above — the standalone **"Notes" tab is
-removed** (the rail card is now the single, always-visible home for notes, as
-shown in the approved mockup). Editing reuses the existing notes save path
-(audit-logged customer update).
+Notes are the rail card described above — built on today's `NotesPanel` logic
+(add via `POST /api/customers/:id/notes` → creates a `manual_note` activity;
+list comes from `recentActivities.filter(kind === "manual_note")`). The
+standalone **"Notes" tab is removed**: the rail card is the always-visible home
+for adding + reading recent notes, and every manual note also appears in the
+Activity timeline (filter → "Note") so nothing is lost. The dead
+`customer.internalNotes` field is untouched (separate cleanup, out of scope).
 
 ## Components affected
 
