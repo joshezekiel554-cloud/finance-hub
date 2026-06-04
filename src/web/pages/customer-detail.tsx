@@ -7,15 +7,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Pause,
-  Play,
   Mail,
   FileText,
   CheckCircle2,
   Pencil,
   X,
-  ShoppingBag,
-  CreditCard,
-  ExternalLink,
   Send,
   RotateCcw,
   Plus,
@@ -147,12 +143,6 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "tasks", label: "Tasks" },
   { key: "returns", label: "Returns" },
 ];
-
-type ShopifyTagsResponse = {
-  matched: boolean;
-  shopifyCustomerId?: string;
-  tags: string[];
-};
 
 // Plain text from the AI card's action args → TipTap-friendly HTML.
 // Blank-line-separated paragraphs become <p>; intra-paragraph newlines
@@ -1164,46 +1154,6 @@ function CustomerTypeBadge({ type }: { type: "b2b" | "b2c" | null }) {
 // customer. The "b2b" tag is highlighted with the info tone so it's
 // visually distinct from the other (neutral) tags — that's the tag
 // hold/release toggles, so it deserves emphasis.
-function ShopifyTagsRow({
-  tagsQuery,
-}: {
-  tagsQuery: ReturnType<typeof useQuery<ShopifyTagsResponse>>;
-}) {
-  if (tagsQuery.isPending) {
-    return (
-      <div className="mt-2 text-xs text-muted">Loading Shopify tags…</div>
-    );
-  }
-  if (tagsQuery.isError || !tagsQuery.data) {
-    return null;
-  }
-  const { matched, tags } = tagsQuery.data;
-  if (!matched) {
-    return (
-      <div className="mt-2 text-xs text-muted">No matched Shopify customer</div>
-    );
-  }
-  if (tags.length === 0) {
-    return (
-      <div className="mt-2 text-xs text-muted">
-        Shopify customer matched, no tags set
-      </div>
-    );
-  }
-  return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-      <span className="text-xs uppercase tracking-wide text-muted">
-        Shopify tags:
-      </span>
-      {tags.map((t) => (
-        <Badge key={t} tone={t === "b2b" ? "info" : "neutral"}>
-          {t}
-        </Badge>
-      ))}
-    </div>
-  );
-}
-
 function PlaceholderPanel({ label }: { label: string }) {
   return (
     <Card>
@@ -1509,159 +1459,6 @@ function CustomerContextRail({
 // chase), phone (read-only for now), and the linked Shopify customer
 // id (with a deep link to the Shopify admin if the env tells us the
 // store domain). Kept compact — the heading row above is dense already.
-function CustomerRecipientsRow({
-  primaryEmail,
-  billingEmails,
-  phone,
-  shopifyCustomerId,
-}: {
-  primaryEmail: string | null;
-  billingEmails: string[];
-  phone: string | null;
-  shopifyCustomerId: string | null;
-}) {
-  // Drop the primary from the billing list — it's already shown above
-  // as the canonical TO. Lower-case dedup defends against QBO drift
-  // (some customers have the same address in both fields, just cased
-  // differently).
-  const ccEmails = billingEmails.filter(
-    (e) =>
-      e &&
-      (!primaryEmail ||
-        e.trim().toLowerCase() !== primaryEmail.trim().toLowerCase()),
-  );
-  const shopDomain =
-    typeof window !== "undefined"
-      ? // The dev server doesn't know about the Shopify store domain on
-        // the client side; fall back to a search URL that resolves on
-        // the operator's logged-in admin tab.
-        "admin.shopify.com"
-      : null;
-  const shopifyHref =
-    shopifyCustomerId && shopDomain
-      ? `https://${shopDomain}/store/feldart/customers/${encodeURIComponent(shopifyCustomerId)}`
-      : null;
-
-  if (
-    ccEmails.length === 0 &&
-    !phone &&
-    !shopifyCustomerId
-  ) {
-    return null;
-  }
-
-  return (
-    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-      {ccEmails.length > 0 ? (
-        <span className="inline-flex items-center gap-1">
-          <Mail className="size-3" />
-          Also sent to:{" "}
-          <span className="text-secondary">
-            {ccEmails.map((e, i) => (
-              <span key={e}>
-                {i > 0 ? ", " : ""}
-                <span title={e}>{e}</span>
-              </span>
-            ))}
-          </span>
-        </span>
-      ) : null}
-      {phone ? (
-        <span className="inline-flex items-center gap-1 text-secondary">
-          <CreditCard className="size-3 text-muted" />
-          {phone}
-        </span>
-      ) : null}
-      {shopifyCustomerId ? (
-        <span className="inline-flex items-center gap-1">
-          <ShoppingBag className="size-3" />
-          Shopify:{" "}
-          {shopifyHref ? (
-            <a
-              href={shopifyHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-mono text-accent-primary hover:underline"
-            >
-              {shopifyCustomerId}
-              <ExternalLink className="ml-0.5 inline size-3" />
-            </a>
-          ) : (
-            <span className="font-mono text-secondary">
-              {shopifyCustomerId}
-            </span>
-          )}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-// Three-way status action buttons. The current state's button is
-// hidden; the other two are shown — Hold = danger styling, others =
-// secondary. Click → fires onRequest with the target which the parent
-// pipes into the confirm dialog.
-function StatusActions({
-  holdStatus,
-  disabled,
-  onRequest,
-}: {
-  holdStatus: "active" | "hold" | "payment_upfront";
-  disabled: boolean;
-  onRequest: (target: "active" | "hold" | "payment_upfront") => void;
-}) {
-  // Two state-aware toggles:
-  //   - hold-toggle (always visible): "Put on hold" when not held;
-  //     "Take off hold" when held.
-  //   - payment-upfront-toggle (hidden when held): "Set to payment
-  //     upfront" when active; "Set to active" when upfront. Hidden
-  //     during hold because operator must take off hold first —
-  //     mixing payment-upfront with hold is operationally
-  //     contradictory.
-  const isHeld = holdStatus === "hold";
-  const isUpfront = holdStatus === "payment_upfront";
-  return (
-    <>
-      <Button
-        variant={isHeld ? "secondary" : "danger"}
-        size="sm"
-        onClick={() => onRequest(isHeld ? "active" : "hold")}
-        disabled={disabled}
-      >
-        {isHeld ? (
-          <Play className="size-3.5" />
-        ) : (
-          <Pause className="size-3.5" />
-        )}
-        {isHeld ? "Take off hold" : "Put on hold"}
-      </Button>
-      {!isHeld ? (
-        isUpfront ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => onRequest("active")}
-            disabled={disabled}
-          >
-            <Play className="size-3.5" />
-            Set to active
-          </Button>
-        ) : (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => onRequest("payment_upfront")}
-            disabled={disabled}
-          >
-            <CreditCard className="size-3.5" />
-            Set to payment upfront
-          </Button>
-        )
-      ) : null}
-    </>
-  );
-}
-
 // "Recipients & tags" section. Two stacked cards — one for invoice
 // recipients, one for statement recipients — each editable. Plus a
 // tags chip input with auto-BCC hints when a tag matches an
