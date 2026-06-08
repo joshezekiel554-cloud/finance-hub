@@ -16,7 +16,7 @@ import {
   RotateCcw,
   Plus,
   ClipboardList,
-  MoreHorizontal,
+  ChevronDown,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -461,7 +461,7 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-default bg-base px-4 py-4 shadow-sm md:px-5">
         <div className="min-w-0 flex-1">
           <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
             {customer.displayName}
@@ -531,59 +531,68 @@ export default function CustomerDetailPage() {
               less-frequent state changes (payment-upfront, autopilot). */}
           <div className="flex flex-wrap items-center justify-end gap-2">
             <SyncCustomerButton customerId={customer.id} />
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={holdToggleMutation.isPending}
-              onClick={() => {
-                setPendingTarget(
-                  customer.holdStatus === "hold" ? "active" : "hold",
-                );
-                setHoldDialogOpen(true);
-              }}
-            >
-              <Pause className="size-3.5" />
-              {customer.holdStatus === "hold" ? "Take off hold" : "Put on hold"}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label="More account actions"
-                >
-                  <MoreHorizontal className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent>
-                {customer.holdStatus !== "hold" && (
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      setPendingTarget(
-                        customer.holdStatus === "payment_upfront"
-                          ? "active"
-                          : "payment_upfront",
-                      );
-                      setHoldDialogOpen(true);
-                    }}
+            {/* Split button: the main face toggles hold; the caret opens a
+                menu of the less-frequent state changes (payment-upfront,
+                autopilot). */}
+            <div className="inline-flex items-stretch">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={holdToggleMutation.isPending}
+                onClick={() => {
+                  setPendingTarget(
+                    customer.holdStatus === "hold" ? "active" : "hold",
+                  );
+                  setHoldDialogOpen(true);
+                }}
+                className="rounded-r-none"
+              >
+                <Pause className="size-3.5" />
+                {customer.holdStatus === "hold"
+                  ? "Take off hold"
+                  : "Put on hold"}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-label="More account actions"
+                    className="rounded-l-none border-l-0 px-1.5"
                   >
-                    {customer.holdStatus === "payment_upfront"
-                      ? "Set to active"
-                      : "Set to payment upfront"}
+                    <ChevronDown className="size-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  {customer.holdStatus !== "hold" && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        setPendingTarget(
+                          customer.holdStatus === "payment_upfront"
+                            ? "active"
+                            : "payment_upfront",
+                        );
+                        setHoldDialogOpen(true);
+                      }}
+                    >
+                      {customer.holdStatus === "payment_upfront"
+                        ? "Set to active"
+                        : "Set to payment upfront"}
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    disabled={agentModeMutation.isPending}
+                    onSelect={() =>
+                      agentModeMutation.mutate(!customer.agentModeExcluded)
+                    }
+                  >
+                    {customer.agentModeExcluded
+                      ? "Autopilot: turn on"
+                      : "Autopilot: turn off"}
                   </DropdownMenuItem>
-                )}
-                <DropdownMenuItem
-                  disabled={agentModeMutation.isPending}
-                  onSelect={() =>
-                    agentModeMutation.mutate(!customer.agentModeExcluded)
-                  }
-                >
-                  {customer.agentModeExcluded
-                    ? "Autopilot: turn on"
-                    : "Autopilot: turn off"}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
           {/* Messaging row — the primary outbound actions. Each gated on
               having something to send. Held customers are still chase-able. */}
@@ -600,7 +609,7 @@ export default function CustomerDetailPage() {
               }
             >
               <FileText className="size-3.5" />
-              Send statement
+              Statement
             </Button>
             <Button
               variant="secondary"
@@ -614,7 +623,7 @@ export default function CustomerDetailPage() {
               }
             >
               <Send className="size-3.5" />
-              Send chase email
+              Chase
             </Button>
             <Button
               variant="secondary"
