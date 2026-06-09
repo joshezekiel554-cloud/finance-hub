@@ -14,6 +14,8 @@ export const customersSearchSchema = z.object({
     .enum([
       "displayName",
       "balance",
+      "feldartBalance",
+      "tjBalance",
       "overdueBalance",
       "lastSyncedAt",
       "lastPaymentAt",

@@ -40,6 +40,8 @@ type CustomerRow = {
   primaryEmail: string | null;
   phone: string | null;
   balance: string;
+  feldartBalance: string;
+  tjBalance: string;
   overdueBalance: string;
   unappliedCreditBalance: string;
   holdStatus: HoldStatus;
@@ -69,6 +71,8 @@ type HoldFilter = "all" | "active" | "hold" | "payment_upfront";
 type SortKey =
   | "displayName"
   | "balance"
+  | "feldartBalance"
+  | "tjBalance"
   | "overdueBalance"
   | "lastSyncedAt"
   | "lastPaymentAt"
@@ -79,6 +83,8 @@ type SortKey =
 const SORT_LABELS: Record<SortKey, string> = {
   displayName: "Name",
   balance: "Balance",
+  feldartBalance: "Feldart",
+  tjBalance: "TJ",
   overdueBalance: "Overdue",
   lastSyncedAt: "Last synced",
   lastPaymentAt: "Last payment",
@@ -108,7 +114,11 @@ export default function CustomersPage() {
 
   // Local aliases — minimize downstream changes:
   const tab = search.tab;
-  const sort = search.sort;
+  // `sort` is widened to the local SortKey union (which now carries the
+  // per-origin keys feldartBalance/tjBalance). The URL search schema's
+  // enum is owned elsewhere; we cast at the read/write boundary so the
+  // new sort keys round-trip through the URL without the schema clobber.
+  const sort = search.sort as SortKey;
   const dir = search.dir;
   const hideZero = search.hideZero;
   const hasOverdueFilter = search.hasOverdue;
@@ -120,8 +130,8 @@ export default function CustomersPage() {
   // text input + boolean filter chips use replace (default).
   const setTab = (next: CustomersSearch["tab"]) =>
     setFilters({ tab: next, hideZero: next === "b2b" }, { history: "push" });
-  const setSort = (next: CustomersSearch["sort"]) =>
-    setFilter("sort", next, { history: "push" });
+  const setSort = (next: SortKey) =>
+    setFilter("sort", next as CustomersSearch["sort"], { history: "push" });
   const setDir = (next: CustomersSearch["dir"]) =>
     setFilter("dir", next, { history: "push" });
   const setHideZero = (next: boolean) => setFilter("hideZero", next);
@@ -703,10 +713,21 @@ export default function CustomersPage() {
                 />
                 <th className="px-3 py-2">Phone</th>
                 <SortableTh
-                  label="Balance"
-                  active={sort === "balance"}
+                  label="Feldart"
+                  active={sort === "feldartBalance"}
                   dir={dir}
-                  onClick={() => toggleSort("balance", sort, setSort, dir, setDir)}
+                  onClick={() =>
+                    toggleSort("feldartBalance", sort, setSort, dir, setDir)
+                  }
+                  align="right"
+                />
+                <SortableTh
+                  label="TJ"
+                  active={sort === "tjBalance"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("tjBalance", sort, setSort, dir, setDir)
+                  }
                   align="right"
                 />
                 <SortableTh
@@ -758,7 +779,8 @@ export default function CustomersPage() {
             </thead>
             <tbody>
               {visibleRows.map((row) => {
-                const balance = Number(row.balance);
+                const feldartBalance = Number(row.feldartBalance);
+                const tjBalance = Number(row.tjBalance);
                 const rawOverdue = Number(row.overdueBalance);
                 const credits = Number(row.unappliedCreditBalance);
                 // Display nets unapplied credit memos; sort still uses
@@ -837,8 +859,19 @@ export default function CustomersPage() {
                       {row.phone ?? <span className="text-muted">—</span>}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
-                      {balance > 0 ? (
-                        <span className="font-medium">${balance.toFixed(2)}</span>
+                      {feldartBalance > 0 ? (
+                        <span className="font-medium text-accent-info">
+                          ${feldartBalance.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-muted">$0.00</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {tjBalance > 0 ? (
+                        <span className="font-medium text-accent-warning">
+                          ${tjBalance.toFixed(2)}
+                        </span>
                       ) : (
                         <span className="text-muted">$0.00</span>
                       )}
@@ -1162,6 +1195,8 @@ function toggleSort(
     // wants "what synced most recently" surfaced, not stalest.
     const descByDefault: SortKey[] = [
       "balance",
+      "feldartBalance",
+      "tjBalance",
       "overdueBalance",
       "lastPaymentAt",
       "lastStatementSentAt",
