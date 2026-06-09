@@ -41,7 +41,18 @@
 - [x] Wave B T6 settings bookkeeper — `4ecdddf`
 - [x] Wave B T7 per-origin statements — `b44d756`
 - [x] Wave B T8 verify + review + fixes — Playwright-verified full lifecycle (claims-paid parks + drops from TJ chase 8912→8804.50; verifying badge+note+muted row; bookkeeper email pre-fills To/Subject/Body; resolve-unpaid resumes; tj_l1 template selected for origin=tj). Opus review: 0 High; M1/M2 state-machine guards + L1 syncToken fixed (`2867aa1`). 631 tests pass.
-- [ ] Wave B MERGE/PUSH/DEPLOY  ← NEXT
+- [x] Wave B MERGE/PUSH/DEPLOY — merge `a3bb7f9`, pushed, **deployed OK** (migration 0041 applied, /health passed). WAVE B LIVE.
+
+## ✅ BOTH WAVES COMPLETE & DEPLOYED (2026-06-09)
+
+### Required operator follow-ups (prod):
+1. **Seed TJ chase templates on the VPS** — the deploy does NOT run the email-template seeder. Run `npx tsx scripts/seed-email-templates.ts` on the VPS (idempotent; adds tj_l1/l2/l3). Until then a TJ chase send returns a clear "template 'tj_l1' not found" (no crash).
+2. **Set the TJ bookkeeper email** in Settings → Torah Judaica (`tj_bookkeeper_email`) so the one-click bookkeeper email pre-fills a recipient.
+3. **Origin-review sweep**: once a real QB sync runs on prod, the credit_memos table populates; check Settings → "Origin review" for any needs_review credit memos to classify.
+
+### Deferred (not built — flag to user):
+- Wave C (AI assist off call transcripts + external/3rd-party handover) — out of scope per spec.
+- LOW review items: chase-next autopilot nets Feldart overdue vs blended credit (advisory, conservative); 0040 backfill `LIKE '2%'` no-trim (self-corrects on sync).
 - [ ] Wave B T1 dispute schema/migration
 - [ ] Wave B T2 TJ templates seed
 - [ ] Wave B T3 chase send branch + exclude verifying
