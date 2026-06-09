@@ -101,6 +101,8 @@ const SETTINGS: AppSettingsMap = {
   ai_voice_guide: "",
   ai_corrections_cron_enabled: "",
   autopilot_scan_cron_enabled: "",
+  tj_bookkeeper_email: "",
+  tj_bookkeeper_name: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -195,6 +197,8 @@ describe("renderStatementPdf", () => {
         ai_voice_guide: "",
         ai_corrections_cron_enabled: "",
         autopilot_scan_cron_enabled: "",
+        tj_bookkeeper_email: "",
+        tj_bookkeeper_name: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

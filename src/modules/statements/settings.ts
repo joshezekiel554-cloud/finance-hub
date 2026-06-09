@@ -50,6 +50,10 @@ export type AppSettingsMap = {
   ai_voice_guide: string;
   ai_corrections_cron_enabled: string;
   autopilot_scan_cron_enabled: string;
+  // Torah Judaica bookkeeper contact — surfaced so loadAppSettings can
+  // index by any canonical key without a type error.
+  tj_bookkeeper_email: string;
+  tj_bookkeeper_name: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -75,6 +79,8 @@ const DEFAULTS: AppSettingsMap = {
   ai_voice_guide: "",
   ai_corrections_cron_enabled: "",
   autopilot_scan_cron_enabled: "",
+  tj_bookkeeper_email: "",
+  tj_bookkeeper_name: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

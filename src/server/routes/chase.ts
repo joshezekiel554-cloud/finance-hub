@@ -105,6 +105,10 @@ const batchBodySchema = z.object({
     .array(z.string().min(1).max(24))
     .min(1)
     .max(BATCH_MAX_CUSTOMERS),
+  // Which book to send statements for. 'feldart'/'tj' scope each
+  // statement to that origin's invoices; 'both' (default) leaves the
+  // statement blended across the two books (legacy behaviour).
+  origin: z.enum(["feldart", "tj", "both"]).default("both"),
 });
 
 type BatchResult = {
@@ -395,7 +399,10 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .code(400)
         .send({ error: "invalid body", details: parse.error.flatten() });
     }
-    const { customerIds } = parse.data;
+    const { customerIds, origin } = parse.data;
+    // 'both' means no per-book filter — pass undefined to sendStatement so
+    // the statement stays blended; 'feldart'/'tj' scope to one book.
+    const sendOrigin = origin === "both" ? undefined : origin;
 
     // Dedupe defensively. The UI already prevents this but a stray
     // duplicate id would otherwise double-send to that customer.
@@ -417,6 +424,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
           const result = await sendStatement({
             customerId,
             userId: user.id,
+            origin: sendOrigin,
           });
           return {
             customerId,
@@ -474,6 +482,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         startedAt: startedAt.toISOString(),
         completedAt: new Date().toISOString(),
         requestedCount: uniqueIds.length,
+        origin,
         summary,
         results: results.map((r) => ({
           customerId: r.customerId,

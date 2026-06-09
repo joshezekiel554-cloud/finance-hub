@@ -78,6 +78,10 @@ const MAX_INVOICES_PER_SEND = 50;
 export type ManagerInput = {
   customerId: string;
   userId: string;
+  // Optional per-book filter. When set, the statement only includes
+  // invoices from that origin ('feldart' or 'tj'); when omitted, the
+  // statement is blended across both books (legacy behaviour).
+  origin?: "feldart" | "tj";
   // Optional operator overrides from the send dialog. When any of
   // these are set, they replace the template-rendered defaults
   // verbatim. Undefined fields fall through to the previous
@@ -356,6 +360,21 @@ function calcOverdue(opens: Invoice[], now: Date): number {
   return Math.round(total * 100) / 100;
 }
 
+// Build the WHERE conditions that select a customer's open invoices for
+// a statement: customer match + positive balance, optionally narrowed to
+// a single origin book. Extracted as a pure helper so the origin filter
+// is unit-testable without a live DB (see send.test.ts).
+export function buildOpenInvoiceConditions(
+  customerId: string,
+  origin?: "feldart" | "tj",
+) {
+  return and(
+    eq(invoices.customerId, customerId),
+    gt(invoices.balance, "0"),
+    origin ? eq(invoices.origin, origin) : undefined,
+  );
+}
+
 // Public entry point. Loads everything, fires QBO + Gmail, persists the
 // statement_sends row + activity + audit log, returns the result. All
 // failure modes throw a SendStatementError; the route layer catches
@@ -394,9 +413,7 @@ export async function sendStatement(
   const openInvoices = await db
     .select()
     .from(invoices)
-    .where(
-      and(eq(invoices.customerId, customerId), gt(invoices.balance, "0")),
-    )
+    .where(buildOpenInvoiceConditions(customerId, input.origin))
     .orderBy(asc(invoices.issueDate));
 
   if (openInvoices.length === 0) {
