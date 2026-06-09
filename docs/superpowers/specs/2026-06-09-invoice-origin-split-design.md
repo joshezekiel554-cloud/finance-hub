@@ -35,7 +35,7 @@ TJ → void or resume" mess. **No AI in this phase** — AI may assist later (Wa
 | Invoice classification | docNumber prefix `1`→feldart / `2`→tj (reliable for invoices), **stored explicitly** |
 | Credit-memo classification | prefix unreliable; store origin explicitly, auto-classify where possible, manual sweep/override for the rest |
 | Scope | **Scope 2, AI-free**, shipped Wave A then Wave B |
-| TJ chase differences | softer tone + invite dispute (a); lower escalation ceiling, never hard final-demand (c); separate TJ templates (d); **one-click** park on push-back (e — manual, not auto-detected) |
+| TJ chase differences | softer tone + invite dispute (a); **still tiered** (ramping firmness so it's not ignorable) but ceiling stays firm-not-legalistic (c); separate TJ templates (d); **one-click** park on push-back (e — manual, not auto-detected) |
 | Chase list UI | **Toggle** on one `/chase` page: `Feldart | TJ`, default Feldart |
 | Customer **detail** UI | **Both tracks visible, sectioned** — two balance KPIs in the rail, invoices grouped by origin with chips |
 | Customer **list** UI | **Split balance columns** — Feldart + TJ columns always shown |
@@ -109,9 +109,9 @@ chase/scoring hot path:
   balanceTj / overdueTj` onto `customers`, written by sync. **Deferred** unless
   needed.
 
-The TJ chase numbers are **invoice-driven** (open TJ invoices + overdue). Whether
-TJ unapplied credit nets against the TJ chase figure is a minor open question
-(see Open questions) — default: show net, target chasing on open invoices.
+The TJ chase figure **nets TJ unapplied credit** against open TJ invoices, while
+chasing still *targets* the open invoices themselves. TJ credit only ever offsets
+TJ, never Feldart (and vice-versa).
 
 ### 4. Dispute state — `invoices` local columns (new)
 
@@ -158,10 +158,12 @@ disputeUpdatedBy fk → users nullable
 
 ### TJ tone + dispute loop (Wave B)
 
-- **TJ template set:** new `tj_l1`, `tj_l2` chase templates (email_templates
-  enum). Softer, acknowledge the handover, invite *"if you've already settled
-  this with Torah Judaica, tell us and we'll verify."* **Lower ceiling** — no
-  hard final-demand tier (2 levels, not 3).
+- **TJ template set:** tiered chase templates `tj_l1 / tj_l2 / tj_l3` with
+  **ramping firmness** so the sequence has teeth and isn't ignorable — but the top
+  tier stays **firm, not legalistic** (no "before we take further action" /
+  debt-collection threat, since provability is weak). Every tier acknowledges the
+  handover and carries the dispute invite *"if you've already settled this with
+  Torah Judaica, tell us and we'll verify."*
 - **Auto-pause on push-back (e):** when an inbound reply lands on a TJ chase
   thread, the operator gets a one-click park; (full auto-detection is explicitly
   *not* attempted — disputes mostly arrive by phone with varied phrasing).
@@ -217,18 +219,20 @@ disputeUpdatedBy fk → users nullable
   detail shows two tracks; dispute buttons drive the lifecycle; bookkeeper email
   pre-fills.
 
+## Resolved (was open)
+
+- **TJ credit nets the TJ chase figure** — TJ unapplied credit offsets open TJ
+  balance in the chase number; chasing still targets open invoices. (2026-06-09)
+- **TJ stays tiered** — `tj_l1/l2/l3` with ramping firmness so emails can't just
+  be ignored; top tier firm but not legalistic. (2026-06-09)
+
 ## Open questions (small, can resolve during planning)
 
-1. **TJ credit & chase figure:** does TJ unapplied credit net against the TJ
-   chase number, or is the TJ list purely "open TJ invoices"? Default: show net,
-   chase on open invoices.
-2. **Customer-list width:** which existing column (if any) to drop/consolidate to
+1. **Customer-list width:** which existing column (if any) to drop/consolidate to
    fit two balance columns, vs leaning on horizontal scroll. Decide at build time
    with the real columns in view.
-3. **Credit-memo volume:** rough count of ambiguous legacy TJ credit memos — sizes
+2. **Credit-memo volume:** rough count of ambiguous legacy TJ credit memos — sizes
    the sweep UI (trivial if a handful).
-4. **TJ chase levels:** confirm 2 tiers (`tj_l1`, `tj_l2`) is the right ceiling,
-   or 1 gentle reminder only.
 
 ## Non-goals
 
