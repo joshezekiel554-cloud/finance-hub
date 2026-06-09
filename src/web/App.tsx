@@ -121,7 +121,12 @@ export default function App({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-6">{children}</div>
+        {/* No `overflow-y-auto` here: the app is window-scrolled (outer is
+            `min-h-screen`, and TanStack `ScrollRestoration` targets the
+            window). A scroll-container ancestor would capture `position:
+            sticky` and break in-page sticky headers (e.g. table column
+            headers on Customers/Chase), so this stays `overflow: visible`. */}
+        <div className="flex-1 p-4 md:p-6">{children}</div>
       </main>
 
       <MobileNavDrawer

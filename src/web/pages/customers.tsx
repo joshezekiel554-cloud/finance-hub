@@ -692,7 +692,7 @@ export default function CustomersPage() {
             </div>
           )}
           <table className="w-full text-sm">
-            <thead className="border-b border-default bg-subtle text-left text-xs uppercase tracking-wide text-muted">
+            <thead className="bg-subtle text-left text-xs uppercase tracking-wide text-muted [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:border-default [&_th]:bg-subtle">
               <tr>
                 {sweepMode && <th className="w-10 px-3 py-2"></th>}
                 <SortableTh
