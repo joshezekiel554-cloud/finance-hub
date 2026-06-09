@@ -85,6 +85,15 @@ export default function SettingsPage() {
       <ImportsSection />
       <AutopilotSection />
       <VocatechSection />
+      <div className="pt-1 text-xs text-muted">
+        <Link
+          to="/origin-review"
+          className="inline-flex items-center gap-1 hover:text-primary"
+        >
+          Origin review
+          <ArrowRight className="size-3" />
+        </Link>
+      </div>
     </div>
   );
 }

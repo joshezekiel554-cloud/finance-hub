@@ -30,6 +30,7 @@ import CreditMemoCreatePage from "./pages/credit-memo-create";
 import SeasonsPage from "./pages/seasons";
 import AutopilotPage from "./pages/autopilot";
 import AiTrainingPage from "./pages/ai-training";
+import OriginReviewPage from "./pages/origin-review";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { tasksSearchSchema } from "./lib/search-schemas/tasks";
@@ -198,6 +199,12 @@ const aiTrainingRoute = createRoute({
   component: AiTrainingPage,
 });
 
+const originReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/origin-review",
+  component: OriginReviewPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -219,6 +226,7 @@ const routeTree = rootRoute.addChildren([
   seasonsRoute,
   autopilotRoute,
   aiTrainingRoute,
+  originReviewRoute,
 ]);
 
 const router = createRouter({ routeTree });
