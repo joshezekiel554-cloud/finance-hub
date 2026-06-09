@@ -212,12 +212,15 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       origin === "both" ? sql`` : sql` AND ${invoices.origin} = ${origin}`;
     const cmOriginCond =
       origin === "both" ? sql`` : sql` AND ${creditMemos.origin} = ${origin}`;
+    // TJ invoices parked for bookkeeper verification drop out of the active
+    // chase list (feldart invoices never carry a dispute_state, so harmless).
+    const notVerifying = sql` AND (${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;
 
     const daysOverdueExpr = sql<number | null>`(
       SELECT DATEDIFF(CURRENT_DATE, MIN(${invoices.dueDate}))
       FROM ${invoices}
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
-        AND ${invoices.balance} > 0${invOriginCond}
+        AND ${invoices.balance} > 0${notVerifying}${invOriginCond}
         AND ${invoices.dueDate} IS NOT NULL
     )`;
 
@@ -227,7 +230,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       SELECT COALESCE(SUM(${invoices.balance}), 0)
       FROM ${invoices}
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
-        AND ${invoices.balance} > 0${invOriginCond}
+        AND ${invoices.balance} > 0${notVerifying}${invOriginCond}
         AND ${invoices.dueDate} IS NOT NULL
         AND ${invoices.dueDate} < CURRENT_DATE
     )`;
@@ -235,7 +238,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       SELECT COALESCE(SUM(${invoices.balance}), 0)
       FROM ${invoices}
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
-        AND ${invoices.balance} > 0${invOriginCond}
+        AND ${invoices.balance} > 0${notVerifying}${invOriginCond}
     )`;
     const originCreditExpr = sql<string>`(
       SELECT COALESCE(SUM(${creditMemos.balance}), 0)
@@ -513,6 +516,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     const previewSchema = z.object({
       customerId: z.string().min(1).max(64),
       level: z.coerce.number().int().min(1).max(3),
+      // Which book is being chased — picks the template (tj_l* vs chase_l*)
+      // and scopes the invoices in the email to that origin.
+      origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
       // CSV of invoice ids — TanStack Query serialises arrays as
       // repeated `?invoiceIds=a&invoiceIds=b`, but for a GET we accept
       // either shape and split on comma if a string slipped through.
@@ -526,9 +532,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .code(400)
         .send({ error: "invalid query", details: parse.error.flatten() });
     }
-    const { customerId, level } = parse.data;
+    const { customerId, level, origin } = parse.data;
     const invoiceIds = normaliseInvoiceIds(parse.data.invoiceIds);
-    const slug = `chase_l${level}`;
+    const slug = origin === "tj" ? `tj_l${level}` : `chase_l${level}`;
 
     const customerRows = await db
       .select()
@@ -570,6 +576,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         and(
           eq(invoices.customerId, customerId),
           gt(invoices.balance, "0"),
+          origin !== "both" ? eq(invoices.origin, origin) : undefined,
+          // Never chase a TJ invoice parked for bookkeeper verification.
+          sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`,
           ...(invoiceIds.length > 0
             ? [inArray(invoices.id, invoiceIds)]
             : []),
@@ -635,6 +644,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     const {
       customerId,
       level,
+      origin,
       invoiceIds: invoiceIdsRaw,
       subject: subjectOverride,
       body: bodyOverride,
@@ -643,7 +653,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       bcc: bccOverride,
     } = parse.data;
     const invoiceIds = invoiceIdsRaw ?? [];
-    const slug = `chase_l${level}`;
+    const slug = origin === "tj" ? `tj_l${level}` : `chase_l${level}`;
 
     const customerRows = await db
       .select()
@@ -687,6 +697,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         and(
           eq(invoices.customerId, customerId),
           gt(invoices.balance, "0"),
+          origin !== "both" ? eq(invoices.origin, origin) : undefined,
+          // Never chase a TJ invoice parked for bookkeeper verification.
+          sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`,
           ...(invoiceIds.length > 0
             ? [inArray(invoices.id, invoiceIds)]
             : []),
@@ -899,6 +912,9 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
 const sendChaseEmailBodySchema = z.object({
   customerId: z.string().min(1).max(64),
   level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  // Which book is being chased — picks the template (tj_l* vs chase_l*) and
+  // scopes which invoices the email + invoice_chases rows cover.
+  origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
   // Optional subset filter — when set, the rendered template covers
   // only these invoices AND only these get an invoice_chases row
   // written after send. When absent, the chase covers all the

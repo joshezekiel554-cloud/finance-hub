@@ -749,6 +749,9 @@ export default function CustomerDetailPage() {
           }}
           customerId={customer.id}
           customerName={customer.displayName}
+          // Chases the operator-selected invoice set as-is (any book); the
+          // dedicated TJ-template chase lives on the /chase TJ list.
+          origin="both"
           level={1}
           invoiceIds={chaseDialog.invoiceIds}
           onSent={(_result: ChaseSendSuccess) => {

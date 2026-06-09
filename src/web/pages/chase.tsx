@@ -686,6 +686,7 @@ export default function ChasePage() {
           }}
           customerId={chaseDialog.customerId}
           customerName={chaseDialog.customerName}
+          origin={originFilter}
           level={chaseDialog.level}
           onSent={(result: ChaseSendSuccess) => {
             setResultsById((prev) => ({
