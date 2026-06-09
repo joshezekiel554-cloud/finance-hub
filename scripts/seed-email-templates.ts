@@ -94,6 +94,73 @@ Thanks,
 {{company_name}}`,
   },
   {
+    slug: "tj_l1",
+    name: "TJ Chase - Level 1 (gentle)",
+    context: "chase",
+    description:
+      "First touch on a Torah Judaica legacy balance; acknowledges the handover and invites a paid-already check.",
+    subject: "{{company_name}} - reminder regarding your Torah Judaica account",
+    body: `Hi {{customer_name}},
+
+Hope you're well. We're now looking after the invoices originally raised by \
+Torah Judaica, and our records show {{overdue_balance}} past due on your \
+account (oldest invoice {{oldest_unpaid_invoice}}, {{days_overdue}} days past \
+due).
+
+If you've already settled this directly with Torah Judaica, just reply and \
+let us know. We'll check it against their records and clear it from our end. \
+Otherwise we'd appreciate payment, or an expected date so we can keep things \
+tidy.
+
+Thanks,
+{{user_name}}
+{{company_name}}`,
+  },
+  {
+    slug: "tj_l2",
+    name: "TJ Chase - Level 2 (firmer)",
+    context: "chase",
+    description:
+      "Second touch on a Torah Judaica legacy balance; firmer, still invites the paid-already check.",
+    subject:
+      "{{company_name}} - follow-up on your Torah Judaica balance ({{overdue_balance}})",
+    body: `Hi {{customer_name}},
+
+Following up on the Torah Judaica balance on your account, which is still \
+outstanding at {{overdue_balance}} ({{days_overdue}} days past due on \
+{{oldest_unpaid_invoice}}).
+
+If you believe this was already paid to Torah Judaica, please reply and we'll \
+verify it with their bookkeeper before taking it any further. If not, could \
+you let us know when payment will reach us?
+
+Thanks,
+{{user_name}}
+{{company_name}}`,
+  },
+  {
+    slug: "tj_l3",
+    name: "TJ Chase - Level 3 (firm)",
+    context: "chase",
+    description:
+      "Final reminder on a Torah Judaica legacy balance; firm but not legalistic given the handover.",
+    subject:
+      "{{company_name}} - outstanding Torah Judaica balance ({{overdue_balance}})",
+    body: `Hi {{customer_name}},
+
+We've reached out a couple of times now about the Torah Judaica balance on \
+your account, still outstanding at {{overdue_balance}} (oldest invoice \
+{{oldest_unpaid_invoice}}, {{days_overdue}} days past due).
+
+We'd really like to get this settled. If it has already been paid to Torah \
+Judaica, tell us and we'll verify it with their bookkeeper and close it off. \
+Otherwise please arrange payment, or reply so we can work out a plan together.
+
+Thanks,
+{{user_name}}
+{{company_name}}`,
+  },
+  {
     slug: "statement_open_items",
     name: "Statement - Open Items",
     context: "statement",
