@@ -30,8 +30,9 @@
 - [x] Wave A T9 customers list page — `94ea3ce`
 - [x] Wave A T10 autopilot feldart-scope — `83b05be`
 - [x] Wave A T11 origin-review sweep — `ad272a2`
-- [ ] Wave A T12 verify + impeccable UI sweep + review + MERGE/PUSH/DEPLOY  ← NEXT
-      (user asked: "impeccable sweep on the UI so it looks nice")
+- [x] Wave A T12 verify + impeccable sweep + review + fixes — Playwright-verified all surfaces with real data (feldart 101 / tj 21 / both 117 chase rows, 5 mixed customers), Opus review found 1 HIGH (chase double-net credit) + colSpan off-by-one, both fixed (`1a95bfe`). 628 tests pass.
+- [x] **Operator-feedback enhancement** (`ba67287`): chase "Both" option; customers list Feldart/TJ/Both lens (Both → 3 cols incl Combined; single book → just that col) + combinedBalance sort key.
+- [ ] Wave A MERGE/PUSH/DEPLOY  ← NEXT
 - [ ] Wave B T1 dispute schema/migration
 - [ ] Wave B T2 TJ templates seed
 - [ ] Wave B T3 chase send branch + exclude verifying
@@ -47,3 +48,4 @@
 - Wave C (AI assist off transcripts + external handover) intentionally NOT built — out of scope per spec; "all waves" = A + B.
 - Dropped planned `aggregateCreditBalanceByOrigin` helper (T3 step5): redundant now that `credit_memos` stores origin — per-origin credit is a `SELECT origin, SUM(balance) ... GROUP BY origin` query consumed by `computeOriginBalances`.
 - Credit netting (`balances.ts`): credit reduces both balance and overdue floored at 0 (conservative — avoids over-chasing). Net overdue <= net balance always.
+- **Open follow-ups from review (LOW, deferred):** (1) `chase-next.ts` autopilot nets Feldart overdue against the customer's BLENDED unapplied credit (TJ credit can slightly reduce a Feldart chase proposal) — conservative/advisory only, violates strict "TJ credit never offsets Feldart" in that one advisory path; (2) `0040` backfill uses `doc_number LIKE '2%'` without trim (a leading-space docNumber self-corrects on next sync). Neither blocks; worth a Wave B-adjacent cleanup.
