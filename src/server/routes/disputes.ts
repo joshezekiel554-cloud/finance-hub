@@ -47,6 +47,11 @@ const disputesRoute: FastifyPluginAsync = async (app) => {
         code: "not_tj",
       });
     }
+    if (inv.status === "void" || inv.disputeState === "confirmed_paid") {
+      return reply
+        .code(409)
+        .send({ error: "invoice already resolved/void", code: "already_resolved" });
+    }
 
     const now = new Date();
     await db
@@ -76,6 +81,11 @@ const disputesRoute: FastifyPluginAsync = async (app) => {
     const { id } = req.params as { id: string };
     const inv = await loadInvoice(id);
     if (!inv) return reply.code(404).send({ error: "invoice not found" });
+    if (inv.status === "void" || inv.disputeState === "confirmed_paid") {
+      return reply
+        .code(409)
+        .send({ error: "invoice already resolved/void", code: "already_resolved" });
+    }
 
     await db
       .update(invoices)
@@ -104,6 +114,15 @@ const disputesRoute: FastifyPluginAsync = async (app) => {
     if (inv.status === "void") {
       return reply.code(400).send({ error: "invoice already void" });
     }
+    // The spec flow voids out of 'verifying' (claims-paid first). Refuse to
+    // void an invoice that was never parked, so the QBO write only ever
+    // happens off a deliberate dispute.
+    if (inv.disputeState !== "verifying") {
+      return reply.code(409).send({
+        error: "invoice is not parked for verification",
+        code: "not_verifying",
+      });
+    }
     if (!inv.syncToken) {
       return reply.code(409).send({
         error: "invoice missing syncToken; run a QB sync first",
@@ -111,9 +130,12 @@ const disputesRoute: FastifyPluginAsync = async (app) => {
       });
     }
 
+    let voidedSyncToken = inv.syncToken;
     try {
       const qb = new QboClient();
-      await qb.voidInvoice(inv.qbInvoiceId, inv.syncToken);
+      const voided = await qb.voidInvoice(inv.qbInvoiceId, inv.syncToken);
+      // Persist QBO's new SyncToken so a write before the next sync won't 409.
+      if (voided?.SyncToken) voidedSyncToken = voided.SyncToken;
     } catch (err) {
       log.error(
         { invoice_id: id, qb_invoice_id: inv.qbInvoiceId, err: (err as Error).message },
@@ -132,6 +154,7 @@ const disputesRoute: FastifyPluginAsync = async (app) => {
         balance: "0",
         disputeState: "confirmed_paid",
         disputeUpdatedBy: user.id,
+        syncToken: voidedSyncToken,
         lastSyncedAt: new Date(),
       })
       .where(eq(invoices.id, id));
