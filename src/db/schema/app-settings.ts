@@ -79,5 +79,10 @@ export const APP_SETTING_KEYS = [
   // Manual "Run autopilot now" triggers bypass this gate (they pass
   // trigger="manual" to the handler).
   "autopilot_scan_cron_enabled",
+  // Torah Judaica bookkeeper contact — the one-click "Email TJ bookkeeper"
+  // dispute action pre-fills a message to this address. Empty = the action
+  // opens compose with no recipient pre-filled.
+  "tj_bookkeeper_email",
+  "tj_bookkeeper_name",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];
