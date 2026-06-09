@@ -115,6 +115,14 @@ type CustomerKpi = {
   lastContactedAt: string | null;
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
+  // Two-track exposure, netted server-side. Feldart = we supplied it;
+  // TJ = Torah Judaica legacy wind-down. All amounts are 2dp strings.
+  feldartBalance: string;
+  feldartOverdue: string;
+  feldartOpenCount: number;
+  tjBalance: string;
+  tjOverdue: string;
+  tjOpenCount: number;
 };
 
 type DetailResponse = {
@@ -933,8 +941,6 @@ export default function CustomerDetailPage() {
         <CustomerContextRail
           customer={customer}
           kpi={kpi}
-          overdue={overdue}
-          balance={balance}
           notes={recentActivities.filter((a) => a.kind === "manual_note")}
           onAction={handleAiCardAction}
         />
@@ -1381,40 +1387,53 @@ function NotesRailCard({
   );
 }
 
-// Compact KPI pair for the rail (overdue + balance/open).
+// Per-track "owed" card for the rail. Shows the netted balance large,
+// the overdue slice as a sub-figure, and the open-doc count. Two of
+// these stack in the rail — one for Feldart (indigo accent), one for
+// Torah Judaica (amber accent, matching the Notes card treatment).
 function KpiRailCard({
-  overdue,
+  label,
   balance,
+  overdue,
   openInvoices,
+  accent,
 }: {
-  overdue: number;
+  label: string;
   balance: number;
+  overdue: number;
   openInvoices: number | null;
+  accent: "feldart" | "tj";
 }) {
+  const accentClass =
+    accent === "feldart"
+      ? "border-indigo-500/30 bg-indigo-500/5"
+      : "border-accent-warning/30 bg-accent-warning/5";
+  const labelClass =
+    accent === "feldart" ? "text-indigo-500" : "text-accent-warning";
   return (
-    <div className="grid grid-cols-2 gap-2.5">
-      <div className="rounded-xl border border-default bg-base p-3">
-        <div className="text-[10px] uppercase tracking-wide text-muted">
-          Overdue
-        </div>
-        <div
-          className={cn(
-            "mt-0.5 text-lg font-semibold tabular-nums",
-            overdue > 0 && "text-accent-danger",
-          )}
-        >
-          {overdue > 0 ? `$${overdue.toFixed(2)}` : "—"}
-        </div>
+    <div className={cn("rounded-xl border p-3", accentClass)}>
+      <div
+        className={cn(
+          "text-[10px] font-semibold uppercase tracking-wide",
+          labelClass,
+        )}
+      >
+        {label}
       </div>
-      <div className="rounded-xl border border-default bg-base p-3">
-        <div className="text-[10px] uppercase tracking-wide text-muted">
-          Balance
-        </div>
-        <div className="mt-0.5 text-lg font-semibold tabular-nums">
-          ${balance.toFixed(2)}
-        </div>
+      <div className="mt-0.5 text-lg font-semibold tabular-nums">
+        ${balance.toFixed(2)}
+      </div>
+      <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted">
+        <span
+          className={cn("tabular-nums", overdue > 0 && "text-accent-danger")}
+        >
+          {overdue > 0 ? `$${overdue.toFixed(2)} overdue` : "none overdue"}
+        </span>
         {openInvoices != null && openInvoices > 0 ? (
-          <div className="text-[10px] text-muted">{openInvoices} open</div>
+          <>
+            <span aria-hidden>·</span>
+            <span className="tabular-nums">{openInvoices} open</span>
+          </>
         ) : null}
       </div>
     </div>
@@ -1426,25 +1445,39 @@ function KpiRailCard({
 function CustomerContextRail({
   customer,
   kpi,
-  overdue,
-  balance,
   notes,
   onAction,
 }: {
   customer: Customer;
   kpi: CustomerKpi | null;
-  overdue: number;
-  balance: number;
   notes: Activity[];
   onAction: (action: AiCardAction) => void;
 }) {
+  // Two-track exposure split. Hide the TJ card when there's no TJ
+  // exposure so pure-Feldart customers see a single clean card.
+  const tjBalance = Number(kpi?.tjBalance ?? "0");
+  const tjOverdue = Number(kpi?.tjOverdue ?? "0");
+  const showTj = tjBalance !== 0 || tjOverdue !== 0;
   return (
     <aside className="flex w-full flex-col gap-3 md:w-[330px] md:shrink-0">
-      <KpiRailCard
-        overdue={overdue}
-        balance={balance}
-        openInvoices={kpi?.openInvoiceCount ?? null}
-      />
+      <div className="flex flex-col gap-2.5">
+        <KpiRailCard
+          label="Feldart owed"
+          balance={Number(kpi?.feldartBalance ?? "0")}
+          overdue={Number(kpi?.feldartOverdue ?? "0")}
+          openInvoices={kpi?.feldartOpenCount ?? null}
+          accent="feldart"
+        />
+        {showTj ? (
+          <KpiRailCard
+            label="Torah Judaica owed"
+            balance={tjBalance}
+            overdue={tjOverdue}
+            openInvoices={kpi?.tjOpenCount ?? null}
+            accent="tj"
+          />
+        ) : null}
+      </div>
       <CustomerAiCard customerId={customer.id} onAction={onAction} />
       <NotesRailCard customerId={customer.id} notes={notes} />
       <details className="rounded-xl border border-default bg-subtle">
@@ -2174,6 +2207,9 @@ function PhonesCard({
 // rendering branches (no due date on credit memos, etc).
 type InvoiceRow = {
   docType: "invoice" | "credit_memo";
+  // Who supplied the goods: 'feldart' (current) vs 'tj' (Torah Judaica
+  // legacy wind-down). Set server-side on every row.
+  origin: "feldart" | "tj";
   id: string | null;
   qbId: string;
   docNumber: string | null;
@@ -2336,6 +2372,24 @@ function InvoicesPanel({
       if (Number(r.balance) > 0) openSum += Number(r.balance);
     }
     return { totalSum, openSum };
+  }, [filteredRows]);
+
+  // Origin-grouped view: Feldart first, then Torah Judaica. Preserves
+  // the existing within-group sort (filteredRows is already sorted).
+  // Each group carries its own balance subtotal for the section header.
+  const originGroups = useMemo(() => {
+    const make = (origin: "feldart" | "tj", label: string) => {
+      const rows = filteredRows.filter((r) => r.origin === origin);
+      let balanceSum = 0;
+      for (const r of rows) {
+        if (Number(r.balance) > 0) balanceSum += Number(r.balance);
+      }
+      return { origin, label, rows, balanceSum };
+    };
+    return [
+      make("feldart", "Feldart"),
+      make("tj", "Torah Judaica"),
+    ].filter((g) => g.rows.length > 0);
   }, [filteredRows]);
 
   function toggleSort(key: SortKey) {
@@ -2689,18 +2743,48 @@ function InvoicesPanel({
                   <th className="px-3 py-2 text-right font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody>
-                {filteredRows.map((row) => (
-                  <InvoiceTableRow
-                    key={`${row.docType}:${row.qbId}`}
-                    row={row}
-                    selected={selected.has(rowKey(row))}
-                    onToggle={() => toggleRow(row)}
-                    onSend={() => setSending(row)}
-                    onRemind={() => setReminding(row)}
-                  />
-                ))}
-              </tbody>
+              {originGroups.map((group) => (
+                <tbody key={group.origin}>
+                  <tr className="bg-elevated/60">
+                    <td
+                      colSpan={11}
+                      className="border-t border-default px-3 py-1.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-secondary">
+                          <OriginChip origin={group.origin} />
+                          {group.label}
+                          <span className="font-normal text-muted">
+                            ({group.rows.length})
+                          </span>
+                        </span>
+                        <span className="text-[11px] tabular-nums text-muted">
+                          {group.balanceSum > 0 ? (
+                            <>
+                              open{" "}
+                              <span className="font-medium text-accent-warning">
+                                ${group.balanceSum.toFixed(2)}
+                              </span>
+                            </>
+                          ) : (
+                            "nothing open"
+                          )}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                  {group.rows.map((row) => (
+                    <InvoiceTableRow
+                      key={`${row.docType}:${row.qbId}`}
+                      row={row}
+                      selected={selected.has(rowKey(row))}
+                      onToggle={() => toggleRow(row)}
+                      onSend={() => setSending(row)}
+                      onRemind={() => setReminding(row)}
+                    />
+                  ))}
+                </tbody>
+              ))}
             </table>
           </div>
         )}
@@ -2880,6 +2964,25 @@ function SortHeader({
   );
 }
 
+// Tiny origin pill: Feldart = indigo tint, TJ = amber tint. Used in the
+// group section headers and inline beside each row's doc number.
+function OriginChip({ origin }: { origin: "feldart" | "tj" }) {
+  const isFeldart = origin === "feldart";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ring-1 ring-inset",
+        isFeldart
+          ? "bg-indigo-500/15 text-indigo-500 ring-indigo-500/30"
+          : "bg-accent-warning/15 text-accent-warning ring-accent-warning/30",
+      )}
+      title={isFeldart ? "Supplied by Feldart" : "Torah Judaica legacy"}
+    >
+      {isFeldart ? "Feldart" : "TJ"}
+    </span>
+  );
+}
+
 function InvoiceTableRow({
   row,
   selected,
@@ -2932,7 +3035,10 @@ function InvoiceTableRow({
         />
       </td>
       <td className="px-3 py-2 font-mono text-xs">
-        {row.docNumber ?? "—"}
+        <span className="inline-flex items-center gap-1.5">
+          <OriginChip origin={row.origin} />
+          {row.docNumber ?? "—"}
+        </span>
       </td>
       <td className="px-3 py-2">
         {row.docType === "credit_memo" ? (
