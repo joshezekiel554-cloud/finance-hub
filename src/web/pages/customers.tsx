@@ -1024,7 +1024,7 @@ export default function CustomersPage() {
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={(sweepMode ? 11 : 10) + moneyColCount}
+                    colSpan={(sweepMode ? 12 : 11) + moneyColCount}
                   >
                     No customers match.
                   </td>

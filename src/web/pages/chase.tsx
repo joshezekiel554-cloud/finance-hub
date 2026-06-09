@@ -50,7 +50,6 @@ import { cn } from "../lib/cn";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { ChaseSearch } from "../lib/search-schemas/chase";
-import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 
 const chaseRouteApi = getRouteApi("/chase");
 
@@ -260,13 +259,13 @@ export default function ChasePage() {
 
   // Total overdue across the current selection. Used in the toolbar
   // banner so the operator knows the dollar value they're about to
-  // chase. parseFloat is safe — overdueBalance is server-validated as a
-  // decimal string.
+  // chase. The route already returns overdueBalance net of this book's
+  // unapplied credit, so we sum it directly (no second netting).
   const selectedTotalOverdue = useMemo(() => {
     let sum = 0;
     for (const row of rows) {
       if (selectedIds.has(row.id)) {
-        sum += effectiveOverdue(row.overdueBalance, row.unappliedCreditBalance);
+        sum += parseFloat(row.overdueBalance) || 0;
       }
     }
     return sum;
@@ -509,15 +508,13 @@ export default function ChasePage() {
               {rows.map((row) => {
                 const checked = selectedIds.has(row.id);
                 const onHold = row.holdStatus === "hold";
-                const rawOverdue = parseFloat(row.overdueBalance) || 0;
+                // overdueBalance is already net of this book's unapplied
+                // credit (the route does the netting); don't subtract again.
                 const credits = parseFloat(row.unappliedCreditBalance) || 0;
-                const overdue = effectiveOverdue(
-                  row.overdueBalance,
-                  row.unappliedCreditBalance,
-                );
+                const overdue = parseFloat(row.overdueBalance) || 0;
                 const overdueTooltip =
                   credits > 0
-                    ? `Overdue net of $${credits.toFixed(2)} in unapplied credits (raw overdue: $${rawOverdue.toFixed(2)})`
+                    ? `Net of $${credits.toFixed(2)} in unapplied credits`
                     : undefined;
                 const balance = parseFloat(row.balance) || 0;
                 const result = resultsById[row.id];
