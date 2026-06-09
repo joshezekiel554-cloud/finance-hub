@@ -110,6 +110,36 @@ describe("findCandidates", () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.entityId).toBe("cust-scope");
   });
+
+  it("TJ-only open invoices produce no statement-cadence candidate", async () => {
+    // The invoice innerJoin is origin-scoped to feldart, so a customer whose
+    // only open invoices are TJ (origin='tj') matches no invoice rows and is
+    // dropped by the inner join → query returns no rows. TJ statements are
+    // handled manually, never by the AI proposer.
+    const chain = makeQueryChain([]);
+    vi.mocked(db.select).mockReturnValue(chain);
+
+    const results = await findCandidates();
+    expect(results).toHaveLength(0);
+  });
+
+  it("Feldart open invoices still produce a candidate", async () => {
+    const chain = makeQueryChain([
+      {
+        customerId: "cust-feldart",
+        customerName: "Feldart Co",
+        openInvoiceCount: "2",
+        totalOpenBalance: "2200.00",
+        lastStatementSentAt: null,
+      },
+    ]);
+    vi.mocked(db.select).mockReturnValue(chain);
+
+    const results = await findCandidates();
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entityId).toBe("cust-feldart");
+    expect(results[0]!.summary.openInvoiceCount).toBe(2);
+  });
 });
 
 describe("isStillEligible", () => {

@@ -249,6 +249,52 @@ describe("findCandidates", () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.entityId).toBe("cust-scope");
   });
+
+  it("TJ-only overdue customer produces no chase proposal", async () => {
+    // Customer's denormalized overdueBalance is blended (it reflects a TJ
+    // invoice), but the invoice query is origin-scoped to feldart — so the
+    // invoice list returned for this customer is EMPTY (the TJ invoice is
+    // filtered out by the query's eq(origin,'feldart')). No Feldart overdue
+    // → score 0 → LOW tier → excluded.
+    const customer = makeCustomer({
+      id: "cust-tj",
+      displayName: "Torah Judaica Debtor",
+      overdueBalance: "60000.00",
+      unappliedCreditBalance: "0.00",
+    });
+
+    // The query filters origin='feldart'; a TJ-only customer yields no invoices.
+    mockFindCandidatesDB([customer], [], []);
+
+    const results = await findCandidates();
+    expect(results).toHaveLength(0);
+  });
+
+  it("mixed-book customer scored on Feldart overdue only (Feldart still proposed)", async () => {
+    // Customer has both a TJ and a Feldart overdue invoice. Only the Feldart
+    // invoice survives the origin-scoped query. Its balance alone is CRITICAL,
+    // so the customer is still proposed — driven purely by the Feldart book.
+    const customer = makeCustomer({
+      id: "cust-mixed",
+      displayName: "Mixed Book Co",
+      overdueBalance: "120000.00", // blended (Feldart + TJ)
+      unappliedCreditBalance: "0.00",
+    });
+    const feldartInv = makeInvoice({
+      id: "inv-feldart",
+      customerId: "cust-mixed",
+      origin: "feldart",
+      balance: "60000.00",
+      dueDate: daysAgo(120),
+    });
+    // TJ invoice would be filtered by the query — not passed in.
+    mockFindCandidatesDB([customer], [feldartInv], []);
+
+    const results = await findCandidates();
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entityId).toBe("cust-mixed");
+    expect(results[0]!.summary.tier).toBe("CRITICAL");
+  });
 });
 
 // ── isStillEligible ──────────────────────────────────────────────────────────
@@ -317,5 +363,16 @@ describe("isStillEligible", () => {
       [{ lastChasedAt: null }],
     );
     expect(await isStillEligible("cust-eligible")).toBe(true);
+  });
+
+  it("returns false for a TJ-only overdue customer", async () => {
+    // overdueBalance is blended/non-zero, but the origin-scoped invoice query
+    // returns no Feldart invoices → no Feldart overdue → LOW tier → ineligible.
+    mockIsEligibleDB(
+      [makeCustomer({ id: "cust-tj", overdueBalance: "60000.00", unappliedCreditBalance: "0.00" })],
+      [], // origin='feldart' filter yields no rows for a TJ-only customer
+      [{ lastChasedAt: null }],
+    );
+    expect(await isStillEligible("cust-tj")).toBe(false);
   });
 });

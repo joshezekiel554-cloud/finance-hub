@@ -30,7 +30,13 @@ export async function findCandidates(
     .from(customers)
     .innerJoin(
       invoices,
-      and(eq(invoices.customerId, customers.id), gt(invoices.balance, sql`0`)),
+      // Feldart-only: TJ (Torah Judaica) is a legacy wind-down book chased
+      // manually, so statement-cadence proposals must ignore TJ invoices.
+      and(
+        eq(invoices.customerId, customers.id),
+        gt(invoices.balance, sql`0`),
+        eq(invoices.origin, "feldart"),
+      ),
     )
     .leftJoin(statementSends, eq(statementSends.customerId, customers.id))
     .where(
@@ -84,7 +90,13 @@ export async function isStillEligible(entityId: string): Promise<boolean> {
     .from(customers)
     .leftJoin(
       invoices,
-      and(eq(invoices.customerId, customers.id), gt(invoices.balance, sql`0`)),
+      // Feldart-only (see findCandidates) — TJ open invoices don't count
+      // toward statement-cadence eligibility.
+      and(
+        eq(invoices.customerId, customers.id),
+        gt(invoices.balance, sql`0`),
+        eq(invoices.origin, "feldart"),
+      ),
     )
     .leftJoin(statementSends, eq(statementSends.customerId, customers.id))
     .where(eq(customers.id, entityId))

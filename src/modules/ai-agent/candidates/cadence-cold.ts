@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, isNull, max, or, sql } from "drizzle-orm";
 import { db } from "../../../db/index.js";
 import { customers } from "../../../db/schema/customers.js";
+import { invoices } from "../../../db/schema/invoices.js";
 import { activities, emailLog } from "../../../db/schema/crm.js";
 
 export type Candidate = {
@@ -49,6 +50,27 @@ async function queryCandidates(customerId?: string): Promise<Candidate[]> {
     .groupBy(emailLog.customerId)
     .as("last_contact_sq");
 
+  // Feldart open-invoice count per customer. The cold-cadence gate uses the
+  // origin-blended customers.overdueBalance, so without this a customer whose
+  // overdue is entirely TJ (Torah Judaica — a legacy wind-down book chased
+  // manually) would be proposed. Requiring >0 Feldart open invoices excludes
+  // TJ-only customers; TJ is never auto-chased by the AI proposer.
+  const feldartOpenSq = db
+    .select({
+      customerId: invoices.customerId,
+      feldartOpenCount: sql<number>`count(*)`.as("feldart_open_count"),
+    })
+    .from(invoices)
+    .where(
+      and(
+        gt(invoices.balance, sql`0`),
+        eq(invoices.origin, "feldart"),
+        customerId ? eq(invoices.customerId, customerId) : undefined,
+      ),
+    )
+    .groupBy(invoices.customerId)
+    .as("feldart_open_sq");
+
   const paymentCutoff = new Date(Date.now() - PAYMENT_STALE_DAYS * DAYS_MS);
   const contactCutoff = new Date(Date.now() - CONTACT_STALE_DAYS * DAYS_MS);
 
@@ -63,6 +85,7 @@ async function queryCandidates(customerId?: string): Promise<Candidate[]> {
     .from(customers)
     .leftJoin(lastPaymentSq, eq(customers.id, lastPaymentSq.customerId))
     .leftJoin(lastContactSq, eq(customers.id, lastContactSq.customerId))
+    .innerJoin(feldartOpenSq, eq(customers.id, feldartOpenSq.customerId))
     .where(
       and(
         eq(customers.agentModeExcluded, false),

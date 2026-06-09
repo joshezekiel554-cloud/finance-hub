@@ -69,6 +69,7 @@ function mockDbSelect(rows: Record<string, unknown>[]) {
   const chain = {
     from: vi.fn().mockReturnThis(),
     leftJoin: vi.fn().mockReturnThis(),
+    innerJoin: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
     as: vi.fn().mockReturnThis(),
@@ -159,6 +160,34 @@ describe("findCandidates", () => {
     const result = await findCandidates("cust-scope");
     expect(result).toHaveLength(1);
     expect(result[0]!.entityId).toBe("cust-scope");
+  });
+
+  it("TJ-only overdue customer produces no cold-cadence proposal", async () => {
+    // The query inner-joins on a Feldart-open-invoice subquery, so a customer
+    // whose only open invoices are TJ (origin='tj') is filtered out at the DB
+    // layer and the query returns no rows. TJ is chased manually, never by the
+    // AI proposer.
+    mockDbSelect([]);
+
+    const result = await findCandidates();
+    expect(result).toHaveLength(0);
+  });
+
+  it("Feldart-overdue customer still proposed (has Feldart open invoices)", async () => {
+    // Customer survives the Feldart inner-join → one row returned → proposed.
+    mockDbSelect([
+      {
+        id: "cust-feldart",
+        displayName: "Feldart Debtor",
+        overdueBalance: "1500.00",
+        lastPayment: daysAgo(60),
+        lastContact: daysAgo(30),
+      },
+    ]);
+
+    const result = await findCandidates();
+    expect(result).toHaveLength(1);
+    expect(result[0]!.entityId).toBe("cust-feldart");
   });
 });
 
