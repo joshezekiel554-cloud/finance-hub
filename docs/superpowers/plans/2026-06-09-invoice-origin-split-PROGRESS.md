@@ -18,12 +18,12 @@
 ## Status log (append one line per task as completed, with commit sha)
 - [x] Spec written + reviewed + approved (`5669f93`, `cd25d45`)
 - [x] Recon (4 Explore agents) done
-- [x] Wave A + Wave B plans + this tracker committed — `<sha-pending>`
-- [ ] Wave A T1 schema/migration
-- [ ] Wave A T2 origin classifier
-- [ ] Wave A T3 sync origin + credit_memos
-- [ ] Wave A T4 per-origin balances
-- [ ] Wave A T5 lookups/digest scoping
+- [x] Wave A + Wave B plans + this tracker committed — `b7296b1`
+- [x] Wave A T1 schema/migration — `23ed032` (migration 0040)
+- [x] Wave A T2 origin classifier — `e14284a`
+- [x] Wave A T3 sync origin + credit_memos — `87dc26f`
+- [x] Wave A T4 per-origin balances — `cbe2489`
+- [ ] Wave A T5 lookups/digest scoping  ← NEXT
 - [ ] Wave A T6 chase route + toggle
 - [ ] Wave A T7 customer-detail route
 - [ ] Wave A T8 customer-detail page
@@ -44,3 +44,5 @@
 - Credit-memo "inherit origin from applied invoice" dropped for v1 (QBO fetch lacks LinkedTxn). Manual sweep + override covers misclassifications.
 - Customers list: replace blended Balance column with Feldart+TJ columns (keep Overdue blended) to manage width — revisit visually.
 - Wave C (AI assist off transcripts + external handover) intentionally NOT built — out of scope per spec; "all waves" = A + B.
+- Dropped planned `aggregateCreditBalanceByOrigin` helper (T3 step5): redundant now that `credit_memos` stores origin — per-origin credit is a `SELECT origin, SUM(balance) ... GROUP BY origin` query consumed by `computeOriginBalances`.
+- Credit netting (`balances.ts`): credit reduces both balance and overdue floored at 0 (conservative — avoids over-chasing). Net overdue <= net balance always.
