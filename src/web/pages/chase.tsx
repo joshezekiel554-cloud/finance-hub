@@ -113,12 +113,18 @@ const CUSTOMER_TYPE_LABELS: Record<CustomerTypeFilter, string> = {
   all: "All",
 };
 
+const ORIGIN_LABELS: Record<ChaseSearch["origin"], string> = {
+  feldart: "Feldart",
+  tj: "Torah Judaica",
+};
+
 export default function ChasePage() {
   const search = chaseRouteApi.useSearch();
   const { setFilter, setFilters } = useFilterNavigate<ChaseSearch>("/chase");
   useFilterPersistence("/chase");
 
   // Local aliases (preserve old variable names so JSX/queryKey changes are minimal):
+  const originFilter = search.origin;
   const customerTypeFilter = search.customerType;
   const holdFilter = search.holdStatus;
   const missingTermsFilter = search.missingTerms;
@@ -127,6 +133,8 @@ export default function ChasePage() {
   const dir = search.dir;
 
   // Setters:
+  const setOriginFilter = (next: ChaseSearch["origin"]) =>
+    setFilter("origin", next, { history: "push" });
   const setCustomerTypeFilter = (next: ChaseSearch["customerType"]) =>
     setFilter("customerType", next, { history: "push" });
   const setHoldFilter = (next: ChaseSearch["holdStatus"]) =>
@@ -169,6 +177,7 @@ export default function ChasePage() {
     "chase",
     "customers",
     {
+      originFilter,
       customerTypeFilter,
       holdFilter,
       missingTermsFilter,
@@ -186,6 +195,7 @@ export default function ChasePage() {
     staleTime: 60_000,
     queryFn: async () => {
       const params = new URLSearchParams({
+        origin: originFilter,
         customerType: customerTypeFilter,
         holdStatus: holdFilter,
         sort,
@@ -354,6 +364,11 @@ export default function ChasePage() {
       </div>
 
       <FilterBar
+        originFilter={originFilter}
+        onOriginChange={(v) => {
+          setOriginFilter(v);
+          setSelectedIds(new Set());
+        }}
         customerTypeFilter={customerTypeFilter}
         onCustomerTypeChange={(v) => {
           setCustomerTypeFilter(v);
@@ -691,6 +706,8 @@ export default function ChasePage() {
 }
 
 function FilterBar({
+  originFilter,
+  onOriginChange,
   customerTypeFilter,
   onCustomerTypeChange,
   holdFilter,
@@ -701,6 +718,8 @@ function FilterBar({
   onHasPendingRmaChange,
   onClearToggles,
 }: {
+  originFilter: ChaseSearch["origin"];
+  onOriginChange: (v: ChaseSearch["origin"]) => void;
   customerTypeFilter: CustomerTypeFilter;
   onCustomerTypeChange: (v: CustomerTypeFilter) => void;
   holdFilter: HoldFilter;
@@ -715,6 +734,17 @@ function FilterBar({
   return (
     <Card>
       <CardBody className="flex flex-wrap items-center gap-4 py-3">
+        <ChipGroup label="Book">
+          {(["feldart", "tj"] as ChaseSearch["origin"][]).map((v) => (
+            <Chip
+              key={v}
+              active={originFilter === v}
+              onClick={() => onOriginChange(v)}
+            >
+              {ORIGIN_LABELS[v]}
+            </Chip>
+          ))}
+        </ChipGroup>
         <ChipGroup label="Hold status">
           {(["active", "hold", "all"] as HoldFilter[]).map((v) => (
             <Chip

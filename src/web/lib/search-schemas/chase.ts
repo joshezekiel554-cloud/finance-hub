@@ -5,6 +5,9 @@
 import { z } from "zod";
 
 export const chaseSearchSchema = z.object({
+  // Which receivable book to chase. Default 'feldart' keeps the clean Feldart
+  // list up first; 'tj' is the Torah Judaica wind-down track.
+  origin: z.enum(["feldart", "tj"]).catch("feldart"),
   customerType: z.enum(["b2b", "b2c", "all"]).catch("b2b"),
   holdStatus: z.enum(["active", "hold", "all"]).catch("all"),
   missingTerms: z.boolean().catch(false),
