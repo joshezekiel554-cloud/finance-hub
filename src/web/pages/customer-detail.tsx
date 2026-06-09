@@ -56,6 +56,7 @@ import ComposeModal, {
 import CustomerAiCard, {
   type CardAction as AiCardAction,
 } from "../components/customer-ai-card";
+import { DisputeActions } from "../components/dispute-actions";
 import {
   TaskDetailDrawer,
   type DrawerMode as TaskDrawerMode,
@@ -281,6 +282,21 @@ export default function CustomerDetailPage() {
     staleTime: 5 * 60 * 1000,
   });
   const currentUser = meQuery.data?.user ?? null;
+
+  // App settings — only needed for the TJ dispute flow's "Email TJ
+  // bookkeeper" prefill (key tj_bookkeeper_email). Cached for 5 min;
+  // an empty value still opens compose with no recipient.
+  const appSettingsQuery = useQuery<{ settings: Record<string, string> }>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const tjBookkeeperEmail =
+    appSettingsQuery.data?.settings.tj_bookkeeper_email?.trim() || undefined;
 
   // Customer-scoped task list. Used by:
   //   - The Tasks tab (renders the list + an Add task button)
@@ -891,6 +907,31 @@ export default function CustomerDetailPage() {
                 customerId={customer.id}
                 customerName={customer.displayName}
                 onBulkChase={(invoiceIds) => setChaseDialog({ invoiceIds })}
+                onDisputeChanged={() => {
+                  void queryClient.invalidateQueries({
+                    queryKey: ["customer-invoices", customer.id],
+                  });
+                  void queryClient.invalidateQueries({
+                    queryKey: ["customer", customerId],
+                  });
+                }}
+                onEmailBookkeeper={(inv) => {
+                  const amount = Number(inv.balance).toFixed(2);
+                  const docLabel = inv.docNumber ?? inv.qbId;
+                  const subject = `Payment check: invoice ${docLabel} (${customer.displayName})`;
+                  const bodyHtml = [
+                    `<p>Hi,</p>`,
+                    `<p>${escapeComposeHtml(customer.displayName)} says they have already paid invoice <strong>${escapeComposeHtml(docLabel)}</strong> (open balance $${amount}).</p>`,
+                    `<p>Could you confirm whether this was settled with Torah Judaica? If it was paid to TJ, let me know and we will void it on our side. If not, we will resume chasing it.</p>`,
+                    `<p>Thanks.</p>`,
+                  ].join("");
+                  setComposeContext({
+                    customerId: customer.id,
+                    customerName: customer.displayName,
+                    customerEmail: tjBookkeeperEmail,
+                    prefill: { subject, bodyHtml },
+                  });
+                }}
                 invStatus={invStatus}
                 invType={invType}
                 invSearch={invSearch}
@@ -2224,6 +2265,11 @@ type InvoiceRow = {
   customerMemo: string | null;
   sentAt: string | null;
   sentVia: string | null;
+  // TJ dispute lifecycle (TJ invoices only; null elsewhere + on credit
+  // memos). Drives the per-row DisputeActions UI.
+  disputeState: "verifying" | "confirmed_paid" | "confirmed_unpaid" | null;
+  disputeClaimedAt: string | null;
+  disputeNote: string | null;
   // Last chase email that touched this invoice. Always null for
   // credit memos (chase tracking is invoice-only). Drives the
   // sortable "Last chased" column + the bulk-action target picker.
@@ -2245,6 +2291,8 @@ function InvoicesPanel({
   customerId,
   customerName,
   onBulkChase,
+  onDisputeChanged,
+  onEmailBookkeeper,
   invStatus,
   invType,
   invSearch,
@@ -2264,6 +2312,11 @@ function InvoicesPanel({
   // invoice-only). Chase tracking + invalidation is the dialog's
   // job after send succeeds.
   onBulkChase: (invoiceIds: string[]) => void;
+  // A TJ dispute action succeeded — parent invalidates the invoices +
+  // customer queries so balances/badges refresh.
+  onDisputeChanged: () => void;
+  // Open the bookkeeper compose for a TJ invoice under verification.
+  onEmailBookkeeper: (inv: InvoiceRow) => void;
   invStatus: StatusFilter;
   invType: TypeFilter;
   invSearch: string;
@@ -2784,6 +2837,8 @@ function InvoicesPanel({
                       onToggle={() => toggleRow(row)}
                       onSend={() => setSending(row)}
                       onRemind={() => setReminding(row)}
+                      onDisputeChanged={onDisputeChanged}
+                      onEmailBookkeeper={() => onEmailBookkeeper(row)}
                     />
                   ))}
                 </tbody>
@@ -2967,6 +3022,13 @@ function SortHeader({
   );
 }
 
+// Minimal HTML escape for strings injected into a compose prefill body
+// (customer name, doc number). Keeps the bookkeeper email well-formed
+// when those values contain &, <, or >.
+function escapeComposeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // Tiny origin pill: Feldart = indigo tint, TJ = amber tint. Used in the
 // group section headers and inline beside each row's doc number.
 function OriginChip({ origin }: { origin: "feldart" | "tj" }) {
@@ -2992,13 +3054,21 @@ function InvoiceTableRow({
   onToggle,
   onSend,
   onRemind,
+  onDisputeChanged,
+  onEmailBookkeeper,
 }: {
   row: InvoiceRow;
   selected: boolean;
   onToggle: () => void;
   onSend: () => void;
   onRemind: () => void;
+  onDisputeChanged: () => void;
+  onEmailBookkeeper: () => void;
 }) {
+  // TJ invoices parked for verification render visually muted.
+  const isVerifying = row.origin === "tj" && row.disputeState === "verifying";
+  // Only show the dispute affordance on TJ invoices (never credit memos).
+  const showDispute = row.origin === "tj" && row.docType === "invoice";
   const total = Number(row.total);
   const balance = Number(row.balance);
   const isPaid =
@@ -3026,6 +3096,9 @@ function InvoiceTableRow({
       className={cn(
         "border-t border-default",
         selected && "bg-accent-primary/5",
+        // Parked-for-verification TJ invoices read muted so they don't
+        // compete with active items in the list.
+        isVerifying && "opacity-60",
       )}
     >
       <td className="w-8 px-3 py-2">
@@ -3143,6 +3216,21 @@ function InvoiceTableRow({
                 ? `sent ${new Date(row.sentAt).toLocaleDateString()}`
                 : "sent"}
             </span>
+          ) : null}
+          {showDispute ? (
+            <DisputeActions
+              invoice={{
+                id: row.id,
+                origin: row.origin,
+                disputeState: row.disputeState,
+                disputeClaimedAt: row.disputeClaimedAt,
+                disputeNote: row.disputeNote,
+                docNumber: row.docNumber,
+                balance: row.balance,
+              }}
+              onChanged={onDisputeChanged}
+              onEmailBookkeeper={onEmailBookkeeper}
+            />
           ) : null}
         </div>
       </td>

@@ -216,7 +216,9 @@ export default function ChasePage() {
       const res = await fetch("/api/chase/batch-statement", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ customerIds }),
+        // Scope the statements to the active book so a TJ-view batch sends
+        // TJ-only statements (and Feldart-view Feldart-only).
+        body: JSON.stringify({ customerIds, origin: originFilter }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json() as Promise<BatchResponse>;
@@ -555,6 +557,19 @@ export default function ChasePage() {
                           </span>
                         ) : null}
                       </a>
+                      {originFilter === "tj" ? (
+                        // Dispute lifecycle is per-invoice (a chase row is
+                        // per-customer), so we don't park here. Link the
+                        // operator to the customer's Invoices tab where the
+                        // per-invoice "Customer claims paid" action lives.
+                        <a
+                          href={`/customers/${row.id}?tab=invoices`}
+                          className="mt-0.5 block text-[11px] text-muted hover:text-accent-warning hover:underline underline-offset-2"
+                          title="Park a TJ invoice the customer says they paid (per-invoice, on the customer page)"
+                        >
+                          Dispute on customer page →
+                        </a>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 text-secondary">
                       {row.primaryEmail ?? (
