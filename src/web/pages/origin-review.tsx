@@ -77,7 +77,7 @@ export default function OriginReviewPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Origin review</h1>
         <p className="mt-1 text-sm text-secondary">
-          These credit memos couldn&rsquo;t be auto-classified — tell us whether
+          These credit memos couldn&rsquo;t be auto-classified. Tell us whether
           each belongs to the Feldart book or the Torah Judaica wind-down book.
         </p>
       </div>

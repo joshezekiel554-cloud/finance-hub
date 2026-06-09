@@ -80,6 +80,9 @@ const listQuerySchema = z.object({
     .enum(["active", "hold", "payment_upfront", "all"])
     .default("all"),
   withBalance: boolish,
+  // Origin lens: 'both' shows every customer; 'feldart'/'tj' narrow to those
+  // with an open balance in that book.
+  book: z.enum(["feldart", "tj", "both"]).default("both"),
   // New filter chips (all default false → no filtering applied):
   hideZeroBalance: boolish,
   hasOverdue: boolish,
@@ -96,6 +99,7 @@ const listQuerySchema = z.object({
       "balance",
       "feldartBalance",
       "tjBalance",
+      "combinedBalance",
       "overdueBalance",
       "lastSyncedAt",
       "lastPaymentAt",
@@ -186,6 +190,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       customerType,
       holdStatus,
       withBalance,
+      book,
       hideZeroBalance,
       hasOverdue,
       hasUnactionedEmail,
@@ -224,6 +229,17 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     }
     if (hasOverdue) {
       filters.push(gt(customers.overdueBalance, "0"));
+    }
+    // Origin lens — narrow to customers with an open balance in the chosen book.
+    if (book === "feldart" || book === "tj") {
+      filters.push(
+        sql`EXISTS (
+          SELECT 1 FROM ${invoices}
+          WHERE ${invoices.customerId} = \`customers\`.\`id\`
+            AND ${invoices.balance} > 0
+            AND ${invoices.origin} = ${book}
+        )`,
+      );
     }
     if (missingTerms) {
       filters.push(isNull(customers.paymentTerms));
@@ -294,12 +310,15 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     )`;
     const feldartBalanceExpr = originBalanceExpr("feldart");
     const tjBalanceExpr = originBalanceExpr("tj");
+    // Combined = the two netted books summed (Feldart + TJ).
+    const combinedBalanceExpr = sql<string>`(${feldartBalanceExpr} + ${tjBalanceExpr})`;
 
     const sortCol = {
       displayName: customers.displayName,
       balance: customers.balance,
       feldartBalance: feldartBalanceExpr,
       tjBalance: tjBalanceExpr,
+      combinedBalance: combinedBalanceExpr,
       overdueBalance: customers.overdueBalance,
       lastSyncedAt: customers.lastSyncedAt,
       lastPaymentAt: lastPaymentExprForSort,
@@ -383,6 +402,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         balance: customers.balance,
         feldartBalance: feldartBalanceExpr,
         tjBalance: tjBalanceExpr,
+        combinedBalance: combinedBalanceExpr,
         overdueBalance: customers.overdueBalance,
         unappliedCreditBalance: customers.unappliedCreditBalance,
         holdStatus: customers.holdStatus,
@@ -423,6 +443,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       // fixed 2dp string so the client renders them like balance/overdue.
       feldartBalance: Number(r.feldartBalance ?? 0).toFixed(2),
       tjBalance: Number(r.tjBalance ?? 0).toFixed(2),
+      combinedBalance: Number(r.combinedBalance ?? 0).toFixed(2),
       // mysql2 returns TIMESTAMP from a correlated subquery as a
       // "YYYY-MM-DD HH:MM:SS" string rather than a Date. Normalise to
       // ISO so the frontend reads them like every other timestamp.

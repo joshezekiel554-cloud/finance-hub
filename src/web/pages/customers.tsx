@@ -42,6 +42,7 @@ type CustomerRow = {
   balance: string;
   feldartBalance: string;
   tjBalance: string;
+  combinedBalance: string;
   overdueBalance: string;
   unappliedCreditBalance: string;
   holdStatus: HoldStatus;
@@ -73,6 +74,7 @@ type SortKey =
   | "balance"
   | "feldartBalance"
   | "tjBalance"
+  | "combinedBalance"
   | "overdueBalance"
   | "lastSyncedAt"
   | "lastPaymentAt"
@@ -85,6 +87,7 @@ const SORT_LABELS: Record<SortKey, string> = {
   balance: "Balance",
   feldartBalance: "Feldart",
   tjBalance: "TJ",
+  combinedBalance: "Combined",
   overdueBalance: "Overdue",
   lastSyncedAt: "Last synced",
   lastPaymentAt: "Last payment",
@@ -107,6 +110,12 @@ const TAB_LABELS: Record<FilterTab, string> = {
   all: "All",
 };
 
+const BOOK_LABELS: Record<CustomersSearch["book"], string> = {
+  feldart: "Feldart",
+  tj: "TJ",
+  both: "Both",
+};
+
 export default function CustomersPage() {
   const search = customersRouteApi.useSearch();
   const { setFilter, setFilters } = useFilterNavigate<CustomersSearch>("/customers");
@@ -114,6 +123,14 @@ export default function CustomersPage() {
 
   // Local aliases — minimize downstream changes:
   const tab = search.tab;
+  const book = search.book;
+  // The Book lens drives which money columns show: Both → Feldart + TJ +
+  // Combined; a single book → just that book's column.
+  const showFeldartCol = book === "both" || book === "feldart";
+  const showTjCol = book === "both" || book === "tj";
+  const showCombinedCol = book === "both";
+  const moneyColCount =
+    (showFeldartCol ? 1 : 0) + (showTjCol ? 1 : 0) + (showCombinedCol ? 1 : 0);
   // `sort` is widened to the local SortKey union (which now carries the
   // per-origin keys feldartBalance/tjBalance). The URL search schema's
   // enum is owned elsewhere; we cast at the read/write boundary so the
@@ -130,6 +147,8 @@ export default function CustomersPage() {
   // text input + boolean filter chips use replace (default).
   const setTab = (next: CustomersSearch["tab"]) =>
     setFilters({ tab: next, hideZero: next === "b2b" }, { history: "push" });
+  const setBook = (next: CustomersSearch["book"]) =>
+    setFilter("book", next, { history: "push" });
   const setSort = (next: SortKey) =>
     setFilter("sort", next as CustomersSearch["sort"], { history: "push" });
   const setDir = (next: CustomersSearch["dir"]) =>
@@ -174,6 +193,7 @@ export default function CustomersPage() {
     "customers",
     {
       tab,
+      book,
       search: search.search,
       sort,
       dir,
@@ -209,6 +229,8 @@ export default function CustomersPage() {
         // than the first page. Backend caps at 5000 in the route schema.
         limit: "5000",
       });
+      // Origin lens applies in every view (scope, not a chip).
+      if (book !== "both") params.set("book", book);
       if (searchIsActive) params.set("q", search.search.trim());
       // Filter chips are suppressed when search is active.
       if (!searchIsActive) {
@@ -474,6 +496,30 @@ export default function CustomersPage() {
             ))}
         </div>
 
+        <div className="inline-flex items-center gap-1.5">
+          <span className="text-xs uppercase tracking-wide text-muted">Book</span>
+          <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
+            {(["feldart", "tj", "both"] as const).map((b) => (
+              <button
+                key={b}
+                type="button"
+                onClick={() => {
+                  setBook(b);
+                  setSelectedIds(new Set());
+                }}
+                className={cn(
+                  "rounded px-3 py-1 transition-colors",
+                  book === b
+                    ? "bg-base font-medium text-primary shadow-sm"
+                    : "text-secondary hover:text-primary",
+                )}
+              >
+                {BOOK_LABELS[b]}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="relative ml-auto flex flex-col items-end gap-1">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
@@ -712,24 +758,39 @@ export default function CustomersPage() {
                   onClick={() => toggleSort("displayName", sort, setSort, dir, setDir)}
                 />
                 <th className="px-3 py-2">Phone</th>
-                <SortableTh
-                  label="Feldart"
-                  active={sort === "feldartBalance"}
-                  dir={dir}
-                  onClick={() =>
-                    toggleSort("feldartBalance", sort, setSort, dir, setDir)
-                  }
-                  align="right"
-                />
-                <SortableTh
-                  label="TJ"
-                  active={sort === "tjBalance"}
-                  dir={dir}
-                  onClick={() =>
-                    toggleSort("tjBalance", sort, setSort, dir, setDir)
-                  }
-                  align="right"
-                />
+                {showFeldartCol && (
+                  <SortableTh
+                    label="Feldart"
+                    active={sort === "feldartBalance"}
+                    dir={dir}
+                    onClick={() =>
+                      toggleSort("feldartBalance", sort, setSort, dir, setDir)
+                    }
+                    align="right"
+                  />
+                )}
+                {showTjCol && (
+                  <SortableTh
+                    label="TJ"
+                    active={sort === "tjBalance"}
+                    dir={dir}
+                    onClick={() =>
+                      toggleSort("tjBalance", sort, setSort, dir, setDir)
+                    }
+                    align="right"
+                  />
+                )}
+                {showCombinedCol && (
+                  <SortableTh
+                    label="Combined"
+                    active={sort === "combinedBalance"}
+                    dir={dir}
+                    onClick={() =>
+                      toggleSort("combinedBalance", sort, setSort, dir, setDir)
+                    }
+                    align="right"
+                  />
+                )}
                 <SortableTh
                   label="Overdue"
                   active={sort === "overdueBalance"}
@@ -781,6 +842,7 @@ export default function CustomersPage() {
               {visibleRows.map((row) => {
                 const feldartBalance = Number(row.feldartBalance);
                 const tjBalance = Number(row.tjBalance);
+                const combinedBalance = Number(row.combinedBalance);
                 const rawOverdue = Number(row.overdueBalance);
                 const credits = Number(row.unappliedCreditBalance);
                 // Display nets unapplied credit memos; sort still uses
@@ -858,24 +920,39 @@ export default function CustomersPage() {
                     <td className="px-3 py-2 text-secondary">
                       {row.phone ?? <span className="text-muted">—</span>}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {feldartBalance > 0 ? (
-                        <span className="font-medium text-accent-info">
-                          ${feldartBalance.toFixed(2)}
-                        </span>
-                      ) : (
-                        <span className="text-muted">$0.00</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {tjBalance > 0 ? (
-                        <span className="font-medium text-accent-warning">
-                          ${tjBalance.toFixed(2)}
-                        </span>
-                      ) : (
-                        <span className="text-muted">$0.00</span>
-                      )}
-                    </td>
+                    {showFeldartCol && (
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {feldartBalance > 0 ? (
+                          <span className="font-medium text-accent-info">
+                            ${feldartBalance.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-muted">$0.00</span>
+                        )}
+                      </td>
+                    )}
+                    {showTjCol && (
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {tjBalance > 0 ? (
+                          <span className="font-medium text-accent-warning">
+                            ${tjBalance.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-muted">$0.00</span>
+                        )}
+                      </td>
+                    )}
+                    {showCombinedCol && (
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {combinedBalance > 0 ? (
+                          <span className="font-semibold text-primary">
+                            ${combinedBalance.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-muted">$0.00</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-3 py-2 text-right tabular-nums">
                       {overdue > 0 ? (
                         <span
@@ -947,7 +1024,7 @@ export default function CustomersPage() {
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={sweepMode ? 13 : 12}
+                    colSpan={(sweepMode ? 11 : 10) + moneyColCount}
                   >
                     No customers match.
                   </td>
@@ -1197,6 +1274,7 @@ function toggleSort(
       "balance",
       "feldartBalance",
       "tjBalance",
+      "combinedBalance",
       "overdueBalance",
       "lastPaymentAt",
       "lastStatementSentAt",

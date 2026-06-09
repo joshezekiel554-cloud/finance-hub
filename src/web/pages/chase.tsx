@@ -116,6 +116,7 @@ const CUSTOMER_TYPE_LABELS: Record<CustomerTypeFilter, string> = {
 const ORIGIN_LABELS: Record<ChaseSearch["origin"], string> = {
   feldart: "Feldart",
   tj: "Torah Judaica",
+  both: "Both",
 };
 
 export default function ChasePage() {
@@ -735,7 +736,7 @@ function FilterBar({
     <Card>
       <CardBody className="flex flex-wrap items-center gap-4 py-3">
         <ChipGroup label="Book">
-          {(["feldart", "tj"] as ChaseSearch["origin"][]).map((v) => (
+          {(["feldart", "tj", "both"] as ChaseSearch["origin"][]).map((v) => (
             <Chip
               key={v}
               active={originFilter === v}

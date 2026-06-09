@@ -72,8 +72,9 @@ const boolish = z
 
 const listQuerySchema = z.object({
   // Which receivable book to chase. Default 'feldart' keeps the clean Feldart
-  // list front-and-centre; 'tj' is the Torah Judaica wind-down track.
-  origin: z.enum(["feldart", "tj"]).default("feldart"),
+  // list front-and-centre; 'tj' is the Torah Judaica wind-down track; 'both'
+  // is the blended view across the two books.
+  origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
   customerType: z.enum(["b2b", "b2c", "all"]).default("b2b"),
   // "Active" widens to include payment_upfront — those customers can
   // still be chased; only true hold customers are excluded by it.
@@ -205,23 +206,28 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     // = future due). We render past-due only on the UI but surface the
     // raw integer so the client can decide. NULL when there's no
     // unpaid invoice with a due_date.
+    // 'both' = blended across the two books (no origin filter); 'feldart'/'tj'
+    // scope to one book. Empty sql fragment when both so the subqueries sum all.
+    const invOriginCond =
+      origin === "both" ? sql`` : sql` AND ${invoices.origin} = ${origin}`;
+    const cmOriginCond =
+      origin === "both" ? sql`` : sql` AND ${creditMemos.origin} = ${origin}`;
+
     const daysOverdueExpr = sql<number | null>`(
       SELECT DATEDIFF(CURRENT_DATE, MIN(${invoices.dueDate}))
       FROM ${invoices}
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
-        AND ${invoices.balance} > 0
-        AND ${invoices.origin} = ${origin}
+        AND ${invoices.balance} > 0${invOriginCond}
         AND ${invoices.dueDate} IS NOT NULL
     )`;
 
-    // Per-origin money (gross). Netted by this origin's unapplied credit in JS
+    // Per-origin money (gross). Netted by the matching unapplied credit in JS
     // below. Same hand-qualified `customers`.`id` as the other subqueries.
     const grossOverdueExpr = sql<string>`(
       SELECT COALESCE(SUM(${invoices.balance}), 0)
       FROM ${invoices}
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
-        AND ${invoices.balance} > 0
-        AND ${invoices.origin} = ${origin}
+        AND ${invoices.balance} > 0${invOriginCond}
         AND ${invoices.dueDate} IS NOT NULL
         AND ${invoices.dueDate} < CURRENT_DATE
     )`;
@@ -229,15 +235,13 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       SELECT COALESCE(SUM(${invoices.balance}), 0)
       FROM ${invoices}
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
-        AND ${invoices.balance} > 0
-        AND ${invoices.origin} = ${origin}
+        AND ${invoices.balance} > 0${invOriginCond}
     )`;
     const originCreditExpr = sql<string>`(
       SELECT COALESCE(SUM(${creditMemos.balance}), 0)
       FROM ${creditMemos}
       WHERE ${creditMemos.customerId} = \`customers\`.\`id\`
-        AND ${creditMemos.balance} > 0
-        AND ${creditMemos.origin} = ${origin}
+        AND ${creditMemos.balance} > 0${cmOriginCond}
     )`;
 
     const lastActivityExpr = sql<Date | null>`(
