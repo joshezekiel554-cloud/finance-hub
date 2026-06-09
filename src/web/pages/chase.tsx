@@ -50,7 +50,6 @@ import { cn } from "../lib/cn";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { ChaseSearch } from "../lib/search-schemas/chase";
-import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 
 const chaseRouteApi = getRouteApi("/chase");
 
@@ -113,12 +112,19 @@ const CUSTOMER_TYPE_LABELS: Record<CustomerTypeFilter, string> = {
   all: "All",
 };
 
+const ORIGIN_LABELS: Record<ChaseSearch["origin"], string> = {
+  feldart: "Feldart",
+  tj: "Torah Judaica",
+  both: "Both",
+};
+
 export default function ChasePage() {
   const search = chaseRouteApi.useSearch();
   const { setFilter, setFilters } = useFilterNavigate<ChaseSearch>("/chase");
   useFilterPersistence("/chase");
 
   // Local aliases (preserve old variable names so JSX/queryKey changes are minimal):
+  const originFilter = search.origin;
   const customerTypeFilter = search.customerType;
   const holdFilter = search.holdStatus;
   const missingTermsFilter = search.missingTerms;
@@ -127,6 +133,8 @@ export default function ChasePage() {
   const dir = search.dir;
 
   // Setters:
+  const setOriginFilter = (next: ChaseSearch["origin"]) =>
+    setFilter("origin", next, { history: "push" });
   const setCustomerTypeFilter = (next: ChaseSearch["customerType"]) =>
     setFilter("customerType", next, { history: "push" });
   const setHoldFilter = (next: ChaseSearch["holdStatus"]) =>
@@ -169,6 +177,7 @@ export default function ChasePage() {
     "chase",
     "customers",
     {
+      originFilter,
       customerTypeFilter,
       holdFilter,
       missingTermsFilter,
@@ -186,6 +195,7 @@ export default function ChasePage() {
     staleTime: 60_000,
     queryFn: async () => {
       const params = new URLSearchParams({
+        origin: originFilter,
         customerType: customerTypeFilter,
         holdStatus: holdFilter,
         sort,
@@ -249,13 +259,13 @@ export default function ChasePage() {
 
   // Total overdue across the current selection. Used in the toolbar
   // banner so the operator knows the dollar value they're about to
-  // chase. parseFloat is safe — overdueBalance is server-validated as a
-  // decimal string.
+  // chase. The route already returns overdueBalance net of this book's
+  // unapplied credit, so we sum it directly (no second netting).
   const selectedTotalOverdue = useMemo(() => {
     let sum = 0;
     for (const row of rows) {
       if (selectedIds.has(row.id)) {
-        sum += effectiveOverdue(row.overdueBalance, row.unappliedCreditBalance);
+        sum += parseFloat(row.overdueBalance) || 0;
       }
     }
     return sum;
@@ -354,6 +364,11 @@ export default function ChasePage() {
       </div>
 
       <FilterBar
+        originFilter={originFilter}
+        onOriginChange={(v) => {
+          setOriginFilter(v);
+          setSelectedIds(new Set());
+        }}
         customerTypeFilter={customerTypeFilter}
         onCustomerTypeChange={(v) => {
           setCustomerTypeFilter(v);
@@ -493,15 +508,13 @@ export default function ChasePage() {
               {rows.map((row) => {
                 const checked = selectedIds.has(row.id);
                 const onHold = row.holdStatus === "hold";
-                const rawOverdue = parseFloat(row.overdueBalance) || 0;
+                // overdueBalance is already net of this book's unapplied
+                // credit (the route does the netting); don't subtract again.
                 const credits = parseFloat(row.unappliedCreditBalance) || 0;
-                const overdue = effectiveOverdue(
-                  row.overdueBalance,
-                  row.unappliedCreditBalance,
-                );
+                const overdue = parseFloat(row.overdueBalance) || 0;
                 const overdueTooltip =
                   credits > 0
-                    ? `Overdue net of $${credits.toFixed(2)} in unapplied credits (raw overdue: $${rawOverdue.toFixed(2)})`
+                    ? `Net of $${credits.toFixed(2)} in unapplied credits`
                     : undefined;
                 const balance = parseFloat(row.balance) || 0;
                 const result = resultsById[row.id];
@@ -691,6 +704,8 @@ export default function ChasePage() {
 }
 
 function FilterBar({
+  originFilter,
+  onOriginChange,
   customerTypeFilter,
   onCustomerTypeChange,
   holdFilter,
@@ -701,6 +716,8 @@ function FilterBar({
   onHasPendingRmaChange,
   onClearToggles,
 }: {
+  originFilter: ChaseSearch["origin"];
+  onOriginChange: (v: ChaseSearch["origin"]) => void;
   customerTypeFilter: CustomerTypeFilter;
   onCustomerTypeChange: (v: CustomerTypeFilter) => void;
   holdFilter: HoldFilter;
@@ -715,6 +732,17 @@ function FilterBar({
   return (
     <Card>
       <CardBody className="flex flex-wrap items-center gap-4 py-3">
+        <ChipGroup label="Book">
+          {(["feldart", "tj", "both"] as ChaseSearch["origin"][]).map((v) => (
+            <Chip
+              key={v}
+              active={originFilter === v}
+              onClick={() => onOriginChange(v)}
+            >
+              {ORIGIN_LABELS[v]}
+            </Chip>
+          ))}
+        </ChipGroup>
         <ChipGroup label="Hold status">
           {(["active", "hold", "all"] as HoldFilter[]).map((v) => (
             <Chip

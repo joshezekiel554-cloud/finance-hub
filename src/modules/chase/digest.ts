@@ -9,12 +9,15 @@
 
 import { generateChaseDigest } from "../../integrations/anthropic/chase-digest.js";
 import type { ChaseAccount } from "../../integrations/anthropic/types.js";
+import type { InvoiceOrigin } from "../invoicing/origin.js";
 import { getOverdueCustomers } from "./lookups.js";
 import type { OverdueCustomer } from "./types.js";
 
 export type DailyDigestOptions = {
   topN?: number;
   userId?: string | null;
+  // Scope the digest to one book ('feldart' | 'tj'); omit for blended (both).
+  origin?: InvoiceOrigin;
   // Test/injection seam — allows unit tests to mock the AI call without
   // setting ANTHROPIC_API_KEY or stubbing the SDK at the module level.
   generateDigest?: typeof generateChaseDigest;
@@ -38,7 +41,7 @@ export async function buildDailyDigest(
   const loadOverdue = options.loadOverdue ?? getOverdueCustomers;
   const generate = options.generateDigest ?? generateChaseDigest;
 
-  const overdueCustomers = await loadOverdue();
+  const overdueCustomers = await loadOverdue(options.origin);
   if (overdueCustomers.length === 0) {
     return {
       digest: null,

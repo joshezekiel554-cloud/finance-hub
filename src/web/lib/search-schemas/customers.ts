@@ -10,10 +10,15 @@ export const customersSearchSchema = z.object({
     .enum(["b2b", "b2c", "uncategorized", "all"])
     .catch("b2b"),
   search: z.string().catch(""),
+  // Origin lens: 'both' = all customers; 'feldart'/'tj' narrow to a book.
+  book: z.enum(["feldart", "tj", "both"]).catch("both"),
   sort: z
     .enum([
       "displayName",
       "balance",
+      "feldartBalance",
+      "tjBalance",
+      "combinedBalance",
       "overdueBalance",
       "lastSyncedAt",
       "lastPaymentAt",

@@ -35,6 +35,7 @@ import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { activities, statementSends } from "../../db/schema/crm.js";
 import { invoices, invoiceChases } from "../../db/schema/invoices.js";
+import { creditMemos } from "../../db/schema/credit-memos.js";
 import { rmas } from "../../db/schema/returns.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
@@ -70,6 +71,10 @@ const boolish = z
   .transform((v) => v === true || v === "true");
 
 const listQuerySchema = z.object({
+  // Which receivable book to chase. Default 'feldart' keeps the clean Feldart
+  // list front-and-centre; 'tj' is the Torah Judaica wind-down track; 'both'
+  // is the blended view across the two books.
+  origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
   customerType: z.enum(["b2b", "b2c", "all"]).default("b2b"),
   // "Active" widens to include payment_upfront — those customers can
   // still be chased; only true hold customers are excluded by it.
@@ -135,6 +140,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid query", details: parse.error.flatten() });
     }
     const {
+      origin,
       customerType,
       holdStatus,
       sort,
@@ -143,6 +149,10 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       hasPendingRma: hasPendingRmaFilter,
     } = parse.data;
 
+    // Coarse pre-filter on the blended denormalized overdue. A customer with
+    // overdue in *this* origin necessarily has blended overdue > 0, so this is
+    // a safe superset; we compute the precise per-origin (netted) figures
+    // below and drop rows whose origin overdue nets to 0.
     const filters = [gt(customers.overdueBalance, "0")];
     if (customerType === "b2b") {
       filters.push(eq(customers.customerType, "b2b"));
@@ -196,12 +206,42 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     // = future due). We render past-due only on the UI but surface the
     // raw integer so the client can decide. NULL when there's no
     // unpaid invoice with a due_date.
+    // 'both' = blended across the two books (no origin filter); 'feldart'/'tj'
+    // scope to one book. Empty sql fragment when both so the subqueries sum all.
+    const invOriginCond =
+      origin === "both" ? sql`` : sql` AND ${invoices.origin} = ${origin}`;
+    const cmOriginCond =
+      origin === "both" ? sql`` : sql` AND ${creditMemos.origin} = ${origin}`;
+
     const daysOverdueExpr = sql<number | null>`(
       SELECT DATEDIFF(CURRENT_DATE, MIN(${invoices.dueDate}))
       FROM ${invoices}
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
-        AND ${invoices.balance} > 0
+        AND ${invoices.balance} > 0${invOriginCond}
         AND ${invoices.dueDate} IS NOT NULL
+    )`;
+
+    // Per-origin money (gross). Netted by the matching unapplied credit in JS
+    // below. Same hand-qualified `customers`.`id` as the other subqueries.
+    const grossOverdueExpr = sql<string>`(
+      SELECT COALESCE(SUM(${invoices.balance}), 0)
+      FROM ${invoices}
+      WHERE ${invoices.customerId} = \`customers\`.\`id\`
+        AND ${invoices.balance} > 0${invOriginCond}
+        AND ${invoices.dueDate} IS NOT NULL
+        AND ${invoices.dueDate} < CURRENT_DATE
+    )`;
+    const grossBalanceExpr = sql<string>`(
+      SELECT COALESCE(SUM(${invoices.balance}), 0)
+      FROM ${invoices}
+      WHERE ${invoices.customerId} = \`customers\`.\`id\`
+        AND ${invoices.balance} > 0${invOriginCond}
+    )`;
+    const originCreditExpr = sql<string>`(
+      SELECT COALESCE(SUM(${creditMemos.balance}), 0)
+      FROM ${creditMemos}
+      WHERE ${creditMemos.customerId} = \`customers\`.\`id\`
+        AND ${creditMemos.balance} > 0${cmOriginCond}
     )`;
 
     const lastActivityExpr = sql<Date | null>`(
@@ -242,41 +282,16 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       )
     )`;
 
-    // Sort column resolution.
-    const orderFn = dir === "asc" ? asc : desc;
     const where = and(...filters);
-
-    let orderByClauses;
-    if (sort === "displayName") {
-      orderByClauses = [orderFn(customers.displayName), asc(customers.id)];
-    } else if (sort === "overdueBalance") {
-      orderByClauses = [orderFn(customers.overdueBalance), asc(customers.id)];
-    } else if (sort === "balance") {
-      orderByClauses = [orderFn(customers.balance), asc(customers.id)];
-    } else if (sort === "lastActivityAt") {
-      // MySQL default: NULLs first when ASC, last when DESC. The
-      // intuitive "show me unattended customers" lands at the top of
-      // either direction (oldest first or unknown first), so we keep
-      // the default.
-      orderByClauses = [orderFn(lastActivityExpr), asc(customers.id)];
-    } else if (sort === "lastPaymentAt") {
-      orderByClauses = [orderFn(lastPaymentExpr), asc(customers.id)];
-    } else if (sort === "lastStatementSentAt") {
-      orderByClauses = [orderFn(lastStatementSentExpr), asc(customers.id)];
-    } else {
-      // daysOverdue: positive = past due. Sort the daysOverdue
-      // expression directly — desc → most overdue first.
-      orderByClauses = [orderFn(daysOverdueExpr), asc(customers.id)];
-    }
 
     const rows = await db
       .select({
         id: customers.id,
         displayName: customers.displayName,
         primaryEmail: customers.primaryEmail,
-        balance: customers.balance,
-        overdueBalance: customers.overdueBalance,
-        unappliedCreditBalance: customers.unappliedCreditBalance,
+        grossBalance: grossBalanceExpr,
+        grossOverdue: grossOverdueExpr,
+        originCredit: originCreditExpr,
         holdStatus: customers.holdStatus,
         customerType: customers.customerType,
         paymentTerms: customers.paymentTerms,
@@ -287,34 +302,78 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         hasPendingRma: hasPendingRmaExpr,
       })
       .from(customers)
-      .where(where)
-      .orderBy(...orderByClauses);
+      .where(where);
 
-    // Coerce nullable numerics. mysql2 returns DATEDIFF as `string | null`
-    // depending on driver mode — normalize to `number | null` for the
-    // client. lastActivityAt comes back as a Date (mysql2 hydrates
-    // TIMESTAMP); JSON stringification handles the ISO conversion.
-    const out = rows.map((r) => ({
-      id: r.id,
-      displayName: r.displayName,
-      primaryEmail: r.primaryEmail,
-      balance: r.balance,
-      overdueBalance: r.overdueBalance,
-      unappliedCreditBalance: r.unappliedCreditBalance,
-      holdStatus: r.holdStatus,
-      customerType: r.customerType,
-      paymentTerms: r.paymentTerms,
-      daysSinceOldestUnpaid:
-        r.daysSinceOldestUnpaid === null || r.daysSinceOldestUnpaid === undefined
-          ? null
-          : Number(r.daysSinceOldestUnpaid),
-      lastActivityAt: normalizeSubqueryDate(r.lastActivityAt),
-      lastPaymentAt: normalizeSubqueryDate(r.lastPaymentAt),
-      lastStatementSentAt: normalizeSubqueryDate(r.lastStatementSentAt),
-      // EXISTS comes back as 0/1 from mysql2; coerce to boolean so the
-      // wire shape matches the UI's `hasPendingRma: boolean` expectation.
-      hasPendingRma: Boolean(r.hasPendingRma),
-    }));
+    // Net this origin's unapplied credit against its overdue + open balance
+    // (floored at 0). mysql2 returns DATEDIFF/SUM as `string | null` depending
+    // on driver mode; normalize. Then drop customers with no overdue left in
+    // this book, and sort in JS (uniform across all keys now money is local).
+    const num = (v: string | number | null | undefined): number =>
+      v === null || v === undefined ? 0 : Number(v) || 0;
+    const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+    const mapped = rows.map((r) => {
+      const credit = num(r.originCredit);
+      const overdueNum = round2(Math.max(0, num(r.grossOverdue) - credit));
+      const balanceNum = round2(Math.max(0, num(r.grossBalance) - credit));
+      return {
+        id: r.id,
+        displayName: r.displayName,
+        primaryEmail: r.primaryEmail,
+        balance: balanceNum.toFixed(2),
+        overdueBalance: overdueNum.toFixed(2),
+        unappliedCreditBalance: round2(credit).toFixed(2),
+        holdStatus: r.holdStatus,
+        customerType: r.customerType,
+        paymentTerms: r.paymentTerms,
+        daysSinceOldestUnpaid:
+          r.daysSinceOldestUnpaid === null ||
+          r.daysSinceOldestUnpaid === undefined
+            ? null
+            : Number(r.daysSinceOldestUnpaid),
+        lastActivityAt: normalizeSubqueryDate(r.lastActivityAt),
+        lastPaymentAt: normalizeSubqueryDate(r.lastPaymentAt),
+        lastStatementSentAt: normalizeSubqueryDate(r.lastStatementSentAt),
+        hasPendingRma: Boolean(r.hasPendingRma),
+      };
+    });
+
+    // Only customers with overdue remaining in this book.
+    const out = mapped.filter((r) => Number(r.overdueBalance) > 0);
+
+    const sortKey = (r: (typeof out)[number]): number | string => {
+      switch (sort) {
+        case "displayName":
+          return r.displayName ?? "";
+        case "balance":
+          return Number(r.balance);
+        case "lastActivityAt":
+          return r.lastActivityAt ? Date.parse(r.lastActivityAt) : -Infinity;
+        case "lastPaymentAt":
+          return r.lastPaymentAt ? Date.parse(r.lastPaymentAt) : -Infinity;
+        case "lastStatementSentAt":
+          return r.lastStatementSentAt
+            ? Date.parse(r.lastStatementSentAt)
+            : -Infinity;
+        case "daysOverdue":
+          return r.daysSinceOldestUnpaid ?? -Infinity;
+        default:
+          return Number(r.overdueBalance);
+      }
+    };
+    out.sort((a, b) => {
+      const ka = sortKey(a);
+      const kb = sortKey(b);
+      let c: number;
+      if (typeof ka === "string" && typeof kb === "string") {
+        c = ka.localeCompare(kb);
+      } else {
+        c = ka < kb ? -1 : ka > kb ? 1 : 0;
+      }
+      if (c !== 0) return dir === "asc" ? c : -c;
+      // Stable tie-break: id asc, regardless of direction.
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
 
     return reply.send({ rows: out, total: out.length });
   });

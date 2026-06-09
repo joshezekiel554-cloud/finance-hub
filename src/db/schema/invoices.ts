@@ -37,6 +37,19 @@ export const invoices = mysqlTable(
       "void",
       "overdue",
     ]),
+    // Invoice origin: 'feldart' (docNumber begins 1 — we supplied it, simple to
+    // chase) vs 'tj' (Torah Judaica legacy hand-over, docNumber begins 2 — a
+    // wind-down book with its own softer chase track + dispute loop). Seeded
+    // from the docNumber prefix on sync; never overwritten once an operator
+    // sets it manually (origin_source='manual') or it's flagged needs_review.
+    origin: mysqlEnum("origin", ["feldart", "tj"]).notNull().default("feldart"),
+    originSource: mysqlEnum("origin_source", [
+      "prefix",
+      "manual",
+      "needs_review",
+    ])
+      .notNull()
+      .default("prefix"),
     sentAt: timestamp("sent_at"),
     sentVia: varchar("sent_via", { length: 32 }),
     // QBO Invoice.CustomerMemo.value — the customer-facing memo
@@ -54,6 +67,11 @@ export const invoices = mysqlTable(
     dueDateIdx: index("idx_invoices_due_date").on(t.dueDate),
     statusIdx: index("idx_invoices_status").on(t.status),
     docNumberIdx: index("idx_invoices_doc_number").on(t.docNumber),
+    originIdx: index("idx_invoices_origin").on(t.origin),
+    originBalanceIdx: index("idx_invoices_origin_balance").on(
+      t.origin,
+      t.balance,
+    ),
   }),
 );
 

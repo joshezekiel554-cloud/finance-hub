@@ -54,7 +54,15 @@ export function computeScore(totalOverdue: number, daysOverdue: number): number 
 // MySQL); use that as the authoritative figure when present, falling back to
 // summing the supplied invoice list. Both paths align because QB sync is what
 // populates the denormalized column.
-export function computeSeverity(customer: Customer, invoices: Invoice[]): Severity {
+export function computeSeverity(
+  customer: Customer,
+  invoices: Invoice[],
+  // Origin-scoped callers pass overrides so severity reflects ONE book rather
+  // than the customer's blended denormalized fields. rawOverdueOverride is the
+  // origin's gross overdue; unappliedCreditOverride its origin credit (pass 0 if
+  // the raw figure is already netted). When omitted, behaviour is unchanged.
+  opts?: { rawOverdueOverride?: number; unappliedCreditOverride?: number },
+): Severity {
   const today = startOfDayUtc(new Date());
 
   const openOverdue = invoices.filter((inv) => {
@@ -72,12 +80,18 @@ export function computeSeverity(customer: Customer, invoices: Invoice[]): Severi
 
   const denormalizedOverdue = parseMoney(customer.overdueBalance);
   const totalRawOverdue =
-    denormalizedOverdue > 0 ? denormalizedOverdue : totalOverdueFromInvoices;
+    opts?.rawOverdueOverride !== undefined
+      ? opts.rawOverdueOverride
+      : denormalizedOverdue > 0
+        ? denormalizedOverdue
+        : totalOverdueFromInvoices;
   // Net of unapplied credit memos. effectiveOverdue floors at zero so a
   // customer whose credits cover overdue drops out of the chase list.
   const totalOverdue = effectiveOverdue(
     totalRawOverdue,
-    customer.unappliedCreditBalance,
+    opts?.unappliedCreditOverride !== undefined
+      ? opts.unappliedCreditOverride
+      : customer.unappliedCreditBalance,
   );
 
   let oldestDate: Date | null = null;

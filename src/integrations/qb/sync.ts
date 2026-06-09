@@ -8,12 +8,13 @@
 // are logged at warn and skipped (so one bad invoice doesn't fail the whole
 // sync). Caller (BullMQ worker job) handles top-level errors.
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
 import { BUSINESS_EMAILS } from "../gmail/business-emails.js";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { activities } from "../../db/schema/crm.js";
+import { creditMemos } from "../../db/schema/credit-memos.js";
 import { customers, type Customer } from "../../db/schema/customers.js";
 import {
   invoiceLines,
@@ -22,7 +23,12 @@ import {
   type NewInvoice,
   type NewInvoiceLine,
 } from "../../db/schema/invoices.js";
+import { rmas } from "../../db/schema/returns.js";
 import { createLogger } from "../../lib/logger.js";
+import {
+  classifyCreditMemoOrigin,
+  originFromDocNumber,
+} from "../../modules/invoicing/origin.js";
 import { recordActivity } from "../../modules/crm/index.js";
 import { QboClient } from "./client.js";
 import { aggregateCreditBalanceByQbCustomerId } from "./credit-memo-aggregation.js";
@@ -403,6 +409,10 @@ async function upsertInvoice(
     qbInvoiceId: qboInvoice.Id,
     customerId,
     docNumber: qboInvoice.DocNumber ?? null,
+    // Origin derived from the docNumber prefix (reliable for invoices). On
+    // INSERT origin_source defaults to 'prefix'; on UPDATE we only re-derive
+    // origin when the existing row hasn't been manually overridden (below).
+    origin: originFromDocNumber(qboInvoice.DocNumber),
     issueDate,
     dueDate,
     total: formatMoney(qboInvoice.TotalAmt ?? 0),
@@ -504,19 +514,22 @@ async function upsertInvoice(
   // owns. The team-lead brief calls this out explicitly. The race is in the
   // create path above (concurrent inserts); UPDATE-by-id is already race-safe
   // since the row's been seen.
-  await db
-    .update(invoices)
-    .set({
-      docNumber: desired.docNumber,
-      issueDate: desired.issueDate,
-      dueDate: desired.dueDate,
-      total: desired.total,
-      balance: desired.balance,
-      status: desired.status,
-      syncToken: desired.syncToken,
-      lastSyncedAt: desired.lastSyncedAt,
-    })
-    .where(eq(invoices.id, before.id));
+  const updateSet: Partial<NewInvoice> = {
+    docNumber: desired.docNumber,
+    issueDate: desired.issueDate,
+    dueDate: desired.dueDate,
+    total: desired.total,
+    balance: desired.balance,
+    status: desired.status,
+    syncToken: desired.syncToken,
+    lastSyncedAt: desired.lastSyncedAt,
+  };
+  // Re-derive origin from the (possibly changed) docNumber, but never override a
+  // manual classification. origin_source itself is never written by sync.
+  if (before.originSource !== "manual") {
+    updateSet.origin = desired.origin;
+  }
+  await db.update(invoices).set(updateSet).where(eq(invoices.id, before.id));
 
   await syncInvoiceLines(before.id, qboInvoice.Line ?? []);
   return "updated";
@@ -668,14 +681,101 @@ export async function syncCreditMemos(client?: QboClient): Promise<SyncStats> {
   log.info({ count: memos.length }, "fetched QB credit memos");
 
   await emitCreditMemoActivities(memos);
-  // No dedicated credit_memos table yet — the activity row is the trace.
 
-  // Recompute customers.unapplied_credit_balance from the now-current
+  // Persist per-row credit memos with origin so per-origin balances can net
+  // TJ credit against TJ invoices (and Feldart against Feldart).
+  const [customerIdMap, feldartCreditMemoIds] = await Promise.all([
+    loadCustomerIdMap(),
+    loadFeldartCreditMemoIds(),
+  ]);
+  await syncCreditMemoRows(memos, customerIdMap, feldartCreditMemoIds);
+
+  // Recompute customers.unapplied_credit_balance (blended) from the now-current
   // memo balances. Authoritative: a customer with no unapplied credits
   // gets reset to 0 (handles credits that were applied since last sync).
   await recomputeUnappliedCreditBalances(memos);
 
   return stats;
+}
+
+// Load the set of QBO credit-memo ids Feldart generated itself (RMA / damage
+// credit memos created in-app). These are authoritatively 'feldart' regardless
+// of docNumber prefix.
+async function loadFeldartCreditMemoIds(): Promise<Set<string>> {
+  const rows = await db
+    .select({ qboCreditMemoId: rmas.qboCreditMemoId })
+    .from(rmas)
+    .where(isNotNull(rmas.qboCreditMemoId));
+  const set = new Set<string>();
+  for (const r of rows) if (r.qboCreditMemoId) set.add(r.qboCreditMemoId);
+  return set;
+}
+
+// Upsert per-row credit memos with origin. origin / origin_source are written
+// only on INSERT — later syncs preserve any manual override or needs_review
+// flag (credit-memo docNumbers don't change). Memos absent from `memos` (fully
+// applied) get their balance zeroed so per-origin netting drops them. When
+// `scopeCustomerId` is set, zeroing is limited to that one customer.
+async function syncCreditMemoRows(
+  memos: QboCreditMemo[],
+  customerIdMap: Map<string, string>,
+  feldartCreditMemoIds: Set<string>,
+  scopeCustomerId?: string,
+): Promise<void> {
+  const presentIds: string[] = [];
+  for (const m of memos) {
+    const customerId = customerIdMap.get(m.CustomerRef?.value ?? "");
+    if (!customerId) continue;
+    presentIds.push(m.Id);
+    const { origin, originSource } = classifyCreditMemoOrigin(
+      { qbCreditMemoId: m.Id, docNumber: m.DocNumber ?? null },
+      feldartCreditMemoIds,
+    );
+    await db
+      .insert(creditMemos)
+      .values({
+        id: nanoid(24),
+        qbCreditMemoId: m.Id,
+        customerId,
+        docNumber: m.DocNumber ?? null,
+        total: formatMoney(m.TotalAmt ?? 0),
+        balance: formatMoney(m.Balance ?? 0),
+        origin,
+        originSource,
+        txnDate: parseQboDate(m.TxnDate),
+        lastSyncedAt: new Date(),
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          customerId,
+          docNumber: m.DocNumber ?? null,
+          total: formatMoney(m.TotalAmt ?? 0),
+          balance: formatMoney(m.Balance ?? 0),
+          txnDate: parseQboDate(m.TxnDate),
+          lastSyncedAt: new Date(),
+          // origin / origin_source intentionally NOT updated — preserve manual
+          // overrides + needs_review.
+        },
+      });
+  }
+
+  // Zero memos no longer returned (fully applied since last sync). Guard the
+  // global path against an empty fetch (transient QBO blip), mirroring the
+  // invoice deletion-reconcile safety.
+  if (scopeCustomerId) {
+    const conds = [eq(creditMemos.customerId, scopeCustomerId)];
+    if (presentIds.length > 0)
+      conds.push(notInArray(creditMemos.qbCreditMemoId, presentIds));
+    await db
+      .update(creditMemos)
+      .set({ balance: "0", lastSyncedAt: new Date() })
+      .where(and(...conds));
+  } else if (presentIds.length > 0) {
+    await db
+      .update(creditMemos)
+      .set({ balance: "0", lastSyncedAt: new Date() })
+      .where(notInArray(creditMemos.qbCreditMemoId, presentIds));
+  }
 }
 
 // Reset every customer's unapplied_credit_balance to 0, then write the
@@ -912,6 +1012,13 @@ export async function syncOneCustomer(
   //    customer's open credit memos.
   if (financeHubId) {
     const customerMemos = await qb.getCreditMemosForCustomer(qbCustomerId);
+    const feldartCreditMemoIds = await loadFeldartCreditMemoIds();
+    await syncCreditMemoRows(
+      customerMemos,
+      new Map([[qbCustomerId, financeHubId]]),
+      feldartCreditMemoIds,
+      financeHubId,
+    );
     const totals = aggregateCreditBalanceByQbCustomerId(customerMemos);
     const total = totals.get(qbCustomerId) ?? 0;
     const rounded = (Math.round(total * 100) / 100).toFixed(2);
