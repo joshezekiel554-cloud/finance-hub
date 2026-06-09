@@ -288,6 +288,13 @@
       "when": 1781025216934,
       "tag": "0040_new_polaris",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1781030218113,
+      "tag": "0041_smart_blue_marvel",
+      "breakpoints": true
     }
   ]
 }
