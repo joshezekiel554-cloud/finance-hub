@@ -32,7 +32,8 @@
 - [x] Wave A T11 origin-review sweep — `ad272a2`
 - [x] Wave A T12 verify + impeccable sweep + review + fixes — Playwright-verified all surfaces with real data (feldart 101 / tj 21 / both 117 chase rows, 5 mixed customers), Opus review found 1 HIGH (chase double-net credit) + colSpan off-by-one, both fixed (`1a95bfe`). 628 tests pass.
 - [x] **Operator-feedback enhancement** (`ba67287`): chase "Both" option; customers list Feldart/TJ/Both lens (Both → 3 cols incl Combined; single book → just that col) + combinedBalance sort key.
-- [ ] Wave A MERGE/PUSH/DEPLOY  ← NEXT
+- [x] Wave A MERGE/PUSH/DEPLOY — merge `3746d1b` to main, pushed, **deployed OK in 1m48s** (migration 0040 applied on VPS, /health passed). WAVE A LIVE on finance.feldart.com.
+- [ ] Wave B T1 dispute schema/migration  ← NEXT (branch feat/invoice-origin-split-wave-b)
 - [ ] Wave B T1 dispute schema/migration
 - [ ] Wave B T2 TJ templates seed
 - [ ] Wave B T3 chase send branch + exclude verifying
