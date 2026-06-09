@@ -23,14 +23,15 @@
 - [x] Wave A T2 origin classifier — `e14284a`
 - [x] Wave A T3 sync origin + credit_memos — `87dc26f`
 - [x] Wave A T4 per-origin balances — `cbe2489`
-- [ ] Wave A T5 lookups/digest scoping  ← NEXT
-- [ ] Wave A T6 chase route + toggle
-- [ ] Wave A T7 customer-detail route
-- [ ] Wave A T8 customer-detail page
-- [ ] Wave A T9 customers list route + page
-- [ ] Wave A T10 autopilot feldart-scope
-- [ ] Wave A T11 origin-review sweep
-- [ ] Wave A T12 verify + review + MERGE/PUSH/DEPLOY
+- [x] Wave A T5 lookups/digest scoping — `a43be16`
+- [x] Wave A T6 chase route + toggle — `f14688b`
+- [x] Wave A T7 customer-detail route (+T9 route) — `15e1813`
+- [x] Wave A T8 customer-detail page — `66aa03d`
+- [x] Wave A T9 customers list page — `94ea3ce`
+- [x] Wave A T10 autopilot feldart-scope — `83b05be`
+- [x] Wave A T11 origin-review sweep — `ad272a2`
+- [ ] Wave A T12 verify + impeccable UI sweep + review + MERGE/PUSH/DEPLOY  ← NEXT
+      (user asked: "impeccable sweep on the UI so it looks nice")
 - [ ] Wave B T1 dispute schema/migration
 - [ ] Wave B T2 TJ templates seed
 - [ ] Wave B T3 chase send branch + exclude verifying
