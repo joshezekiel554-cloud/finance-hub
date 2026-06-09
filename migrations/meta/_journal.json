@@ -281,6 +281,13 @@
       "when": 1779817498805,
       "tag": "0039_productive_mentor",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1781025216934,
+      "tag": "0040_new_polaris",
+      "breakpoints": true
     }
   ]
 }

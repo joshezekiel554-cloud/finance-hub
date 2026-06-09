@@ -59,6 +59,8 @@ function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     id: "i-1",
     qbInvoiceId: "q-1",
     customerId: "cust-1",
+    origin: "feldart",
+    originSource: "prefix",
     docNumber: "18307",
     issueDate: new Date("2026-03-01T00:00:00.000Z"),
     dueDate: new Date("2026-03-31T00:00:00.000Z"),

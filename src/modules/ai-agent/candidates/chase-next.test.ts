@@ -76,6 +76,8 @@ function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     id: "inv-test",
     qbInvoiceId: "QB-INV-1",
     customerId: "cust-test",
+    origin: "feldart",
+    originSource: "prefix",
     docNumber: "1001",
     issueDate: null,
     dueDate: null,

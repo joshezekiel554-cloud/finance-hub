@@ -2,6 +2,7 @@ export * from "./auth";
 export * from "./customers";
 export * from "./catalog";
 export * from "./invoices";
+export * from "./credit-memos";
 export * from "./crm";
 export * from "./email-templates";
 export * from "./email-routing-rules";
