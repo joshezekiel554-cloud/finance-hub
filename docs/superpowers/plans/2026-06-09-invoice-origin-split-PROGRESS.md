@@ -40,7 +40,8 @@
 - [x] Wave B T5 dispute UI + bookkeeper email — `a264aa3` (+ batch-statement origin wired)
 - [x] Wave B T6 settings bookkeeper — `4ecdddf`
 - [x] Wave B T7 per-origin statements — `b44d756`
-- [ ] Wave B T8 verify + review + MERGE/PUSH/DEPLOY  ← NEXT (631 tests pass)
+- [x] Wave B T8 verify + review + fixes — Playwright-verified full lifecycle (claims-paid parks + drops from TJ chase 8912→8804.50; verifying badge+note+muted row; bookkeeper email pre-fills To/Subject/Body; resolve-unpaid resumes; tj_l1 template selected for origin=tj). Opus review: 0 High; M1/M2 state-machine guards + L1 syncToken fixed (`2867aa1`). 631 tests pass.
+- [ ] Wave B MERGE/PUSH/DEPLOY  ← NEXT
 - [ ] Wave B T1 dispute schema/migration
 - [ ] Wave B T2 TJ templates seed
 - [ ] Wave B T3 chase send branch + exclude verifying
