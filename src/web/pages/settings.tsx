@@ -78,6 +78,7 @@ export default function SettingsPage() {
       <MySignaturesSection />
       <AliasSignaturesSection />
       <StatementPdfSection />
+      <TorahJudaicaSection />
       <ReturnsSection />
       <RoutingRulesSection />
       <BccForwardingSection />
@@ -1947,6 +1948,142 @@ function ReturnsSection() {
             value={damageCmNumberNextDraft}
             onChange={(e) => setDamageCmNumberNextDraft(e.target.value)}
             className="mt-2 font-mono text-xs"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={!dirty || saveMutation.isPending}
+          >
+            <Save className="size-4" />
+            {saveMutation.isPending ? "Saving…" : "Save"}
+          </Button>
+          {savedAt && !dirty && (
+            <span className="text-xs text-muted">Saved.</span>
+          )}
+          {saveMutation.isError && (
+            <span className="text-xs text-accent-danger">
+              {(saveMutation.error as Error).message}
+            </span>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// ─────────────────────── Torah Judaica ───────────────────────────────────
+
+function TorahJudaicaSection() {
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const initialBookkeeperEmail =
+    settingsQuery.data?.settings.tj_bookkeeper_email ?? "";
+  const initialBookkeeperName =
+    settingsQuery.data?.settings.tj_bookkeeper_name ?? "";
+
+  const [bookkeeperEmailDraft, setBookkeeperEmailDraft] = useState<string>("");
+  const [bookkeeperNameDraft, setBookkeeperNameDraft] = useState<string>("");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  // Snap drafts to server values on (re)load.
+  useEffect(() => {
+    if (settingsQuery.data) {
+      setBookkeeperEmailDraft(initialBookkeeperEmail);
+      setBookkeeperNameDraft(initialBookkeeperName);
+    }
+  }, [settingsQuery.data, initialBookkeeperEmail, initialBookkeeperName]);
+
+  const bookkeeperEmailDirty =
+    bookkeeperEmailDraft.trim() !== initialBookkeeperEmail.trim();
+  const bookkeeperNameDirty =
+    bookkeeperNameDraft.trim() !== initialBookkeeperName.trim();
+  const dirty = bookkeeperEmailDirty || bookkeeperNameDirty;
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      // Send only the changed keys so the audit log + updated_at don't churn.
+      const body: Record<string, string> = {};
+      if (bookkeeperEmailDirty)
+        body.tj_bookkeeper_email = bookkeeperEmailDraft.trim();
+      if (bookkeeperNameDirty)
+        body.tj_bookkeeper_name = bookkeeperNameDraft.trim();
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as AppSettingsResponse;
+    },
+    onSuccess: () => {
+      setSavedAt(Date.now());
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-base font-semibold">Torah Judaica</h2>
+        <p className="mt-1 text-xs text-muted">
+          Contact details for the Torah Judaica wind-down book.
+        </p>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <div>
+          <label
+            htmlFor="tj-bookkeeper-email"
+            className="block text-sm font-medium text-secondary"
+          >
+            Bookkeeper email
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Address the "Email TJ bookkeeper" dispute action pre-fills. Leave
+            empty to open compose with no recipient pre-filled.
+          </p>
+          <Input
+            id="tj-bookkeeper-email"
+            type="email"
+            placeholder="bookkeeper@example.com"
+            value={bookkeeperEmailDraft}
+            onChange={(e) => setBookkeeperEmailDraft(e.target.value)}
+            className="mt-2 text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="tj-bookkeeper-name"
+            className="block text-sm font-medium text-secondary"
+          >
+            Bookkeeper name
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Display name used when addressing the bookkeeper.
+          </p>
+          <Input
+            id="tj-bookkeeper-name"
+            type="text"
+            placeholder="e.g. Sarah Klein"
+            value={bookkeeperNameDraft}
+            onChange={(e) => setBookkeeperNameDraft(e.target.value)}
+            className="mt-2 text-xs"
           />
         </div>
 

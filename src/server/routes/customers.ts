@@ -1448,6 +1448,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: invoices.customerMemo,
         sentAt: invoices.sentAt,
         sentVia: invoices.sentVia,
+        disputeState: invoices.disputeState,
+        disputeClaimedAt: invoices.disputeClaimedAt,
+        disputeNote: invoices.disputeNote,
         lastChasedAt: lastChasedAtExpr,
         lastChasedLevel: lastChasedLevelExpr,
       })
@@ -1519,6 +1522,12 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       customerMemo: string | null;
       sentAt: string | null;
       sentVia: string | null;
+      // TJ dispute lifecycle. Null for credit_memo rows + any non-TJ /
+      // undisputed invoice. Drives the per-row DisputeActions UI on the
+      // customer-detail Invoices tab (TJ section only).
+      disputeState: "verifying" | "confirmed_paid" | "confirmed_unpaid" | null;
+      disputeClaimedAt: string | null;
+      disputeNote: string | null;
       // Last chase email that touched this invoice — null when never
       // chased. Always null on credit memos (chase is invoice-only).
       lastChasedAt: string | null;
@@ -1550,6 +1559,11 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: inv.customerMemo,
         sentAt: inv.sentAt ? inv.sentAt.toISOString() : null,
         sentVia: inv.sentVia,
+        disputeState: inv.disputeState,
+        disputeClaimedAt: inv.disputeClaimedAt
+          ? inv.disputeClaimedAt.toISOString()
+          : null,
+        disputeNote: inv.disputeNote,
         // mysql2 returns the subquery TIMESTAMP as a string; normalise
         // to ISO so the frontend's relativeTime() doesn't have to
         // guess. Same pattern used by normalizeDateValue elsewhere.
@@ -1577,6 +1591,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         customerMemo: cm.customerMemo,
         sentAt: cm.emailStatus === "EmailSent" ? "(sent)" : null,
         sentVia: cm.emailStatus === "EmailSent" ? "qbo" : null,
+        // Dispute lifecycle is invoice-only — credit memos never park.
+        disputeState: null,
+        disputeClaimedAt: null,
+        disputeNote: null,
         // Chase tracking is invoice-only — credit memos can't be
         // chased.
         lastChasedAt: null,

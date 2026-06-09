@@ -50,6 +50,21 @@ export const invoices = mysqlTable(
     ])
       .notNull()
       .default("prefix"),
+    // TJ dispute lifecycle (local-only; never round-trips to QBO except the
+    // eventual void). 'verifying' parks the invoice out of the active TJ chase
+    // while we check the claim with the TJ bookkeeper; 'confirmed_unpaid'
+    // resumes chasing; 'confirmed_paid' is set after the hub voids it in QBO.
+    disputeState: mysqlEnum("dispute_state", [
+      "verifying",
+      "confirmed_paid",
+      "confirmed_unpaid",
+    ]),
+    disputeClaimedAt: timestamp("dispute_claimed_at"),
+    disputeNote: text("dispute_note"),
+    disputeUpdatedBy: varchar("dispute_updated_by", { length: 255 }).references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
     sentAt: timestamp("sent_at"),
     sentVia: varchar("sent_via", { length: 32 }),
     // QBO Invoice.CustomerMemo.value — the customer-facing memo
@@ -72,6 +87,7 @@ export const invoices = mysqlTable(
       t.origin,
       t.balance,
     ),
+    disputeStateIdx: index("idx_invoices_dispute_state").on(t.disputeState),
   }),
 );
 

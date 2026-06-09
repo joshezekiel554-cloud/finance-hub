@@ -33,7 +33,15 @@
 - [x] Wave A T12 verify + impeccable sweep + review + fixes — Playwright-verified all surfaces with real data (feldart 101 / tj 21 / both 117 chase rows, 5 mixed customers), Opus review found 1 HIGH (chase double-net credit) + colSpan off-by-one, both fixed (`1a95bfe`). 628 tests pass.
 - [x] **Operator-feedback enhancement** (`ba67287`): chase "Both" option; customers list Feldart/TJ/Both lens (Both → 3 cols incl Combined; single book → just that col) + combinedBalance sort key.
 - [x] Wave A MERGE/PUSH/DEPLOY — merge `3746d1b` to main, pushed, **deployed OK in 1m48s** (migration 0040 applied on VPS, /health passed). WAVE A LIVE on finance.feldart.com.
-- [ ] Wave B T1 dispute schema/migration  ← NEXT (branch feat/invoice-origin-split-wave-b)
+- [x] Wave B T1 dispute schema/migration — `ac57b34` (0041) + fixture fix `6ebde86`
+- [x] Wave B T2 TJ templates seed — `6dda7f9` (tj_l1/l2/l3, 3 created)
+- [x] Wave B T3 chase send branch + exclude verifying — `22e8da5`
+- [x] Wave B T4 dispute endpoints + QBO voidInvoice — `946b046`
+- [x] Wave B T5 dispute UI + bookkeeper email — `a264aa3` (+ batch-statement origin wired)
+- [x] Wave B T6 settings bookkeeper — `4ecdddf`
+- [x] Wave B T7 per-origin statements — `b44d756`
+- [x] Wave B T8 verify + review + fixes — Playwright-verified full lifecycle (claims-paid parks + drops from TJ chase 8912→8804.50; verifying badge+note+muted row; bookkeeper email pre-fills To/Subject/Body; resolve-unpaid resumes; tj_l1 template selected for origin=tj). Opus review: 0 High; M1/M2 state-machine guards + L1 syncToken fixed (`2867aa1`). 631 tests pass.
+- [ ] Wave B MERGE/PUSH/DEPLOY  ← NEXT
 - [ ] Wave B T1 dispute schema/migration
 - [ ] Wave B T2 TJ templates seed
 - [ ] Wave B T3 chase send branch + exclude verifying

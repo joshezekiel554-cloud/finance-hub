@@ -20,6 +20,10 @@ import { computeOriginBalances } from "./balances.js";
 import { computeSeverity } from "./scoring.js";
 import type { OverdueCustomer } from "./types.js";
 
+// Exclude TJ invoices parked for bookkeeper verification from every
+// chase/digest candidate query (feldart invoices never carry a dispute_state).
+const notVerifyingSql = sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;
+
 export async function getOverdueCustomers(
   origin?: InvoiceOrigin,
 ): Promise<OverdueCustomer[]> {
@@ -41,7 +45,13 @@ async function getOverdueCustomersBlended(): Promise<OverdueCustomer[]> {
   const openInvoices = await db
     .select()
     .from(invoices)
-    .where(and(inArray(invoices.customerId, ids), gt(invoices.balance, "0")));
+    .where(
+      and(
+        inArray(invoices.customerId, ids),
+        gt(invoices.balance, "0"),
+        notVerifyingSql,
+      ),
+    );
 
   const invoicesByCustomer = groupByCustomer(openInvoices);
 
@@ -70,7 +80,13 @@ async function getOverdueCustomersForOrigin(
   const openInvoices = await db
     .select()
     .from(invoices)
-    .where(and(eq(invoices.origin, origin), gt(invoices.balance, "0")));
+    .where(
+      and(
+        eq(invoices.origin, origin),
+        gt(invoices.balance, "0"),
+        notVerifyingSql,
+      ),
+    );
   if (openInvoices.length === 0) return [];
 
   const invoicesByCustomer = groupByCustomer(openInvoices);
@@ -117,6 +133,7 @@ export async function getOverdueForCustomer(
         eq(invoices.customerId, customerId),
         gt(invoices.balance, "0"),
         origin ? eq(invoices.origin, origin) : undefined,
+        notVerifyingSql,
       ),
     );
 

@@ -553,6 +553,40 @@ export class QboClient {
     }
   }
 
+  // Void an Invoice in QBO. POST /invoice?operation=void with { Id, SyncToken }.
+  // QBO zeroes the balance and stamps the doc Voided (it stays in the ledger,
+  // unlike a delete). Returns the voided Invoice (new SyncToken). 401 → forced
+  // refresh → single retry, same as updateInvoice.
+  async voidInvoice(id: string, syncToken: string): Promise<QboInvoice> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/invoice`;
+    const accessToken = await this.getAccessToken();
+    const body = { Id: id, SyncToken: syncToken };
+
+    const doRequest = async (token: string) => {
+      return this.http.post<{ Invoice: QboInvoice }>(url, body, {
+        params: { minorversion: QBO_MINOR_VERSION, operation: "void" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    try {
+      const response = await doRequest(accessToken);
+      return response.data.Invoice;
+    } catch (err) {
+      const axiosErr = err as AxiosError;
+      if (axiosErr.response?.status === 401) {
+        const fresh = await this.forceRefresh();
+        const response = await doRequest(fresh);
+        return response.data.Invoice;
+      }
+      throw err;
+    }
+  }
+
   // -------- SalesReceipt API ---------------------------------------------
   // Shopify-pipeline orders that are paid upfront create a SalesReceipt
   // (not Invoice) in QBO. Same /send endpoint shape and same per-document

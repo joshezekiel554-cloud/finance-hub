@@ -60,6 +60,7 @@ export default function ChaseEmailSendDialog({
   onOpenChange,
   customerId,
   customerName,
+  origin,
   level: defaultLevel,
   invoiceIds,
   onSent,
@@ -68,6 +69,9 @@ export default function ChaseEmailSendDialog({
   onOpenChange: (next: boolean) => void;
   customerId: string;
   customerName: string;
+  // Which book is being chased — picks the template (tj_l* vs chase_l*) and
+  // scopes the invoices the email covers.
+  origin: "feldart" | "tj" | "both";
   // Initial level when the dialog mounts. The operator can switch
   // inside the dialog; this is just the starting point.
   level: ChaseLevel;
@@ -90,10 +94,11 @@ export default function ChaseEmailSendDialog({
 
   const previewQuery = useQuery<PreviewResponse>({
     enabled: open,
-    queryKey: ["chase-preview", customerId, level, invoiceIdsKey],
+    queryKey: ["chase-preview", customerId, origin, level, invoiceIdsKey],
     queryFn: async () => {
       const params = new URLSearchParams({
         customerId,
+        origin,
         level: String(level),
       });
       // Repeated `invoiceIds` params — backend's normaliseInvoiceIds
@@ -173,6 +178,7 @@ export default function ChaseEmailSendDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           customerId,
+          origin,
           level,
           // invoice subset — undefined when chasing all open
           ...(invoiceIds && invoiceIds.length > 0 ? { invoiceIds } : {}),

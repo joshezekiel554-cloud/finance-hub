@@ -61,6 +61,10 @@ function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     customerId: "cust-1",
     origin: "feldart",
     originSource: "prefix",
+    disputeState: null,
+    disputeClaimedAt: null,
+    disputeNote: null,
+    disputeUpdatedBy: null,
     docNumber: "18307",
     issueDate: new Date("2026-03-01T00:00:00.000Z"),
     dueDate: new Date("2026-03-31T00:00:00.000Z"),
@@ -97,6 +101,8 @@ const SETTINGS: AppSettingsMap = {
   ai_voice_guide: "",
   ai_corrections_cron_enabled: "",
   autopilot_scan_cron_enabled: "",
+  tj_bookkeeper_email: "",
+  tj_bookkeeper_name: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -191,6 +197,8 @@ describe("renderStatementPdf", () => {
         ai_voice_guide: "",
         ai_corrections_cron_enabled: "",
         autopilot_scan_cron_enabled: "",
+        tj_bookkeeper_email: "",
+        tj_bookkeeper_name: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,
