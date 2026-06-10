@@ -14,7 +14,7 @@ Context notes (survive compact):
 - [x] Recon (6 Explore agents) + plan written + committed
 - [x] T1 #11/#17 returns tax surfacing + fee parity — `f39a702` + review fix `3f12a2b` (spec ✅, quality ✅)
 - [x] T2 #12 blended chase severity from invoices — `05e9773` + dashboard `9fc710f` + review fixes `525e563` (spec ✅, quality ✅ after parity+boundary fixes). Suite 652/652.
-- [ ] T3 #13 atomic Shopify tag mutations
+- [x] T3 #13 atomic Shopify tag mutations — `d4e6514` (graphql client + atomic addTag/removeTag) + `cc939e6` (holds route intent-ops, setCustomerTags deleted, ACCESS_DENIED→403) + `c9cf1bd` (partial-failure audit row). Spec ✅ (36-combination end-state diff = 0 mismatches), quality ✅. Shopify tests 37/37.
 - [ ] T4 #14 qty_change effective-rate discount preservation
 - [ ] T5 #15 server-side parse-gap verify gate
 - [ ] T6 #16 Gmail direction from live aliases
