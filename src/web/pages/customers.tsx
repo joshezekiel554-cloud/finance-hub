@@ -26,7 +26,6 @@ import {
   TaskDetailDrawer,
   type DrawerMode as TaskDrawerMode,
 } from "../components/task-detail-drawer";
-import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 
 const customersRouteApi = getRouteApi("/customers");
 
@@ -42,6 +41,11 @@ type CustomerRow = {
   balance: string;
   feldartBalance: string;
   tjBalance: string;
+  // Per-origin overdue (net of that origin's unapplied credit) — what the
+  // Overdue column renders. overdueBalance below is the blended figure,
+  // kept in the response for internal logic only, never displayed (spec §5).
+  feldartOverdue: string;
+  tjOverdue: string;
   overdueBalance: string;
   unappliedCreditBalance: string;
   holdStatus: HoldStatus;
@@ -70,7 +74,6 @@ type FilterTab = "b2b" | "b2c" | "uncategorized" | "all";
 type HoldFilter = "all" | "active" | "hold" | "payment_upfront";
 type SortKey =
   | "displayName"
-  | "balance"
   | "feldartBalance"
   | "tjBalance"
   | "overdueBalance"
@@ -82,7 +85,6 @@ type SortKey =
 
 const SORT_LABELS: Record<SortKey, string> = {
   displayName: "Name",
-  balance: "Balance",
   feldartBalance: "Balance",
   tjBalance: "TJ owed",
   overdueBalance: "Overdue",
@@ -700,10 +702,7 @@ export default function CustomersPage() {
             primaryEmail={row.primaryEmail}
             balance={Number(row.feldartBalance)}
             tjBalance={Number(row.tjBalance)}
-            overdueBalance={effectiveOverdue(
-              row.overdueBalance,
-              row.unappliedCreditBalance,
-            )}
+            overdueBalance={Number(row.feldartOverdue)}
             daysOverdue={row.daysOverdue}
             holdStatus={row.holdStatus}
             agentModeExcluded={row.agentModeExcluded}
@@ -823,20 +822,11 @@ export default function CustomersPage() {
               {visibleRows.map((row) => {
                 const feldartBalance = Number(row.feldartBalance);
                 const tjBalance = Number(row.tjBalance);
-                const rawOverdue = Number(row.overdueBalance);
-                const credits = Number(row.unappliedCreditBalance);
-                // Display nets unapplied credit memos; sort still uses
-                // raw overdueBalance (DB-side) so direction still puts
-                // the largest raw-overdue customers first, which is the
-                // operationally useful ordering.
-                const overdue = effectiveOverdue(
-                  row.overdueBalance,
-                  row.unappliedCreditBalance,
-                );
+                // Feldart-scoped overdue (credit netting happens in the SQL
+                // expr) — the list never shows the blended figure (spec §5).
+                const overdue = Number(row.feldartOverdue);
                 const overdueTooltip =
-                  credits > 0
-                    ? `Overdue net of $${credits.toFixed(2)} in unapplied credits (raw overdue: $${rawOverdue.toFixed(2)})`
-                    : undefined;
+                  "Feldart book overdue, net of unapplied Feldart credits";
                 const checked = selectedIds.has(row.id);
                 const onHold = row.holdStatus === "hold";
                 return (
@@ -1326,7 +1316,6 @@ function toggleSort(
     // starts asc (A→Z). lastSyncedAt left to default desc too — operator
     // wants "what synced most recently" surfaced, not stalest.
     const descByDefault: SortKey[] = [
-      "balance",
       "feldartBalance",
       "tjBalance",
       "overdueBalance",

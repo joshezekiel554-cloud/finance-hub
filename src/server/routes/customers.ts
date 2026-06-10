@@ -93,7 +93,6 @@ const listQuerySchema = z.object({
   sort: z
     .enum([
       "displayName",
-      "balance",
       "feldartBalance",
       "tjBalance",
       "overdueBalance",
@@ -294,13 +293,30 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     )`;
     const feldartBalanceExpr = originBalanceExpr("feldart");
     const tjBalanceExpr = originBalanceExpr("tj");
+    // Per-origin overdue — same Wave A convention as the customer-detail KPI
+    // exprs: that origin's invoices past due (due-today = not overdue), net
+    // of that origin's full unapplied credit, floored at 0. The list renders
+    // these instead of the blended customers.overdueBalance (spec §5: no
+    // blended money number operator-facing).
+    const originOverdueExpr = (o: "feldart" | "tj") => sql<string>`GREATEST(0,
+      (SELECT COALESCE(SUM(${invoices.balance}), 0) FROM ${invoices}
+        WHERE ${invoices.customerId} = \`customers\`.\`id\`
+          AND ${invoices.balance} > 0 AND ${invoices.origin} = ${o}
+          AND ${invoices.dueDate} IS NOT NULL AND ${invoices.dueDate} < CURRENT_DATE)
+      - (SELECT COALESCE(SUM(${creditMemos.balance}), 0) FROM ${creditMemos}
+        WHERE ${creditMemos.customerId} = \`customers\`.\`id\`
+          AND ${creditMemos.balance} > 0 AND ${creditMemos.origin} = ${o})
+    )`;
+    const feldartOverdueExpr = originOverdueExpr("feldart");
+    const tjOverdueExpr = originOverdueExpr("tj");
 
     const sortCol = {
       displayName: customers.displayName,
-      balance: customers.balance,
       feldartBalance: feldartBalanceExpr,
       tjBalance: tjBalanceExpr,
-      overdueBalance: customers.overdueBalance,
+      // The Overdue column displays the Feldart-scoped figure, so its sort
+      // targets the same expr (not the blended denormalized field).
+      overdueBalance: feldartOverdueExpr,
       lastSyncedAt: customers.lastSyncedAt,
       lastPaymentAt: lastPaymentExprForSort,
       lastStatementSentAt: lastStatementExprForSort,
@@ -383,6 +399,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         balance: customers.balance,
         feldartBalance: feldartBalanceExpr,
         tjBalance: tjBalanceExpr,
+        feldartOverdue: feldartOverdueExpr,
+        tjOverdue: tjOverdueExpr,
+        // Blended figure stays in the response for internal logic only —
+        // never rendered (spec §5).
         overdueBalance: customers.overdueBalance,
         unappliedCreditBalance: customers.unappliedCreditBalance,
         holdStatus: customers.holdStatus,
@@ -423,6 +443,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       // fixed 2dp string so the client renders them like balance/overdue.
       feldartBalance: Number(r.feldartBalance ?? 0).toFixed(2),
       tjBalance: Number(r.tjBalance ?? 0).toFixed(2),
+      feldartOverdue: Number(r.feldartOverdue ?? 0).toFixed(2),
+      tjOverdue: Number(r.tjOverdue ?? 0).toFixed(2),
       // mysql2 returns TIMESTAMP from a correlated subquery as a
       // "YYYY-MM-DD HH:MM:SS" string rather than a Date. Normalise to
       // ISO so the frontend reads them like every other timestamp.

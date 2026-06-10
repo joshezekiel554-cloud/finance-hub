@@ -17,6 +17,8 @@ type Props = {
   balance: number;
   // Net TJ exposure — > 0 renders the small amber TJ chip beside the name.
   tjBalance: number;
+  // Feldart-scoped overdue (net of Feldart credits) — no blended money
+  // figure anywhere operator-facing (origin-split-2 spec §5).
   overdueBalance: number;
   daysOverdue: number | null;
   holdStatus: "active" | "hold" | "payment_upfront";

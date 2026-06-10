@@ -13,7 +13,6 @@ export const customersSearchSchema = z.object({
   sort: z
     .enum([
       "displayName",
-      "balance",
       "feldartBalance",
       "tjBalance",
       "overdueBalance",
@@ -23,7 +22,10 @@ export const customersSearchSchema = z.object({
       "lastContactedAt",
       "openTaskCount",
     ])
-    .catch("balance"),
+    // Default matches the visible Balance column (Feldart book). Stale URLs
+    // carrying the removed blended "balance"/"combinedBalance" sorts fall
+    // back here via .catch.
+    .catch("feldartBalance"),
   dir: z.enum(["asc", "desc"]).catch("desc"),
   hideZero: z.boolean().catch(true),
   hasOverdue: z.boolean().catch(false),
