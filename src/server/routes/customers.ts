@@ -54,6 +54,7 @@ import {
   renderTemplate,
 } from "../../modules/email-compose/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
+import { buildOpenInvoiceConditions } from "../../modules/statements/send.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 import { recordActivity } from "../../modules/crm/activity-ingester.js";
@@ -80,9 +81,6 @@ const listQuerySchema = z.object({
     .enum(["active", "hold", "payment_upfront", "all"])
     .default("all"),
   withBalance: boolish,
-  // Origin lens: 'both' shows every customer; 'feldart'/'tj' narrow to those
-  // with an open balance in that book.
-  book: z.enum(["feldart", "tj", "both"]).default("both"),
   // New filter chips (all default false → no filtering applied):
   hideZeroBalance: boolish,
   hasOverdue: boolish,
@@ -96,10 +94,8 @@ const listQuerySchema = z.object({
   sort: z
     .enum([
       "displayName",
-      "balance",
       "feldartBalance",
       "tjBalance",
-      "combinedBalance",
       "overdueBalance",
       "lastSyncedAt",
       "lastPaymentAt",
@@ -190,7 +186,6 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       customerType,
       holdStatus,
       withBalance,
-      book,
       hideZeroBalance,
       hasOverdue,
       hasUnactionedEmail,
@@ -229,17 +224,6 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     }
     if (hasOverdue) {
       filters.push(gt(customers.overdueBalance, "0"));
-    }
-    // Origin lens — narrow to customers with an open balance in the chosen book.
-    if (book === "feldart" || book === "tj") {
-      filters.push(
-        sql`EXISTS (
-          SELECT 1 FROM ${invoices}
-          WHERE ${invoices.customerId} = \`customers\`.\`id\`
-            AND ${invoices.balance} > 0
-            AND ${invoices.origin} = ${book}
-        )`,
-      );
     }
     if (missingTerms) {
       filters.push(isNull(customers.paymentTerms));
@@ -310,16 +294,30 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     )`;
     const feldartBalanceExpr = originBalanceExpr("feldart");
     const tjBalanceExpr = originBalanceExpr("tj");
-    // Combined = the two netted books summed (Feldart + TJ).
-    const combinedBalanceExpr = sql<string>`(${feldartBalanceExpr} + ${tjBalanceExpr})`;
+    // Per-origin overdue — same Wave A convention as the customer-detail KPI
+    // exprs: that origin's invoices past due (due-today = not overdue), net
+    // of that origin's full unapplied credit, floored at 0. The list renders
+    // these instead of the blended customers.overdueBalance (spec §5: no
+    // blended money number operator-facing).
+    const originOverdueExpr = (o: "feldart" | "tj") => sql<string>`GREATEST(0,
+      (SELECT COALESCE(SUM(${invoices.balance}), 0) FROM ${invoices}
+        WHERE ${invoices.customerId} = \`customers\`.\`id\`
+          AND ${invoices.balance} > 0 AND ${invoices.origin} = ${o}
+          AND ${invoices.dueDate} IS NOT NULL AND ${invoices.dueDate} < CURRENT_DATE)
+      - (SELECT COALESCE(SUM(${creditMemos.balance}), 0) FROM ${creditMemos}
+        WHERE ${creditMemos.customerId} = \`customers\`.\`id\`
+          AND ${creditMemos.balance} > 0 AND ${creditMemos.origin} = ${o})
+    )`;
+    const feldartOverdueExpr = originOverdueExpr("feldart");
+    const tjOverdueExpr = originOverdueExpr("tj");
 
     const sortCol = {
       displayName: customers.displayName,
-      balance: customers.balance,
       feldartBalance: feldartBalanceExpr,
       tjBalance: tjBalanceExpr,
-      combinedBalance: combinedBalanceExpr,
-      overdueBalance: customers.overdueBalance,
+      // The Overdue column displays the Feldart-scoped figure, so its sort
+      // targets the same expr (not the blended denormalized field).
+      overdueBalance: feldartOverdueExpr,
       lastSyncedAt: customers.lastSyncedAt,
       lastPaymentAt: lastPaymentExprForSort,
       lastStatementSentAt: lastStatementExprForSort,
@@ -338,6 +336,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
         AND ${invoices.balance} > 0
         AND ${invoices.dueDate} IS NOT NULL
+        AND ${invoices.origin} = 'feldart'
     )`;
     const lastPaymentExpr = sql<Date | string | null>`(
       SELECT MAX(${activities.occurredAt})
@@ -402,7 +401,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         balance: customers.balance,
         feldartBalance: feldartBalanceExpr,
         tjBalance: tjBalanceExpr,
-        combinedBalance: combinedBalanceExpr,
+        feldartOverdue: feldartOverdueExpr,
+        tjOverdue: tjOverdueExpr,
+        // Blended figure stays in the response for internal logic only —
+        // never rendered (spec §5).
         overdueBalance: customers.overdueBalance,
         unappliedCreditBalance: customers.unappliedCreditBalance,
         holdStatus: customers.holdStatus,
@@ -443,7 +445,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       // fixed 2dp string so the client renders them like balance/overdue.
       feldartBalance: Number(r.feldartBalance ?? 0).toFixed(2),
       tjBalance: Number(r.tjBalance ?? 0).toFixed(2),
-      combinedBalance: Number(r.combinedBalance ?? 0).toFixed(2),
+      feldartOverdue: Number(r.feldartOverdue ?? 0).toFixed(2),
+      tjOverdue: Number(r.tjOverdue ?? 0).toFixed(2),
       // mysql2 returns TIMESTAMP from a correlated subquery as a
       // "YYYY-MM-DD HH:MM:SS" string rather than a Date. Normalise to
       // ISO so the frontend reads them like every other timestamp.
@@ -839,6 +842,25 @@ const customersRoute: FastifyPluginAsync = async (app) => {
   app.get("/:id/statement-preview", async (req, reply) => {
     await requireAuth(req);
     const id = (req.params as { id: string }).id;
+    // Book scope — required, mirrors the send route so the preview shows
+    // exactly the invoices the send would include (origin-split-2 W1).
+    const queryParse = z
+      .object({
+        origin: z.enum(["feldart", "tj"], {
+          errorMap: () => ({
+            message:
+              "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+          }),
+        }),
+      })
+      .safeParse(req.query ?? {});
+    if (!queryParse.success) {
+      return reply.code(400).send({
+        error: "invalid query",
+        details: queryParse.error.flatten(),
+      });
+    }
+    const { origin } = queryParse.data;
 
     const customerRows = await db
       .select()
@@ -867,7 +889,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         balance: invoices.balance,
       })
       .from(invoices)
-      .where(and(eq(invoices.customerId, id), gt(invoices.balance, "0")))
+      // Shared condition with the send path (buildOpenInvoiceConditions)
+      // so preview and send can never disagree about scope.
+      .where(buildOpenInvoiceConditions(id, origin))
       .orderBy(asc(invoices.issueDate))
       .limit(STATEMENT_PREVIEW_INVOICE_CAP + 1);
 
@@ -978,12 +1002,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       const fullInvoices = await db
         .select()
         .from(invoices)
-        .where(
-          and(
-            eq(invoices.customerId, id),
-            gt(invoices.balance, "0"),
-          ),
-        )
+        .where(buildOpenInvoiceConditions(id, origin))
         .limit(STATEMENT_PREVIEW_INVOICE_CAP);
       const baseVars = buildTemplateVars({
         customer: {
@@ -1123,6 +1142,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           feldartOpenCount: sql<number>`(
             SELECT COUNT(*) FROM ${invoices}
             WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0 AND ${invoices.origin} = 'feldart')`,
+          // Age (days) of the oldest overdue open Feldart invoice — the
+          // header pill's "· oldest Nd" segment. NULL when nothing is
+          // past due.
+          feldartOldestDays: sql<number | null>`(
+            SELECT DATEDIFF(CURRENT_DATE, MIN(${invoices.dueDate})) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0
+              AND ${invoices.origin} = 'feldart'
+              AND ${invoices.dueDate} IS NOT NULL AND ${invoices.dueDate} < CURRENT_DATE)`,
           tjBalance: sql<string>`GREATEST(0,
             (SELECT COALESCE(SUM(${invoices.balance}),0) FROM ${invoices}
               WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0 AND ${invoices.origin} = 'tj')
@@ -1137,6 +1164,13 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           tjOpenCount: sql<number>`(
             SELECT COUNT(*) FROM ${invoices}
             WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0 AND ${invoices.origin} = 'tj')`,
+          // Open TJ invoices parked in the claims-paid dispute loop —
+          // drives the header TJ pill's "· N verifying" segment + the
+          // TJ panel KPI chip.
+          tjVerifyingCount: sql<number>`(
+            SELECT COUNT(*) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0
+              AND ${invoices.origin} = 'tj' AND ${invoices.disputeState} = 'verifying')`,
         })
         .from(customers)
         .where(eq(customers.id, id))
@@ -1172,9 +1206,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           feldartBalance: Number(kpi.feldartBalance ?? 0).toFixed(2),
           feldartOverdue: Number(kpi.feldartOverdue ?? 0).toFixed(2),
           feldartOpenCount: Number(kpi.feldartOpenCount ?? 0),
+          feldartOldestDays:
+            kpi.feldartOldestDays == null
+              ? null
+              : Number(kpi.feldartOldestDays),
           tjBalance: Number(kpi.tjBalance ?? 0).toFixed(2),
           tjOverdue: Number(kpi.tjOverdue ?? 0).toFixed(2),
           tjOpenCount: Number(kpi.tjOpenCount ?? 0),
+          tjVerifyingCount: Number(kpi.tjVerifyingCount ?? 0),
         }
       : null;
 

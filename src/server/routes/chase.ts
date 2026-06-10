@@ -54,6 +54,7 @@ import { appendSignatures } from "../../modules/email-compose/signatures.js";
 import { recordActivity } from "../../modules/crm/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
+import { getTjWinddown } from "../../modules/chase/winddown.js";
 import { users } from "../../db/schema/auth.js";
 
 const log = createLogger({ component: "routes.chase" });
@@ -70,11 +71,9 @@ const boolish = z
   .optional()
   .transform((v) => v === true || v === "true");
 
+// No `origin` param: this list is Feldart-only (origin-split-2). The Torah
+// Judaica wind-down has its own endpoint, GET /api/chase/tj-winddown.
 const listQuerySchema = z.object({
-  // Which receivable book to chase. Default 'feldart' keeps the clean Feldart
-  // list front-and-centre; 'tj' is the Torah Judaica wind-down track; 'both'
-  // is the blended view across the two books.
-  origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
   customerType: z.enum(["b2b", "b2c", "all"]).default("b2b"),
   // "Active" widens to include payment_upfront — those customers can
   // still be chased; only true hold customers are excluded by it.
@@ -100,15 +99,21 @@ const listQuerySchema = z.object({
   hasPendingRma: boolish,
 });
 
-const batchBodySchema = z.object({
+// Exported for schema-level route tests (no Fastify harness in repo).
+export const batchBodySchema = z.object({
   customerIds: z
     .array(z.string().min(1).max(24))
     .min(1)
     .max(BATCH_MAX_CUSTOMERS),
-  // Which book to send statements for. 'feldart'/'tj' scope each
-  // statement to that origin's invoices; 'both' (default) leaves the
-  // statement blended across the two books (legacy behaviour).
-  origin: z.enum(["feldart", "tj", "both"]).default("both"),
+  // Which book to send statements for. Required — each statement covers
+  // exactly one book; 'both' (the old blended default) is rejected
+  // (origin-split-2 Wave 1).
+  origin: z.enum(["feldart", "tj"], {
+    errorMap: () => ({
+      message:
+        "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+    }),
+  }),
 });
 
 type BatchResult = {
@@ -144,7 +149,6 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid query", details: parse.error.flatten() });
     }
     const {
-      origin,
       customerType,
       holdStatus,
       sort,
@@ -210,12 +214,10 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     // = future due). We render past-due only on the UI but surface the
     // raw integer so the client can decide. NULL when there's no
     // unpaid invoice with a due_date.
-    // 'both' = blended across the two books (no origin filter); 'feldart'/'tj'
-    // scope to one book. Empty sql fragment when both so the subqueries sum all.
-    const invOriginCond =
-      origin === "both" ? sql`` : sql` AND ${invoices.origin} = ${origin}`;
-    const cmOriginCond =
-      origin === "both" ? sql`` : sql` AND ${creditMemos.origin} = ${origin}`;
+    // Feldart-only: the per-origin netting SQL is hard-coded to the living
+    // book. TJ figures come from the wind-down endpoint instead.
+    const invOriginCond = sql` AND ${invoices.origin} = ${"feldart"}`;
+    const cmOriginCond = sql` AND ${creditMemos.origin} = ${"feldart"}`;
     // TJ invoices parked for bookkeeper verification drop out of the active
     // chase list (feldart invoices never carry a dispute_state, so harmless).
     const notVerifying = sql` AND (${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;
@@ -400,16 +402,13 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid body", details: parse.error.flatten() });
     }
     const { customerIds, origin } = parse.data;
-    // 'both' means no per-book filter — pass undefined to sendStatement so
-    // the statement stays blended; 'feldart'/'tj' scope to one book.
-    const sendOrigin = origin === "both" ? undefined : origin;
 
     // Dedupe defensively. The UI already prevents this but a stray
     // duplicate id would otherwise double-send to that customer.
     const uniqueIds = Array.from(new Set(customerIds));
 
     log.info(
-      { userId: user.id, count: uniqueIds.length },
+      { userId: user.id, count: uniqueIds.length, origin },
       "batch statement send starting",
     );
 
@@ -424,7 +423,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
           const result = await sendStatement({
             customerId,
             userId: user.id,
-            origin: sendOrigin,
+            origin,
           });
           return {
             customerId,
@@ -507,6 +506,17 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     );
 
     return reply.send({ results });
+  });
+
+  // GET /api/chase/tj-winddown — the whole Torah Judaica wind-down picture
+  // in one read: net exposure, delta vs ~1 month ago (from the self-populating
+  // tj_exposure_snapshots table — this call upserts today's row), aging
+  // buckets, verifying count, and per-customer rows with embedded per-invoice
+  // dispute data so the /chase TJ panel expands without a second fetch.
+  app.get("/tj-winddown", async (req, reply) => {
+    await requireAuth(req);
+    const result = await getTjWinddown();
+    return reply.send(result);
   });
 
   // GET /api/chase/preview-chase-email?customerId=...&level=...&invoiceIds=...

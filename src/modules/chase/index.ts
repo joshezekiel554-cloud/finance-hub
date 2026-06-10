@@ -15,6 +15,13 @@ export {
   type DailyDigestResult,
 } from "./digest.js";
 export {
+  getTjWinddown,
+  type TjWinddown,
+  type WinddownCustomer,
+  type WinddownInvoice,
+  type WinddownDeps,
+} from "./winddown.js";
+export {
   markChased,
   wasRecentlyChased,
   type MarkChasedOptions,

@@ -22,7 +22,7 @@ import { invoices } from "../../db/schema/invoices.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { chaseDismissals } from "../../db/schema/chase-dismissals.js";
 import {
-  blendedSeverity,
+  blendedSeverityWithParts,
   hasOpenOverdueInvoiceSql,
   loadOriginCreditByCustomer,
   notVerifyingSql,
@@ -440,25 +440,32 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
     // 3. Score + shape rows. Severity is derived from the invoice set
     //    (per-origin credit netting summed), never the denormalized
     //    customers.overdue_balance — audit #12. Rows whose real overdue
-    //    nets to zero (stale denormalized figure) drop out.
+    //    nets to zero (stale denormalized figure) drop out. Ranking stays
+    //    blended; the response carries per-book amounts only (origin-split-2
+    //    spec §5: no blended money figure operator-facing).
     const enriched = overdueRows
       .map((c) => {
-        const sev = blendedSeverity(c, invoicesByCustomer.get(c.id) ?? [], {
-          feldart: feldartCredit.get(c.id) ?? 0,
-          tj: tjCredit.get(c.id) ?? 0,
-        });
+        const { severity: sev, feldartOverdue, tjOverdue } =
+          blendedSeverityWithParts(c, invoicesByCustomer.get(c.id) ?? [], {
+            feldart: feldartCredit.get(c.id) ?? 0,
+            tj: tjCredit.get(c.id) ?? 0,
+          });
         return {
           customerId: c.id,
           customerName: c.displayName,
           tier: sev.tier,
           score: sev.score,
           daysOverdue: sev.daysOverdue,
-          totalOverdue: sev.totalOverdue,
+          feldartOverdue,
+          tjOverdue,
           oldestUnpaidDate: sev.oldestUnpaidDate,
           primaryEmail: c.primaryEmail,
         };
       })
-      .filter((r) => r.totalOverdue > 0);
+      // Equivalent to the old totalOverdue > 0 (severity's total is exactly
+      // the sum of the per-book netted parts) — stale-denormalized rows
+      // whose real overdue nets to zero still drop out.
+      .filter((r) => r.feldartOverdue + r.tjOverdue > 0);
 
     // 4. Sort by tier rank then daysOverdue desc, take top 10.
     const tierRank = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;

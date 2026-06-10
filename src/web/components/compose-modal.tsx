@@ -848,7 +848,9 @@ function CustomerDocPicker({
     setBusyKey("statement");
     setPickError(null);
     try {
-      const url = `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview`;
+      // Generic compose path with no book context — default the attached
+      // statement to the living (Feldart) book (origin-split-2 W1).
+      const url = `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview?origin=feldart`;
       const file = await fetchAsFile(url, filename);
       onPick(file);
     } catch (err) {

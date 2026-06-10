@@ -7,7 +7,8 @@
 //      (To/CC/BCC). Lookup of QBO Pay-now InvoiceLink presence is
 //      best-effort; failures render as gray "unknown" dots.
 //   2. User clicks Send → POST /api/customers/:id/statement-send
-//      (no body — the server is authoritative about everything).
+//      with { origin, ...optional subject/body/recipient overrides } —
+//      origin is required; the server renders the statement itself.
 //   3. On success: closes the dialog, fires onSent so the customer
 //      detail page can show a confirmation pill, and invalidates the
 //      ["customer", customerId] query so the activity timeline picks
@@ -101,6 +102,10 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   customerId: string;
   customerName: string;
+  // Book scope — required (origin-split-2 W1 T5). Threaded into the
+  // preview GET, the PDF preview, and the send POST so all three cover
+  // exactly the same single-book invoice set.
+  origin: "feldart" | "tj";
   onSent?: (result: StatementSendSuccess) => void;
 };
 
@@ -154,15 +159,16 @@ export default function StatementSendDialog({
   onOpenChange,
   customerId,
   customerName,
+  origin,
   onSent,
 }: Props) {
   const queryClient = useQueryClient();
 
   const previewQuery = useQuery<StatementPreviewResponse, ApiError>({
-    queryKey: ["statement-preview", customerId],
+    queryKey: ["statement-preview", customerId, origin],
     queryFn: async () => {
       const res = await fetch(
-        `/api/customers/${encodeURIComponent(customerId)}/statement-preview`,
+        `/api/customers/${encodeURIComponent(customerId)}/statement-preview?origin=${origin}`,
       );
       if (!res.ok) {
         const json: ApiError = await res.json().catch(() => ({}));
@@ -235,6 +241,7 @@ export default function StatementSendDialog({
             subject: subjectOverride,
             body: bodyOverride,
             userSignatureId,
+            origin,
           }),
         },
       );
@@ -364,7 +371,7 @@ export default function StatementSendDialog({
             size="sm"
             onClick={() =>
               window.open(
-                `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview`,
+                `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview?origin=${origin}`,
                 "_blank",
                 "noopener,noreferrer",
               )

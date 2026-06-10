@@ -21,7 +21,10 @@ type ChaseRow = {
   customerName: string;
   tier: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
   daysOverdue: number;
-  totalOverdue: number;
+  // Per-book overdue (origin-split-2 spec §5) — ranking stays blended
+  // server-side but no blended money figure is ever rendered.
+  feldartOverdue: number;
+  tjOverdue: number;
   oldestUnpaidDate: string | null;
   primaryEmail: string | null;
 };
@@ -243,7 +246,22 @@ export function ChaseWidget() {
                     {r.customerName}
                   </div>
                   <div className="text-xs text-muted">
-                    {formatMoney(r.totalOverdue)} · {r.daysOverdue}d overdue
+                    {/* Per-book amounts, color-keyed (indigo Feldart / amber
+                        TJ) — never a blended figure. Feldart shown when > 0;
+                        a pure-TJ row shows only the TJ part. */}
+                    {r.feldartOverdue > 0 && (
+                      <span className="font-medium text-accent-primary">
+                        {formatMoney(r.feldartOverdue)}
+                      </span>
+                    )}
+                    {r.tjOverdue > 0 && (
+                      <span className="font-medium text-accent-warning">
+                        {r.feldartOverdue > 0 ? " · " : ""}TJ{" "}
+                        {formatMoney(r.tjOverdue)}
+                      </span>
+                    )}
+                    {" · "}
+                    {r.daysOverdue}d overdue
                   </div>
                 </Link>
                 <Button

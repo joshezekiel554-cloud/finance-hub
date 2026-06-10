@@ -78,10 +78,9 @@ const MAX_INVOICES_PER_SEND = 50;
 export type ManagerInput = {
   customerId: string;
   userId: string;
-  // Optional per-book filter. When set, the statement only includes
-  // invoices from that origin ('feldart' or 'tj'); when omitted, the
-  // statement is blended across both books (legacy behaviour).
-  origin?: "feldart" | "tj";
+  // Required per-book scope. Every statement covers exactly one book —
+  // the blended both-books statement was removed in origin-split-2 W1.
+  origin: "feldart" | "tj";
   // Optional operator overrides from the send dialog. When any of
   // these are set, they replace the template-rendered defaults
   // verbatim. Undefined fields fall through to the previous
@@ -361,17 +360,19 @@ function calcOverdue(opens: Invoice[], now: Date): number {
 }
 
 // Build the WHERE conditions that select a customer's open invoices for
-// a statement: customer match + positive balance, optionally narrowed to
-// a single origin book. Extracted as a pure helper so the origin filter
-// is unit-testable without a live DB (see send.test.ts).
+// a statement: customer match + positive balance + origin book. Origin is
+// required — there is no blended (all-books) statement query. Shared by
+// the send path and both preview routes so the preview always shows
+// exactly what the send would include. Extracted as a pure helper so the
+// origin filter is unit-testable without a live DB (see send.test.ts).
 export function buildOpenInvoiceConditions(
   customerId: string,
-  origin?: "feldart" | "tj",
+  origin: "feldart" | "tj",
 ) {
   return and(
     eq(invoices.customerId, customerId),
     gt(invoices.balance, "0"),
-    origin ? eq(invoices.origin, origin) : undefined,
+    eq(invoices.origin, origin),
   );
 }
 
@@ -681,6 +682,7 @@ export async function sendStatement(
     before: null,
     after: {
       customerId,
+      origin: input.origin,
       to,
       cc: cc ?? null,
       bcc,
@@ -708,6 +710,7 @@ export async function sendStatement(
     refType: "statement_send",
     refId: statementSendId,
     meta: {
+      origin: input.origin,
       to,
       cc: cc ?? null,
       bcc,
@@ -728,6 +731,7 @@ export async function sendStatement(
       statementSendId,
       statementNumber,
       customerId,
+      origin: input.origin,
       userId,
       to,
       cc: cc ?? null,

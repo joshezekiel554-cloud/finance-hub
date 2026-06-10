@@ -1522,8 +1522,10 @@ function StatementPdfSection() {
     },
     onSuccess: (id) => {
       setPreviewError(null);
+      // Layout preview against an arbitrary B2B customer — no book
+      // context here, so default to the living (Feldart) book.
       window.open(
-        `/api/customers/${id}/statement-pdf-preview`,
+        `/api/customers/${id}/statement-pdf-preview?origin=feldart`,
         "_blank",
         "noopener",
       );

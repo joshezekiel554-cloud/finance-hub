@@ -5,9 +5,8 @@
 import { z } from "zod";
 
 export const chaseSearchSchema = z.object({
-  // Which receivable book to chase. Default 'feldart' keeps the clean Feldart
-  // list up first; 'tj' is the Torah Judaica wind-down track; 'both' blends them.
-  origin: z.enum(["feldart", "tj", "both"]).catch("feldart"),
+  // No `origin` param: /chase shows both books as two sections (origin-
+  // split-2). Stale bookmarked ?origin=… values are dropped silently.
   customerType: z.enum(["b2b", "b2c", "all"]).catch("b2b"),
   holdStatus: z.enum(["active", "hold", "all"]).catch("all"),
   missingTerms: z.boolean().catch(false),

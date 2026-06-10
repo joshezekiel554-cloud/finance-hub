@@ -141,6 +141,9 @@ const sendStatementTool: Tool<z.infer<typeof SendStatementArgs>> = {
       await sendStatement({
         customerId: args.customerId,
         userId: ctx.userId,
+        // Automated path with no book context: default to the living
+        // (Feldart) book. Wave 2 makes AI proposals origin-aware.
+        origin: "feldart",
         overrides: args.coverNote ? { body: args.coverNote } : {},
       });
       // Best-effort proposal linkage: stamp the most recent statement_sends

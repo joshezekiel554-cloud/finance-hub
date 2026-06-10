@@ -26,7 +26,6 @@ import {
   TaskDetailDrawer,
   type DrawerMode as TaskDrawerMode,
 } from "../components/task-detail-drawer";
-import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 
 const customersRouteApi = getRouteApi("/customers");
 
@@ -42,7 +41,11 @@ type CustomerRow = {
   balance: string;
   feldartBalance: string;
   tjBalance: string;
-  combinedBalance: string;
+  // Per-origin overdue (net of that origin's unapplied credit) — what the
+  // Overdue column renders. overdueBalance below is the blended figure,
+  // kept in the response for internal logic only, never displayed (spec §5).
+  feldartOverdue: string;
+  tjOverdue: string;
   overdueBalance: string;
   unappliedCreditBalance: string;
   holdStatus: HoldStatus;
@@ -71,10 +74,8 @@ type FilterTab = "b2b" | "b2c" | "uncategorized" | "all";
 type HoldFilter = "all" | "active" | "hold" | "payment_upfront";
 type SortKey =
   | "displayName"
-  | "balance"
   | "feldartBalance"
   | "tjBalance"
-  | "combinedBalance"
   | "overdueBalance"
   | "lastSyncedAt"
   | "lastPaymentAt"
@@ -84,10 +85,8 @@ type SortKey =
 
 const SORT_LABELS: Record<SortKey, string> = {
   displayName: "Name",
-  balance: "Balance",
-  feldartBalance: "Feldart",
-  tjBalance: "TJ",
-  combinedBalance: "Combined",
+  feldartBalance: "Balance",
+  tjBalance: "TJ owed",
   overdueBalance: "Overdue",
   lastSyncedAt: "Last synced",
   lastPaymentAt: "Last payment",
@@ -110,11 +109,17 @@ const TAB_LABELS: Record<FilterTab, string> = {
   all: "All",
 };
 
-const BOOK_LABELS: Record<CustomersSearch["book"], string> = {
-  feldart: "Feldart",
-  tj: "TJ",
-  both: "Both",
-};
+// localStorage key for the on-demand TJ column (a UI preference, not a URL
+// param — it's an additive reveal, not a mode; see origin-split-2 spec §4).
+const SHOW_TJ_COLUMN_KEY = "customers.showTjColumn";
+
+function readShowTjColumn(): boolean {
+  try {
+    return window.localStorage.getItem(SHOW_TJ_COLUMN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 export default function CustomersPage() {
   const search = customersRouteApi.useSearch();
@@ -123,19 +128,34 @@ export default function CustomersPage() {
 
   // Local aliases — minimize downstream changes:
   const tab = search.tab;
-  const book = search.book;
-  // The Book lens drives which money columns show: Both → Feldart + TJ +
-  // Combined; a single book → just that book's column.
-  const showFeldartCol = book === "both" || book === "feldart";
-  const showTjCol = book === "both" || book === "tj";
-  const showCombinedCol = book === "both";
-  const moneyColCount =
-    (showFeldartCol ? 1 : 0) + (showTjCol ? 1 : 0) + (showCombinedCol ? 1 : 0);
+  // On-demand TJ column (origin-split-2 §4): a localStorage-persisted UI
+  // preference, read once on mount, written on toggle. The list is
+  // Feldart-shaped by default; this adds the amber "TJ owed" column.
+  const [showTjColumn, setShowTjColumn] = useState<boolean>(readShowTjColumn);
+  const toggleShowTjColumn = () => {
+    const next = !showTjColumn;
+    setShowTjColumn(next);
+    try {
+      window.localStorage.setItem(SHOW_TJ_COLUMN_KEY, next ? "1" : "0");
+    } catch {
+      // Storage unavailable (private mode etc.) — preference just won't stick.
+    }
+    // Hiding the column removes its sort target — fall back to the
+    // Feldart balance sort so the order stays sensible.
+    if (!next && (search.sort as SortKey) === "tjBalance") {
+      setSort("feldartBalance");
+    }
+  };
   // `sort` is widened to the local SortKey union (which now carries the
   // per-origin keys feldartBalance/tjBalance). The URL search schema's
   // enum is owned elsewhere; we cast at the read/write boundary so the
   // new sort keys round-trip through the URL without the schema clobber.
-  const sort = search.sort as SortKey;
+  // A tjBalance sort arriving from the URL while the TJ column is hidden
+  // (stale bookmark) degrades to feldartBalance — sorting by an invisible
+  // column would look like a broken order.
+  const rawSort = search.sort as SortKey;
+  const sort: SortKey =
+    !showTjColumn && rawSort === "tjBalance" ? "feldartBalance" : rawSort;
   const dir = search.dir;
   const hideZero = search.hideZero;
   const hasOverdueFilter = search.hasOverdue;
@@ -147,8 +167,6 @@ export default function CustomersPage() {
   // text input + boolean filter chips use replace (default).
   const setTab = (next: CustomersSearch["tab"]) =>
     setFilters({ tab: next, hideZero: next === "b2b" }, { history: "push" });
-  const setBook = (next: CustomersSearch["book"]) =>
-    setFilter("book", next, { history: "push" });
   const setSort = (next: SortKey) =>
     setFilter("sort", next as CustomersSearch["sort"], { history: "push" });
   const setDir = (next: CustomersSearch["dir"]) =>
@@ -193,7 +211,6 @@ export default function CustomersPage() {
     "customers",
     {
       tab,
-      book,
       search: search.search,
       sort,
       dir,
@@ -229,8 +246,6 @@ export default function CustomersPage() {
         // than the first page. Backend caps at 5000 in the route schema.
         limit: "5000",
       });
-      // Origin lens applies in every view (scope, not a chip).
-      if (book !== "both") params.set("book", book);
       if (searchIsActive) params.set("q", search.search.trim());
       // Filter chips are suppressed when search is active.
       if (!searchIsActive) {
@@ -496,30 +511,6 @@ export default function CustomersPage() {
             ))}
         </div>
 
-        <div className="inline-flex items-center gap-1.5">
-          <span className="text-xs uppercase tracking-wide text-muted">Book</span>
-          <div className="inline-flex rounded-md border border-default bg-subtle p-0.5 text-sm">
-            {(["feldart", "tj", "both"] as const).map((b) => (
-              <button
-                key={b}
-                type="button"
-                onClick={() => {
-                  setBook(b);
-                  setSelectedIds(new Set());
-                }}
-                className={cn(
-                  "rounded px-3 py-1 transition-colors",
-                  book === b
-                    ? "bg-base font-medium text-primary shadow-sm"
-                    : "text-secondary hover:text-primary",
-                )}
-              >
-                {BOOK_LABELS[b]}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div className="relative ml-auto flex flex-col items-end gap-1">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted" />
@@ -599,6 +590,8 @@ export default function CustomersPage() {
           </button>
         ) : null}
       </div>
+
+      <TjExposureStrip shown={showTjColumn} onToggle={toggleShowTjColumn} />
 
       {sweepMode && (
         <Card className="hidden md:block">
@@ -707,11 +700,9 @@ export default function CustomersPage() {
             id={row.id}
             displayName={row.displayName}
             primaryEmail={row.primaryEmail}
-            balance={Number(row.balance)}
-            overdueBalance={effectiveOverdue(
-              row.overdueBalance,
-              row.unappliedCreditBalance,
-            )}
+            balance={Number(row.feldartBalance)}
+            tjBalance={Number(row.tjBalance)}
+            overdueBalance={Number(row.feldartOverdue)}
             daysOverdue={row.daysOverdue}
             holdStatus={row.holdStatus}
             agentModeExcluded={row.agentModeExcluded}
@@ -758,35 +749,24 @@ export default function CustomersPage() {
                   onClick={() => toggleSort("displayName", sort, setSort, dir, setDir)}
                 />
                 <th className="px-3 py-2">Phone</th>
-                {showFeldartCol && (
+                <SortableTh
+                  label="Balance"
+                  dot="feldart"
+                  active={sort === "feldartBalance"}
+                  dir={dir}
+                  onClick={() =>
+                    toggleSort("feldartBalance", sort, setSort, dir, setDir)
+                  }
+                  align="right"
+                />
+                {showTjColumn && (
                   <SortableTh
-                    label="Feldart"
-                    active={sort === "feldartBalance"}
-                    dir={dir}
-                    onClick={() =>
-                      toggleSort("feldartBalance", sort, setSort, dir, setDir)
-                    }
-                    align="right"
-                  />
-                )}
-                {showTjCol && (
-                  <SortableTh
-                    label="TJ"
+                    label="TJ owed"
+                    dot="tj"
                     active={sort === "tjBalance"}
                     dir={dir}
                     onClick={() =>
                       toggleSort("tjBalance", sort, setSort, dir, setDir)
-                    }
-                    align="right"
-                  />
-                )}
-                {showCombinedCol && (
-                  <SortableTh
-                    label="Combined"
-                    active={sort === "combinedBalance"}
-                    dir={dir}
-                    onClick={() =>
-                      toggleSort("combinedBalance", sort, setSort, dir, setDir)
                     }
                     align="right"
                   />
@@ -842,21 +822,11 @@ export default function CustomersPage() {
               {visibleRows.map((row) => {
                 const feldartBalance = Number(row.feldartBalance);
                 const tjBalance = Number(row.tjBalance);
-                const combinedBalance = Number(row.combinedBalance);
-                const rawOverdue = Number(row.overdueBalance);
-                const credits = Number(row.unappliedCreditBalance);
-                // Display nets unapplied credit memos; sort still uses
-                // raw overdueBalance (DB-side) so direction still puts
-                // the largest raw-overdue customers first, which is the
-                // operationally useful ordering.
-                const overdue = effectiveOverdue(
-                  row.overdueBalance,
-                  row.unappliedCreditBalance,
-                );
+                // Feldart-scoped overdue (credit netting happens in the SQL
+                // expr) — the list never shows the blended figure (spec §5).
+                const overdue = Number(row.feldartOverdue);
                 const overdueTooltip =
-                  credits > 0
-                    ? `Overdue net of $${credits.toFixed(2)} in unapplied credits (raw overdue: $${rawOverdue.toFixed(2)})`
-                    : undefined;
+                  "Feldart book overdue, net of unapplied Feldart credits";
                 const checked = selectedIds.has(row.id);
                 const onHold = row.holdStatus === "hold";
                 return (
@@ -887,6 +857,7 @@ export default function CustomersPage() {
                         className="inline-flex items-center gap-2 hover:text-accent-primary hover:underline underline-offset-2"
                       >
                         {row.displayName}
+                        {tjBalance > 0 ? <TjChip /> : null}
                         {row.tags?.some(
                           (t) => t.toLowerCase() === "yiddy",
                         ) ? (
@@ -920,36 +891,23 @@ export default function CustomersPage() {
                     <td className="px-3 py-2 text-secondary">
                       {row.phone ?? <span className="text-muted">—</span>}
                     </td>
-                    {showFeldartCol && (
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {feldartBalance > 0 ? (
-                          <span className="font-medium text-accent-info">
-                            ${feldartBalance.toFixed(2)}
-                          </span>
-                        ) : (
-                          <span className="text-muted">$0.00</span>
-                        )}
-                      </td>
-                    )}
-                    {showTjCol && (
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {feldartBalance > 0 ? (
+                        <span className="font-medium">
+                          ${feldartBalance.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-muted">$0.00</span>
+                      )}
+                    </td>
+                    {showTjColumn && (
                       <td className="px-3 py-2 text-right tabular-nums">
                         {tjBalance > 0 ? (
                           <span className="font-medium text-accent-warning">
                             ${tjBalance.toFixed(2)}
                           </span>
                         ) : (
-                          <span className="text-muted">$0.00</span>
-                        )}
-                      </td>
-                    )}
-                    {showCombinedCol && (
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {combinedBalance > 0 ? (
-                          <span className="font-semibold text-primary">
-                            ${combinedBalance.toFixed(2)}
-                          </span>
-                        ) : (
-                          <span className="text-muted">$0.00</span>
+                          <span className="text-muted">—</span>
                         )}
                       </td>
                     )}
@@ -1024,7 +982,7 @@ export default function CustomersPage() {
                 <tr>
                   <td
                     className="p-8 text-center text-sm text-muted"
-                    colSpan={(sweepMode ? 12 : 11) + moneyColCount}
+                    colSpan={(sweepMode ? 13 : 12) + (showTjColumn ? 1 : 0)}
                   >
                     No customers match.
                   </td>
@@ -1113,6 +1071,80 @@ export default function CustomersPage() {
         </StickyActionBar>
       )}
     </div>
+  );
+}
+
+// Minimal slice of GET /api/chase/tj-winddown — the strip only needs the
+// headline exposure + how many customers carry it. Shares the query key
+// (and therefore the cache entry) with the /chase TJ wind-down panel.
+type TjWinddownSlice = {
+  exposure: number;
+  customers: unknown[];
+};
+
+// Amber banner above the customers table (origin-split-2 spec §4): the
+// list itself is Feldart-shaped; this is the one place TJ exposure
+// surfaces, with the on-demand column toggle. Decorative — fails quiet
+// (renders nothing) while loading, on error, and when there's no exposure.
+function TjExposureStrip({
+  shown,
+  onToggle,
+}: {
+  shown: boolean;
+  onToggle: () => void;
+}) {
+  const { data } = useQuery<TjWinddownSlice>({
+    queryKey: ["chase", "tj-winddown"],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const res = await fetch("/api/chase/tj-winddown");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  if (!data) return null;
+  const count = data.customers.length;
+  if (data.exposure === 0 && count === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-accent-warning/30 bg-accent-warning/10 px-3 py-2 text-sm">
+      <span
+        className="size-2 shrink-0 rounded-full bg-accent-warning"
+        aria-hidden
+      />
+      <span className="text-accent-warning">
+        <span className="font-semibold tabular-nums">{count}</span> customer
+        {count === 1 ? " carries" : "s carry"} Torah Judaica exposure (
+        <span className="font-semibold tabular-nums">
+          ${data.exposure.toFixed(2)}
+        </span>
+        )
+      </span>
+      {/* Desktop-only: the mobile cards don't render columns, so the
+          toggle has nothing to reveal below md. */}
+      <button
+        type="button"
+        onClick={onToggle}
+        className="ml-auto hidden shrink-0 rounded border border-accent-warning/40 bg-base px-2 py-1 text-xs font-medium text-accent-warning transition-colors hover:bg-accent-warning/15 md:inline-flex"
+      >
+        {shown ? "Hide TJ column" : "Show TJ column"}
+      </button>
+    </div>
+  );
+}
+
+// Tiny amber chip beside a customer's name wherever they carry TJ
+// exposure — always shown, independent of the on-demand column. Matches
+// the OriginChip palette on customer detail.
+function TjChip() {
+  return (
+    <span
+      className="inline-flex items-center rounded bg-accent-warning/15 px-1.5 text-[10px] font-bold text-accent-warning ring-1 ring-inset ring-accent-warning/30"
+      title="Carries Torah Judaica exposure"
+    >
+      TJ
+    </span>
   );
 }
 
@@ -1235,12 +1267,16 @@ function SortableTh({
   dir,
   onClick,
   align = "left",
+  dot,
 }: {
   label: string;
   active: boolean;
   dir: "asc" | "desc";
   onClick: () => void;
   align?: "left" | "right";
+  // Book accent dot (origin-split-2 conventions): indigo = Feldart,
+  // amber = Torah Judaica. Matches book-section-header's BAND mapping.
+  dot?: "feldart" | "tj";
 }) {
   return (
     <th
@@ -1250,6 +1286,15 @@ function SortableTh({
         align === "right" && "text-right",
       )}
     >
+      {dot ? (
+        <span
+          className={cn(
+            "mr-1 inline-block size-1.5 rounded-full align-middle",
+            dot === "feldart" ? "bg-accent-primary" : "bg-accent-warning",
+          )}
+          aria-hidden
+        />
+      ) : null}
       {label}
       {active && <span className="ml-1">{dir === "asc" ? "▲" : "▼"}</span>}
     </th>
@@ -1271,10 +1316,8 @@ function toggleSort(
     // starts asc (A→Z). lastSyncedAt left to default desc too — operator
     // wants "what synced most recently" surfaced, not stalest.
     const descByDefault: SortKey[] = [
-      "balance",
       "feldartBalance",
       "tjBalance",
-      "combinedBalance",
       "overdueBalance",
       "lastPaymentAt",
       "lastStatementSentAt",

@@ -7,14 +7,14 @@ import { buildOpenInvoiceConditions } from "./send.js";
 const dialect = new MySqlDialect();
 function sqlOf(cond: ReturnType<typeof buildOpenInvoiceConditions>) {
   // buildOpenInvoiceConditions never returns undefined here (it always has
-  // at least the customer + balance conditions), but and() is typed as
+  // the customer + balance + origin conditions), but and() is typed as
   // SQL | undefined; narrow for the serializer.
   if (!cond) throw new Error("expected conditions");
   return dialect.sqlToQuery(cond);
 }
 
 describe("buildOpenInvoiceConditions", () => {
-  it("filters to a single origin when one is supplied", () => {
+  it("scopes to tj when tj is supplied", () => {
     const { sql, params } = sqlOf(
       buildOpenInvoiceConditions("cust_123", "tj"),
     );
@@ -25,17 +25,6 @@ describe("buildOpenInvoiceConditions", () => {
     // The origin value is bound as a parameter.
     expect(params).toContain("tj");
     expect(params).toContain("cust_123");
-  });
-
-  it("does not constrain origin when none is supplied (blended)", () => {
-    const { sql, params } = sqlOf(
-      buildOpenInvoiceConditions("cust_123", undefined),
-    );
-    expect(sql).toContain("`customer_id`");
-    expect(sql).toContain("`balance`");
-    // No origin predicate in the blended case.
-    expect(sql).not.toContain("`origin`");
-    expect(params).not.toContain("tj");
     expect(params).not.toContain("feldart");
   });
 
@@ -45,5 +34,18 @@ describe("buildOpenInvoiceConditions", () => {
     );
     expect(sql).toContain("`origin`");
     expect(params).toContain("feldart");
+    expect(params).not.toContain("tj");
+  });
+
+  it("always constrains origin — there is no blended query shape", () => {
+    // Origin is required at the type level; verify both books produce an
+    // origin predicate so a blended (no-origin) statement can't exist.
+    for (const origin of ["feldart", "tj"] as const) {
+      const { sql, params } = sqlOf(
+        buildOpenInvoiceConditions("cust_123", origin),
+      );
+      expect(sql).toContain("`origin`");
+      expect(params).toContain(origin);
+    }
   });
 });

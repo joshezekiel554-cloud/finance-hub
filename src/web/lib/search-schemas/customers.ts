@@ -10,15 +10,11 @@ export const customersSearchSchema = z.object({
     .enum(["b2b", "b2c", "uncategorized", "all"])
     .catch("b2b"),
   search: z.string().catch(""),
-  // Origin lens: 'both' = all customers; 'feldart'/'tj' narrow to a book.
-  book: z.enum(["feldart", "tj", "both"]).catch("both"),
   sort: z
     .enum([
       "displayName",
-      "balance",
       "feldartBalance",
       "tjBalance",
-      "combinedBalance",
       "overdueBalance",
       "lastSyncedAt",
       "lastPaymentAt",
@@ -26,7 +22,10 @@ export const customersSearchSchema = z.object({
       "lastContactedAt",
       "openTaskCount",
     ])
-    .catch("balance"),
+    // Default matches the visible Balance column (Feldart book). Stale URLs
+    // carrying the removed blended "balance"/"combinedBalance" sorts fall
+    // back here via .catch.
+    .catch("feldartBalance"),
   dir: z.enum(["asc", "desc"]).catch("desc"),
   hideZero: z.boolean().catch(true),
   hasOverdue: z.boolean().catch(false),

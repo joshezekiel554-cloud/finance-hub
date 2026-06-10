@@ -9,6 +9,7 @@ export * from "./email-routing-rules";
 export * from "./user-signatures";
 export * from "./alias-signatures";
 export * from "./chase-dismissals";
+export * from "./tj-exposure-snapshots";
 export * from "./ai-proposals";
 export * from "./ai-scans";
 export * from "./ai-company-facts";
