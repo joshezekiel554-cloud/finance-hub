@@ -22,7 +22,7 @@ Context notes (survive compact):
 - [x] W2 T1 migration 0044 + schema — `c5811be` (spec+quality ✅; note for T3: warn-log unwired finders)
 - [x] W2 T2 bookkeeper thread linkage — `ea1f5d3` (spec+quality ✅, guard-before-send verified). Suite 725/725.
 - [x] W2 T3 TJ proposers — `4018003` + at-most-once fix `b4d091e` (spec ✅ incl. rulings: invoice-level nudges, exec-time recipient lock, cross-book cooldown acceptable-with-note; quality ✅). Suite 771/771. OPERATOR NOTE: dual-book customers under weekly Feldart chase defer TJ proposals by a week (chase_log has no origin; add one if TJ stalls).
-- [ ] W2 T4 autopilot two sections
-- [ ] W2 T5 AI card per-book
+- [x] W2 T4 autopilot two sections — `99a82a0` (spec+quality ✅ no findings; symmetric-hide ruled fine)
+- [x] W2 T5 AI card per-book — `64f88fc` (spec+quality ✅; single-book path provably byte-identical; origin-validated actions). Suite 787/787.
 - [ ] W2 T6 digest + cleanups + SHIP
 - [ ] W2 verify + review + MERGE/PUSH/DEPLOY
