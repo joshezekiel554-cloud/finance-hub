@@ -46,6 +46,15 @@ const CHASE_TIER_SLUG: Record<string, string> = {
   CRITICAL: "chase_l3",
 };
 
+// Same ladder for the Torah Judaica book — tj_chase drafts reference the
+// tj_l1/2/3 templates (seeded by scripts/seed-email-templates.ts) instead of
+// the Feldart chase_l* set.
+const TJ_CHASE_TIER_SLUG: Record<string, string> = {
+  MEDIUM: "tj_l1",
+  HIGH: "tj_l2",
+  CRITICAL: "tj_l3",
+};
+
 function exampleSlugFor(
   category: AiProposalCategory,
   summary: Record<string, unknown>,
@@ -54,7 +63,12 @@ function exampleSlugFor(
     const tier = String(summary.tier ?? "");
     return CHASE_TIER_SLUG[tier] ?? null;
   }
-  // cadence_cold (no check-in template), cadence_statement, ops_* -> none.
+  if (category === "tj_chase") {
+    const tier = String(summary.tier ?? "");
+    return TJ_CHASE_TIER_SLUG[tier] ?? null;
+  }
+  // cadence_cold (no check-in template), cadence_statement, ops_*,
+  // tj_dispute_nudge (bookkeeper email — no customer template) -> none.
   return null;
 }
 

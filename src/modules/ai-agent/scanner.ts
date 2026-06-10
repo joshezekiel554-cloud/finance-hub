@@ -20,18 +20,24 @@ import { findCandidates as cadenceStatement } from "./candidates/cadence-stateme
 import { findCandidates as cadenceCold } from "./candidates/cadence-cold.js";
 import { findCandidates as opsRmaStalled } from "./candidates/ops-rma-stalled.js";
 import { findCandidates as opsCronFail } from "./candidates/ops-cron-fail.js";
+import { findCandidates as tjChase } from "./candidates/tj-chase.js";
+import { findCandidates as tjDisputeNudge } from "./candidates/tj-dispute-nudge.js";
 
 const log = createLogger({ module: "ai-agent.scanner" });
 
 type Candidate = {
   entityType: string;
   entityId: string;
+  // Which book the candidate belongs to. Chase finders stamp it
+  // ('feldart'/'tj'); book-agnostic categories (cadence_*, ops_*) leave it
+  // unset → ai_proposals.origin NULL.
+  origin?: "feldart" | "tj";
   summary: Record<string, unknown>;
 };
 
-// Partial: tj_chase / tj_dispute_nudge are registered categories but their
-// finders land in a later task — the scan loop skips categories with no
-// finder wired yet.
+// Partial so a category can be registered in AI_PROPOSAL_CATEGORIES before
+// its finder lands — the scan loop warn-logs and skips those (see below).
+// All 7 current categories have finders wired.
 const FINDERS: Partial<
   Record<AiProposalCategory, () => Promise<Candidate[]>>
 > = {
@@ -40,6 +46,8 @@ const FINDERS: Partial<
   cadence_cold: cadenceCold as () => Promise<Candidate[]>,
   ops_rma_stalled: opsRmaStalled as () => Promise<Candidate[]>,
   ops_cron_fail: opsCronFail as () => Promise<Candidate[]>,
+  tj_chase: tjChase as () => Promise<Candidate[]>,
+  tj_dispute_nudge: tjDisputeNudge as () => Promise<Candidate[]>,
 };
 
 const PROPOSAL_TTL_DAYS = 7;
@@ -61,7 +69,16 @@ export async function runScan(
 
   for (const category of AI_PROPOSAL_CATEGORIES) {
     const finder = FINDERS[category];
-    if (!finder) continue; // category registered but finder not wired yet
+    if (!finder) {
+      // Should not happen in steady state — every registered category ought
+      // to have a finder. Warn (not silent-skip) so a category added to
+      // AI_PROPOSAL_CATEGORIES without scanner wiring is visible in logs.
+      log.warn(
+        { category },
+        "proposal category registered but no candidate finder wired; skipping",
+      );
+      continue;
+    }
     let candidates: Candidate[] = [];
     try {
       candidates = await finder();
@@ -112,6 +129,7 @@ export async function runScan(
       await db.insert(aiProposals).values({
         id: proposalId,
         category,
+        origin: c.origin ?? null,
         entityType: c.entityType,
         entityId: c.entityId,
         status: "pending",

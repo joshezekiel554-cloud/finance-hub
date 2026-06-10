@@ -39,6 +39,26 @@ describe("buildDraftContext", () => {
     expect(ctx.exampleTemplate).toBe("L3 BODY");
   });
 
+  it("resolves the TJ ladder for tj_chase (CRITICAL → tj_l3 example)", async () => {
+    (db.select as Mock)
+      .mockReturnValueOnce(chain([])) // voice guide: none
+      .mockReturnValueOnce(chain([])) // facts: none
+      .mockReturnValueOnce(chain([])) // corrections: none
+      .mockReturnValueOnce(chain([{ body: "TJ L3 BODY" }])); // example
+    const ctx = await buildDraftContext("tj_chase", { tier: "CRITICAL" }, null);
+    expect(ctx.exampleTemplate).toBe("TJ L3 BODY");
+  });
+
+  it("tj_dispute_nudge has no example template (no template query)", async () => {
+    (db.select as Mock)
+      .mockReturnValueOnce(chain([{ value: "G" }])) // voice guide
+      .mockReturnValueOnce(chain([])) // facts
+      .mockReturnValueOnce(chain([])); // corrections (no customer, no example)
+    const ctx = await buildDraftContext("tj_dispute_nudge", {}, null);
+    expect(ctx.exampleTemplate).toBeNull();
+    expect((db.select as Mock).mock.calls.length).toBe(3);
+  });
+
   it("partitions facts and corrections by tag", async () => {
     (db.select as Mock)
       .mockReturnValueOnce(chain([{ value: "G" }])) // voice guide

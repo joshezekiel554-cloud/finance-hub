@@ -198,6 +198,8 @@ describe("findCandidates", () => {
     const c = results[0]!;
     expect(c.entityType).toBe("customer");
     expect(c.entityId).toBe("cust-2");
+    expect(c.origin).toBe("feldart");
+    expect(c.summary.customerId).toBe("cust-2");
     expect(c.summary.customerName).toBe("Big Debtor");
     expect(c.summary.tier).toBe("CRITICAL");
     expect(c.summary.overdueBalance).toBeGreaterThan(0);
