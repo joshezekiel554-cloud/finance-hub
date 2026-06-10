@@ -25,6 +25,8 @@ const customerAiCardRoute: FastifyPluginAsync = async (app) => {
       if (cached) {
         return reply.send({
           summary: cached.data.summary,
+          summaryFeldart: cached.data.summaryFeldart,
+          summaryTj: cached.data.summaryTj,
           actions: cached.data.actions,
           generatedAt: cached.generatedAt.toISOString(),
           isStale: cached.isStale,
@@ -33,6 +35,8 @@ const customerAiCardRoute: FastifyPluginAsync = async (app) => {
       const fresh = await generateCustomerCard(id);
       return reply.send({
         summary: fresh.data.summary,
+        summaryFeldart: fresh.data.summaryFeldart,
+        summaryTj: fresh.data.summaryTj,
         actions: fresh.data.actions,
         generatedAt: fresh.generatedAt.toISOString(),
         isStale: false,
@@ -54,6 +58,8 @@ const customerAiCardRoute: FastifyPluginAsync = async (app) => {
       const fresh = await generateCustomerCard(id, { force: true });
       return reply.send({
         summary: fresh.data.summary,
+        summaryFeldart: fresh.data.summaryFeldart,
+        summaryTj: fresh.data.summaryTj,
         actions: fresh.data.actions,
         generatedAt: fresh.generatedAt.toISOString(),
         isStale: false,

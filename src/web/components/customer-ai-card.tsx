@@ -20,11 +20,20 @@ export type CardActionKind =
 export type CardAction = {
   kind: CardActionKind;
   label: string;
+  // Which receivable book a book-specific action targets (send_chase_email /
+  // send_statement) — the customer-detail handler prefers this over its
+  // balance-based smart default.
+  origin?: "feldart" | "tj";
   args: Record<string, unknown>;
 };
 
 type CardResponse = {
   summary: string;
+  // Per-book reads — present together when the customer has both books
+  // (origin-split-2 W2 T5); the card then renders two origin-chipped
+  // paragraphs instead of the blended summary.
+  summaryFeldart?: string | null;
+  summaryTj?: string | null;
   actions: CardAction[];
   generatedAt: string;
   isStale: boolean;
@@ -34,6 +43,23 @@ type Props = {
   customerId: string;
   onAction: (action: CardAction) => void;
 };
+
+// Origin chip for per-book summary paragraphs. Indigo = Feldart, amber =
+// Torah Judaica — matches the customers-list TjChip / book-section-header
+// palette (origin-split-2 conventions).
+function BookChip({ book }: { book: "feldart" | "tj" }) {
+  const cls =
+    book === "feldart"
+      ? "bg-accent-primary/15 text-accent-primary ring-accent-primary/30"
+      : "bg-accent-warning/15 text-accent-warning ring-accent-warning/30";
+  return (
+    <span
+      className={`mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 text-[10px] font-bold ring-1 ring-inset ${cls}`}
+    >
+      {book === "feldart" ? "FELDART" : "TJ"}
+    </span>
+  );
+}
 
 function relativeAge(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -152,9 +178,22 @@ export default function CustomerAiCard({ customerId, onAction }: Props) {
         </div>
       </div>
 
-      <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-secondary">
-        {data.summary}
-      </div>
+      {data.summaryFeldart && data.summaryTj ? (
+        <div className="mt-3 space-y-3 text-sm leading-relaxed text-secondary">
+          <div className="flex items-start gap-2">
+            <BookChip book="feldart" />
+            <p className="min-w-0 whitespace-pre-wrap">{data.summaryFeldart}</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <BookChip book="tj" />
+            <p className="min-w-0 whitespace-pre-wrap">{data.summaryTj}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-secondary">
+          {data.summary}
+        </div>
+      )}
 
       {data.actions.length > 0 && (
         <div className="mt-4 space-y-1.5">

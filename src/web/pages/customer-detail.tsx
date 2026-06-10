@@ -462,12 +462,19 @@ export default function CustomerDetailPage() {
         return;
       }
       case "send_statement":
-        // AI card is book-agnostic in Wave 1 — pick the book that actually
-        // carries a balance (Feldart wins ties; Wave 2 makes AI actions
-        // origin-aware properly).
+        // W2 T5: actions are origin-aware — prefer the model's normalized
+        // origin; fall back to the Wave 1 smart default (the book that
+        // actually carries a balance, Feldart wins ties) for cached
+        // pre-Wave-2 cards whose actions have no origin yet.
         setStatementDialog({
           origin:
-            feldartBalance > 0 ? "feldart" : tjBalance > 0 ? "tj" : "feldart",
+            action.origin === "tj" || action.origin === "feldart"
+              ? action.origin
+              : feldartBalance > 0
+                ? "feldart"
+                : tjBalance > 0
+                  ? "tj"
+                  : "feldart",
         });
         return;
       case "view_rma": {

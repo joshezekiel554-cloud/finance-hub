@@ -42,5 +42,9 @@ export type CardActionKind =
 export type CardAction = {
   kind: CardActionKind;
   label: string;
+  // Which receivable book a book-specific action targets (send_chase_email /
+  // send_statement). Normalized at parse time: tj only when the customer has
+  // TJ history, feldart otherwise. Absent on non-book-specific kinds.
+  origin?: "feldart" | "tj";
   args: Record<string, unknown>;
 };

@@ -5,14 +5,17 @@
 // reads still return stale rows with an is_stale flag so the page renders
 // instantly; the Regenerate button forces a fresh call.
 
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailLog } from "../../db/schema/crm.js";
+import { invoices } from "../../db/schema/invoices.js";
+import { creditMemos } from "../../db/schema/credit-memos.js";
 import {
   customerAiCards,
   type CardAction,
 } from "../../db/schema/customer-ai-cards.js";
+import { computeOriginBalances } from "../chase/balances.js";
 import { buildDraftContext, type DraftContext } from "./voice.js";
 import { findCandidates as findChaseNext } from "./candidates/chase-next.js";
 import { findCandidates as findCadenceCold } from "./candidates/cadence-cold.js";
@@ -47,16 +50,48 @@ export type CardEmail = {
   date: string;
 };
 
+// Per-book figures fed to the prompt when the customer has BOTH receivable
+// books (osplit2 W2 T5). Balances are net of that origin's unapplied credit —
+// same computeOriginBalances convention as the customer-detail KPIs.
+export type CardBookFigures = {
+  balance: number;
+  overdue: number;
+  openCount: number;
+  oldestOverdueDays: number | null;
+};
+
+export type CardTjDispute = {
+  docNumber: string | null;
+  balance: number;
+  claimedAt: string | null; // YYYY-MM-DD
+};
+
+export type CardBooks = {
+  feldart: CardBookFigures;
+  tj: CardBookFigures & {
+    verifyingCount: number;
+    disputes: CardTjDispute[];
+  };
+};
+
 export type CardPromptInput = {
   customer: { id: string; name: string };
   kpis: CardKpis;
   candidates: CardCandidate[];
   recentEmails: CardEmail[];
   context: DraftContext;
+  // Present only for both-books customers — switches the prompt into the
+  // two-summary schema. Single-book customers keep the blended schema.
+  books?: CardBooks;
 };
 
 export type CustomerCardData = {
   summary: string;
+  // Per-book reads — non-null only when the customer has both books AND the
+  // model returned both fields. `summary` always stays populated (NOT NULL
+  // column; blended/single-book fallback).
+  summaryFeldart: string | null;
+  summaryTj: string | null;
   actions: CardAction[];
 };
 
@@ -82,11 +117,18 @@ export function buildCardPrompt(input: CardPromptInput): {
       : "") +
     `## Output schema (return JSON only — no prose preamble)\n` +
     `{\n` +
-    `  "summary": string,   // 1-2 short paragraphs of plain prose\n` +
+    (input.books
+      ? `  "summary": string,          // ONE short sentence — the overall read across both books\n` +
+        `  "summary_feldart": string,  // 1 short paragraph — the Feldart book only\n` +
+        `  "summary_tj": string,       // 1 short paragraph — the Torah Judaica book only (balance net of credits; claims-paid/verifying dispute states with dates)\n`
+      : `  "summary": string,   // 1-2 short paragraphs of plain prose\n`) +
     `  "actions": [         // 0 or more recommended actions\n` +
     `    {\n` +
     `      "kind": "send_chase_email" | "send_statement" | "send_check_in_email" | "view_rma" | "view_cron_failure",\n` +
     `      "label": string, // operator-facing button text\n` +
+    (input.books
+      ? `      "origin": "feldart" | "tj", // REQUIRED on send_chase_email/send_statement — which book the action targets; omit on other kinds\n`
+      : "") +
     `      "args": object   // kind-specific args, may be empty\n` +
     `    }\n` +
     `  ]\n` +
@@ -114,18 +156,52 @@ export function buildCardPrompt(input: CardPromptInput): {
     ? `\n\n## Customer-specific context (operator-curated)\n${input.context.customerContext}`
     : "";
 
+  const booksBlock = input.books ? buildBooksBlock(input.books) : "";
+
   const user =
     `## Customer: ${input.customer.name}\n` +
     `Open balance: £${input.kpis.balance.toFixed(2)} ` +
     `(overdue: £${input.kpis.overdueBalance.toFixed(2)}, ` +
-    `on hold: ${input.kpis.hasHold ? "yes" : "no"})\n\n` +
-    `## Current autopilot candidates for this customer\n${candidatesBlock}\n\n` +
+    `on hold: ${input.kpis.hasHold ? "yes" : "no"})` +
+    booksBlock +
+    `\n\n## Current autopilot candidates for this customer\n${candidatesBlock}\n\n` +
     `## Recent emails (last 5)\n${emailBlock}` +
     ctxBlock +
-    `\n\nReturn JSON matching the schema. Summary in plain prose; ` +
+    `\n\nReturn JSON matching the schema. ` +
+    (input.books
+      ? `Read the two books separately — summary_feldart covers Feldart only, ` +
+        `summary_tj covers Torah Judaica only; summary is one overall sentence. `
+      : `Summary in plain prose; `) +
     `actions cover only what's actually warranted right now.`;
 
   return { system, user };
+}
+
+function fmtBookFigures(f: CardBookFigures): string {
+  const oldest =
+    f.oldestOverdueDays != null ? `, oldest overdue ${f.oldestOverdueDays}d` : "";
+  return (
+    `balance £${f.balance.toFixed(2)} (overdue £${f.overdue.toFixed(2)}, ` +
+    `${f.openCount} open invoice${f.openCount === 1 ? "" : "s"}${oldest})`
+  );
+}
+
+function buildBooksBlock(books: CardBooks): string {
+  const disputeLines = books.tj.disputes.length
+    ? books.tj.disputes
+        .map(
+          (d) =>
+            `- ${d.docNumber ?? "(no doc number)"}: £${d.balance.toFixed(2)}, customer claims paid, verifying with bookkeeper since ${d.claimedAt ?? "(unknown date)"}`,
+        )
+        .join("\n")
+    : "(none)";
+  return (
+    `\n\n## Receivable books (this customer has BOTH — read them separately)\n` +
+    `### Feldart (primary, living book)\n${fmtBookFigures(books.feldart)}\n` +
+    `### Torah Judaica (legacy wind-down book; balance net of TJ credits)\n` +
+    `${fmtBookFigures(books.tj)}; ${books.tj.verifyingCount} invoice${books.tj.verifyingCount === 1 ? "" : "s"} in claims-paid verification\n` +
+    `Claims-paid disputes:\n${disputeLines}`
+  );
 }
 
 const VALID_KINDS = new Set<CardAction["kind"]>([
@@ -144,48 +220,97 @@ function unfence(raw: string): string {
   return fence?.[1]?.trim() ?? trimmed;
 }
 
-export function parseCardResponse(raw: string): CustomerCardData {
+// Kinds that target one specific receivable book — these carry an `origin`
+// after normalization (default feldart; tj only when the customer actually
+// has TJ history, i.e. opts.allowTj).
+const BOOK_SPECIFIC_KINDS = new Set<CardAction["kind"]>([
+  "send_chase_email",
+  "send_statement",
+]);
+
+export type ParseCardOptions = {
+  // The prompt used the per-book schema (both-books customer) — accept
+  // summary_feldart / summary_tj from the model.
+  perBook?: boolean;
+  // The customer has TJ history; action origin "tj" is legal.
+  allowTj?: boolean;
+};
+
+export function parseCardResponse(
+  raw: string,
+  opts: ParseCardOptions = {},
+): CustomerCardData {
   try {
     const parsed = JSON.parse(unfence(raw)) as unknown;
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "summary" in parsed &&
-      "actions" in parsed
-    ) {
-      const p = parsed as { summary: unknown; actions: unknown };
-      if (typeof p.summary === "string" && Array.isArray(p.actions)) {
-        const actions: CardAction[] = [];
-        for (const a of p.actions) {
-          if (
-            typeof a === "object" &&
-            a !== null &&
-            "kind" in a &&
-            "label" in a
-          ) {
-            const aa = a as {
-              kind: unknown;
-              label: unknown;
-              args?: unknown;
-            };
-            if (
-              typeof aa.kind === "string" &&
-              typeof aa.label === "string" &&
-              VALID_KINDS.has(aa.kind as CardAction["kind"])
-            ) {
-              const args =
-                typeof aa.args === "object" && aa.args !== null
-                  ? (aa.args as Record<string, unknown>)
-                  : {};
-              actions.push({
-                kind: aa.kind as CardAction["kind"],
-                label: aa.label,
-                args,
-              });
-            }
+    if (typeof parsed === "object" && parsed !== null) {
+      const p = parsed as Record<string, unknown>;
+      if (Array.isArray(p.actions)) {
+        const summaryRaw =
+          typeof p.summary === "string" ? p.summary.trim() : "";
+        let summaryFeldart: string | null = null;
+        let summaryTj: string | null = null;
+        if (opts.perBook) {
+          const sf =
+            typeof p.summary_feldart === "string"
+              ? p.summary_feldart.trim()
+              : "";
+          const st =
+            typeof p.summary_tj === "string" ? p.summary_tj.trim() : "";
+          // Both or neither — a lone per-book read renders confusingly.
+          if (sf && st) {
+            summaryFeldart = sf;
+            summaryTj = st;
           }
         }
-        return { summary: p.summary, actions };
+        // `summary` backs a NOT NULL column — synthesize a combiner when the
+        // model returned only the per-book reads.
+        const summary =
+          summaryRaw ||
+          (summaryFeldart && summaryTj
+            ? `Feldart: ${summaryFeldart}\n\nTJ: ${summaryTj}`
+            : "");
+        if (summary) {
+          const actions: CardAction[] = [];
+          for (const a of p.actions) {
+            if (
+              typeof a === "object" &&
+              a !== null &&
+              "kind" in a &&
+              "label" in a
+            ) {
+              const aa = a as {
+                kind: unknown;
+                label: unknown;
+                args?: unknown;
+                origin?: unknown;
+              };
+              if (
+                typeof aa.kind === "string" &&
+                typeof aa.label === "string" &&
+                VALID_KINDS.has(aa.kind as CardAction["kind"])
+              ) {
+                const kind = aa.kind as CardAction["kind"];
+                const args =
+                  typeof aa.args === "object" && aa.args !== null
+                    ? (aa.args as Record<string, unknown>)
+                    : {};
+                const action: CardAction = { kind, label: aa.label, args };
+                if (BOOK_SPECIFIC_KINDS.has(kind)) {
+                  const rawOrigin =
+                    typeof aa.origin === "string"
+                      ? aa.origin
+                      : typeof args.origin === "string"
+                        ? args.origin
+                        : null;
+                  action.origin =
+                    rawOrigin === "tj" && opts.allowTj ? "tj" : "feldart";
+                }
+                actions.push(action);
+              }
+            }
+          }
+          return { summary, summaryFeldart, summaryTj, actions };
+        }
       }
     }
   } catch {
@@ -193,6 +318,8 @@ export function parseCardResponse(raw: string): CustomerCardData {
   }
   return {
     summary: "AI summary unavailable — try Regenerate.",
+    summaryFeldart: null,
+    summaryTj: null,
     actions: [],
   };
 }
@@ -216,7 +343,12 @@ export async function getCustomerCard(
   const ageHours =
     (Date.now() - row.generatedAt.getTime()) / (1000 * 60 * 60);
   return {
-    data: { summary: row.summary, actions: row.actions },
+    data: {
+      summary: row.summary,
+      summaryFeldart: row.summaryFeldart ?? null,
+      summaryTj: row.summaryTj ?? null,
+      actions: row.actions,
+    },
     isStale: ageHours > CACHE_TTL_HOURS,
     generatedAt: row.generatedAt,
   };
@@ -250,16 +382,87 @@ export async function generateCustomerCard(
     ...cronFail.map((c) => ({ ...c, category: "ops_cron_fail" })),
   ];
 
-  const emails = await db
-    .select({
-      direction: emailLog.direction,
-      subject: emailLog.subject,
-      emailDate: emailLog.emailDate,
-    })
-    .from(emailLog)
-    .where(eq(emailLog.customerId, customerId))
-    .orderBy(desc(emailLog.emailDate))
-    .limit(5);
+  const [emails, invoiceRows, creditRows] = await Promise.all([
+    db
+      .select({
+        direction: emailLog.direction,
+        subject: emailLog.subject,
+        emailDate: emailLog.emailDate,
+      })
+      .from(emailLog)
+      .where(eq(emailLog.customerId, customerId))
+      .orderBy(desc(emailLog.emailDate))
+      .limit(5),
+    // Open invoices across both books — feeds the per-book figures the same
+    // way the customer-detail KPI exprs do (net of that origin's credit).
+    db
+      .select({
+        origin: invoices.origin,
+        balance: invoices.balance,
+        dueDate: invoices.dueDate,
+        disputeState: invoices.disputeState,
+        docNumber: invoices.docNumber,
+        disputeClaimedAt: invoices.disputeClaimedAt,
+      })
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), gt(invoices.balance, "0")),
+      ),
+    db
+      .select({ origin: creditMemos.origin, balance: creditMemos.balance })
+      .from(creditMemos)
+      .where(
+        and(
+          eq(creditMemos.customerId, customerId),
+          gt(creditMemos.balance, "0"),
+        ),
+      ),
+  ]);
+
+  // Both-books predicate — same semantics as the customer-detail header
+  // pill (hasTjHistory): any TJ exposure, open TJ paper, or verifying
+  // dispute. Feldart is the living default book, so TJ history alone flips
+  // the card into per-book mode.
+  const asOf = new Date();
+  const credit = { feldart: 0, tj: 0 };
+  for (const c of creditRows) {
+    const v = Number(c.balance);
+    if (Number.isFinite(v) && v > 0) credit[c.origin] += v;
+  }
+  const netted = computeOriginBalances(invoiceRows, credit, asOf);
+  const openCounts = { feldart: 0, tj: 0 };
+  for (const r of invoiceRows) openCounts[r.origin] += 1;
+  const tjVerifying = invoiceRows.filter(
+    (r) => r.origin === "tj" && r.disputeState === "verifying",
+  );
+  const hasTjHistory =
+    netted.tj.balance !== 0 ||
+    netted.tj.overdue !== 0 ||
+    openCounts.tj !== 0 ||
+    tjVerifying.length !== 0;
+
+  const books: CardBooks | undefined = hasTjHistory
+    ? {
+        feldart: {
+          balance: netted.feldart.balance,
+          overdue: netted.feldart.overdue,
+          openCount: openCounts.feldart,
+          oldestOverdueDays: oldestOverdueDays(invoiceRows, "feldart", asOf),
+        },
+        tj: {
+          balance: netted.tj.balance,
+          overdue: netted.tj.overdue,
+          openCount: openCounts.tj,
+          oldestOverdueDays: oldestOverdueDays(invoiceRows, "tj", asOf),
+          verifyingCount: tjVerifying.length,
+          disputes: tjVerifying.map((r) => ({
+            docNumber: r.docNumber,
+            balance: Number(r.balance) || 0,
+            claimedAt: toDateStr(r.disputeClaimedAt),
+          })),
+        },
+      }
+    : undefined;
 
   // chase_next as the carrier category — globals are what we use, the
   // category-specific arrays go unused in buildCardPrompt.
@@ -281,6 +484,7 @@ export async function generateCustomerCard(
       date: e.emailDate.toISOString().slice(0, 10),
     })),
     context: ctx,
+    books,
   });
 
   const client = getAnthropicClient();
@@ -298,7 +502,10 @@ export async function generateCustomerCard(
     textBlock && textBlock.type === "text" && "text" in textBlock
       ? (textBlock as { text: string }).text
       : "";
-  const data = parseCardResponse(raw);
+  const data = parseCardResponse(raw, {
+    perBook: hasTjHistory,
+    allowTj: hasTjHistory,
+  });
 
   await trackUsage(res, { surface: "customer_summary" });
 
@@ -308,6 +515,8 @@ export async function generateCustomerCard(
     .values({
       customerId,
       summary: data.summary,
+      summaryFeldart: data.summaryFeldart,
+      summaryTj: data.summaryTj,
       actions: data.actions,
       generatedAt: now,
       modelUsed: MODEL,
@@ -317,6 +526,10 @@ export async function generateCustomerCard(
     .onDuplicateKeyUpdate({
       set: {
         summary: data.summary,
+        // Per-book columns clear on regen when the customer dropped back to
+        // a single book — never leave stale per-book reads behind.
+        summaryFeldart: data.summaryFeldart,
+        summaryTj: data.summaryTj,
         actions: data.actions,
         generatedAt: now,
         modelUsed: MODEL,
@@ -326,8 +539,44 @@ export async function generateCustomerCard(
     });
 
   log.info(
-    { customerId, tookMs, force: opts.force ?? false, actions: data.actions.length },
+    {
+      customerId,
+      tookMs,
+      force: opts.force ?? false,
+      actions: data.actions.length,
+      perBook: hasTjHistory,
+    },
     "customer card generated",
   );
   return { data, isStale: false, generatedAt: now };
+}
+
+// Age in days of the oldest overdue open invoice on one book; null when
+// nothing on that book is past due. Mirrors the detail KPI's
+// feldartOldestDays convention.
+function oldestOverdueDays(
+  rows: { origin: "feldart" | "tj"; dueDate: Date | string | null }[],
+  origin: "feldart" | "tj",
+  asOf: Date,
+): number | null {
+  let oldest: number | null = null;
+  for (const r of rows) {
+    if (r.origin !== origin || r.dueDate == null) continue;
+    const due = r.dueDate instanceof Date ? r.dueDate : new Date(r.dueDate);
+    if (Number.isNaN(due.getTime()) || due.getTime() >= asOf.getTime()) {
+      continue;
+    }
+    const days = Math.floor(
+      (asOf.getTime() - due.getTime()) / (24 * 60 * 60 * 1000),
+    );
+    if (oldest === null || days > oldest) oldest = days;
+  }
+  return oldest;
+}
+
+function toDateStr(value: Date | string | null): string | null {
+  if (value == null) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
 }
