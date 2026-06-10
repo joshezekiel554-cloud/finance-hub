@@ -71,11 +71,9 @@ const boolish = z
   .optional()
   .transform((v) => v === true || v === "true");
 
+// No `origin` param: this list is Feldart-only (origin-split-2). The Torah
+// Judaica wind-down has its own endpoint, GET /api/chase/tj-winddown.
 const listQuerySchema = z.object({
-  // Which receivable book to chase. Default 'feldart' keeps the clean Feldart
-  // list front-and-centre; 'tj' is the Torah Judaica wind-down track; 'both'
-  // is the blended view across the two books.
-  origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
   customerType: z.enum(["b2b", "b2c", "all"]).default("b2b"),
   // "Active" widens to include payment_upfront — those customers can
   // still be chased; only true hold customers are excluded by it.
@@ -145,7 +143,6 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid query", details: parse.error.flatten() });
     }
     const {
-      origin,
       customerType,
       holdStatus,
       sort,
@@ -211,12 +208,10 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     // = future due). We render past-due only on the UI but surface the
     // raw integer so the client can decide. NULL when there's no
     // unpaid invoice with a due_date.
-    // 'both' = blended across the two books (no origin filter); 'feldart'/'tj'
-    // scope to one book. Empty sql fragment when both so the subqueries sum all.
-    const invOriginCond =
-      origin === "both" ? sql`` : sql` AND ${invoices.origin} = ${origin}`;
-    const cmOriginCond =
-      origin === "both" ? sql`` : sql` AND ${creditMemos.origin} = ${origin}`;
+    // Feldart-only: the per-origin netting SQL is hard-coded to the living
+    // book. TJ figures come from the wind-down endpoint instead.
+    const invOriginCond = sql` AND ${invoices.origin} = ${"feldart"}`;
+    const cmOriginCond = sql` AND ${creditMemos.origin} = ${"feldart"}`;
     // TJ invoices parked for bookkeeper verification drop out of the active
     // chase list (feldart invoices never carry a dispute_state, so harmless).
     const notVerifying = sql` AND (${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;

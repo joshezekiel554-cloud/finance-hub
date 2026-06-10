@@ -1,8 +1,15 @@
-// Chase list page. Backs /chase. Surfaces every B2B customer with an
-// overdue balance, lets the user multi-select + batch-send open-items
-// statements, and shows per-row outcomes once the batch lands.
+// Chase page. Backs /chase. Two sections, one per receivable book
+// (origin-split-2 spec §1):
+//   - Feldart (indigo band): every B2B customer with an overdue Feldart
+//     balance — multi-select + batch-send open-items statements, per-row
+//     chase/statement actions, per-row outcomes once the batch lands.
+//   - Torah Judaica (amber band): the wind-down panel — exposure KPIs,
+//     aging bar, per-customer rows expanding to per-invoice dispute
+//     actions. Own endpoint, own selection. See
+//     components/book-sections/tj-winddown-panel.tsx.
+// There is no book toggle: both books render, separated, always.
 //
-// Key UX choices:
+// Key UX choices (Feldart section):
 //   - Default filters: holdStatus=All, customerType=B2B. The "All"
 //     hold default is intentional — chasing a customer who happens to
 //     be on hold is still a real workflow. The B2B default mirrors
@@ -34,7 +41,12 @@ import { Mail, Pause, Send, AlertCircle, CheckCircle2 } from "lucide-react";
 import ChaseEmailSendDialog, {
   type ChaseSendSuccess,
 } from "../components/chase-email-send-dialog";
-import { Card, CardBody, CardHeader } from "../components/ui/card";
+import {
+  BookSectionHeader,
+  KpiChip,
+} from "../components/book-sections/book-section-header";
+import TjWinddownPanel from "../components/book-sections/tj-winddown-panel";
+import { Card, CardBody } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { SyncQbBadge } from "../components/sync-qb-badge";
@@ -112,19 +124,12 @@ const CUSTOMER_TYPE_LABELS: Record<CustomerTypeFilter, string> = {
   all: "All",
 };
 
-const ORIGIN_LABELS: Record<ChaseSearch["origin"], string> = {
-  feldart: "Feldart",
-  tj: "Torah Judaica",
-  both: "Both",
-};
-
 export default function ChasePage() {
   const search = chaseRouteApi.useSearch();
   const { setFilter, setFilters } = useFilterNavigate<ChaseSearch>("/chase");
   useFilterPersistence("/chase");
 
   // Local aliases (preserve old variable names so JSX/queryKey changes are minimal):
-  const originFilter = search.origin;
   const customerTypeFilter = search.customerType;
   const holdFilter = search.holdStatus;
   const missingTermsFilter = search.missingTerms;
@@ -133,8 +138,6 @@ export default function ChasePage() {
   const dir = search.dir;
 
   // Setters:
-  const setOriginFilter = (next: ChaseSearch["origin"]) =>
-    setFilter("origin", next, { history: "push" });
   const setCustomerTypeFilter = (next: ChaseSearch["customerType"]) =>
     setFilter("customerType", next, { history: "push" });
   const setHoldFilter = (next: ChaseSearch["holdStatus"]) =>
@@ -177,7 +180,6 @@ export default function ChasePage() {
     "chase",
     "customers",
     {
-      originFilter,
       customerTypeFilter,
       holdFilter,
       missingTermsFilter,
@@ -194,8 +196,9 @@ export default function ChasePage() {
     // window focus would feel jumpy.
     staleTime: 60_000,
     queryFn: async () => {
+      // Feldart-only endpoint — the TJ panel below has its own
+      // (/api/chase/tj-winddown).
       const params = new URLSearchParams({
-        origin: originFilter,
         customerType: customerTypeFilter,
         holdStatus: holdFilter,
         sort,
@@ -216,9 +219,9 @@ export default function ChasePage() {
       const res = await fetch("/api/chase/batch-statement", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // Scope the statements to the active book so a TJ-view batch sends
-        // TJ-only statements (and Feldart-view Feldart-only).
-        body: JSON.stringify({ customerIds, origin: originFilter }),
+        // This section is the Feldart queue — statements are always
+        // Feldart-scoped (the TJ panel sends its own with origin 'tj').
+        body: JSON.stringify({ customerIds, origin: "feldart" }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json() as Promise<BatchResponse>;
@@ -275,6 +278,16 @@ export default function ChasePage() {
 
   const allSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
 
+  // Feldart section-header KPI: total overdue across the visible rows
+  // (already net of unapplied Feldart credit, per the route).
+  const totalOverdue = useMemo(() => {
+    let sum = 0;
+    for (const row of rows) {
+      sum += parseFloat(row.overdueBalance) || 0;
+    }
+    return sum;
+  }, [rows]);
+
   function clearResults() {
     setResultsById({});
   }
@@ -296,7 +309,11 @@ export default function ChasePage() {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: "{}",
+          // Feldart-scoped (this section is the Feldart queue). The route's
+          // body schema gains a required `origin` in the statements task of
+          // this wave — until then unknown keys are stripped server-side,
+          // so passing it now is forward-compatible.
+          body: JSON.stringify({ origin: "feldart" }),
         },
       );
       if (!res.ok) {
@@ -358,19 +375,14 @@ export default function ChasePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Chase list</h1>
           <p className="mt-1 text-sm text-secondary">
-            B2B customers with overdue balances. Send open-items statements
-            to selected.
+            Feldart customers with overdue balances, plus the Torah Judaica
+            wind-down below.
           </p>
         </div>
         <SyncQbBadge />
       </div>
 
       <FilterBar
-        originFilter={originFilter}
-        onOriginChange={(v) => {
-          setOriginFilter(v);
-          setSelectedIds(new Set());
-        }}
         customerTypeFilter={customerTypeFilter}
         onCustomerTypeChange={(v) => {
           setCustomerTypeFilter(v);
@@ -409,26 +421,55 @@ export default function ChasePage() {
         </Card>
       )}
 
-      <Toolbar
-        selectedCount={selectedIds.size}
-        selectedTotalOverdue={selectedTotalOverdue}
-        allSelected={allSelected}
-        rowsPresent={rows.length > 0}
-        onToggleSelectAll={toggleSelectAll}
-        onClickSend={() => setConfirmOpen(true)}
-        sending={batchMutation.isPending}
-      />
-
-      <Card>
-        <CardHeader>
-          <h2 className="text-sm font-medium text-secondary">
-            {isPending
-              ? "Loading…"
-              : `${rows.length} customer${rows.length === 1 ? "" : "s"} with overdue balance`}
-          </h2>
-        </CardHeader>
-        <CardBody className="p-0">
-          <table className="w-full text-sm">
+      {/* ── Feldart section: the chase queue ─────────────────────────── */}
+      <section className="rounded-lg border border-default bg-subtle shadow-sm">
+        <BookSectionHeader
+          book="feldart"
+          title="Feldart"
+          kpis={
+            isPending ? (
+              <KpiChip>Loading…</KpiChip>
+            ) : (
+              <>
+                <KpiChip title="Total overdue across the listed accounts">
+                  Overdue ${totalOverdue.toFixed(2)}
+                </KpiChip>
+                <KpiChip>
+                  {rows.length} account{rows.length === 1 ? "" : "s"}
+                </KpiChip>
+                {selectedIds.size > 0 ? (
+                  <KpiChip title="Selection: count and total overdue">
+                    {selectedIds.size} selected · $
+                    {selectedTotalOverdue.toFixed(2)}
+                  </KpiChip>
+                ) : null}
+              </>
+            )
+          }
+          actions={
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={toggleSelectAll}
+                disabled={rows.length === 0 || batchMutation.isPending}
+              >
+                {allSelected ? "Clear selection" : "Select all"}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setConfirmOpen(true)}
+                disabled={selectedIds.size === 0 || batchMutation.isPending}
+                loading={batchMutation.isPending}
+              >
+                <Send className="size-3.5" />
+                {batchMutation.isPending ? "Sending…" : "Send statements"}
+              </Button>
+            </>
+          }
+        />
+        <table className="w-full text-sm">
             <thead className="bg-subtle text-left text-xs uppercase tracking-wide text-muted [&_th]:sticky [&_th]:top-14 [&_th]:z-10 [&_th]:border-b [&_th]:border-default [&_th]:bg-subtle md:[&_th]:top-0">
               <tr>
                 <th className="w-10 px-3 py-2">
@@ -557,19 +598,6 @@ export default function ChasePage() {
                           </span>
                         ) : null}
                       </a>
-                      {originFilter === "tj" ? (
-                        // Dispute lifecycle is per-invoice (a chase row is
-                        // per-customer), so we don't park here. Link the
-                        // operator to the customer's Invoices tab where the
-                        // per-invoice "Customer claims paid" action lives.
-                        <a
-                          href={`/customers/${row.id}?tab=invoices`}
-                          className="mt-0.5 block text-[11px] text-muted hover:text-accent-warning hover:underline underline-offset-2"
-                          title="Park a TJ invoice the customer says they paid (per-invoice, on the customer page)"
-                        >
-                          Dispute on customer page →
-                        </a>
-                      ) : null}
                     </td>
                     <td className="px-3 py-2 text-secondary">
                       {row.primaryEmail ?? (
@@ -663,17 +691,26 @@ export default function ChasePage() {
                   </tr>
                 );
               })}
+              {isPending && (
+                <tr>
+                  <td className="p-8 text-center text-sm text-muted" colSpan={12}>
+                    Loading…
+                  </td>
+                </tr>
+              )}
               {!isPending && rows.length === 0 && (
                 <tr>
-                  <td className="p-8 text-center text-sm text-muted" colSpan={10}>
+                  <td className="p-8 text-center text-sm text-muted" colSpan={12}>
                     No customers match these filters. 🎉
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-        </CardBody>
-      </Card>
+      </section>
+
+      {/* ── Torah Judaica section: the wind-down panel ─────────────────── */}
+      <TjWinddownPanel />
 
       <ConfirmDialog
         open={confirmOpen}
@@ -701,7 +738,7 @@ export default function ChasePage() {
           }}
           customerId={chaseDialog.customerId}
           customerName={chaseDialog.customerName}
-          origin={originFilter}
+          origin="feldart"
           level={chaseDialog.level}
           onSent={(result: ChaseSendSuccess) => {
             setResultsById((prev) => ({
@@ -720,8 +757,6 @@ export default function ChasePage() {
 }
 
 function FilterBar({
-  originFilter,
-  onOriginChange,
   customerTypeFilter,
   onCustomerTypeChange,
   holdFilter,
@@ -732,8 +767,6 @@ function FilterBar({
   onHasPendingRmaChange,
   onClearToggles,
 }: {
-  originFilter: ChaseSearch["origin"];
-  onOriginChange: (v: ChaseSearch["origin"]) => void;
   customerTypeFilter: CustomerTypeFilter;
   onCustomerTypeChange: (v: CustomerTypeFilter) => void;
   holdFilter: HoldFilter;
@@ -748,17 +781,6 @@ function FilterBar({
   return (
     <Card>
       <CardBody className="flex flex-wrap items-center gap-4 py-3">
-        <ChipGroup label="Book">
-          {(["feldart", "tj", "both"] as ChaseSearch["origin"][]).map((v) => (
-            <Chip
-              key={v}
-              active={originFilter === v}
-              onClick={() => onOriginChange(v)}
-            >
-              {ORIGIN_LABELS[v]}
-            </Chip>
-          ))}
-        </ChipGroup>
         <ChipGroup label="Hold status">
           {(["active", "hold", "all"] as HoldFilter[]).map((v) => (
             <Chip
@@ -804,66 +826,6 @@ function FilterBar({
             </button>
           ) : null}
         </ChipGroup>
-      </CardBody>
-    </Card>
-  );
-}
-
-function Toolbar({
-  selectedCount,
-  selectedTotalOverdue,
-  allSelected,
-  rowsPresent,
-  onToggleSelectAll,
-  onClickSend,
-  sending,
-}: {
-  selectedCount: number;
-  selectedTotalOverdue: number;
-  allSelected: boolean;
-  rowsPresent: boolean;
-  onToggleSelectAll: () => void;
-  onClickSend: () => void;
-  sending: boolean;
-}) {
-  return (
-    <Card>
-      <CardBody className="flex flex-wrap items-center gap-3 py-3 text-sm">
-        <span className="text-secondary">
-          <span className="font-medium text-primary">{selectedCount}</span>{" "}
-          customer{selectedCount === 1 ? "" : "s"} selected
-          {selectedCount > 0 && (
-            <>
-              {" · "}
-              <span>
-                total overdue:{" "}
-                <span className="font-medium text-accent-danger">
-                  ${selectedTotalOverdue.toFixed(2)}
-                </span>
-              </span>
-            </>
-          )}
-        </span>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={onToggleSelectAll}
-          disabled={!rowsPresent || sending}
-        >
-          {allSelected ? "Clear selection" : "Select all"}
-        </Button>
-        <div className="ml-auto">
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={onClickSend}
-            disabled={selectedCount === 0 || sending}
-            loading={sending}
-          >
-            <Send className="size-3.5" />
-            {sending ? "Sending…" : "Send statements"}
-          </Button>
-        </div>
       </CardBody>
     </Card>
   );
