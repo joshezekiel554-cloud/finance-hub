@@ -17,7 +17,7 @@ Context notes (survive compact):
 - [x] W1 T4 customer-detail panels — `b1a64e6` + review fixes `3679426` (spec ✅ after pill-age restore + mixed-book bulk-chase guard; quality ✅). Header pills (feldartOldestDays/tjVerifyingCount KPIs added), BookInvoiceSection shared renderer, rail KPI cards + OriginChip + blended footer deleted, header Chase/Statement moved into panels. Suite 710/710. T5 notes: flip statement origin REQUIRED; check AI-card send_statement 'feldart' default for pure-TJ; statement PREVIEW still blended.
 - [x] W1 T5 statements origin required — `3423567` + doc-comment fix (spec ✅ blended-path grep clean repo-wide incl. jobs/AI; quality ✅ rolling-deploy 400 fail-safe verified). Preview parity via shared buildOpenInvoiceConditions. Suite 717/717. W2 note: compose-modal statement attach is feldart-only — book picker candidate.
 - [x] W1 T6 dashboard per-book amounts — `da1316c` (blendedSeverityWithParts wrapper; totalOverdue dropped; spec+quality ✅ no findings). Suite 719/719.
-- [ ] W1 T7 verify + Opus wave review + MERGE/PUSH/DEPLOY
+- [x] W1 T7 verify + wave review — gates green (719/719, tsc, build); Playwright pass on all 4 surfaces + pure-Feldart/both-books cases, 0 console errors; Opus wave review: SHIP (cosmetic 'both' residue in chase dialog type → W2 cleanup item). MERGE/DEPLOY next.
 - [ ] W2 plan written
 - [ ] W2 execution (proposer/nudge/AI card/digest)
 - [ ] W2 verify + review + MERGE/PUSH/DEPLOY
