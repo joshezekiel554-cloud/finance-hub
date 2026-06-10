@@ -218,8 +218,10 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
     // authoritative tagsAfter. When no ops are needed (already in the
     // target state) we skip the API entirely and report the pre-read.
     let tagsAfter = tagsBefore;
+    let currentOp: TagOp | null = null;
     try {
       for (const op of ops) {
+        currentOp = op;
         const result =
           op.kind === "add"
             ? await addTag(client, shopify.id, op.tag)
@@ -227,6 +229,34 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
         tagsAfter = result.tagsAfter;
       }
     } catch (err) {
+      // A multi-op flip (e.g. payment_upfront → hold removes two tags)
+      // can fail partway: earlier ops already landed in Shopify and
+      // won't be rolled back (the mutations are idempotent — operator
+      // retry converges). Record the partial mutation in the audit
+      // trail so it isn't invisible; the error response below is
+      // unchanged. Best-effort: an audit-write failure must not mask
+      // the original Shopify error.
+      try {
+        await db.insert(auditLog).values({
+          id: nanoid(24),
+          userId: user.id,
+          action: "shopify.tag_set_failed",
+          entityType: "shopify_customer",
+          entityId: String(shopify.id),
+          before: { tags: tagsBefore },
+          after: {
+            tags: tagsAfter,
+            targetState,
+            failedOp: currentOp,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        });
+      } catch (auditErr) {
+        log.error(
+          { err: auditErr, customerId: id, shopifyCustomerId: shopify.id },
+          "failed to audit-log partial tag flip",
+        );
+      }
       // 403 → likely missing write_customers scope. Bubble up a
       // distinct status so the UI can suggest a re-OAuth.
       if (err instanceof ShopifyApiError && err.status === 403) {

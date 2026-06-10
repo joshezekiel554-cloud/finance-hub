@@ -161,6 +161,9 @@ export class ShopifyClient {
   // Access-denied GraphQL errors (missing scope — HTTP 200 on the wire)
   // throw with status 403 so callers' scope-missing handling fires.
   // Mutation userErrors are returned inside T for the caller to inspect.
+  // Note: GraphQL rate-limiting arrives as HTTP 200 + extensions.code
+  // THROTTLED, which the HTTP-429 retry loop never sees — not retried
+  // here (low-frequency operator actions; fine for now).
   async graphql<T>(
     query: string,
     variables?: Record<string, unknown>,
