@@ -605,11 +605,20 @@ describe("classifyOperatorFeeLine", () => {
     rma_shipping_fee_item_id: "ship-item",
     rma_restocking_fee_item_id: "restock-item",
   };
+  const blankSettings = {
+    rma_shipping_fee_item_id: "",
+    rma_restocking_fee_item_id: "",
+  };
 
   it("classifies a negative line on the configured shipping item", () => {
     expect(
       classifyOperatorFeeLine(
-        { qbItemId: "ship-item", quantity: "1", unitPrice: "-5.00" },
+        {
+          qbItemId: "ship-item",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Return shipping costs deducted",
+        },
         settings,
       ),
     ).toBe("shipping");
@@ -618,7 +627,12 @@ describe("classifyOperatorFeeLine", () => {
   it("classifies a negative line on the configured restocking item", () => {
     expect(
       classifyOperatorFeeLine(
-        { qbItemId: "restock-item", quantity: "1", unitPrice: "-10.00" },
+        {
+          qbItemId: "restock-item",
+          quantity: "1",
+          unitPrice: "-10.00",
+          description: "Restocking fee",
+        },
         settings,
       ),
     ).toBe("restocking");
@@ -627,7 +641,12 @@ describe("classifyOperatorFeeLine", () => {
   it("returns null for a positive line even on a fee item", () => {
     expect(
       classifyOperatorFeeLine(
-        { qbItemId: "ship-item", quantity: "1", unitPrice: "5.00" },
+        {
+          qbItemId: "ship-item",
+          quantity: "1",
+          unitPrice: "5.00",
+          description: "Return shipping costs deducted",
+        },
         settings,
       ),
     ).toBeNull();
@@ -636,7 +655,12 @@ describe("classifyOperatorFeeLine", () => {
   it("returns null for a negative line on an unrelated item", () => {
     expect(
       classifyOperatorFeeLine(
-        { qbItemId: "some-other-item", quantity: "2", unitPrice: "-3.00" },
+        {
+          qbItemId: "some-other-item",
+          quantity: "2",
+          unitPrice: "-3.00",
+          description: "Price adjustment",
+        },
         settings,
       ),
     ).toBeNull();
@@ -647,12 +671,89 @@ describe("classifyOperatorFeeLine", () => {
     // the assertFeeItemConfigured guard must catch it, same as the builder.
     expect(() =>
       classifyOperatorFeeLine(
-        { qbItemId: "  ", quantity: "1", unitPrice: "-5.00" },
+        {
+          qbItemId: "  ",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Adjustment",
+        },
         {
           rma_shipping_fee_item_id: "  ",
           rma_restocking_fee_item_id: "restock-item",
         },
       ),
     ).toThrow(/rma_shipping_fee_item_id is not configured/);
+  });
+
+  it("rejects a negative shipping-looking line when fee items are unconfigured", () => {
+    expect(() =>
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Shipping deduction",
+        },
+        blankSettings,
+      ),
+    ).toThrow(/rma_shipping_fee_item_id is not configured/);
+  });
+
+  it("rejects a negative restocking-looking line when fee items are unconfigured", () => {
+    expect(() =>
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-10.00",
+          description: "Restocking charge",
+        },
+        blankSettings,
+      ),
+    ).toThrow(/rma_restocking_fee_item_id is not configured/);
+  });
+
+  it("rejects a generic fee-looking negative line when BOTH fee items are unconfigured", () => {
+    expect(() =>
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-2.50",
+          description: "Processing fee",
+        },
+        blankSettings,
+      ),
+    ).toThrow(/is not configured/);
+  });
+
+  it("allows a negative line with an unrelated description when fee items are unconfigured", () => {
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-3.00",
+          description: "Goodwill credit",
+        },
+        blankSettings,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not throw for a shipping-looking negative line on another item when shipping IS configured", () => {
+    // Config exists — the operator just used a different item. Not a
+    // misconfiguration; leave the line as the operator entered it.
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Shipping deduction",
+        },
+        settings,
+      ),
+    ).toBeNull();
   });
 });

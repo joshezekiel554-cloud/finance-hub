@@ -685,6 +685,9 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       // Fee lines follow this flag rather than their own taxable checkbox,
       // mirroring the builder path where one lineTaxCode stamps every line
       // (goods AND fee deductions) so the taxable subtotal nets the fees.
+      // Goods lines deliberately KEEP their per-line taxable flag (a
+      // divergence from the builder's single lineTaxCode) — the create page
+      // exposes a per-line tax checkbox, so mixed-taxability CMs are valid.
       const anyTaxable = body.lines.some(
         (line, i) => feeKinds[i] === null && line.taxable,
       );

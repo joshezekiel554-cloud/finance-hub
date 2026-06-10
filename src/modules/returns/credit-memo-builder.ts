@@ -141,11 +141,16 @@ export function assertFeeItemConfigured(
 // fee lines against a missing/blank configuration. Returns null for ordinary
 // (non-fee) lines, including negative adjustments on unrelated items.
 //
-// quantity/unitPrice are the route's string-typed body fields (mirrors the
-// processReturnBodySchema line shape).
+// quantity/unitPrice/description are the route's string-typed body fields
+// (mirrors the processReturnBodySchema line shape).
 // ---------------------------------------------------------------------------
 export function classifyOperatorFeeLine(
-  line: { qbItemId: string; quantity: string; unitPrice: string },
+  line: {
+    qbItemId: string;
+    quantity: string;
+    unitPrice: string;
+    description: string;
+  },
   settings: {
     rma_shipping_fee_item_id: string;
     rma_restocking_fee_item_id: string;
@@ -164,6 +169,30 @@ export function classifyOperatorFeeLine(
     assertFeeItemConfigured("restocking", settings.rma_restocking_fee_item_id);
     return "restocking";
   }
+
+  // The matched-id paths above only fire when the setting is non-blank
+  // (qbItemId is schema-guaranteed non-empty), so they can't catch the real
+  // misconfiguration hazard: a negative line that LOOKS like a fee — its
+  // description mentions shipping/restocking/fee — posted while the fee
+  // items are unconfigured. Without this it would silently land in QBO as a
+  // goods line against whatever item the operator picked. Route the
+  // blank-config case through the same guard the builder uses (each branch
+  // only runs when the setting is blank, so the assert always throws).
+  const desc = line.description;
+  if (/restock/i.test(desc) && !settings.rma_restocking_fee_item_id.trim()) {
+    assertFeeItemConfigured("restocking", settings.rma_restocking_fee_item_id);
+  }
+  if (/shipping/i.test(desc) && !settings.rma_shipping_fee_item_id.trim()) {
+    assertFeeItemConfigured("shipping", settings.rma_shipping_fee_item_id);
+  }
+  if (
+    /fee/i.test(desc) &&
+    !settings.rma_shipping_fee_item_id.trim() &&
+    !settings.rma_restocking_fee_item_id.trim()
+  ) {
+    assertFeeItemConfigured("shipping", settings.rma_shipping_fee_item_id);
+  }
+
   return null;
 }
 
