@@ -117,7 +117,7 @@ function formatInvoiceDate(date: Date | string): string {
 // Returns section. When unset the deduction path throws — see
 // assertFeeItemConfigured — rather than silently posting a CM against
 // the wrong QBO item.
-function assertFeeItemConfigured(
+export function assertFeeItemConfigured(
   kind: "shipping" | "restocking",
   itemId: string,
 ): asserts itemId is string {
@@ -127,6 +127,44 @@ function assertFeeItemConfigured(
         `Create the service item in QBO and set the id in /settings → Returns before issuing CMs with ${kind} fees.`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// classifyOperatorFeeLine — fee-line parity for the /process-return path.
+//
+// The redesigned CM create page lets the operator post free-form lines, so
+// shipping/restocking deductions arrive as negative lines referencing the
+// configured fee items rather than through the shippingDeduction /
+// restockingFee inputs above. Classify such a line by matching its item id
+// against the configured fee item ids; when it matches, run the same
+// assertFeeItemConfigured guard the builder path uses so both paths reject
+// fee lines against a missing/blank configuration. Returns null for ordinary
+// (non-fee) lines, including negative adjustments on unrelated items.
+//
+// quantity/unitPrice are the route's string-typed body fields (mirrors the
+// processReturnBodySchema line shape).
+// ---------------------------------------------------------------------------
+export function classifyOperatorFeeLine(
+  line: { qbItemId: string; quantity: string; unitPrice: string },
+  settings: {
+    rma_shipping_fee_item_id: string;
+    rma_restocking_fee_item_id: string;
+  },
+): "shipping" | "restocking" | null {
+  const unitPrice = parseFloat(line.unitPrice);
+  const amount = parseFloat(line.quantity) * unitPrice;
+  const isNegative = unitPrice < 0 || amount < 0;
+  if (!isNegative) return null;
+
+  if (line.qbItemId === settings.rma_shipping_fee_item_id) {
+    assertFeeItemConfigured("shipping", settings.rma_shipping_fee_item_id);
+    return "shipping";
+  }
+  if (line.qbItemId === settings.rma_restocking_fee_item_id) {
+    assertFeeItemConfigured("restocking", settings.rma_restocking_fee_item_id);
+    return "restocking";
+  }
+  return null;
 }
 
 export async function buildAndPushCreditMemo(
