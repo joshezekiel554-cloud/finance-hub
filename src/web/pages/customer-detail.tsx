@@ -69,6 +69,7 @@ import InvoiceSendDialog, {
 import InvoiceReminderDialog, {
   type InvoiceReminderSuccess,
 } from "../components/invoice-reminder-dialog";
+import { buildBookkeeperCompose } from "../lib/bookkeeper-compose";
 import { cn } from "../lib/cn";
 
 const customerDetailRouteApi = getRouteApi("/customers/$customerId");
@@ -916,20 +917,15 @@ export default function CustomerDetailPage() {
                   });
                 }}
                 onEmailBookkeeper={(inv) => {
-                  const amount = Number(inv.balance).toFixed(2);
-                  const docLabel = inv.docNumber ?? inv.qbId;
-                  const subject = `Payment check: invoice ${docLabel} (${customer.displayName})`;
-                  const bodyHtml = [
-                    `<p>Hi,</p>`,
-                    `<p>${escapeComposeHtml(customer.displayName)} says they have already paid invoice <strong>${escapeComposeHtml(docLabel)}</strong> (open balance $${amount}).</p>`,
-                    `<p>Could you confirm whether this was settled with Torah Judaica? If it was paid to TJ, let me know and we will void it on our side. If not, we will resume chasing it.</p>`,
-                    `<p>Thanks.</p>`,
-                  ].join("");
                   setComposeContext({
                     customerId: customer.id,
                     customerName: customer.displayName,
                     customerEmail: tjBookkeeperEmail,
-                    prefill: { subject, bodyHtml },
+                    prefill: buildBookkeeperCompose({
+                      customerName: customer.displayName,
+                      docNumber: inv.docNumber ?? inv.qbId,
+                      balance: inv.balance,
+                    }),
                   });
                 }}
                 invStatus={invStatus}
@@ -3020,13 +3016,6 @@ function SortHeader({
       </button>
     </th>
   );
-}
-
-// Minimal HTML escape for strings injected into a compose prefill body
-// (customer name, doc number). Keeps the bookkeeper email well-formed
-// when those values contain &, <, or >.
-function escapeComposeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 // Tiny origin pill: Feldart = indigo tint, TJ = amber tint. Used in the

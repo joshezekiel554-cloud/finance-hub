@@ -32,6 +32,10 @@ const paramsSchema = z.object({
 // strings are used verbatim — gives the operator final say without
 // rebuilding the whole pipeline server-side.
 const sendBodySchema = z.object({
+  // Which book the statement covers. Optional for now (omitted = blended,
+  // the legacy behaviour); the statements task of origin-split-2 Wave 1
+  // flips it to required once every caller passes it.
+  origin: z.enum(["feldart", "tj"]).optional(),
   subject: z.string().min(1).max(998).optional(),
   body: z.string().min(1).max(200_000).optional(),
   to: z.string().max(2000).optional(),
@@ -56,12 +60,13 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid body", details: bodyParse.error.flatten() });
     }
     const { id: customerId } = parse.data;
-    const { userSignatureId, ...overrides } = bodyParse.data;
+    const { userSignatureId, origin, ...overrides } = bodyParse.data;
 
     try {
       const result = await sendStatement({
         customerId,
         userId: user.id,
+        origin,
         overrides:
           Object.values(overrides).some((v) => v !== undefined)
             ? overrides

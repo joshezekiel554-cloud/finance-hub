@@ -309,10 +309,9 @@ export default function ChasePage() {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          // Feldart-scoped (this section is the Feldart queue). The route's
-          // body schema gains a required `origin` in the statements task of
-          // this wave — until then unknown keys are stripped server-side,
-          // so passing it now is forward-compatible.
+          // Feldart-scoped (this section is the Feldart queue). The route
+          // threads `origin` into sendStatement; the statements task of
+          // this wave flips it to required.
           body: JSON.stringify({ origin: "feldart" }),
         },
       );

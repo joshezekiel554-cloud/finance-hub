@@ -41,6 +41,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
+import { buildBookkeeperCompose } from "../../lib/bookkeeper-compose";
 import { cn } from "../../lib/cn";
 import { AgingBar } from "./aging-bar";
 import { BookSectionHeader, KpiChip } from "./book-section-header";
@@ -114,15 +115,6 @@ function formatBaselineDate(iso: string): string {
     day: "numeric",
     timeZone: "UTC",
   });
-}
-
-// Minimal HTML escape for the bookkeeper compose prefill (mirrors the
-// helper on customer-detail).
-function escapeComposeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 export default function TjWinddownPanel() {
@@ -244,26 +236,24 @@ export default function TjWinddownPanel() {
     // Customer detail may be open in another tab; keep its invoice list in
     // step the same way the chase page does after sends.
     void queryClient.invalidateQueries({ queryKey: ["customer-invoices"] });
+    // Dispute resolutions move overdue figures — keep the dashboard chase
+    // widget fresh too.
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", "chase"] });
   }
 
   function openBookkeeperCompose(
     customer: WinddownCustomer,
     inv: WinddownInvoice,
   ) {
-    const amount = inv.balance.toFixed(2);
-    const docLabel = inv.docNumber ?? inv.id;
-    const subject = `Payment check: invoice ${docLabel} (${customer.customerName})`;
-    const bodyHtml = [
-      `<p>Hi,</p>`,
-      `<p>${escapeComposeHtml(customer.customerName)} says they have already paid invoice <strong>${escapeComposeHtml(docLabel)}</strong> (open balance $${amount}).</p>`,
-      `<p>Could you confirm whether this was settled with Torah Judaica? If it was paid to TJ, let me know and we will void it on our side. If not, we will resume chasing it.</p>`,
-      `<p>Thanks.</p>`,
-    ].join("");
     setComposeContext({
       customerId: customer.customerId,
       customerName: customer.customerName,
       customerEmail: tjBookkeeperEmail,
-      prefill: { subject, bodyHtml },
+      prefill: buildBookkeeperCompose({
+        customerName: customer.customerName,
+        docNumber: inv.docNumber ?? inv.id,
+        balance: inv.balance,
+      }),
     });
   }
 
