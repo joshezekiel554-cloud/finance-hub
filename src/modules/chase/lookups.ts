@@ -27,7 +27,9 @@ import type { OverdueCustomer, Severity } from "./types.js";
 
 // Exclude TJ invoices parked for bookkeeper verification from every
 // chase/digest candidate query (feldart invoices never carry a dispute_state).
-const notVerifyingSql = sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;
+// Exported for blended callers outside this module (dashboard chase-queue
+// widget) so they apply the same exclusion.
+export const notVerifyingSql = sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;
 
 export async function getOverdueCustomers(
   origin?: InvoiceOrigin,
@@ -236,7 +238,9 @@ function originSeverity(
   });
 }
 
-async function loadOriginCreditByCustomer(
+// Unapplied credit-memo balance per customer for ONE origin. Exported for
+// blended callers outside this module (dashboard chase-queue widget).
+export async function loadOriginCreditByCustomer(
   origin: InvoiceOrigin,
   ids: string[],
 ): Promise<Map<string, number>> {
