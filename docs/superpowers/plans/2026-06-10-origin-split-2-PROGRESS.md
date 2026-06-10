@@ -20,5 +20,6 @@ Context notes (survive compact):
 - [x] W1 T7 verify + wave review — gates green (719/719, tsc, build); Playwright pass on all 4 surfaces + pure-Feldart/both-books cases, 0 console errors; Opus wave review: SHIP (cosmetic 'both' residue in chase dialog type → W2 cleanup item). MERGE/DEPLOY next.
 - [x] W2 plan written — `192cce9`
 - [x] W2 T1 migration 0044 + schema — `c5811be` (spec+quality ✅; note for T3: warn-log unwired finders)
-- [ ] W2 execution (proposer/nudge/AI card/digest)
+- [x] W2 T2 bookkeeper thread linkage — `ea1f5d3` (spec+quality ✅, guard-before-send verified). Suite 725/725.
+- [ ] W2 execution remaining (T3 proposers, T4 autopilot UI, T5 AI card, T6 digest+cleanups)
 - [ ] W2 verify + review + MERGE/PUSH/DEPLOY
