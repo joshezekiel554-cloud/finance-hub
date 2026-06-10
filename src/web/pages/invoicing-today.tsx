@@ -1081,6 +1081,13 @@ function ShipmentCard({
           // Only send the override when it differs from today; server
           // defaults to today in America/New_York when omitted.
           txnDate: txnDate !== todayNY ? txnDate : undefined,
+          // Parse-gap verify gate — the server re-derives the flagged
+          // removals from `actions` and the unreadable rows by re-parsing
+          // the source email (gmailId), then checks them against these.
+          // Mirrors the UI gate, so a send the UI allows always passes.
+          gmailId: row.gmailId,
+          verifiedRemoveLineIds: Array.from(verifiedLineIds),
+          unreadAck,
         }),
       });
       const body = await res.json().catch(() => ({}));
