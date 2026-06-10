@@ -54,6 +54,7 @@ import { appendSignatures } from "../../modules/email-compose/signatures.js";
 import { recordActivity } from "../../modules/crm/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
+import { getTjWinddown } from "../../modules/chase/winddown.js";
 import { users } from "../../db/schema/auth.js";
 
 const log = createLogger({ component: "routes.chase" });
@@ -507,6 +508,17 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     );
 
     return reply.send({ results });
+  });
+
+  // GET /api/chase/tj-winddown — the whole Torah Judaica wind-down picture
+  // in one read: net exposure, delta vs ~1 month ago (from the self-populating
+  // tj_exposure_snapshots table — this call upserts today's row), aging
+  // buckets, verifying count, and per-customer rows with embedded per-invoice
+  // dispute data so the /chase TJ panel expands without a second fetch.
+  app.get("/tj-winddown", async (req, reply) => {
+    await requireAuth(req);
+    const result = await getTjWinddown();
+    return reply.send(result);
   });
 
   // GET /api/chase/preview-chase-email?customerId=...&level=...&invoiceIds=...
