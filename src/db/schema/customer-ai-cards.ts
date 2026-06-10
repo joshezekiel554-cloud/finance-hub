@@ -17,6 +17,11 @@ export const customerAiCards = mysqlTable("customer_ai_cards", {
     .primaryKey()
     .references(() => customers.id, { onDelete: "cascade" }),
   summary: text("summary").notNull(),
+  // Per-book summaries, populated only when the customer has BOTH books
+  // (Feldart + Torah Judaica). Single-book customers keep using `summary`
+  // alone; `summary` remains the blended/single-book fallback either way.
+  summaryFeldart: text("summary_feldart"),
+  summaryTj: text("summary_tj"),
   actions: json("actions").$type<CardAction[]>().notNull(),
   generatedAt: timestamp("generated_at").defaultNow().notNull(),
   modelUsed: varchar("model_used", { length: 64 }),

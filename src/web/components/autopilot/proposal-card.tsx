@@ -42,8 +42,16 @@ const SNOOZE_OPTIONS = [
   { label: "1 month", hours: 24 * 30 },
 ];
 
-function categoryLabel(c: string): string {
-  return c.replace(/_/g, " ");
+// Explicit labels where the underscore→space fallback reads badly.
+// Both tj_* categories ARE draft categories (they produce email drafts),
+// so they are deliberately absent from NO_DRAFT_CATEGORIES above.
+const CATEGORY_LABELS: Record<string, string> = {
+  tj_chase: "TJ chase",
+  tj_dispute_nudge: "Dispute nudge",
+};
+
+export function categoryLabel(c: string): string {
+  return CATEGORY_LABELS[c] ?? c.replace(/_/g, " ");
 }
 
 function summaryLine(summary: Record<string, unknown>): string {

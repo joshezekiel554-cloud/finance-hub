@@ -69,12 +69,16 @@ const log = createLogger({ module: "routes.autopilot" });
 // Per-category prompt builders. ops-rma-stalled exports TOOL_NAMES (array)
 // since the AI may choose between two tools; for the toolSchema passed to
 // Anthropic we include both tools and let the AI pick.
-const PROMPTS: Record<
-  AiProposalCategory,
-  {
-    build: (s: Record<string, unknown>, ctx: DraftContext) => BuiltPrompt;
-    toolNames: string[];
-  }
+// Partial: tj_chase / tj_dispute_nudge prompts land in a later task — the
+// draft loop already skips categories with no prompt registered.
+const PROMPTS: Partial<
+  Record<
+    AiProposalCategory,
+    {
+      build: (s: Record<string, unknown>, ctx: DraftContext) => BuiltPrompt;
+      toolNames: string[];
+    }
+  >
 > = {
   chase_next: { build: buildChaseNextPrompt, toolNames: [CHASE_NEXT_TOOL] },
   cadence_statement: {
@@ -89,9 +93,10 @@ const PROMPTS: Record<
   ops_cron_fail: { build: buildOpsCronFailPrompt, toolNames: [OPS_CRON_FAIL_TOOL] },
 };
 
-const STILL_ELIGIBLE: Record<
-  AiProposalCategory,
-  (id: string) => Promise<boolean>
+// Partial: tj_* eligibility checks land in a later task — the approve path
+// already treats a missing entry as "no staleness check".
+const STILL_ELIGIBLE: Partial<
+  Record<AiProposalCategory, (id: string) => Promise<boolean>>
 > = {
   chase_next: isStillEligibleChase,
   cadence_statement: isStillEligibleStatement,

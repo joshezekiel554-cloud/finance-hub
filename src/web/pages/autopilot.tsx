@@ -5,6 +5,7 @@ import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import {
   ProposalCard,
+  categoryLabel,
   type Proposal,
 } from "../components/autopilot/proposal-card";
 import ComposeModal, {
@@ -316,7 +317,7 @@ export default function AutopilotPage() {
                     <h2 className="text-sm font-medium">{customerName}</h2>
                     <p className="text-xs text-muted">
                       {props
-                        .map((p) => p.category.replace(/_/g, " "))
+                        .map((p) => categoryLabel(p.category))
                         .join(" · ")}
                     </p>
                   </div>

@@ -29,7 +29,12 @@ type Candidate = {
   summary: Record<string, unknown>;
 };
 
-const FINDERS: Record<AiProposalCategory, () => Promise<Candidate[]>> = {
+// Partial: tj_chase / tj_dispute_nudge are registered categories but their
+// finders land in a later task — the scan loop skips categories with no
+// finder wired yet.
+const FINDERS: Partial<
+  Record<AiProposalCategory, () => Promise<Candidate[]>>
+> = {
   chase_next: chaseNext as () => Promise<Candidate[]>,
   cadence_statement: cadenceStatement as () => Promise<Candidate[]>,
   cadence_cold: cadenceCold as () => Promise<Candidate[]>,
@@ -55,9 +60,11 @@ export async function runScan(
   let proposalsGenerated = 0;
 
   for (const category of AI_PROPOSAL_CATEGORIES) {
+    const finder = FINDERS[category];
+    if (!finder) continue; // category registered but finder not wired yet
     let candidates: Candidate[] = [];
     try {
-      candidates = await FINDERS[category]();
+      candidates = await finder();
     } catch (err) {
       log.error({ err, category }, "candidate finder failed");
       continue;
