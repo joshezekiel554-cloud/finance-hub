@@ -11,7 +11,7 @@ Context notes (survive compact):
 ## Status log
 - [x] Spec written, operator-approved, committed (`818042b` post-rebase)
 - [x] Recon (2 thorough agents) — anchors embedded in W1 plan
-- [ ] W1 T1 winddown backend + 0043
+- [x] W1 T1 winddown backend + 0043 — `006e7ec` + polish `b6500b0` (spec ✅, quality ✅; baselineDate + 15-min upsert throttle added). winddown 18 tests, chase suite 57/57. Migration `0043_omniscient_sauron` applied locally.
 - [ ] W1 T2 chase two sections
 - [ ] W1 T3 customers list strip
 - [ ] W1 T4 customer-detail panels
