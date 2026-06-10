@@ -137,7 +137,9 @@ export async function findCandidates(
         daysSilent,
         lastThreadEmailAt,
         // The drafted email goes to the TJ bookkeeper, NOT the customer —
-        // surfaced here so the queue UI + drafting prompt make that plain.
+        // surfaced here so the drafting prompt makes that plain. Nothing in
+        // the /autopilot queue UI renders this yet; W2 T4 (per-book proposal
+        // sections) consumes it for the recipient chip.
         recipient: "bookkeeper",
         bookkeeperEmail: contact.email,
         bookkeeperName: contact.name,

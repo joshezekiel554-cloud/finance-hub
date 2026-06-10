@@ -31,7 +31,13 @@ export type ToolContext = {
   proposalId: string;
 };
 
-export type ToolResult = { ok: true } | { ok: false; error: string };
+// `note` flags a degraded success: the side effect the operator cares about
+// (the email) went out, but a post-send bookkeeping write failed and was only
+// logged. The proposal still shows executed — see the at-most-once comments
+// in the email tools below.
+export type ToolResult =
+  | { ok: true; note?: string }
+  | { ok: false; error: string };
 
 export type Tool<A = unknown> = {
   name: string;
@@ -89,45 +95,75 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
         html: finalHtml,
         alias: aliasEmail,
       });
-      // Insert email_log row with ai_proposal_id linkage.
-      // (sendEmail itself doesn't write to email_log — that's done by the
-      // gmail poller's outbound classification. We pre-write here so the
-      // AI provenance badge lights up immediately on the customer page.)
+      // ── Post-send bookkeeping: NEVER fatal past this point. ───────────
+      // The execute queue retries failed jobs (attempts: 3 in queues.ts),
+      // so returning ok:false after the email has left Gmail would re-send
+      // the chase — a duplicate dunning email is unrecoverable, while a
+      // missed bookkeeping row is recoverable from the error log. At-most-
+      // once send beats at-least-once bookkeeping: once we hold a
+      // messageId, write failures are logged + surfaced via `note`, and
+      // the tool still reports success.
       const sentAt = new Date();
-      await db.insert(emailLog).values({
-        id: nanoid(24),
-        gmailMessageId: result.messageId,
-        threadId: result.threadId || null,
-        customerId: customer.id,
-        userId: ctx.userId,
-        direction: "outbound",
-        aliasUsed: aliasEmail,
-        fromAddress: aliasEmail,
-        toAddress: customer.primaryEmail,
-        subject: args.subject,
-        snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
-        emailDate: sentAt,
-        aiProposalId: ctx.proposalId,
-      });
-      await autoActionPriorInbounds({
-        customerId: customer.id,
-        threadId: result.threadId || null,
-        sentAt,
-      });
-      // chase_log row — drives the 7-day-no-chase dedup in chase-next
-      // candidate finder.
-      await db.insert(chaseLog).values({
-        id: nanoid(24),
-        customerId: customer.id,
-        userId: ctx.userId,
-        method: "email",
-        severity: tierToChaseSeverity[args.tier],
-        aiProposalId: ctx.proposalId,
-        notes:
-          args.origin === "tj"
-            ? `Autopilot TJ chase ${args.tier}`
-            : `Autopilot chase ${args.tier}`,
-      });
+      let stage = "email_log insert";
+      try {
+        // email_log row with ai_proposal_id linkage. (sendEmail itself
+        // doesn't write to email_log — the gmail poller's outbound
+        // classification does, later. We pre-write so the AI provenance
+        // badge lights up immediately on the customer page.)
+        await db.insert(emailLog).values({
+          id: nanoid(24),
+          gmailMessageId: result.messageId,
+          threadId: result.threadId || null,
+          customerId: customer.id,
+          userId: ctx.userId,
+          direction: "outbound",
+          aliasUsed: aliasEmail,
+          fromAddress: aliasEmail,
+          toAddress: customer.primaryEmail,
+          subject: args.subject,
+          snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
+          emailDate: sentAt,
+          aiProposalId: ctx.proposalId,
+        });
+        stage = "auto-action prior inbounds";
+        await autoActionPriorInbounds({
+          customerId: customer.id,
+          threadId: result.threadId || null,
+          sentAt,
+        });
+        // chase_log row — drives the 7-day-no-chase dedup in the chase
+        // candidate finders. If THIS write is the one that failed, the
+        // cooldown is lost and the customer may be re-proposed inside the
+        // window — visible in the queue and far cheaper than a duplicate.
+        stage = "chase_log insert";
+        await db.insert(chaseLog).values({
+          id: nanoid(24),
+          customerId: customer.id,
+          userId: ctx.userId,
+          method: "email",
+          severity: tierToChaseSeverity[args.tier],
+          aiProposalId: ctx.proposalId,
+          notes:
+            args.origin === "tj"
+              ? `Autopilot TJ chase ${args.tier}`
+              : `Autopilot chase ${args.tier}`,
+        });
+      } catch (err) {
+        log.error(
+          {
+            err,
+            proposalId: ctx.proposalId,
+            messageId: result.messageId,
+            customerId: customer.id,
+            failedWrite: stage,
+          },
+          "send_chase_email: email sent but post-send bookkeeping failed",
+        );
+        return {
+          ok: true,
+          note: `email sent (messageId ${result.messageId}) but post-send bookkeeping failed at: ${stage} — see error log`,
+        };
+      }
       return { ok: true };
     } catch (err) {
       log.error({ err, proposalId: ctx.proposalId }, "send_chase_email failed");
@@ -332,59 +368,85 @@ const sendBookkeeperEmailTool: Tool<z.infer<typeof SendBookkeeperEmailArgs>> = {
         inReplyTo,
       });
 
-      // Pre-write the email_log row (the gmail poller would also pick it up
-      // later). Besides lighting up the AI provenance badge, this row is
-      // what resets the dispute-nudge silence clock immediately — the
-      // candidate finder reads latest email_log per bookkeeper thread.
+      // ── Post-send bookkeeping: NEVER fatal past this point. ───────────
+      // Same at-most-once tradeoff as send_chase_email: the execute queue
+      // retries failed jobs, so a throw after the email left Gmail would
+      // re-send the bookkeeper nudge. A missed email_log row (silence
+      // clock) or thread link is recoverable from the error log; a
+      // duplicate email is not. Once we hold a messageId, write failures
+      // are logged + surfaced via `note`, and the tool reports success.
       const sentAt = new Date();
-      await db.insert(emailLog).values({
-        id: nanoid(24),
-        gmailMessageId: result.messageId,
-        threadId: result.threadId || null,
-        customerId: invoice.customerId,
-        userId: ctx.userId,
-        direction: "outbound",
-        aliasUsed: aliasEmail,
-        fromAddress: aliasEmail,
-        toAddress: bookkeeperEmail,
-        subject: args.subject,
-        snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
-        emailDate: sentAt,
-        aiProposalId: ctx.proposalId,
-      });
+      let stage = "email_log insert";
+      try {
+        // Pre-write the email_log row (the gmail poller would also pick it
+        // up later). Besides lighting up the AI provenance badge, this row
+        // is what resets the dispute-nudge silence clock immediately — the
+        // candidate finder reads latest email_log per bookkeeper thread.
+        await db.insert(emailLog).values({
+          id: nanoid(24),
+          gmailMessageId: result.messageId,
+          threadId: result.threadId || null,
+          customerId: invoice.customerId,
+          userId: ctx.userId,
+          direction: "outbound",
+          aliasUsed: aliasEmail,
+          fromAddress: aliasEmail,
+          toAddress: bookkeeperEmail,
+          subject: args.subject,
+          snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
+          emailDate: sentAt,
+          aiProposalId: ctx.proposalId,
+        });
 
-      // First bookkeeper email on this dispute → link the thread onto the
-      // invoice (same mechanism + audit action as the dispute compose flow).
-      if (!invoice.bookkeeperThreadId) {
-        if (result.threadId) {
-          await linkBookkeeperThread(
-            {
-              updateThreadId: async (invoiceId, newThreadId) => {
-                await db
-                  .update(invoices)
-                  .set({ bookkeeperThreadId: newThreadId })
-                  .where(eq(invoices.id, invoiceId));
+        // First bookkeeper email on this dispute → link the thread onto the
+        // invoice (same mechanism + audit action as the dispute compose flow).
+        if (!invoice.bookkeeperThreadId) {
+          if (result.threadId) {
+            stage = "bookkeeper thread link";
+            await linkBookkeeperThread(
+              {
+                updateThreadId: async (invoiceId, newThreadId) => {
+                  await db
+                    .update(invoices)
+                    .set({ bookkeeperThreadId: newThreadId })
+                    .where(eq(invoices.id, invoiceId));
+                },
+                insertAudit: async (row) => {
+                  await db.insert(auditLog).values(row);
+                },
               },
-              insertAudit: async (row) => {
-                await db.insert(auditLog).values(row);
+              {
+                invoice: {
+                  id: invoice.id,
+                  origin: invoice.origin,
+                  bookkeeperThreadId: invoice.bookkeeperThreadId,
+                },
+                threadId: result.threadId,
+                userId: ctx.userId,
               },
-            },
-            {
-              invoice: {
-                id: invoice.id,
-                origin: invoice.origin,
-                bookkeeperThreadId: invoice.bookkeeperThreadId,
-              },
-              threadId: result.threadId,
-              userId: ctx.userId,
-            },
-          );
-        } else {
-          log.warn(
-            { invoiceId: invoice.id, messageId: result.messageId },
-            "gmail send returned no threadId; bookkeeper thread not linked",
-          );
+            );
+          } else {
+            log.warn(
+              { invoiceId: invoice.id, messageId: result.messageId },
+              "gmail send returned no threadId; bookkeeper thread not linked",
+            );
+          }
         }
+      } catch (err) {
+        log.error(
+          {
+            err,
+            proposalId: ctx.proposalId,
+            messageId: result.messageId,
+            invoiceId: invoice.id,
+            failedWrite: stage,
+          },
+          "send_bookkeeper_email: email sent but post-send bookkeeping failed",
+        );
+        return {
+          ok: true,
+          note: `email sent (messageId ${result.messageId}) but post-send bookkeeping failed at: ${stage} — see error log`,
+        };
       }
 
       return { ok: true };
