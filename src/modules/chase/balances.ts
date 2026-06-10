@@ -20,6 +20,11 @@ export function computeOriginBalances(
   invoices: OriginBalanceInput[],
   credit: { feldart: number; tj: number },
   now: Date = new Date(),
+  // Cutoff for the overdue comparison (due < cutoff). Defaults to `now`
+  // (display/statement callers: an invoice due earlier today counts as
+  // overdue). Severity callers pass startOfDayUtc(now) so the filter agrees
+  // with chase scoring, which treats due-today as NOT overdue.
+  overdueCutoff: Date = now,
 ): OriginBalances {
   const gross: OriginBalances = {
     feldart: { balance: 0, overdue: 0 },
@@ -31,7 +36,7 @@ export function computeOriginBalances(
     if (!Number.isFinite(bal) || bal <= 0) continue;
     const bucket = gross[inv.origin];
     bucket.balance += bal;
-    if (isOverdue(inv.dueDate, now)) bucket.overdue += bal;
+    if (isOverdue(inv.dueDate, overdueCutoff)) bucket.overdue += bal;
   }
 
   return {
@@ -40,11 +45,11 @@ export function computeOriginBalances(
   };
 }
 
-function isOverdue(dueDate: Date | string | null, now: Date): boolean {
+function isOverdue(dueDate: Date | string | null, cutoff: Date): boolean {
   if (dueDate == null) return false;
   const due = dueDate instanceof Date ? dueDate : new Date(dueDate);
   if (Number.isNaN(due.getTime())) return false;
-  return due.getTime() < now.getTime();
+  return due.getTime() < cutoff.getTime();
 }
 
 function net(gross: OriginBalance, credit: number): OriginBalance {

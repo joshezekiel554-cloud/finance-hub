@@ -374,6 +374,32 @@ describe("blendedSeverity", () => {
     expect(sev.totalOverdue).toBe(15000);
   });
 
+  it("treats an invoice due exactly today as NOT overdue (boundary aligned with scoring)", () => {
+    // scoring.ts counts overdue with due < startOfDayUtc(today), so a
+    // due-today invoice contributes daysOverdue = 0. The blended override
+    // must use the same cutoff — otherwise totalOverdue > 0 pairs with
+    // daysOverdue = 0 ⇒ score 0 with a positive amount shown.
+    const customer = makeCustomer({ overdueBalance: "0.00" });
+    const invoices = [
+      makeInvoice({
+        id: "f1",
+        origin: "feldart",
+        balance: "500.00",
+        dueDate: daysAgo(10),
+      }),
+      makeInvoice({
+        id: "t1",
+        origin: "tj",
+        balance: "15000.00",
+        dueDate: daysAgo(0), // due today (UTC midnight)
+      }),
+    ];
+
+    const sev = blendedSeverity(customer, invoices, { feldart: 0, tj: 0 });
+    expect(sev.totalOverdue).toBe(500);
+    expect(sev.daysOverdue).toBe(10);
+  });
+
   it("excludes not-yet-due invoices from the blended overdue figure", () => {
     const future = new Date();
     future.setUTCHours(0, 0, 0, 0);

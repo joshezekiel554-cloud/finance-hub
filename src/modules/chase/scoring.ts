@@ -134,7 +134,10 @@ function toDate(v: string | Date): Date {
   return new Date(v);
 }
 
-function startOfDayUtc(d: Date): Date {
+// Exported so severity callers (lookups.ts) can pass the same day-boundary
+// cutoff to computeOriginBalances — keeps "due exactly today" consistently
+// NOT overdue across both filters.
+export function startOfDayUtc(d: Date): Date {
   return new Date(
     Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
   );

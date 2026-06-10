@@ -22,7 +22,7 @@ import { customers, type Customer } from "../../db/schema/customers.js";
 import { invoices, type Invoice } from "../../db/schema/invoices.js";
 import type { InvoiceOrigin } from "../invoicing/origin.js";
 import { computeOriginBalances } from "./balances.js";
-import { computeSeverity } from "./scoring.js";
+import { computeSeverity, startOfDayUtc } from "./scoring.js";
 import type { OverdueCustomer, Severity } from "./types.js";
 
 // Exclude TJ invoices parked for bookkeeper verification from every
@@ -43,8 +43,9 @@ export async function getOverdueCustomers(
 // is cheap but can be stale, so we OR it with an EXISTS over open, past-due,
 // non-verifying invoices — a customer whose denormalized figure lags at 0 but
 // who has real overdue invoices still enters the candidate set. Severity itself
-// is always recomputed from the loaded invoices.
-const hasOpenOverdueInvoiceSql = sql`EXISTS (
+// is always recomputed from the loaded invoices. Exported so the dashboard
+// chase-queue widget can apply the same candidate condition.
+export const hasOpenOverdueInvoiceSql = sql`EXISTS (
   SELECT 1 FROM ${invoices}
   WHERE ${invoices.customerId} = ${customers.id}
     AND ${invoices.balance} > 0
@@ -201,6 +202,9 @@ export function blendedSeverity(
   customerInvoices: Invoice[],
   credit: { feldart: number; tj: number },
 ): Severity {
+  // Cutoff at UTC start-of-day so the overdue filter matches scoring.ts
+  // (due exactly today is NOT overdue in either figure).
+  const now = new Date();
   const balances = computeOriginBalances(
     customerInvoices.map((i) => ({
       origin: i.origin,
@@ -208,6 +212,8 @@ export function blendedSeverity(
       dueDate: i.dueDate,
     })),
     credit,
+    now,
+    startOfDayUtc(now),
   );
   return computeSeverity(customer, customerInvoices, {
     rawOverdueOverride: balances.feldart.overdue + balances.tj.overdue,
@@ -224,6 +230,8 @@ function originSeverity(
   origin: InvoiceOrigin,
   credit: number,
 ) {
+  // Same day-boundary cutoff as blendedSeverity — see comment there.
+  const now = new Date();
   const balances = computeOriginBalances(
     customerInvoices.map((i) => ({
       origin,
@@ -231,6 +239,8 @@ function originSeverity(
       dueDate: i.dueDate,
     })),
     { feldart: origin === "feldart" ? credit : 0, tj: origin === "tj" ? credit : 0 },
+    now,
+    startOfDayUtc(now),
   );
   return computeSeverity(customer, customerInvoices, {
     rawOverdueOverride: balances[origin].overdue,
