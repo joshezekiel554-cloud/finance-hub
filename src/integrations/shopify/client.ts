@@ -51,6 +51,15 @@ export class ShopifyApiError extends Error {
 
 const DEFAULT_RETRY_AFTER_MS = 2000;
 
+// Envelope shape of an Admin GraphQL response. `errors` are top-level
+// transport/validation errors (bad query, access denied, throttled);
+// mutation-specific userErrors live inside `data` and are the caller's
+// responsibility to inspect.
+type GraphQLEnvelope<T> = {
+  data?: T;
+  errors?: Array<{ message: string }>;
+};
+
 export class ShopifyClient {
   private readonly cfg: Required<Omit<ShopifyClientConfig, "fetchImpl" | "sleep">> &
     Pick<ShopifyClientConfig, "fetchImpl" | "sleep">;
@@ -128,6 +137,53 @@ export class ShopifyClient {
       throw new ShopifyApiError(res.status, path, `non-JSON body: ${text.slice(0, 200)}`);
     }
     return { data, res };
+  }
+
+  // Admin GraphQL POST. Same base path + version as the REST surface —
+  // /admin/api/<version>/graphql.json — and the same auth/429-retry
+  // behavior via request(). Throws ShopifyApiError on non-2xx, a
+  // non-JSON body, top-level GraphQL `errors` (e.g. access denied for a
+  // missing scope arrives as HTTP 200 + errors), or a missing `data`
+  // key. Mutation userErrors are returned inside T for the caller to
+  // inspect.
+  async graphql<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+  ): Promise<T> {
+    const path = "/graphql.json";
+    const res = await this.request(path, {
+      method: "POST",
+      body: JSON.stringify({ query, variables }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new ShopifyApiError(res.status, path, text);
+    }
+    let envelope: GraphQLEnvelope<T>;
+    try {
+      envelope = JSON.parse(text) as GraphQLEnvelope<T>;
+    } catch {
+      throw new ShopifyApiError(
+        res.status,
+        path,
+        `non-JSON body: ${text.slice(0, 200)}`,
+      );
+    }
+    if (envelope.errors && envelope.errors.length > 0) {
+      throw new ShopifyApiError(
+        res.status,
+        path,
+        `GraphQL errors: ${envelope.errors.map((e) => e.message).join("; ")}`,
+      );
+    }
+    if (envelope.data === undefined) {
+      throw new ShopifyApiError(
+        res.status,
+        path,
+        `GraphQL response missing data: ${text.slice(0, 200)}`,
+      );
+    }
+    return envelope.data;
   }
 
   // Paginated GET. Pulls up to `pageSize` per call; caller drives pagination
