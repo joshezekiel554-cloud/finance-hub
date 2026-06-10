@@ -1125,6 +1125,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           feldartOpenCount: sql<number>`(
             SELECT COUNT(*) FROM ${invoices}
             WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0 AND ${invoices.origin} = 'feldart')`,
+          // Age (days) of the oldest overdue open Feldart invoice — the
+          // header pill's "· oldest Nd" segment. NULL when nothing is
+          // past due.
+          feldartOldestDays: sql<number | null>`(
+            SELECT DATEDIFF(CURRENT_DATE, MIN(${invoices.dueDate})) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0
+              AND ${invoices.origin} = 'feldart'
+              AND ${invoices.dueDate} IS NOT NULL AND ${invoices.dueDate} < CURRENT_DATE)`,
           tjBalance: sql<string>`GREATEST(0,
             (SELECT COALESCE(SUM(${invoices.balance}),0) FROM ${invoices}
               WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0 AND ${invoices.origin} = 'tj')
@@ -1181,6 +1189,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           feldartBalance: Number(kpi.feldartBalance ?? 0).toFixed(2),
           feldartOverdue: Number(kpi.feldartOverdue ?? 0).toFixed(2),
           feldartOpenCount: Number(kpi.feldartOpenCount ?? 0),
+          feldartOldestDays:
+            kpi.feldartOldestDays == null
+              ? null
+              : Number(kpi.feldartOldestDays),
           tjBalance: Number(kpi.tjBalance ?? 0).toFixed(2),
           tjOverdue: Number(kpi.tjOverdue ?? 0).toFixed(2),
           tjOpenCount: Number(kpi.tjOpenCount ?? 0),

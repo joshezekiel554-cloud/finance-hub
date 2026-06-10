@@ -126,6 +126,9 @@ type CustomerKpi = {
   feldartBalance: string;
   feldartOverdue: string;
   feldartOpenCount: number;
+  // Days overdue of the oldest past-due open Feldart invoice; null when
+  // nothing Feldart is overdue. Drives the header pill's "· oldest Nd".
+  feldartOldestDays: number | null;
   tjBalance: string;
   tjOverdue: string;
   tjOpenCount: number;
@@ -214,10 +217,11 @@ export default function CustomerDetailPage() {
   // Chase email dialog state. invoiceIds is undefined when chasing all
   // open invoices of `origin` (the per-book panel buttons); populated
   // when chasing a selected subset (the Invoices tab bulk-action
-  // button — operator-picked set, any book, so origin stays 'both').
+  // button — single-book selections only; mixed-book selections are
+  // blocked panel-side so one chase email never blends books).
   const [chaseDialog, setChaseDialog] = useState<{
     invoiceIds?: string[];
-    origin: "feldart" | "tj" | "both";
+    origin: "feldart" | "tj";
   } | null>(null);
   const [chaseSuccess, setChaseSuccess] = useState<{
     level: 1 | 2 | 3;
@@ -421,7 +425,7 @@ export default function CustomerDetailPage() {
   // fields stay server-side for sync bookkeeping but are never rendered
   // (origin-split-2 spec §5).
   const feldartBalance = Number(kpi?.feldartBalance ?? "0");
-  const feldartOverdue = Number(kpi?.feldartOverdue ?? "0");
+  const feldartOldestDays = kpi?.feldartOldestDays ?? null;
   const tjBalance = Number(kpi?.tjBalance ?? "0");
   const tjOverdue = Number(kpi?.tjOverdue ?? "0");
   const tjVerifyingCount = kpi?.tjVerifyingCount ?? 0;
@@ -585,10 +589,13 @@ export default function CustomerDetailPage() {
               title="Open Feldart balance, net of Feldart credits"
             >
               Feldart owes ${feldartBalance.toFixed(2)}
-              {feldartOverdue > 0 ? (
-                <span className="font-normal opacity-80">
+              {feldartOldestDays != null ? (
+                <span
+                  className="font-normal opacity-80"
+                  title={`Oldest overdue Feldart invoice is ${feldartOldestDays} day${feldartOldestDays === 1 ? "" : "s"} past due`}
+                >
                   {" "}
-                  · ${feldartOverdue.toFixed(2)} overdue
+                  · oldest {feldartOldestDays}d
                 </span>
               ) : null}
             </HeaderBookPill>
@@ -800,9 +807,9 @@ export default function CustomerDetailPage() {
           }}
           customerId={customer.id}
           customerName={customer.displayName}
-          // Panel buttons pass their book ('feldart'/'tj' → that book's
-          // open invoices + templates); the bulk-selection action passes
-          // 'both' because the operator picked the exact set.
+          // Always a single book — panel buttons pass theirs; the
+          // bulk-selection action derives the selection's (single)
+          // book, so the dialog gets the right templates either way.
           origin={chaseDialog.origin}
           level={1}
           invoiceIds={chaseDialog.invoiceIds}
@@ -817,9 +824,7 @@ export default function CustomerDetailPage() {
               chaseDialog.invoiceIds?.length ??
               (chaseDialog.origin === "feldart"
                 ? kpi?.feldartOpenCount
-                : chaseDialog.origin === "tj"
-                  ? kpi?.tjOpenCount
-                  : kpi?.openInvoiceCount) ??
+                : kpi?.tjOpenCount) ??
               0;
             setChaseSuccess({ level: _result.level, invoiceCount: count });
             setChaseDialog(null);
@@ -950,8 +955,8 @@ export default function CustomerDetailPage() {
                 hasTjHistory={hasTjHistory}
                 onChase={(origin) => setChaseDialog({ origin })}
                 onStatement={(origin) => setStatementDialog({ origin })}
-                onBulkChase={(invoiceIds) =>
-                  setChaseDialog({ invoiceIds, origin: "both" })
+                onBulkChase={(invoiceIds, origin) =>
+                  setChaseDialog({ invoiceIds, origin })
                 }
                 onDisputeChanged={() => {
                   void queryClient.invalidateQueries({
@@ -2327,9 +2332,11 @@ function InvoicesPanel({
   // Operator clicked "Send chase email" with N invoices selected.
   // The parent owns the dialog state; we just hand it the ids of
   // the selected invoice rows (credit memos filtered out — chase is
-  // invoice-only). Chase tracking + invalidation is the dialog's
-  // job after send succeeds.
-  onBulkChase: (invoiceIds: string[]) => void;
+  // invoice-only) plus the selection's single book (mixed-book
+  // selections disable the button — one chase email never blends
+  // books). Chase tracking + invalidation is the dialog's job after
+  // send succeeds.
+  onBulkChase: (invoiceIds: string[], origin: "feldart" | "tj") => void;
   // A TJ dispute action succeeded — parent invalidates the invoices +
   // customer queries so balances/badges refresh.
   onDisputeChanged: () => void;
@@ -2709,20 +2716,32 @@ function InvoicesPanel({
               ) : null}
               {/* Chase only the selected INVOICES (credit memos
                   excluded — chase tracking is invoice-only and the
-                  template renders invoice rows). When zero invoices
-                  are selected (only CMs), the button is disabled. */}
+                  template renders invoice rows). Disabled when zero
+                  invoices are selected (only CMs) OR when the
+                  selection spans both books — one chase email uses
+                  one book's templates, so a mixed set would blend
+                  TJ invoices into a Feldart-toned email. */}
               {(() => {
-                const invoiceLocalIds = selectedRows
-                  .filter((r) => r.docType === "invoice" && r.id)
-                  .map((r) => r.id as string);
-                const chaseDisabled = invoiceLocalIds.length === 0;
+                const chaseableRows = selectedRows.filter(
+                  (r) => r.docType === "invoice" && r.id,
+                );
+                const invoiceLocalIds = chaseableRows.map(
+                  (r) => r.id as string,
+                );
+                const origins = new Set(chaseableRows.map((r) => r.origin));
+                const spansBothBooks = origins.size > 1;
+                const chaseDisabled =
+                  invoiceLocalIds.length === 0 || spansBothBooks;
+                const selectionOrigin: "feldart" | "tj" = origins.has("tj")
+                  ? "tj"
+                  : "feldart";
                 return (
                   <Button
                     size="sm"
                     variant="secondary"
                     onClick={() => {
                       if (chaseDisabled) return;
-                      onBulkChase(invoiceLocalIds);
+                      onBulkChase(invoiceLocalIds, selectionOrigin);
                       // Don't clear selection here — operator can
                       // cancel the dialog and re-fire. Selection
                       // clears via the explicit "clear" link or on
@@ -2730,9 +2749,11 @@ function InvoicesPanel({
                     }}
                     disabled={chaseDisabled}
                     title={
-                      chaseDisabled
-                        ? "Select at least one invoice (credit memos can't be chased)"
-                        : `Send a chase email covering the ${invoiceLocalIds.length} selected invoice${invoiceLocalIds.length === 1 ? "" : "s"} (L1 by default — switch level inside the dialog)`
+                      spansBothBooks
+                        ? "Selection spans both books — chase each book separately."
+                        : invoiceLocalIds.length === 0
+                          ? "Select at least one invoice (credit memos can't be chased)"
+                          : `Send a ${selectionOrigin === "tj" ? "TJ " : ""}chase email covering the ${invoiceLocalIds.length} selected invoice${invoiceLocalIds.length === 1 ? "" : "s"} (L1 by default — switch level inside the dialog)`
                     }
                   >
                     <Send className="size-3.5" />
