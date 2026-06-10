@@ -92,6 +92,11 @@ export type ComposeContext = {
     alias?: string;
   };
   aiProposalId?: string;
+  // When this compose is a TJ-dispute bookkeeper email (wind-down panel /
+  // customer-detail dispute buttons), the invoice under verification. The
+  // send body forwards it so the server records the resulting Gmail
+  // threadId on invoices.bookkeeper_thread_id (dispute-nudge detection).
+  disputeInvoiceId?: string;
   // When set, the compose modal renders an "AI draft" panel (notes + Generate)
   // that POSTs to /api/email-log/<id>/draft-reply. Distinct from inReplyTo:
   // inReplyTo carries the threading metadata for the outbound; this is the
@@ -392,6 +397,7 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
         attachments: encodedAttachments,
         userSignatureId,
         aiProposalId: context?.aiProposalId,
+        disputeInvoiceId: context?.disputeInvoiceId,
       };
       const res = await fetch("/api/send", {
         method: "POST",

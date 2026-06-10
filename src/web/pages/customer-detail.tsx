@@ -980,6 +980,13 @@ export default function CustomerDetailPage() {
                     customerId: customer.id,
                     customerName: customer.displayName,
                     customerEmail: tjBookkeeperEmail,
+                    // Both paths land here: per-invoice dispute buttons pass
+                    // their row; the panel-header Bookkeeper button passes the
+                    // oldest verifying invoice. Server records the sent Gmail
+                    // threadId on it (bookkeeper_thread_id) for the
+                    // dispute-nudge. id is null for rows not yet synced
+                    // locally — skip linkage rather than send a bogus id.
+                    disputeInvoiceId: inv.id ?? undefined,
                     prefill: buildBookkeeperCompose({
                       customerName: customer.displayName,
                       docNumber: inv.docNumber ?? inv.qbId,

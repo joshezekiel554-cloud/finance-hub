@@ -24,11 +24,17 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import sanitizeHtml from "sanitize-html";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
+import { invoices } from "../../db/schema/invoices.js";
 import { requireAuth } from "../lib/auth.js";
+import {
+  guardDisputeInvoice,
+  linkBookkeeperThread,
+} from "../lib/bookkeeper-thread-link.js";
 import { createLogger } from "../../lib/logger.js";
 import { sendEmail } from "../../integrations/gmail/send.js";
 import { listAliases } from "../../integrations/gmail/aliases.js";
@@ -118,6 +124,12 @@ const sendBodySchema = z.object({
   // proposal itself is closed out separately via
   // POST /api/autopilot/proposals/:id/mark-executed.
   aiProposalId: z.string().max(24).optional(),
+  // Set when this send is a TJ-dispute bookkeeper email (compose context
+  // carries it from the wind-down panel / customer-detail dispute buttons).
+  // After a successful send, the resulting Gmail threadId is recorded on
+  // invoices.bookkeeper_thread_id so the dispute-nudge proposer can tell a
+  // silent thread apart from an invoice still awaiting its first email.
+  disputeInvoiceId: z.string().max(64).optional(),
 });
 
 // Minimal HTML escape — sufficient since we control the surrounding
@@ -255,7 +267,27 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       refId: refIdOverride,
       userSignatureId,
       aiProposalId,
+      disputeInvoiceId,
     } = parse.data;
+
+    // Validate the dispute invoice BEFORE sending — a bad id must reject
+    // the whole request, never half-complete (email out, linkage lost).
+    // TJ-only: the bookkeeper loop doesn't exist for Feldart invoices.
+    const disputeGuard = await guardDisputeInvoice(async (id) => {
+      const rows = await db
+        .select({
+          id: invoices.id,
+          origin: invoices.origin,
+          bookkeeperThreadId: invoices.bookkeeperThreadId,
+        })
+        .from(invoices)
+        .where(eq(invoices.id, id))
+        .limit(1);
+      return rows[0] ?? null;
+    }, disputeInvoiceId);
+    if (disputeGuard.kind === "invalid") {
+      return reply.code(400).send({ error: disputeGuard.message });
+    }
 
     // Two body shapes converge here:
     //   - isHtml=true  → body is already formatted HTML from the TipTap
@@ -338,10 +370,44 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
         threadId: threadId ?? null,
         customerId: customerId ?? null,
         aiProposalId: aiProposalId ?? null,
+        disputeInvoiceId: disputeInvoiceId ?? null,
         from: result.from,
         attachmentCount: attachments?.length ?? 0,
       },
     });
+
+    // TJ dispute loop: record the Gmail thread of this bookkeeper email on
+    // the invoice. Guarded above (exists + origin tj). Overwrites any prior
+    // threadId — re-link is fine, the latest bookkeeper thread wins; the
+    // audit row preserves the superseded id. Skipped if Gmail somehow
+    // returned no threadId (linking "" would poison the nudge detection).
+    if (disputeGuard.kind === "ok") {
+      if (result.threadId) {
+        await linkBookkeeperThread(
+          {
+            updateThreadId: async (invoiceId, newThreadId) => {
+              await db
+                .update(invoices)
+                .set({ bookkeeperThreadId: newThreadId })
+                .where(eq(invoices.id, invoiceId));
+            },
+            insertAudit: async (row) => {
+              await db.insert(auditLog).values(row);
+            },
+          },
+          {
+            invoice: disputeGuard.invoice,
+            threadId: result.threadId,
+            userId: user.id,
+          },
+        );
+      } else {
+        log.warn(
+          { invoiceId: disputeGuard.invoice.id, messageId: result.messageId },
+          "gmail send returned no threadId; bookkeeper thread not linked",
+        );
+      }
+    }
 
     // When the send is associated with a known customer, mirror it into
     // the activity timeline so the customer detail page reflects the
