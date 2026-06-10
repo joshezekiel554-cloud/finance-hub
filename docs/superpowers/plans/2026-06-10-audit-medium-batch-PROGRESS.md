@@ -12,14 +12,14 @@ Context notes (survive compact):
 
 ## Status log (append one line per task as completed, with commit sha)
 - [x] Recon (6 Explore agents) + plan written + committed
-- [ ] T1 #11/#17 returns tax surfacing + fee parity
+- [x] T1 #11/#17 returns tax surfacing + fee parity — `f39a702` + review fix `3f12a2b` (spec ✅, quality ✅)
 - [ ] T2 #12 blended chase severity from invoices
 - [ ] T3 #13 atomic Shopify tag mutations
 - [ ] T4 #14 qty_change effective-rate discount preservation
 - [ ] T5 #15 server-side parse-gap verify gate
 - [ ] T6 #16 Gmail direction from live aliases
 - [ ] T7 FK drift schema declarations + no-op migration 0042
-- [ ] T8 local migration-journal backfill (env-only)
+- [x] T8 local migration-journal backfill — DONE inline (no commit): missing DDL applied (ai_learned_corrections table, email_log.draft_ai_notes, 2 idx, 4 FKs), journal rows 37–41 backfilled, `db:migrate` clean. Memory updated.
 - [ ] Full verify (tests/typecheck/build/Playwright spot-check)
 - [ ] Opus review (two-stage) + fixes
 - [ ] MERGE + PUSH + watch Deploy green + prod post-checks over SSH
