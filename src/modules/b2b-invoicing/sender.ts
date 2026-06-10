@@ -184,10 +184,22 @@ export function buildPayload(
     if (action.type === "qty_change") {
       const detail = line.SalesItemLineDetail;
       const newQty = action.toQty;
+      // The 3rd-party Shopify→QB sync bakes special pricing into Amount, so
+      // Amount can differ from UnitPrice×Qty. Rebill at the effective
+      // per-unit rate (origAmount/origQty) when they disagree beyond 1¢ of
+      // rounding noise — recomputing from list UnitPrice would silently
+      // drop the discount. origQty=0 guard falls back to list price.
+      const origAmount = Number(line.Amount ?? 0);
+      const origQty = Number(detail?.Qty ?? 0);
+      const listPrice = Number(detail?.UnitPrice ?? 0);
+      const hasBakedDiscount =
+        origQty > 0 &&
+        round2(Math.abs(origAmount - round2(listPrice * origQty))) > 0.01;
+      const effRate = hasBakedDiscount ? origAmount / origQty : listPrice;
       const unitPrice =
         action.unitPriceOverride !== undefined
           ? action.unitPriceOverride
-          : (detail?.UnitPrice ?? 0);
+          : effRate;
       updatedLines.push({
         ...line,
         Amount: round2(unitPrice * newQty),
