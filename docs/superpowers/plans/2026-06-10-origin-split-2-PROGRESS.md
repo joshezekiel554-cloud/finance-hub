@@ -18,6 +18,7 @@ Context notes (survive compact):
 - [x] W1 T5 statements origin required — `3423567` + doc-comment fix (spec ✅ blended-path grep clean repo-wide incl. jobs/AI; quality ✅ rolling-deploy 400 fail-safe verified). Preview parity via shared buildOpenInvoiceConditions. Suite 717/717. W2 note: compose-modal statement attach is feldart-only — book picker candidate.
 - [x] W1 T6 dashboard per-book amounts — `da1316c` (blendedSeverityWithParts wrapper; totalOverdue dropped; spec+quality ✅ no findings). Suite 719/719.
 - [x] W1 T7 verify + wave review — gates green (719/719, tsc, build); Playwright pass on all 4 surfaces + pure-Feldart/both-books cases, 0 console errors; Opus wave review: SHIP (cosmetic 'both' residue in chase dialog type → W2 cleanup item). MERGE/DEPLOY next.
-- [ ] W2 plan written
+- [x] W2 plan written — `192cce9`
+- [x] W2 T1 migration 0044 + schema — `c5811be` (spec+quality ✅; note for T3: warn-log unwired finders)
 - [ ] W2 execution (proposer/nudge/AI card/digest)
 - [ ] W2 verify + review + MERGE/PUSH/DEPLOY
