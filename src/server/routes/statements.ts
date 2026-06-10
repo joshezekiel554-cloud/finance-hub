@@ -31,11 +31,16 @@ const paramsSchema = z.object({
 // per-channel resolver (the original behaviour). When set, those
 // strings are used verbatim — gives the operator final say without
 // rebuilding the whole pipeline server-side.
-const sendBodySchema = z.object({
-  // Which book the statement covers. Optional for now (omitted = blended,
-  // the legacy behaviour); the statements task of origin-split-2 Wave 1
-  // flips it to required once every caller passes it.
-  origin: z.enum(["feldart", "tj"]).optional(),
+// Exported for schema-level route tests (no Fastify harness in repo).
+export const sendBodySchema = z.object({
+  // Which book the statement covers. Required — blended (both-books)
+  // statements were removed in origin-split-2 Wave 1.
+  origin: z.enum(["feldart", "tj"], {
+    errorMap: () => ({
+      message:
+        "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+    }),
+  }),
   subject: z.string().min(1).max(998).optional(),
   body: z.string().min(1).max(200_000).optional(),
   to: z.string().max(2000).optional(),

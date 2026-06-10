@@ -54,6 +54,7 @@ import {
   renderTemplate,
 } from "../../modules/email-compose/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
+import { buildOpenInvoiceConditions } from "../../modules/statements/send.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 import { recordActivity } from "../../modules/crm/activity-ingester.js";
@@ -841,6 +842,25 @@ const customersRoute: FastifyPluginAsync = async (app) => {
   app.get("/:id/statement-preview", async (req, reply) => {
     await requireAuth(req);
     const id = (req.params as { id: string }).id;
+    // Book scope — required, mirrors the send route so the preview shows
+    // exactly the invoices the send would include (origin-split-2 W1).
+    const queryParse = z
+      .object({
+        origin: z.enum(["feldart", "tj"], {
+          errorMap: () => ({
+            message:
+              "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+          }),
+        }),
+      })
+      .safeParse(req.query ?? {});
+    if (!queryParse.success) {
+      return reply.code(400).send({
+        error: "invalid query",
+        details: queryParse.error.flatten(),
+      });
+    }
+    const { origin } = queryParse.data;
 
     const customerRows = await db
       .select()
@@ -869,7 +889,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         balance: invoices.balance,
       })
       .from(invoices)
-      .where(and(eq(invoices.customerId, id), gt(invoices.balance, "0")))
+      // Shared condition with the send path (buildOpenInvoiceConditions)
+      // so preview and send can never disagree about scope.
+      .where(buildOpenInvoiceConditions(id, origin))
       .orderBy(asc(invoices.issueDate))
       .limit(STATEMENT_PREVIEW_INVOICE_CAP + 1);
 
@@ -980,12 +1002,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       const fullInvoices = await db
         .select()
         .from(invoices)
-        .where(
-          and(
-            eq(invoices.customerId, id),
-            gt(invoices.balance, "0"),
-          ),
-        )
+        .where(buildOpenInvoiceConditions(id, origin))
         .limit(STATEMENT_PREVIEW_INVOICE_CAP);
       const baseVars = buildTemplateVars({
         customer: {

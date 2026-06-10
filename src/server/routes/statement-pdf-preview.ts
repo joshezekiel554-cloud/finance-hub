@@ -20,7 +20,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { and, asc, eq, gt } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import axios, { type AxiosError } from "axios";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
@@ -31,6 +31,7 @@ import { QboClient } from "../../integrations/qb/client.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
 import { requireAuth } from "../lib/auth.js";
 import {
+  buildOpenInvoiceConditions,
   loadAppSettings,
   renderStatementPdf,
   type StatementCreditMemoInput,
@@ -61,6 +62,25 @@ const statementPdfPreviewRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid params", details: parse.error.flatten() });
     }
     const { id: customerId } = parse.data;
+    // Book scope — required, same contract as the send + preview routes
+    // (origin-split-2 W1): the PDF only renders one book's invoices.
+    const queryParse = z
+      .object({
+        origin: z.enum(["feldart", "tj"], {
+          errorMap: () => ({
+            message:
+              "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+          }),
+        }),
+      })
+      .safeParse(req.query ?? {});
+    if (!queryParse.success) {
+      return reply.code(400).send({
+        error: "invalid query",
+        details: queryParse.error.flatten(),
+      });
+    }
+    const { origin } = queryParse.data;
 
     // Load customer.
     const customerRows = await db
@@ -78,12 +98,9 @@ const statementPdfPreviewRoute: FastifyPluginAsync = async (app) => {
     const openInvoiceRows = await db
       .select()
       .from(invoices)
-      .where(
-        and(
-          eq(invoices.customerId, customerId),
-          gt(invoices.balance, "0"),
-        ),
-      )
+      // Shared condition with the send path (buildOpenInvoiceConditions)
+      // so the previewed PDF can never disagree with the sent one.
+      .where(buildOpenInvoiceConditions(customerId, origin))
       .orderBy(asc(invoices.issueDate))
       .limit(PREVIEW_INVOICE_CAP + 1);
 

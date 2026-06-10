@@ -462,9 +462,13 @@ export default function CustomerDetailPage() {
         return;
       }
       case "send_statement":
-        // AI card is book-agnostic in Wave 1 — statements default to the
-        // living (Feldart) book; TJ statements go via the /chase panel.
-        setStatementDialog({ origin: "feldart" });
+        // AI card is book-agnostic in Wave 1 — pick the book that actually
+        // carries a balance (Feldart wins ties; Wave 2 makes AI actions
+        // origin-aware properly).
+        setStatementDialog({
+          origin:
+            feldartBalance > 0 ? "feldart" : tjBalance > 0 ? "tj" : "feldart",
+        });
         return;
       case "view_rma": {
         const rmaId =
@@ -752,16 +756,21 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      <StatementSendDialog
-        open={statementDialog !== null}
-        onOpenChange={(next) => {
-          if (!next) setStatementDialog(null);
-        }}
-        customerId={customer.id}
-        customerName={customer.displayName}
-        origin={statementDialog?.origin}
-        onSent={(result) => setStatementSuccess(result)}
-      />
+      {/* Mounted conditionally so `origin` is always concrete (required
+          prop since origin-split-2 W1 T5) and the preview query only
+          fires for the book the operator picked. */}
+      {statementDialog ? (
+        <StatementSendDialog
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setStatementDialog(null);
+          }}
+          customerId={customer.id}
+          customerName={customer.displayName}
+          origin={statementDialog.origin}
+          onSent={(result) => setStatementSuccess(result)}
+        />
+      ) : null}
 
       {/* Chase email dialog. Mounted conditionally so the
           previewQuery only fires when the operator opens it.

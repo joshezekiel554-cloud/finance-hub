@@ -101,10 +101,10 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   customerId: string;
   customerName: string;
-  // Book scope forwarded on the send POST (origin-split-2). The
-  // statement-send route filters open invoices to this origin; omitted
-  // = legacy blended send (removed once every caller passes it, W1 T5).
-  origin?: "feldart" | "tj";
+  // Book scope — required (origin-split-2 W1 T5). Threaded into the
+  // preview GET, the PDF preview, and the send POST so all three cover
+  // exactly the same single-book invoice set.
+  origin: "feldart" | "tj";
   onSent?: (result: StatementSendSuccess) => void;
 };
 
@@ -164,10 +164,10 @@ export default function StatementSendDialog({
   const queryClient = useQueryClient();
 
   const previewQuery = useQuery<StatementPreviewResponse, ApiError>({
-    queryKey: ["statement-preview", customerId],
+    queryKey: ["statement-preview", customerId, origin],
     queryFn: async () => {
       const res = await fetch(
-        `/api/customers/${encodeURIComponent(customerId)}/statement-preview`,
+        `/api/customers/${encodeURIComponent(customerId)}/statement-preview?origin=${origin}`,
       );
       if (!res.ok) {
         const json: ApiError = await res.json().catch(() => ({}));
@@ -370,7 +370,7 @@ export default function StatementSendDialog({
             size="sm"
             onClick={() =>
               window.open(
-                `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview`,
+                `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview?origin=${origin}`,
                 "_blank",
                 "noopener,noreferrer",
               )
