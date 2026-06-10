@@ -57,24 +57,38 @@ import {
   buildPrompt as buildOpsCronFailPrompt,
   TOOL_NAME as OPS_CRON_FAIL_TOOL,
 } from "../../modules/ai-agent/prompts/ops-cron-fail.js";
+import {
+  buildPrompt as buildTjChasePrompt,
+  TOOL_NAME as TJ_CHASE_TOOL,
+} from "../../modules/ai-agent/prompts/tj-chase.js";
+import {
+  buildPrompt as buildTjDisputeNudgePrompt,
+  TOOL_NAME as TJ_DISPUTE_NUDGE_TOOL,
+} from "../../modules/ai-agent/prompts/tj-dispute-nudge.js";
 
 import { isStillEligible as isStillEligibleChase } from "../../modules/ai-agent/candidates/chase-next.js";
 import { isStillEligible as isStillEligibleStatement } from "../../modules/ai-agent/candidates/cadence-statement.js";
 import { isStillEligible as isStillEligibleCold } from "../../modules/ai-agent/candidates/cadence-cold.js";
 import { isStillEligible as isStillEligibleRma } from "../../modules/ai-agent/candidates/ops-rma-stalled.js";
 import { isStillEligible as isStillEligibleCronFail } from "../../modules/ai-agent/candidates/ops-cron-fail.js";
+import { isStillEligible as isStillEligibleTjChase } from "../../modules/ai-agent/candidates/tj-chase.js";
+import { isStillEligible as isStillEligibleTjDisputeNudge } from "../../modules/ai-agent/candidates/tj-dispute-nudge.js";
 
 const log = createLogger({ module: "routes.autopilot" });
 
 // Per-category prompt builders. ops-rma-stalled exports TOOL_NAMES (array)
 // since the AI may choose between two tools; for the toolSchema passed to
 // Anthropic we include both tools and let the AI pick.
-const PROMPTS: Record<
-  AiProposalCategory,
-  {
-    build: (s: Record<string, unknown>, ctx: DraftContext) => BuiltPrompt;
-    toolNames: string[];
-  }
+// Partial so a category can register before its prompt lands — the draft
+// loop skips those. All 7 current categories have prompts wired.
+const PROMPTS: Partial<
+  Record<
+    AiProposalCategory,
+    {
+      build: (s: Record<string, unknown>, ctx: DraftContext) => BuiltPrompt;
+      toolNames: string[];
+    }
+  >
 > = {
   chase_next: { build: buildChaseNextPrompt, toolNames: [CHASE_NEXT_TOOL] },
   cadence_statement: {
@@ -87,17 +101,28 @@ const PROMPTS: Record<
     toolNames: ["nudge_warehouse_email", "create_admin_notification"],
   },
   ops_cron_fail: { build: buildOpsCronFailPrompt, toolNames: [OPS_CRON_FAIL_TOOL] },
+  // TJ book: tj_chase reuses the chase send tool (origin "tj" in the
+  // drafted args); tj_dispute_nudge drafts a bookkeeper email — the
+  // recipient is resolved from settings at execution, never by the AI.
+  tj_chase: { build: buildTjChasePrompt, toolNames: [TJ_CHASE_TOOL] },
+  tj_dispute_nudge: {
+    build: buildTjDisputeNudgePrompt,
+    toolNames: [TJ_DISPUTE_NUDGE_TOOL],
+  },
 };
 
-const STILL_ELIGIBLE: Record<
-  AiProposalCategory,
-  (id: string) => Promise<boolean>
+// Partial so a category can register before its eligibility check lands —
+// the approve path treats a missing entry as "no staleness check".
+const STILL_ELIGIBLE: Partial<
+  Record<AiProposalCategory, (id: string) => Promise<boolean>>
 > = {
   chase_next: isStillEligibleChase,
   cadence_statement: isStillEligibleStatement,
   cadence_cold: isStillEligibleCold,
   ops_rma_stalled: isStillEligibleRma,
   ops_cron_fail: isStillEligibleCronFail,
+  tj_chase: isStillEligibleTjChase,
+  tj_dispute_nudge: isStillEligibleTjDisputeNudge,
 };
 
 const SONNET = "claude-sonnet-4-6";
@@ -432,7 +457,9 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
         // Replicate the chase tool's chase_log side effect for chase
         // categories so dedup holds even when sent via the composer.
         if (
-          (p.category === "chase_next" || p.category === "cadence_cold") &&
+          (p.category === "chase_next" ||
+            p.category === "cadence_cold" ||
+            p.category === "tj_chase") &&
           p.entityType === "customer"
         ) {
           const tier = (p.candidateSummary as { tier?: string }).tier;

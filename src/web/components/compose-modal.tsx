@@ -92,6 +92,15 @@ export type ComposeContext = {
     alias?: string;
   };
   aiProposalId?: string;
+  // NOTE: AI proposals + customer-card actions carry an `origin`
+  // ('feldart' | 'tj') as of osplit2 W2 T5, but compose has no origin param —
+  // if compose ever needs book-aware behaviour (template book, default
+  // statement book), origin would enter HERE (T5 review accepted the gap).
+  // When this compose is a TJ-dispute bookkeeper email (wind-down panel /
+  // customer-detail dispute buttons), the invoice under verification. The
+  // send body forwards it so the server records the resulting Gmail
+  // threadId on invoices.bookkeeper_thread_id (dispute-nudge detection).
+  disputeInvoiceId?: string;
   // When set, the compose modal renders an "AI draft" panel (notes + Generate)
   // that POSTs to /api/email-log/<id>/draft-reply. Distinct from inReplyTo:
   // inReplyTo carries the threading metadata for the outbound; this is the
@@ -392,6 +401,7 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
         attachments: encodedAttachments,
         userSignatureId,
         aiProposalId: context?.aiProposalId,
+        disputeInvoiceId: context?.disputeInvoiceId,
       };
       const res = await fetch("/api/send", {
         method: "POST",
@@ -803,6 +813,11 @@ function CustomerDocPicker({
 
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
+  // Which book the generated statement covers (origin-split-2 W2 T6 —
+  // closes the W1 gap where compose could only attach Feldart statements).
+  const [statementOrigin, setStatementOrigin] = useState<"feldart" | "tj">(
+    "feldart",
+  );
 
   async function fetchAsFile(
     url: string,
@@ -843,14 +858,18 @@ function CustomerDocPicker({
   }
 
   async function pickStatement(): Promise<void> {
-    const filename = `Statement-${new Date().toISOString().slice(0, 10)}.pdf`;
+    // TJ statements get a distinct filename so the attached-file dedupe
+    // doesn't block attaching one statement per book on the same email.
+    const datePart = new Date().toISOString().slice(0, 10);
+    const filename =
+      statementOrigin === "tj"
+        ? `Statement-TJ-${datePart}.pdf`
+        : `Statement-${datePart}.pdf`;
     if (attachedFilenames.has(filename)) return;
     setBusyKey("statement");
     setPickError(null);
     try {
-      // Generic compose path with no book context — default the attached
-      // statement to the living (Feldart) book (origin-split-2 W1).
-      const url = `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview?origin=feldart`;
+      const url = `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview?origin=${statementOrigin}`;
       const file = await fetchAsFile(url, filename);
       onPick(file);
     } catch (err) {
@@ -884,23 +903,48 @@ function CustomerDocPicker({
           </span>
         ) : null}
       </div>
-      {/* Statement PDF — always offered (re-renders open items on demand). */}
-      <button
-        type="button"
-        onClick={pickStatement}
-        disabled={busyKey !== null}
-        className="mb-1 flex w-full items-center justify-between rounded border border-default bg-base px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:opacity-50"
-      >
-        <span>
-          <span className="font-medium">Statement (open items)</span>
-          <span className="ml-2 text-muted">
-            generated now from current open invoices
+      {/* Statement PDF — always offered (re-renders open items on demand).
+          The segmented Feldart/TJ control picks WHICH BOOK the statement
+          covers; each statement covers exactly one book (origin-split-2). */}
+      <div className="mb-1 flex items-stretch gap-1">
+        <button
+          type="button"
+          onClick={pickStatement}
+          disabled={busyKey !== null}
+          className="flex flex-1 items-center justify-between rounded border border-default bg-base px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:opacity-50"
+        >
+          <span>
+            <span className="font-medium">Statement (open items)</span>
+            <span className="ml-2 text-muted">
+              generated now from current open invoices
+            </span>
           </span>
-        </span>
-        <span className="ml-2 shrink-0 text-[10px] text-muted">
-          {busyKey === "statement" ? "fetching…" : "PDF"}
-        </span>
-      </button>
+          <span className="ml-2 shrink-0 text-[10px] text-muted">
+            {busyKey === "statement" ? "fetching…" : "PDF"}
+          </span>
+        </button>
+        <div
+          role="group"
+          aria-label="Statement book"
+          className="flex shrink-0 overflow-hidden rounded border border-default"
+        >
+          {(["feldart", "tj"] as const).map((book) => (
+            <button
+              key={book}
+              type="button"
+              onClick={() => setStatementOrigin(book)}
+              aria-pressed={statementOrigin === book}
+              className={`px-2 text-[10px] uppercase tracking-wide ${
+                statementOrigin === book
+                  ? "bg-elevated font-semibold"
+                  : "bg-base text-muted hover:bg-elevated"
+              }`}
+            >
+              {book === "tj" ? "TJ" : "Feldart"}
+            </button>
+          ))}
+        </div>
+      </div>
       {docsQuery.isError ? (
         <div className="text-xs text-accent-danger">
           {(docsQuery.error as Error)?.message ?? "Failed to load docs"}

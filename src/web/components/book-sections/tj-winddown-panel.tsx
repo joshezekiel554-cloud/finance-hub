@@ -249,6 +249,9 @@ export default function TjWinddownPanel() {
       customerId: customer.customerId,
       customerName: customer.customerName,
       customerEmail: tjBookkeeperEmail,
+      // Server records the sent Gmail threadId on this invoice
+      // (bookkeeper_thread_id) so the dispute-nudge can track the thread.
+      disputeInvoiceId: inv.id,
       prefill: buildBookkeeperCompose({
         customerName: customer.customerName,
         docNumber: inv.docNumber ?? inv.id,

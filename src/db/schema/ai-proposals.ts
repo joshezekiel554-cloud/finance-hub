@@ -2,6 +2,7 @@ import {
   decimal,
   index,
   json,
+  mysqlEnum,
   mysqlTable,
   text,
   timestamp,
@@ -15,6 +16,8 @@ export const AI_PROPOSAL_CATEGORIES = [
   "cadence_cold",
   "ops_rma_stalled",
   "ops_cron_fail",
+  "tj_chase",
+  "tj_dispute_nudge",
 ] as const;
 export type AiProposalCategory = (typeof AI_PROPOSAL_CATEGORIES)[number];
 
@@ -38,6 +41,10 @@ export const aiProposals = mysqlTable(
   {
     id: varchar("id", { length: 24 }).primaryKey(),
     category: varchar("category", { length: 32 }).notNull(),
+    // Which book the proposal belongs to. 'tj' categories (tj_chase,
+    // tj_dispute_nudge) insert 'tj'; chase_next inserts 'feldart'; null =
+    // book-agnostic categories (cadence_*, ops_*).
+    origin: mysqlEnum("origin", ["feldart", "tj"]),
     entityType: varchar("entity_type", { length: 64 }).notNull(),
     entityId: varchar("entity_id", { length: 64 }).notNull(),
     status: varchar("status", { length: 32 }).notNull(),

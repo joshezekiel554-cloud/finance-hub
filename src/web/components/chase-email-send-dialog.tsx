@@ -70,8 +70,9 @@ export default function ChaseEmailSendDialog({
   customerId: string;
   customerName: string;
   // Which book is being chased — picks the template (tj_l* vs chase_l*) and
-  // scopes the invoices the email covers.
-  origin: "feldart" | "tj" | "both";
+  // scopes the invoices the email covers. A chase email always covers
+  // exactly one book ('both' removed in origin-split-2 W2).
+  origin: "feldart" | "tj";
   // Initial level when the dialog mounts. The operator can switch
   // inside the dialog; this is just the starting point.
   level: ChaseLevel;

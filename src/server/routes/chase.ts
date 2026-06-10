@@ -536,8 +536,10 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       customerId: z.string().min(1).max(64),
       level: z.coerce.number().int().min(1).max(3),
       // Which book is being chased — picks the template (tj_l* vs chase_l*)
-      // and scopes the invoices in the email to that origin.
-      origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
+      // and scopes the invoices in the email to that origin. 'both' (the
+      // old blended option) was removed in origin-split-2 W2: a chase
+      // email always covers exactly one book.
+      origin: z.enum(["feldart", "tj"]).default("feldart"),
       // CSV of invoice ids — TanStack Query serialises arrays as
       // repeated `?invoiceIds=a&invoiceIds=b`, but for a GET we accept
       // either shape and split on comma if a string slipped through.
@@ -595,7 +597,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         and(
           eq(invoices.customerId, customerId),
           gt(invoices.balance, "0"),
-          origin !== "both" ? eq(invoices.origin, origin) : undefined,
+          eq(invoices.origin, origin),
           // Never chase a TJ invoice parked for bookkeeper verification.
           sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`,
           ...(invoiceIds.length > 0
@@ -716,7 +718,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         and(
           eq(invoices.customerId, customerId),
           gt(invoices.balance, "0"),
-          origin !== "both" ? eq(invoices.origin, origin) : undefined,
+          eq(invoices.origin, origin),
           // Never chase a TJ invoice parked for bookkeeper verification.
           sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`,
           ...(invoiceIds.length > 0
@@ -932,8 +934,10 @@ const sendChaseEmailBodySchema = z.object({
   customerId: z.string().min(1).max(64),
   level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   // Which book is being chased — picks the template (tj_l* vs chase_l*) and
-  // scopes which invoices the email + invoice_chases rows cover.
-  origin: z.enum(["feldart", "tj", "both"]).default("feldart"),
+  // scopes which invoices the email + invoice_chases rows cover. 'both' (the
+  // old blended option) was removed in origin-split-2 W2: a chase email
+  // always covers exactly one book.
+  origin: z.enum(["feldart", "tj"]).default("feldart"),
   // Optional subset filter — when set, the rendered template covers
   // only these invoices AND only these get an invoice_chases row
   // written after send. When absent, the chase covers all the

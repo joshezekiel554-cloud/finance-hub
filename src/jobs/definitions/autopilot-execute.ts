@@ -70,7 +70,12 @@ export async function autopilotExecuteHandler(
   const result = await tool.execute(parse.data, { userId, proposalId });
   if (result.ok) {
     await markProposalExecuted(proposalId);
-    log.info({ proposalId, tool: action.tool }, "autopilot execute ok");
+    // note = degraded success: the email went out but a post-send
+    // bookkeeping write failed (the tool already error-logged the detail).
+    log.info(
+      { proposalId, tool: action.tool, note: result.note ?? null },
+      "autopilot execute ok",
+    );
     return { ok: true };
   } else {
     await markProposalExecutionFailed(proposalId, result.error);

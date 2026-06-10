@@ -65,6 +65,7 @@ function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     disputeClaimedAt: null,
     disputeNote: null,
     disputeUpdatedBy: null,
+    bookkeeperThreadId: null,
     docNumber: "18307",
     issueDate: new Date("2026-03-01T00:00:00.000Z"),
     dueDate: new Date("2026-03-31T00:00:00.000Z"),

@@ -65,6 +65,12 @@ export const invoices = mysqlTable(
       () => users.id,
       { onDelete: "set null" },
     ),
+    // Gmail threadId of the dispute's bookkeeper thread. Recorded when the
+    // operator sends a bookkeeper email from the dispute flow, so the AI
+    // dispute-nudge can detect a thread gone silent (latest email_log row on
+    // this thread older than 7 days) vs. an invoice still awaiting its first
+    // bookkeeper email.
+    bookkeeperThreadId: varchar("bookkeeper_thread_id", { length: 128 }),
     sentAt: timestamp("sent_at"),
     sentVia: varchar("sent_via", { length: 32 }),
     // QBO Invoice.CustomerMemo.value — the customer-facing memo

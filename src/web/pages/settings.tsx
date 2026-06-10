@@ -2771,6 +2771,8 @@ const AUTOPILOT_CATEGORIES: { key: string; label: string }[] = [
   { key: "cadence_cold", label: "Cadence: cold" },
   { key: "ops_rma_stalled", label: "Ops: RMA stalled" },
   { key: "ops_cron_fail", label: "Ops: cron fail" },
+  { key: "tj_chase", label: "TJ chase" },
+  { key: "tj_dispute_nudge", label: "Dispute nudge" },
 ];
 
 function AutopilotSection() {

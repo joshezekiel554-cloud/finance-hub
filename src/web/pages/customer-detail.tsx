@@ -462,12 +462,19 @@ export default function CustomerDetailPage() {
         return;
       }
       case "send_statement":
-        // AI card is book-agnostic in Wave 1 — pick the book that actually
-        // carries a balance (Feldart wins ties; Wave 2 makes AI actions
-        // origin-aware properly).
+        // W2 T5: actions are origin-aware — prefer the model's normalized
+        // origin; fall back to the Wave 1 smart default (the book that
+        // actually carries a balance, Feldart wins ties) for cached
+        // pre-Wave-2 cards whose actions have no origin yet.
         setStatementDialog({
           origin:
-            feldartBalance > 0 ? "feldart" : tjBalance > 0 ? "tj" : "feldart",
+            action.origin === "tj" || action.origin === "feldart"
+              ? action.origin
+              : feldartBalance > 0
+                ? "feldart"
+                : tjBalance > 0
+                  ? "tj"
+                  : "feldart",
         });
         return;
       case "view_rma": {
@@ -980,6 +987,13 @@ export default function CustomerDetailPage() {
                     customerId: customer.id,
                     customerName: customer.displayName,
                     customerEmail: tjBookkeeperEmail,
+                    // Both paths land here: per-invoice dispute buttons pass
+                    // their row; the panel-header Bookkeeper button passes the
+                    // oldest verifying invoice. Server records the sent Gmail
+                    // threadId on it (bookkeeper_thread_id) for the
+                    // dispute-nudge. id is null for rows not yet synced
+                    // locally — skip linkage rather than send a bogus id.
+                    disputeInvoiceId: inv.id ?? undefined,
                     prefill: buildBookkeeperCompose({
                       customerName: customer.displayName,
                       docNumber: inv.docNumber ?? inv.qbId,

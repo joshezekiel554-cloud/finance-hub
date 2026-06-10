@@ -18,6 +18,11 @@ Context notes (survive compact):
 - [x] W1 T5 statements origin required — `3423567` + doc-comment fix (spec ✅ blended-path grep clean repo-wide incl. jobs/AI; quality ✅ rolling-deploy 400 fail-safe verified). Preview parity via shared buildOpenInvoiceConditions. Suite 717/717. W2 note: compose-modal statement attach is feldart-only — book picker candidate.
 - [x] W1 T6 dashboard per-book amounts — `da1316c` (blendedSeverityWithParts wrapper; totalOverdue dropped; spec+quality ✅ no findings). Suite 719/719.
 - [x] W1 T7 verify + wave review — gates green (719/719, tsc, build); Playwright pass on all 4 surfaces + pure-Feldart/both-books cases, 0 console errors; Opus wave review: SHIP (cosmetic 'both' residue in chase dialog type → W2 cleanup item). MERGE/DEPLOY next.
-- [ ] W2 plan written
-- [ ] W2 execution (proposer/nudge/AI card/digest)
-- [ ] W2 verify + review + MERGE/PUSH/DEPLOY
+- [x] W2 plan written — `192cce9`
+- [x] W2 T1 migration 0044 + schema — `c5811be` (spec+quality ✅; note for T3: warn-log unwired finders)
+- [x] W2 T2 bookkeeper thread linkage — `ea1f5d3` (spec+quality ✅, guard-before-send verified). Suite 725/725.
+- [x] W2 T3 TJ proposers — `4018003` + at-most-once fix `b4d091e` (spec ✅ incl. rulings: invoice-level nudges, exec-time recipient lock, cross-book cooldown acceptable-with-note; quality ✅). Suite 771/771. OPERATOR NOTE: dual-book customers under weekly Feldart chase defer TJ proposals by a week (chase_log has no origin; add one if TJ stalls).
+- [x] W2 T4 autopilot two sections — `99a82a0` (spec+quality ✅ no findings; symmetric-hide ruled fine)
+- [x] W2 T5 AI card per-book — `64f88fc` (spec+quality ✅; single-book path provably byte-identical; origin-validated actions). Suite 787/787.
+- [x] W2 T6 digest TJ section + both-cleanup + compose book picker — `14b334e` (spec+quality ✅; empty-guard traced safe). Suite 800/800.
+- [x] W2 verify + wave review — gates green (800/800, tsc, build); Playwright (autopilot empty-state, compose Statement-book picker live; scan e2e blocked locally by Redis — unit-covered); Opus wave review: SHIP (AI-safety chain traced sound). OPERATOR NOTES: first 17:00 digest reshapes (Feldart main + TJ section); autopilot scan cron still default-OFF — TJ proposals appear on manual Run-now; pre-existing executor approved-status re-check parked as follow-up.

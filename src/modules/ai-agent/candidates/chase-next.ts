@@ -9,6 +9,10 @@ import { computeSeverity } from "../../chase/scoring.js";
 export type Candidate = {
   entityType: "customer";
   entityId: string;
+  // chase_next is the Feldart-book chase track; its TJ twin is
+  // candidates/tj-chase.ts (origin "tj"). The scanner stamps this onto
+  // ai_proposals.origin.
+  origin: "feldart";
   summary: Record<string, unknown>;
 };
 
@@ -99,7 +103,11 @@ export async function findCandidates(
     candidates.push({
       entityType: "customer",
       entityId: customer.id,
+      origin: "feldart",
       summary: {
+        // customerId included — the drafting prompt (prompts/chase-next.ts)
+        // instructs the tool call with summary.customerId.
+        customerId: customer.id,
         customerName: customer.displayName,
         overdueBalance: sev.totalOverdue,
         daysOverdue: sev.daysOverdue,
