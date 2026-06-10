@@ -1,0 +1,4 @@
+-- Intentionally empty. The four fk_*_ai_proposal constraints this migration
+-- would add already exist in every environment via 0036_autopilot.sql; this
+-- migration only syncs drizzle's meta snapshot so schema and DB agree and a
+-- future drizzle-kit generate/push can't drop or duplicate them. (audit FK-drift fix)
