@@ -1,4 +1,9 @@
-import type { ChaseAccount, EmailContext, QbContext } from "./types.js";
+import type {
+  ChaseAccount,
+  EmailContext,
+  QbContext,
+  TjChaseDigestBlock,
+} from "./types.js";
 
 // Lifted verbatim from 1.0's ai-summarizer.js. The QB-specific scoping ("focus
 // only on payment/billing") is well-tuned — don't broaden it here. If we want
@@ -34,6 +39,16 @@ Any accounts you moved out of Act Today. One bullet each:
 
 ## Watching
 One-line notes on the next 3-5 accounts worth monitoring but not chasing today.
+
+A separate "TORAH JUDAICA WIND-DOWN" block may follow the candidate accounts. Torah Judaica (TJ) is a SEPARATE book being wound down — keep the books strictly separate: never mix TJ accounts into the sections above and never count TJ amounts in the Feldart figures. When the block is present, append this final section:
+
+## Torah Judaica wind-down
+- One line: total TJ overdue exposure and account count.
+- One line: the dispute pipeline exactly as given (invoices verifying / awaiting a first bookkeeper email / silent bookkeeper threads).
+- Up to 3 bullets: the TJ accounts most worth chasing today, one line each (name, overdue amount, days, suggested action).
+If the block reports no overdue TJ accounts and no disputes, the section is the single line "TJ wind-down: $0 outstanding, no disputes pending." When no block is provided, omit the section entirely.
+
+If there are NO candidate accounts (the Feldart book is clear) but a Torah Judaica block is present, write a one-line Today's Digest saying the Feldart book is clear, skip Act Today / Demoted / Watching, and still produce the Torah Judaica wind-down section.
 
 Be direct, specific, and actionable. No generic advice. Use the account's actual context.`;
 
@@ -156,28 +171,58 @@ export function buildActionPlanUserPrompt(
   return prompt;
 }
 
-export function buildChaseDigestUserPrompt(accounts: ChaseAccount[]): string {
+function renderChaseAccountBlock(a: ChaseAccount, i: number): string {
+  let prompt = `### ${i + 1}. ${a.name}\n`;
+  prompt += `- Tier: ${a.tier}, Severity score: ${a.score}\n`;
+  prompt += `- Overdue: $${a.overdue_balance} (${a.days_overdue} days since oldest unpaid ${a.oldest_unpaid_invoice ?? "unknown"})\n`;
+  prompt += `- Current balance: $${a.current_balance}, Last payment: ${a.last_payment ?? "none recorded"}\n`;
+  if (a.last_chased) {
+    prompt += `- Last chased: ${a.last_chased.chased_at}${a.last_chased.method ? " via " + a.last_chased.method : ""}\n`;
+  } else {
+    prompt += "- Last chased: never\n";
+  }
+  prompt += `- Hold status: ${a.hold_status ?? "unknown"}\n`;
+  if (a.action_plan && a.action_plan.trim()) {
+    prompt += `- Existing AI Action Plan:\n${a.action_plan.trim()}\n`;
+  } else {
+    prompt += "- Existing AI Action Plan: (none available)\n";
+  }
+  prompt += "\n---\n\n";
+  return prompt;
+}
+
+export function buildChaseDigestUserPrompt(
+  accounts: ChaseAccount[],
+  tj?: TjChaseDigestBlock | null,
+): string {
   const today = new Date().toISOString().split("T")[0];
   let prompt = `Today is ${today}.\n\nCandidate accounts (sorted by severity score):\n\n`;
 
-  accounts.forEach((a, i) => {
-    prompt += `### ${i + 1}. ${a.name}\n`;
-    prompt += `- Tier: ${a.tier}, Severity score: ${a.score}\n`;
-    prompt += `- Overdue: $${a.overdue_balance} (${a.days_overdue} days since oldest unpaid ${a.oldest_unpaid_invoice ?? "unknown"})\n`;
-    prompt += `- Current balance: $${a.current_balance}, Last payment: ${a.last_payment ?? "none recorded"}\n`;
-    if (a.last_chased) {
-      prompt += `- Last chased: ${a.last_chased.chased_at}${a.last_chased.method ? " via " + a.last_chased.method : ""}\n`;
+  if (accounts.length === 0) {
+    prompt += "(none — the Feldart book has no chase candidates today)\n\n";
+  } else {
+    accounts.forEach((a, i) => {
+      prompt += renderChaseAccountBlock(a, i);
+    });
+  }
+
+  // Torah Judaica wind-down rides along as a clearly-delimited block so the
+  // system prompt's "keep the books separate" instruction has an unambiguous
+  // boundary to work with (origin-split-2 W2 T6).
+  if (tj) {
+    const p = tj.pipeline;
+    prompt += "--- TORAH JUDAICA WIND-DOWN ---\n\n";
+    prompt += `Dispute pipeline: ${p.verifying} invoice(s) in bookkeeper verification, ${p.awaitingFirstEmail} awaiting a FIRST bookkeeper email, ${p.silentThreads} with a bookkeeper thread silent >= 7 days.\n\n`;
+    if (tj.accounts.length === 0) {
+      prompt += "TJ overdue accounts: none.\n\n";
     } else {
-      prompt += "- Last chased: never\n";
+      prompt +=
+        "TJ overdue accounts (sorted by severity score; verifying disputes excluded):\n\n";
+      tj.accounts.forEach((a, i) => {
+        prompt += renderChaseAccountBlock(a, i);
+      });
     }
-    prompt += `- Hold status: ${a.hold_status ?? "unknown"}\n`;
-    if (a.action_plan && a.action_plan.trim()) {
-      prompt += `- Existing AI Action Plan:\n${a.action_plan.trim()}\n`;
-    } else {
-      prompt += "- Existing AI Action Plan: (none available)\n";
-    }
-    prompt += "\n---\n\n";
-  });
+  }
 
   prompt += "Produce the digest now.";
   return prompt;

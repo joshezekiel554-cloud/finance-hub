@@ -150,6 +150,54 @@ export async function findCandidates(
   return candidates;
 }
 
+// Aggregate counts for the daily chase digest's TJ wind-down line
+// (origin-split-2 W2 T6): how many TJ invoices sit in bookkeeper
+// verification, how many still need their FIRST bookkeeper email, and how
+// many have a linked thread that has gone silent ≥ NUDGE_SILENCE_DAYS.
+// Reuses the finder's loaders + semantics — a linked thread with NO
+// email_log rows counts as neither silent nor awaiting (see header comment:
+// absence of rows is not evidence of silence).
+export type DisputePipelineSummary = {
+  verifying: number;
+  awaitingFirstEmail: number;
+  silentThreads: number;
+};
+
+export async function summarizeDisputePipeline(
+  deps: TjDisputeNudgeDeps = {},
+): Promise<DisputePipelineSummary> {
+  const now = deps.now ?? new Date();
+  const loadVerifyingInvoices =
+    deps.loadVerifyingInvoices ?? loadVerifyingInvoicesFromDb;
+  const loadLatestThreadEmailDates =
+    deps.loadLatestThreadEmailDates ?? loadLatestThreadEmailDatesFromDb;
+
+  const rows = (await loadVerifyingInvoices()).filter(
+    (r) => parseMoney(r.balance) > 0, // query contract; defensive
+  );
+  const linked = rows.filter(
+    (r): r is VerifyingInvoiceRow & { bookkeeperThreadId: string } =>
+      r.bookkeeperThreadId != null && r.bookkeeperThreadId !== "",
+  );
+  const awaitingFirstEmail = rows.length - linked.length;
+
+  let silentThreads = 0;
+  if (linked.length > 0) {
+    const latestByThread = await loadLatestThreadEmailDates(
+      linked.map((r) => r.bookkeeperThreadId),
+    );
+    for (const row of linked) {
+      const latest = latestByThread.get(row.bookkeeperThreadId);
+      if (!latest) continue; // not ingested yet — not evidence of silence
+      if (now.getTime() - latest.getTime() >= NUDGE_SILENCE_DAYS * DAY_MS) {
+        silentThreads += 1;
+      }
+    }
+  }
+
+  return { verifying: rows.length, awaitingFirstEmail, silentThreads };
+}
+
 export type TjDisputeNudgeEligibilityDeps = {
   loadInvoice?: (invoiceId: string) => Promise<{
     id: string;

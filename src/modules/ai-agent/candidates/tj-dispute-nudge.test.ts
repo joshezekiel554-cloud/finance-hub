@@ -9,6 +9,7 @@ import {
   findCandidates,
   isStillEligible,
   NUDGE_SILENCE_DAYS,
+  summarizeDisputePipeline,
   type VerifyingInvoiceRow,
 } from "./tj-dispute-nudge.js";
 
@@ -176,6 +177,78 @@ describe("tj-dispute-nudge findCandidates", () => {
       now: NOW,
     });
     expect(loadLatest).toHaveBeenCalledWith(["t-1"]);
+  });
+});
+
+// ── summarizeDisputePipeline (chase digest TJ wind-down line, W2 T6) ─────────
+
+describe("tj-dispute-nudge summarizeDisputePipeline", () => {
+  it("empty pipeline → all zeros (no thread lookup)", async () => {
+    const loadLatest = vi.fn(noThreads);
+    const summary = await summarizeDisputePipeline({
+      loadVerifyingInvoices: async () => [],
+      loadLatestThreadEmailDates: loadLatest,
+      now: NOW,
+    });
+    expect(summary).toEqual({
+      verifying: 0,
+      awaitingFirstEmail: 0,
+      silentThreads: 0,
+    });
+    expect(loadLatest).not.toHaveBeenCalled();
+  });
+
+  it("counts verifying / awaiting-first-email / silent with the finder's semantics", async () => {
+    // 5 verifying invoices: 2 with no thread (awaiting first email), 1 silent
+    // 8d, 1 active 2d, 1 linked but unpolled (no email_log rows → neither).
+    const summary = await summarizeDisputePipeline({
+      loadVerifyingInvoices: async () => [
+        makeRow({ invoiceId: "inv-a", bookkeeperThreadId: null }),
+        makeRow({ invoiceId: "inv-b", bookkeeperThreadId: null }),
+        makeRow({ invoiceId: "inv-c", bookkeeperThreadId: "t-silent" }),
+        makeRow({ invoiceId: "inv-d", bookkeeperThreadId: "t-active" }),
+        makeRow({ invoiceId: "inv-e", bookkeeperThreadId: "t-unpolled" }),
+      ],
+      loadLatestThreadEmailDates: async () =>
+        new Map([
+          ["t-silent", daysBeforeNow(8)],
+          ["t-active", daysBeforeNow(2)],
+        ]),
+      now: NOW,
+    });
+    expect(summary).toEqual({
+      verifying: 5,
+      awaitingFirstEmail: 2,
+      silentThreads: 1,
+    });
+  });
+
+  it("silence boundary: exactly 7 days counts as silent (≥)", async () => {
+    const summary = await summarizeDisputePipeline({
+      loadVerifyingInvoices: async () => [
+        makeRow({ bookkeeperThreadId: "t-1" }),
+      ],
+      loadLatestThreadEmailDates: async () =>
+        new Map([["t-1", daysBeforeNow(NUDGE_SILENCE_DAYS)]]),
+      now: NOW,
+    });
+    expect(summary.silentThreads).toBe(1);
+  });
+
+  it("zero-balance rows are excluded from every count", async () => {
+    const summary = await summarizeDisputePipeline({
+      loadVerifyingInvoices: async () => [
+        makeRow({ invoiceId: "inv-a", balance: "0.00", bookkeeperThreadId: null }),
+        makeRow({ invoiceId: "inv-b" }),
+      ],
+      loadLatestThreadEmailDates: noThreads,
+      now: NOW,
+    });
+    expect(summary).toEqual({
+      verifying: 1,
+      awaitingFirstEmail: 1,
+      silentThreads: 0,
+    });
   });
 });
 

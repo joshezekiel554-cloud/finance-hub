@@ -53,6 +53,23 @@ export type ChaseAccount = {
   action_plan?: string | null;
 };
 
+// Torah Judaica wind-down block for the daily chase digest (origin-split-2
+// W2 T6). Pipeline field names mirror the ai-agent module's
+// DisputePipelineSummary — structural twins, so the chase digest orchestrator
+// can pass the counts straight through without this integration importing
+// module code.
+export type TjDisputePipeline = {
+  verifying: number;
+  awaitingFirstEmail: number;
+  silentThreads: number;
+};
+
+export type TjChaseDigestBlock = {
+  // TJ overdue accounts (TJ severity path; verifying disputes excluded).
+  accounts: ChaseAccount[];
+  pipeline: TjDisputePipeline;
+};
+
 // Anthropic's TS SDK 0.30.x doesn't type cache_read/cache_creation tokens, the
 // thinking/output_config params, or cache_control on system blocks — those
 // fields go through the API as pass-through. Narrow only what we need here.

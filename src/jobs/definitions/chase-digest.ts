@@ -69,7 +69,10 @@ export async function processChaseDigest(
   // Build digest first regardless of shadow mode — that way logs always show
   // what would have been sent. Helps the parity diff against 1.0.
   const built = await buildDailyDigest();
-  const customerCount = built.overdueCustomers.length;
+  // Both books — the digest body is Feldart + a separate TJ wind-down
+  // section (origin-split-2 W2 T6).
+  const customerCount =
+    built.overdueCustomers.length + built.tjOverdueCustomers.length;
 
   if (built.error && !built.digest) {
     // Common case: "No overdue customers" — not an error, just nothing to do.

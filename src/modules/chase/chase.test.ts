@@ -500,37 +500,67 @@ describe("blendedSeverityWithParts", () => {
 
 // ---------- buildDailyDigest ----------
 
+// Origin-aware loadOverdue stub: the default (daily) digest loads BOTH books
+// separately ("feldart" main body, "tj" wind-down block).
+function loadByOrigin(
+  feldart: OverdueCustomer[],
+  tj: OverdueCustomer[] = [],
+): (origin?: "feldart" | "tj") => Promise<OverdueCustomer[]> {
+  return async (origin?: "feldart" | "tj") =>
+    origin === "tj" ? tj : feldart;
+}
+
+const emptyPipeline = {
+  verifying: 0,
+  awaitingFirstEmail: 0,
+  silentThreads: 0,
+};
+
+function makeOverdueRow(
+  overrides: Partial<OverdueCustomer> & { id?: string; name?: string } = {},
+): OverdueCustomer {
+  const id = overrides.id ?? "c1";
+  return {
+    customerId: id,
+    customer: makeCustomer({ id, displayName: overrides.name ?? "Acme" }),
+    invoices: [],
+    severity: {
+      score: 5000,
+      tier: "MEDIUM",
+      daysOverdue: 30,
+      totalOverdue: 5000,
+      oldestUnpaidDate: daysAgoIso(30),
+    },
+    ...overrides,
+  };
+}
+
 describe("buildDailyDigest", () => {
-  it("returns no-overdue error when nothing is open", async () => {
+  it("returns no-overdue error when nothing is open in either book", async () => {
     const generate: GenerateFn = vi.fn(async () => ({ digest: null, error: null }));
     const result = await buildDailyDigest({
-      loadOverdue: async () => [],
+      loadOverdue: loadByOrigin([], []),
+      loadDisputePipeline: async () => emptyPipeline,
       generateDigest: generate,
     });
     expect(generate).not.toHaveBeenCalled();
     expect(result.digest).toBeNull();
     expect(result.accounts).toEqual([]);
+    expect(result.tjAccounts).toEqual([]);
     expect(result.error).toBe("No overdue customers");
   });
 
   it("orchestrates lookup → top-N slice → AI call and returns digest", async () => {
-    const fakeRow: OverdueCustomer = {
-      customerId: "c1",
+    const fakeRow = makeOverdueRow({
+      id: "c1",
+      name: "Acme",
       customer: makeCustomer({
         id: "c1",
         displayName: "Acme",
         balance: "12345.67",
         overdueBalance: "5000.00",
       }),
-      invoices: [],
-      severity: {
-        score: 5000,
-        tier: "MEDIUM",
-        daysOverdue: 30,
-        totalOverdue: 5000,
-        oldestUnpaidDate: daysAgoIso(30),
-      },
-    };
+    });
     const generate: GenerateFn = vi.fn(async () => ({
       digest: "AI digest body",
       error: null,
@@ -538,7 +568,8 @@ describe("buildDailyDigest", () => {
     const result = await buildDailyDigest({
       topN: 5,
       userId: "user-1",
-      loadOverdue: async () => [fakeRow],
+      loadOverdue: loadByOrigin([fakeRow]),
+      loadDisputePipeline: async () => emptyPipeline,
       generateDigest: generate,
     });
 
@@ -547,14 +578,15 @@ describe("buildDailyDigest", () => {
     expect(result.accounts[0]?.name).toBe("Acme");
     expect(result.accounts[0]?.tier).toBe("MEDIUM");
     expect(generate).toHaveBeenCalledTimes(1);
-    expect(generate).toHaveBeenCalledWith(expect.any(Array), { userId: "user-1" });
+    // No TJ rows + zero pipeline → no TJ block sent to the AI.
+    expect(generate).toHaveBeenCalledWith(expect.any(Array), {
+      userId: "user-1",
+      tj: null,
+    });
   });
 
   it("propagates AI errors without throwing", async () => {
-    const fakeRow: OverdueCustomer = {
-      customerId: "c1",
-      customer: makeCustomer({ id: "c1" }),
-      invoices: [],
+    const fakeRow = makeOverdueRow({
       severity: {
         score: 100,
         tier: "LOW",
@@ -562,9 +594,10 @@ describe("buildDailyDigest", () => {
         totalOverdue: 100,
         oldestUnpaidDate: daysAgoIso(5),
       },
-    };
+    });
     const result = await buildDailyDigest({
-      loadOverdue: async () => [fakeRow],
+      loadOverdue: loadByOrigin([fakeRow]),
+      loadDisputePipeline: async () => emptyPipeline,
       generateDigest: async () => ({ digest: null, error: "API key missing" }),
     });
     expect(result.digest).toBeNull();
@@ -573,22 +606,24 @@ describe("buildDailyDigest", () => {
   });
 
   it("slices to topN before passing to AI", async () => {
-    const rows: OverdueCustomer[] = Array.from({ length: 10 }).map((_, i) => ({
-      customerId: `c${i}`,
-      customer: makeCustomer({ id: `c${i}`, displayName: `Cust ${i}` }),
-      invoices: [],
-      severity: {
-        score: 1000 - i,
-        tier: "LOW",
-        daysOverdue: 5,
-        totalOverdue: 1000 - i,
-        oldestUnpaidDate: daysAgoIso(5),
-      },
-    }));
+    const rows: OverdueCustomer[] = Array.from({ length: 10 }).map((_, i) =>
+      makeOverdueRow({
+        id: `c${i}`,
+        name: `Cust ${i}`,
+        severity: {
+          score: 1000 - i,
+          tier: "LOW",
+          daysOverdue: 5,
+          totalOverdue: 1000 - i,
+          oldestUnpaidDate: daysAgoIso(5),
+        },
+      }),
+    );
     const generate: GenerateFn = vi.fn(async () => ({ digest: "ok", error: null }));
     const result = await buildDailyDigest({
       topN: 3,
-      loadOverdue: async () => rows,
+      loadOverdue: loadByOrigin(rows),
+      loadDisputePipeline: async () => emptyPipeline,
       generateDigest: generate,
     });
     expect(result.accounts).toHaveLength(3);
@@ -599,6 +634,103 @@ describe("buildDailyDigest", () => {
     );
     const firstArg = (generate as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
     expect(firstArg).toHaveLength(3);
+  });
+
+  it("TJ rows present → AI receives a separate TJ block with accounts + pipeline", async () => {
+    const feldartRow = makeOverdueRow({ id: "f1", name: "Feldart Cust" });
+    const tjRow = makeOverdueRow({
+      id: "t1",
+      name: "TJ Cust",
+      severity: {
+        score: 9000,
+        tier: "HIGH",
+        daysOverdue: 90,
+        totalOverdue: 9000,
+        oldestUnpaidDate: daysAgoIso(90),
+      },
+    });
+    const pipeline = { verifying: 3, awaitingFirstEmail: 1, silentThreads: 2 };
+    const generate: GenerateFn = vi.fn(async () => ({ digest: "ok", error: null }));
+
+    const result = await buildDailyDigest({
+      loadOverdue: loadByOrigin([feldartRow], [tjRow]),
+      loadDisputePipeline: async () => pipeline,
+      generateDigest: generate,
+    });
+
+    // Feldart main body unchanged; TJ rides along in its own block.
+    expect(result.accounts).toHaveLength(1);
+    expect(result.accounts[0]?.name).toBe("Feldart Cust");
+    expect(result.tjAccounts).toHaveLength(1);
+    expect(result.tjAccounts[0]?.name).toBe("TJ Cust");
+    expect(result.tjOverdueCustomers).toHaveLength(1);
+    expect(result.disputePipeline).toEqual(pipeline);
+    expect(generate).toHaveBeenCalledWith(
+      [expect.objectContaining({ name: "Feldart Cust" })],
+      {
+        userId: null,
+        tj: {
+          accounts: [expect.objectContaining({ name: "TJ Cust", tier: "HIGH" })],
+          pipeline,
+        },
+      },
+    );
+  });
+
+  it("dispute pipeline alone (no TJ severity rows) still produces a TJ block", async () => {
+    // All TJ invoices verifying → excluded from severity, but the digest
+    // must still surface the dispute pipeline.
+    const feldartRow = makeOverdueRow({ id: "f1", name: "Feldart Cust" });
+    const pipeline = { verifying: 2, awaitingFirstEmail: 2, silentThreads: 0 };
+    const generate: GenerateFn = vi.fn(async () => ({ digest: "ok", error: null }));
+
+    await buildDailyDigest({
+      loadOverdue: loadByOrigin([feldartRow], []),
+      loadDisputePipeline: async () => pipeline,
+      generateDigest: generate,
+    });
+
+    expect(generate).toHaveBeenCalledWith(expect.any(Array), {
+      userId: null,
+      tj: { accounts: [], pipeline },
+    });
+  });
+
+  it("TJ-only state (Feldart clear) still generates a digest", async () => {
+    const tjRow = makeOverdueRow({ id: "t1", name: "TJ Cust" });
+    const generate: GenerateFn = vi.fn(async () => ({
+      digest: "tj only digest",
+      error: null,
+    }));
+    const result = await buildDailyDigest({
+      loadOverdue: loadByOrigin([], [tjRow]),
+      loadDisputePipeline: async () => emptyPipeline,
+      generateDigest: generate,
+    });
+    expect(result.digest).toBe("tj only digest");
+    expect(result.accounts).toEqual([]);
+    expect(result.tjAccounts).toHaveLength(1);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("origin-scoped digest skips the TJ section + pipeline entirely", async () => {
+    const tjRow = makeOverdueRow({ id: "t1", name: "TJ Cust" });
+    const loadDisputePipeline = vi.fn(async () => emptyPipeline);
+    const generate: GenerateFn = vi.fn(async () => ({ digest: "ok", error: null }));
+
+    const result = await buildDailyDigest({
+      origin: "tj",
+      loadOverdue: async (origin) => (origin === "tj" ? [tjRow] : []),
+      loadDisputePipeline,
+      generateDigest: generate,
+    });
+
+    expect(loadDisputePipeline).not.toHaveBeenCalled();
+    expect(result.accounts).toHaveLength(1);
+    expect(result.tjAccounts).toEqual([]);
+    expect(result.disputePipeline).toBeNull();
+    // Single-book call shape — no tj key (pre-W2 behaviour).
+    expect(generate).toHaveBeenCalledWith(expect.any(Array), { userId: null });
   });
 });
 

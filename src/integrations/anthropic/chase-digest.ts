@@ -7,6 +7,7 @@ import {
 import type {
   AnthropicResponseWithUsage,
   ChaseAccount,
+  TjChaseDigestBlock,
 } from "./types.js";
 
 const MODEL = "claude-sonnet-4-6";
@@ -19,6 +20,10 @@ export type ChaseDigestResult = {
 
 export type GenerateChaseDigestOptions = {
   userId?: string | null;
+  // Torah Judaica wind-down block (origin-split-2 W2 T6) — rendered as a
+  // separate, delimited prompt section so the model keeps the books apart.
+  // Null/undefined → no TJ section in the digest.
+  tj?: TjChaseDigestBlock | null;
 };
 
 export async function generateChaseDigest(
@@ -31,7 +36,9 @@ export async function generateChaseDigest(
       error: "Anthropic API key not configured. Set ANTHROPIC_API_KEY in env.",
     };
   }
-  if (!accounts || accounts.length === 0) {
+  // An empty Feldart candidate list is still a digest when a TJ wind-down
+  // block is present (the wind-down endgame: Feldart clear, TJ lingering).
+  if ((!accounts || accounts.length === 0) && !options.tj) {
     return { digest: null, error: "No accounts provided" };
   }
 
@@ -61,7 +68,7 @@ export async function generateChaseDigest(
       messages: [
         {
           role: "user",
-          content: buildChaseDigestUserPrompt(accounts),
+          content: buildChaseDigestUserPrompt(accounts, options.tj ?? null),
         },
       ],
       thinking: { type: "adaptive" },
