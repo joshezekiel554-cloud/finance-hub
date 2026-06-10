@@ -12,6 +12,7 @@ import { classifyExtensivEmail } from "~/modules/returns/extensiv-receipt-classi
 import { matchReceiptToRma } from "~/modules/returns/rma-matcher.js";
 import { linkCustomerReplyIfRmaThread } from "~/modules/returns/rma-customer-reply-linker.js";
 import { linkEmailToRmas } from "~/server/modules/rma/email-linker.js";
+import { listAliases } from "./aliases.js";
 import { BUSINESS_EMAILS } from "./business-emails.js";
 import { searchEmails } from "./client.js";
 import type {
@@ -119,16 +120,46 @@ async function buildCustomerEmailIndex(): Promise<Map<string, string>> {
   return index;
 }
 
-function classifyDirection(email: ParsedEmail): "inbound" | "outbound" {
-  return BUSINESS_EMAILS.has(email.fromEmail) ? "outbound" : "inbound";
+// Build the set of addresses we send from: the live Gmail sendAs aliases
+// plus the hardcoded BUSINESS_EMAILS fallback (always included, so a Gmail
+// API hiccup can never flip our own mail to inbound). Call once per poll
+// cycle — listAliases has its own 5-min cache, so this is cheap.
+export async function getOutboundAddressSet(
+  externalAccountId?: string,
+): Promise<Set<string>> {
+  const set = new Set(BUSINESS_EMAILS); // hard fallback, always included
+  try {
+    for (const a of await listAliases(externalAccountId)) {
+      if (a.sendAsEmail) set.add(a.sendAsEmail.toLowerCase());
+    }
+  } catch (err) {
+    log.warn(
+      { err },
+      "listAliases failed; direction uses hardcoded fallback only",
+    );
+  }
+  return set;
 }
 
-function matchCustomer(email: ParsedEmail, index: Map<string, string>): string | null {
+export function classifyDirection(
+  email: ParsedEmail,
+  outbound: Set<string>,
+): "inbound" | "outbound" {
+  return outbound.has(email.fromEmail.toLowerCase()) ? "outbound" : "inbound";
+}
+
+function matchCustomer(
+  email: ParsedEmail,
+  index: Map<string, string>,
+  outbound: Set<string>,
+): string | null {
   // Inbound matches on sender, outbound matches on recipient. This mirrors
   // 1.0's behavior where activity ingestion ties the message to whichever
   // party is the customer regardless of direction.
   const candidate =
-    classifyDirection(email) === "inbound" ? email.fromEmail : email.toEmail;
+    classifyDirection(email, outbound) === "inbound"
+      ? email.fromEmail
+      : email.toEmail;
   if (!candidate) return null;
   return index.get(candidate.toLowerCase()) ?? null;
 }
@@ -308,6 +339,10 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
   }
 
   const customerIndex = await buildCustomerEmailIndex();
+  // Once per poll cycle, not per email — listAliases caches for 5 minutes.
+  const outboundAddresses = await getOutboundAddressSet(
+    provider.externalAccountId,
+  );
 
   let inserted = 0;
   let matched = 0;
@@ -315,8 +350,8 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
   let newestSeen = cursorDate ? cursorDate.getTime() : 0;
 
   for (const email of newEmails) {
-    const direction = classifyDirection(email);
-    const customerId = matchCustomer(email, customerIndex);
+    const direction = classifyDirection(email, outboundAddresses);
+    const customerId = matchCustomer(email, customerIndex, outboundAddresses);
     const occurredAt = email.emailDate ?? new Date();
 
     const emailLogId = nanoid(24);
@@ -387,8 +422,9 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
     if (customerId) {
       matched++;
       try {
-        // Direction is decided by the matched alias upstream: messages from a
-        // BUSINESS_EMAILS sender are outbound; everything else is inbound.
+        // Direction is decided upstream: messages from one of our sendAs
+        // aliases (or the BUSINESS_EMAILS fallback) are outbound; everything
+        // else is inbound.
         // recordActivity handles the audit_log write atomically.
         const created = await recordActivity({
           customerId,
@@ -559,11 +595,14 @@ export async function syncEmailsForCustomer(
   const seen = new Set(existing.map((r) => r.gmailMessageId));
   const newEmails = fetched.filter((e) => e.id && !seen.has(e.id));
 
+  // Once per sync, not per email — listAliases caches for 5 minutes.
+  const outboundAddresses = await getOutboundAddressSet(opts.externalAccountId);
+
   let inserted = 0;
   let activitiesCreated = 0;
 
   for (const email of newEmails) {
-    const direction = classifyDirection(email);
+    const direction = classifyDirection(email, outboundAddresses);
     const occurredAt = email.emailDate ?? new Date();
     const emailLogId = nanoid(24);
     try {
