@@ -122,36 +122,6 @@ export async function getCustomerTags(
   return parseTags(data.customer?.tags);
 }
 
-// Reconciles the customer's tag set toward `tags` using atomic
-// tagsAdd/tagsRemove mutations — NOT a full-set REST PUT (audit #13).
-// We read the current set fresh, diff it against the desired set, and
-// only mutate the delta; tags present in both are never rewritten, so a
-// concurrent unrelated tag change can no longer be clobbered by the
-// write itself. (The caller's desired set is still computed from its
-// own earlier read — for hold flips the delta only ever contains the
-// b2b/upfront tags, which is the intent.)
-export async function setCustomerTags(
-  client: ShopifyClient,
-  shopifyCustomerId: number | string,
-  tags: string[],
-): Promise<void> {
-  const desired = new Set<string>();
-  for (const t of tags) {
-    const normalized = t.trim().toLowerCase();
-    if (normalized) desired.add(normalized);
-  }
-  const current = await getCustomerTags(client, shopifyCustomerId);
-  const currentSet = new Set(current);
-  const toAdd = [...desired].filter((t) => !currentSet.has(t));
-  const toRemove = current.filter((t) => !desired.has(t));
-  if (toAdd.length > 0) {
-    await runTagsMutation(client, "tagsAdd", shopifyCustomerId, toAdd);
-  }
-  if (toRemove.length > 0) {
-    await runTagsMutation(client, "tagsRemove", shopifyCustomerId, toRemove);
-  }
-}
-
 // Adds a tag via an atomic tagsAdd mutation. Idempotent (Shopify no-ops
 // when the tag is already present) and touches ONLY this tag — no
 // read-modify-write of the full set. The tag is normalized (trim +

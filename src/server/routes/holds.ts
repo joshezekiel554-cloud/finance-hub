@@ -26,8 +26,9 @@ import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
 import { ShopifyClient, ShopifyApiError } from "../../integrations/shopify/client.js";
 import {
+  addTag,
   parseTags,
-  setCustomerTags,
+  removeTag,
 } from "../../integrations/shopify/hold.js";
 import { findShopifyCustomer } from "../../modules/shopify-link/lookup.js";
 import { recordActivity } from "../../modules/crm/index.js";
@@ -41,40 +42,41 @@ const toggleBodySchema = z.object({
   targetState: z.enum(["hold", "active", "payment_upfront"]),
 });
 
-// Compute the canonical Shopify tag set for a target account status,
-// preserving any other tags the customer has. The output is the FULL
-// list (caller writes it via setCustomerTags). Mirrors the inverse of
-// statusFromTags() in the b2b-audit route — same rules, same order:
+// Compute the intent-level tag operations that move a customer from
+// their current tag set to a target account status. Mirrors the inverse
+// of statusFromTags() in the b2b-audit route — same rules:
 //
 //   active           → has b2b, no upfront
 //   payment_upfront  → has b2b AND upfront
 //   hold             → no b2b, no upfront
-function tagsForStatus(
+//
+// The ops are executed as atomic Shopify tagsAdd/tagsRemove mutations
+// (audit #13) — only the hold-managed tags are ever touched, never the
+// full set, so concurrent unrelated tag changes can't be clobbered.
+// Ops are diffed against the pre-read so a no-op toggle (rapid
+// double-click) skips the API writes entirely; the mutations themselves
+// are also idempotent server-side.
+type TagOp = { kind: "add" | "remove"; tag: string };
+
+function tagOpsForStatus(
   current: string[],
   target: "active" | "hold" | "payment_upfront",
-): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const t of current) {
-    const lower = t.trim().toLowerCase();
-    if (!lower || seen.has(lower)) continue;
-    if (target === "hold" && (lower === B2B_TAG || lower === UPFRONT_TAG)) {
-      continue;
-    }
-    if (target === "active" && lower === UPFRONT_TAG) {
-      // active strips upfront but keeps b2b (added below if missing).
-      continue;
-    }
-    seen.add(lower);
-    out.push(t.trim());
+): TagOp[] {
+  const has = (tag: string) => current.includes(tag);
+  const ops: TagOp[] = [];
+  if (target === "hold") {
+    if (has(B2B_TAG)) ops.push({ kind: "remove", tag: B2B_TAG });
+    if (has(UPFRONT_TAG)) ops.push({ kind: "remove", tag: UPFRONT_TAG });
+    return ops;
   }
-  if (target === "active" || target === "payment_upfront") {
-    if (!seen.has(B2B_TAG)) out.push(B2B_TAG);
+  if (!has(B2B_TAG)) ops.push({ kind: "add", tag: B2B_TAG });
+  if (target === "payment_upfront") {
+    if (!has(UPFRONT_TAG)) ops.push({ kind: "add", tag: UPFRONT_TAG });
+  } else if (has(UPFRONT_TAG)) {
+    // active strips upfront but keeps b2b.
+    ops.push({ kind: "remove", tag: UPFRONT_TAG });
   }
-  if (target === "payment_upfront" && !seen.has(UPFRONT_TAG)) {
-    out.push(UPFRONT_TAG);
-  }
-  return out;
+  return ops;
 }
 
 const holdsRoute: FastifyPluginAsync = async (app) => {
@@ -210,16 +212,19 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
     }
 
     const tagsBefore = parseTags(shopify.tags);
-    const tagsAfter = tagsForStatus(tagsBefore, targetState);
-    // No-op short-circuit: if the desired tag set is identical to what
-    // Shopify already has, skip the PUT entirely. Saves a request and
-    // avoids tripping rate limits on rapid double-clicks.
-    const sameTags =
-      tagsBefore.length === tagsAfter.length &&
-      tagsBefore.every((t, i) => t === tagsAfter[i]);
+    const ops = tagOpsForStatus(tagsBefore, targetState);
+    // Each addTag/removeTag is an atomic single-tag mutation that
+    // returns the fresh post-mutation tag set; the last one wins as the
+    // authoritative tagsAfter. When no ops are needed (already in the
+    // target state) we skip the API entirely and report the pre-read.
+    let tagsAfter = tagsBefore;
     try {
-      if (!sameTags) {
-        await setCustomerTags(client, shopify.id, tagsAfter);
+      for (const op of ops) {
+        const result =
+          op.kind === "add"
+            ? await addTag(client, shopify.id, op.tag)
+            : await removeTag(client, shopify.id, op.tag);
+        tagsAfter = result.tagsAfter;
       }
     } catch (err) {
       // 403 → likely missing write_customers scope. Bubble up a

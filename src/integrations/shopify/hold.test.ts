@@ -5,7 +5,6 @@ import {
   getCustomerTags,
   parseTags,
   removeTag,
-  setCustomerTags,
 } from "./hold.js";
 
 const BASE_URL = "https://test-shop.myshopify.com/admin/api/2026-01";
@@ -139,16 +138,23 @@ describe("addTag — atomic tagsAdd mutation", () => {
     );
   });
 
-  it("throws ShopifyApiError on top-level GraphQL errors (e.g. missing scope)", async () => {
+  it("throws a 403-status ShopifyApiError on access-denied (missing write_customers scope)", async () => {
     const { fetchImpl } = makeFetchStub({
       graphqlBody: {
-        errors: [{ message: "Access denied for tagsAdd field" }],
+        errors: [
+          {
+            message: "Access denied for tagsAdd field",
+            extensions: { code: "ACCESS_DENIED" },
+          },
+        ],
       },
     });
     const client = makeClient(fetchImpl);
-    await expect(addTag(client, 123, "b2b")).rejects.toBeInstanceOf(
-      ShopifyApiError,
-    );
+    const rejection = expect(addTag(client, 123, "b2b")).rejects;
+    await rejection.toBeInstanceOf(ShopifyApiError);
+    await expect(addTag(client, 123, "b2b")).rejects.toMatchObject({
+      status: 403,
+    });
   });
 });
 
@@ -196,59 +202,6 @@ describe("removeTag — atomic tagsRemove mutation", () => {
       "removeTag: tag must be non-empty",
     );
     expect(calls).toHaveLength(0);
-  });
-});
-
-describe("setCustomerTags — delta via atomic mutations, never a full-set PUT", () => {
-  it("adds missing tags and removes extra tags as separate atomic mutations", async () => {
-    // Current Shopify state: ["vip", "b2b"]; desired: ["vip", "b2b-b2b-upfront"].
-    const calls: FetchCall[] = [];
-    const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
-      const u = String(url);
-      const method = init?.method ?? "GET";
-      const body =
-        typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-      calls.push({ url: u, method, body });
-      if (u === GRAPHQL_URL) {
-        const isAdd = (body as { query: string }).query.includes("tagsAdd");
-        return jsonResponse({
-          data: isAdd
-            ? { tagsAdd: { userErrors: [] } }
-            : { tagsRemove: { userErrors: [] } },
-        });
-      }
-      return jsonResponse({ customer: { id: 123, tags: "vip, b2b" } });
-    }) as typeof fetch;
-    const client = makeClient(fetchImpl);
-
-    await setCustomerTags(client, 123, ["vip", "b2b-b2b-upfront"]);
-
-    const gql = graphqlCalls(calls);
-    expect(gql).toHaveLength(2);
-    const addCall = gql.find((c) =>
-      (c.body as { query: string }).query.includes("tagsAdd"),
-    );
-    const removeCall = gql.find((c) =>
-      (c.body as { query: string }).query.includes("tagsRemove"),
-    );
-    expect((addCall?.body as { variables: unknown }).variables).toEqual({
-      id: "gid://shopify/Customer/123",
-      tags: ["b2b-b2b-upfront"],
-    });
-    expect((removeCall?.body as { variables: unknown }).variables).toEqual({
-      id: "gid://shopify/Customer/123",
-      tags: ["b2b"],
-    });
-    // "vip" is in both current and desired — never rewritten.
-    expect(fullSetWrites(calls)).toHaveLength(0);
-  });
-
-  it("issues no mutation when the desired set already matches", async () => {
-    const { fetchImpl, calls } = makeFetchStub({ tagsString: "vip, b2b" });
-    const client = makeClient(fetchImpl);
-    await setCustomerTags(client, 123, ["VIP", "b2b"]);
-    expect(graphqlCalls(calls)).toHaveLength(0);
-    expect(fullSetWrites(calls)).toHaveLength(0);
   });
 });
 

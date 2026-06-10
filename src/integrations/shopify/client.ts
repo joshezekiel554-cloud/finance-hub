@@ -57,8 +57,23 @@ const DEFAULT_RETRY_AFTER_MS = 2000;
 // responsibility to inspect.
 type GraphQLEnvelope<T> = {
   data?: T;
-  errors?: Array<{ message: string }>;
+  errors?: Array<{ message: string; extensions?: { code?: string } }>;
 };
+
+// Shopify's GraphQL access-denied (missing scope, e.g. write_customers)
+// arrives as HTTP 200 + a top-level error with extensions.code
+// ACCESS_DENIED. Detect it so graphql() can surface a 403-status
+// ShopifyApiError — callers (e.g. the hold-toggle route) key their
+// "re-run OAuth" hint on status 403, same as the REST surface gave them.
+function isGraphQLAccessDenied(
+  errors: NonNullable<GraphQLEnvelope<unknown>["errors"]>,
+): boolean {
+  return errors.some(
+    (e) =>
+      e.extensions?.code === "ACCESS_DENIED" ||
+      /access denied/i.test(e.message),
+  );
+}
 
 export class ShopifyClient {
   private readonly cfg: Required<Omit<ShopifyClientConfig, "fetchImpl" | "sleep">> &
@@ -142,10 +157,10 @@ export class ShopifyClient {
   // Admin GraphQL POST. Same base path + version as the REST surface —
   // /admin/api/<version>/graphql.json — and the same auth/429-retry
   // behavior via request(). Throws ShopifyApiError on non-2xx, a
-  // non-JSON body, top-level GraphQL `errors` (e.g. access denied for a
-  // missing scope arrives as HTTP 200 + errors), or a missing `data`
-  // key. Mutation userErrors are returned inside T for the caller to
-  // inspect.
+  // non-JSON body, top-level GraphQL `errors`, or a missing `data` key.
+  // Access-denied GraphQL errors (missing scope — HTTP 200 on the wire)
+  // throw with status 403 so callers' scope-missing handling fires.
+  // Mutation userErrors are returned inside T for the caller to inspect.
   async graphql<T>(
     query: string,
     variables?: Record<string, unknown>,
@@ -170,8 +185,14 @@ export class ShopifyClient {
       );
     }
     if (envelope.errors && envelope.errors.length > 0) {
+      // Map access-denied to status 403 (the HTTP status is 200 for
+      // GraphQL-level errors) so scope-missing keeps its distinct
+      // signature for callers.
+      const status = isGraphQLAccessDenied(envelope.errors)
+        ? 403
+        : res.status;
       throw new ShopifyApiError(
-        res.status,
+        status,
         path,
         `GraphQL errors: ${envelope.errors.map((e) => e.message).join("; ")}`,
       );

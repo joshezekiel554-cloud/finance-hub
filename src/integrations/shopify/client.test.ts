@@ -214,15 +214,45 @@ describe("ShopifyClient.graphql", () => {
 
   it("throws ShopifyApiError on top-level GraphQL errors even with HTTP 200", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse({ errors: [{ message: "Access denied for tagsAdd field" }] }),
+      jsonResponse({ errors: [{ message: "Field 'x' doesn't exist" }] }),
     );
     const client = makeClient(fetchImpl as typeof fetch);
     await expect(client.graphql("mutation { x }")).rejects.toThrow(
-      /Access denied/,
+      /doesn't exist/,
     );
     await expect(client.graphql("mutation { x }")).rejects.toBeInstanceOf(
       ShopifyApiError,
     );
+  });
+
+  it("maps GraphQL ACCESS_DENIED (extensions.code) to a 403-status ShopifyApiError", async () => {
+    // Missing scope (e.g. write_customers) arrives as HTTP 200 + a
+    // top-level error; the route's re-OAuth hint keys on status 403.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        errors: [
+          {
+            message: "Required access: `write_customers` access scope.",
+            extensions: { code: "ACCESS_DENIED" },
+          },
+        ],
+      }),
+    );
+    const client = makeClient(fetchImpl as typeof fetch);
+    await expect(client.graphql("mutation { x }")).rejects.toMatchObject({
+      name: "ShopifyApiError",
+      status: 403,
+    });
+  });
+
+  it("maps an access-denied message without extensions to status 403 too", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ errors: [{ message: "Access denied for tagsAdd field" }] }),
+    );
+    const client = makeClient(fetchImpl as typeof fetch);
+    await expect(client.graphql("mutation { x }")).rejects.toMatchObject({
+      status: 403,
+    });
   });
 
   it("throws ShopifyApiError on non-2xx", async () => {
