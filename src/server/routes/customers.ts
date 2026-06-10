@@ -335,6 +335,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       WHERE ${invoices.customerId} = \`customers\`.\`id\`
         AND ${invoices.balance} > 0
         AND ${invoices.dueDate} IS NOT NULL
+        AND ${invoices.origin} = 'feldart'
     )`;
     const lastPaymentExpr = sql<Date | string | null>`(
       SELECT MAX(${activities.occurredAt})
