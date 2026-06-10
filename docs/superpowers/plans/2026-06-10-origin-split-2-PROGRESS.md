@@ -12,7 +12,7 @@ Context notes (survive compact):
 - [x] Spec written, operator-approved, committed (`818042b` post-rebase)
 - [x] Recon (2 thorough agents) — anchors embedded in W1 plan
 - [x] W1 T1 winddown backend + 0043 — `006e7ec` + polish `b6500b0` (spec ✅, quality ✅; baselineDate + 15-min upsert throttle added). winddown 18 tests, chase suite 57/57. Migration `0043_omniscient_sauron` applied locally.
-- [ ] W1 T2 chase two sections
+- [x] W1 T2 chase two sections — `95376bc` + review fixes `b607d63` (spec ✅ incl. sequential TJ chase queue judged faithful; quality ✅ after per-row statement scoping + shared bookkeeper-compose helper extraction). Full suite 710/710. book-sections/ components born.
 - [ ] W1 T3 customers list strip
 - [ ] W1 T4 customer-detail panels
 - [ ] W1 T5 statements origin required
