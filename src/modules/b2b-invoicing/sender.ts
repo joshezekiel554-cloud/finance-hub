@@ -184,10 +184,30 @@ export function buildPayload(
     if (action.type === "qty_change") {
       const detail = line.SalesItemLineDetail;
       const newQty = action.toQty;
+      // The 3rd-party Shopify→QB sync bakes special pricing into Amount, so
+      // Amount can differ from UnitPrice×Qty. Rebill at the effective
+      // per-unit rate (origAmount/origQty) when they disagree beyond 1¢ of
+      // rounding noise — recomputing from list UnitPrice would silently
+      // drop the discount. The rate is rounded to 5dp BEFORE both uses
+      // (within QBO's 7-decimal UnitPrice cap), so if QBO recomputes
+      // Amount from our UnitPrice×Qty it reproduces our round2 Amount —
+      // a raw repeating-decimal float could disagree by 1¢.
+      // Negative-amount lines yield a negative effRate deliberately
+      // (preserves a credit line's per-unit value); negative-qty lines
+      // fall through to list price via the origQty>0 guard.
+      const origAmount = Number(line.Amount ?? 0);
+      const origQty = Number(detail?.Qty ?? 0);
+      const listPrice = Number(detail?.UnitPrice ?? 0);
+      const hasBakedDiscount =
+        origQty > 0 &&
+        round2(Math.abs(origAmount - round2(listPrice * origQty))) > 0.01;
+      const effRate = hasBakedDiscount
+        ? round5(origAmount / origQty)
+        : listPrice;
       const unitPrice =
         action.unitPriceOverride !== undefined
           ? action.unitPriceOverride
-          : (detail?.UnitPrice ?? 0);
+          : effRate;
       updatedLines.push({
         ...line,
         Amount: round2(unitPrice * newQty),
@@ -447,6 +467,12 @@ function buildAddLine(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// Effective-rate precision bound: 5dp keeps the rate well within QBO's
+// 7-decimal UnitPrice cap while staying exact for any real per-unit price.
+function round5(n: number): number {
+  return Math.round(n * 100000) / 100000;
 }
 
 // Adds `days` to a YYYY-MM-DD string and returns the same shape. UTC math

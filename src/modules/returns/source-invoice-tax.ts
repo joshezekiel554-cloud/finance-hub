@@ -12,17 +12,26 @@
 //                    rare and the operator can adjust manually if needed)
 //
 // Errors looking up an individual invoice (deleted, never synced, QBO 404)
-// are skipped so a single bad reference doesn't block the rest of the lookup.
+// are skipped so a single bad reference doesn't block the rest of the lookup —
+// but lookup ERRORS (network/auth/5xx, as opposed to "not found") are reported
+// via failedDocNumbers so callers can warn that the tax status may be
+// incomplete instead of silently defaulting a taxed return to non-taxable.
 
 import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { rmaItems } from "../../db/schema/returns.js";
 import { QboClient } from "../../integrations/qb/client.js";
+import { createLogger } from "../../lib/logger.js";
+
+const log = createLogger({ component: "returns.source-invoice-tax" });
 
 export type SourceInvoiceTaxStatus = {
   hadTax: boolean;
   ratePercent: number;
   taxCodeRef: string | null;
+  // Doc numbers whose QBO lookup errored (NOT "not found") — tax status may
+  // be incomplete when non-empty.
+  failedDocNumbers: string[];
 };
 
 export async function getSourceInvoiceTaxStatus(
@@ -43,13 +52,14 @@ export async function getSourceInvoiceTaxStatus(
   );
 
   if (docNumbers.length === 0) {
-    return { hadTax: false, ratePercent: 0, taxCodeRef: null };
+    return { hadTax: false, ratePercent: 0, taxCodeRef: null, failedDocNumbers: [] };
   }
 
   let totalTax = 0;
   let totalSubtotal = 0;
   let anyHadTax = false;
   let taxCodeRef: string | null = null;
+  const failedDocNumbers: string[] = [];
 
   for (const docNum of docNumbers) {
     try {
@@ -70,8 +80,11 @@ export async function getSourceInvoiceTaxStatus(
           taxCodeRef = inv.TxnTaxDetail.TxnTaxCodeRef.value;
         }
       }
-    } catch {
-      // Lookup failure for one invoice shouldn't block the others.
+    } catch (err) {
+      // Lookup failure for one invoice shouldn't block the others — but
+      // record it so callers can surface that the result may be incomplete.
+      failedDocNumbers.push(docNum);
+      log.warn({ rmaId, docNumber: docNum, err }, "source-invoice tax lookup failed");
     }
   }
 
@@ -82,5 +95,6 @@ export async function getSourceInvoiceTaxStatus(
     hadTax: anyHadTax,
     ratePercent,
     taxCodeRef,
+    failedDocNumbers,
   };
 }

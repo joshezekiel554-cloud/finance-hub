@@ -1,5 +1,6 @@
 import {
   decimal,
+  foreignKey,
   index,
   int,
   json,
@@ -11,6 +12,7 @@ import {
 } from "drizzle-orm/mysql-core";
 import { customers } from "./customers";
 import { users } from "./auth";
+import { aiProposals } from "./ai-proposals";
 
 export const auditLog = mysqlTable(
   "audit_log",
@@ -141,13 +143,20 @@ export const chaseLog = mysqlTable(
     }),
     // FK back to ai_proposals when this chase originated from an approved
     // autopilot proposal. Distinct from aiDigestId (which tracks the
-    // chase-digest cron job's AI summary).
+    // chase-digest cron job's AI summary). Constraint declared in the
+    // extra-config below with its existing prod name (created by
+    // 0036_autopilot.sql).
     aiProposalId: varchar("ai_proposal_id", { length: 24 }),
     notes: text("notes"),
   },
   (t) => ({
     customerIdIdx: index("idx_chase_log_customer_id").on(t.customerId),
     chasedAtIdx: index("idx_chase_log_chased_at").on(t.chasedAt),
+    aiProposalFk: foreignKey({
+      name: "fk_chase_log_ai_proposal",
+      columns: [t.aiProposalId],
+      foreignColumns: [aiProposals.id],
+    }).onDelete("set null"),
   }),
 );
 

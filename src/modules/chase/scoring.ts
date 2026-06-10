@@ -51,9 +51,11 @@ export function computeScore(totalOverdue: number, daysOverdue: number): number 
 // Sums balance of customer's invoices that are past due AND still have balance.
 // Mirrors 1.0's overdue calculation: dueDate < today && balance > 0.
 // Customers carry a denormalized `overdueBalance` (DECIMAL stored as string in
-// MySQL); use that as the authoritative figure when present, falling back to
-// summing the supplied invoice list. Both paths align because QB sync is what
-// populates the denormalized column.
+// MySQL); the legacy default prefers it when present, falling back to summing
+// the supplied invoice list. NOTE (audit #12): the denormalized figure can be
+// stale, so every chase path (origin-scoped AND blended, see lookups.ts /
+// chase-next.ts) now passes `rawOverdueOverride` derived from the invoice set —
+// the default only remains for callers outside the chase module.
 export function computeSeverity(
   customer: Customer,
   invoices: Invoice[],
@@ -132,7 +134,10 @@ function toDate(v: string | Date): Date {
   return new Date(v);
 }
 
-function startOfDayUtc(d: Date): Date {
+// Exported so severity callers (lookups.ts) can pass the same day-boundary
+// cutoff to computeOriginBalances — keeps "due exactly today" consistently
+// NOT overdue across both filters.
+export function startOfDayUtc(d: Date): Date {
   return new Date(
     Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
   );

@@ -11,7 +11,7 @@
 // its own data fetch.
 
 import type { FastifyPluginAsync } from "fastify";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../../db/index.js";
@@ -21,7 +21,12 @@ import { rmas } from "../../db/schema/returns.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { chaseDismissals } from "../../db/schema/chase-dismissals.js";
-import { computeSeverity } from "../../modules/chase/scoring.js";
+import {
+  blendedSeverity,
+  hasOpenOverdueInvoiceSql,
+  loadOriginCreditByCustomer,
+  notVerifyingSql,
+} from "../../modules/chase/lookups.js";
 import { requireAuth } from "../lib/auth.js";
 
 const dashboardRoute: FastifyPluginAsync = async (app) => {
@@ -385,15 +390,18 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
   app.get("/chase", async (req, reply) => {
     await requireAuth(req);
 
-    // 1. Pull every non-dismissed customer with overdueBalance > 0.
-    //    Uses NOT IN subquery — cheaper than leftJoin + isNull at scale,
-    //    and the chase_dismissals row count stays small.
+    // 1. Pull every non-dismissed candidate customer — denormalized
+    //    overdueBalance > 0 OR an open overdue (non-verifying) invoice, the
+    //    same candidate condition as the chase module, so a customer whose
+    //    denormalized figure lags at 0 still appears here. Uses NOT IN
+    //    subquery — cheaper than leftJoin + isNull at scale, and the
+    //    chase_dismissals row count stays small.
     const overdueRows = await db
       .select()
       .from(customers)
       .where(
         and(
-          gt(customers.overdueBalance, "0"),
+          or(gt(customers.overdueBalance, "0"), hasOpenOverdueInvoiceSql),
           sql`${customers.id} NOT IN (SELECT ${chaseDismissals.customerId} FROM ${chaseDismissals})`,
         ),
       );
@@ -402,15 +410,25 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
       return reply.send({ rows: [] });
     }
 
-    // 2. Fetch all open invoices for these customers in ONE query
-    //    (batched, not N+1). Group by customerId in memory.
+    // 2. Fetch all open invoices (excluding TJ invoices parked for
+    //    bookkeeper verification, same as the chase module) plus per-origin
+    //    credit maps for these customers — batched, not N+1. Group invoices
+    //    by customerId in memory.
     const customerIds = overdueRows.map((c) => c.id);
-    const allInvoices = await db
-      .select()
-      .from(invoices)
-      .where(
-        and(inArray(invoices.customerId, customerIds), gt(invoices.balance, "0")),
-      );
+    const [allInvoices, feldartCredit, tjCredit] = await Promise.all([
+      db
+        .select()
+        .from(invoices)
+        .where(
+          and(
+            inArray(invoices.customerId, customerIds),
+            gt(invoices.balance, "0"),
+            notVerifyingSql,
+          ),
+        ),
+      loadOriginCreditByCustomer("feldart", customerIds),
+      loadOriginCreditByCustomer("tj", customerIds),
+    ]);
     const invoicesByCustomer = new Map<string, typeof allInvoices>();
     for (const inv of allInvoices) {
       if (!inv.customerId) continue;
@@ -419,20 +437,28 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
       invoicesByCustomer.set(inv.customerId, list);
     }
 
-    // 3. Score + shape rows.
-    const enriched = overdueRows.map((c) => {
-      const sev = computeSeverity(c, invoicesByCustomer.get(c.id) ?? []);
-      return {
-        customerId: c.id,
-        customerName: c.displayName,
-        tier: sev.tier,
-        score: sev.score,
-        daysOverdue: sev.daysOverdue,
-        totalOverdue: sev.totalOverdue,
-        oldestUnpaidDate: sev.oldestUnpaidDate,
-        primaryEmail: c.primaryEmail,
-      };
-    });
+    // 3. Score + shape rows. Severity is derived from the invoice set
+    //    (per-origin credit netting summed), never the denormalized
+    //    customers.overdue_balance — audit #12. Rows whose real overdue
+    //    nets to zero (stale denormalized figure) drop out.
+    const enriched = overdueRows
+      .map((c) => {
+        const sev = blendedSeverity(c, invoicesByCustomer.get(c.id) ?? [], {
+          feldart: feldartCredit.get(c.id) ?? 0,
+          tj: tjCredit.get(c.id) ?? 0,
+        });
+        return {
+          customerId: c.id,
+          customerName: c.displayName,
+          tier: sev.tier,
+          score: sev.score,
+          daysOverdue: sev.daysOverdue,
+          totalOverdue: sev.totalOverdue,
+          oldestUnpaidDate: sev.oldestUnpaidDate,
+          primaryEmail: c.primaryEmail,
+        };
+      })
+      .filter((r) => r.totalOverdue > 0);
 
     // 4. Sort by tier rank then daysOverdue desc, take top 10.
     const tierRank = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;

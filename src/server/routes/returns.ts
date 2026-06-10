@@ -39,6 +39,8 @@ import {
 } from "../../modules/returns/qbo-lookup.js";
 import { parseReturnRequestEmail } from "../../modules/returns/parser.js";
 import { getSourceInvoiceTaxStatus } from "../../modules/returns/source-invoice-tax.js";
+import { classifyOperatorFeeLine } from "../../modules/returns/credit-memo-builder.js";
+import { loadAppSettings } from "../../modules/statements/settings.js";
 import { getPriorInvoiceItems } from "../../modules/returns/prior-invoice-check.js";
 import {
   RMA_RETURN_TYPES,
@@ -661,10 +663,40 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           TaxCodeRef?: { value: string };
         };
       };
-      const qboLines: CreditMemoLine[] = body.lines.map((line) => {
+      // Fee-line parity with the builder path (audit #17). Operator-entered
+      // negative lines that reference the configured shipping/restocking fee
+      // items are real fee deductions — run the same configuration guard
+      // buildAndPushCreditMemo uses before anything hits QBO.
+      const settings = await loadAppSettings();
+      let feeKinds: Array<"shipping" | "restocking" | null>;
+      try {
+        feeKinds = body.lines.map((line) =>
+          classifyOperatorFeeLine(line, settings),
+        );
+      } catch (err) {
+        reply.code(409);
+        return {
+          error:
+            err instanceof Error ? err.message : "fee line validation failed",
+        };
+      }
+
+      // Whether the CM applies tax — driven by the goods (non-fee) lines.
+      // Fee lines follow this flag rather than their own taxable checkbox,
+      // mirroring the builder path where one lineTaxCode stamps every line
+      // (goods AND fee deductions) so the taxable subtotal nets the fees.
+      // Goods lines deliberately KEEP their per-line taxable flag (a
+      // divergence from the builder's single lineTaxCode) — the create page
+      // exposes a per-line tax checkbox, so mixed-taxability CMs are valid.
+      const anyTaxable = body.lines.some(
+        (line, i) => feeKinds[i] === null && line.taxable,
+      );
+
+      const qboLines: CreditMemoLine[] = body.lines.map((line, i) => {
         const qty = parseFloat(line.quantity);
         const unitPrice = parseFloat(line.unitPrice);
         const amount = Math.round(qty * unitPrice * 100) / 100;
+        const taxable = feeKinds[i] !== null ? anyTaxable : line.taxable;
         return {
           DetailType: "SalesItemLineDetail",
           Amount: amount,
@@ -673,7 +705,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
             ItemRef: { value: line.qbItemId },
             Qty: qty,
             UnitPrice: unitPrice,
-            TaxCodeRef: { value: line.taxable ? "TAX" : "NON" },
+            TaxCodeRef: { value: taxable ? "TAX" : "NON" },
           },
         };
       });
@@ -724,11 +756,11 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         payload.TxnDate = body.issueDate;
       }
 
-      // Sales tax. If ANY line is taxable, look up the source-invoice tax
-      // code and set TxnTaxCodeRef so QBO recomputes tax server-side from
-      // the actual rate on the customer's original sale. When no line is
-      // taxable we omit the block entirely → CM is non-taxable.
-      const anyTaxable = body.lines.some((l) => l.taxable);
+      // Sales tax. If ANY goods line is taxable (anyTaxable, computed with
+      // the fee lines above), look up the source-invoice tax code and set
+      // TxnTaxCodeRef so QBO recomputes tax server-side from the actual
+      // rate on the customer's original sale. When no line is taxable we
+      // omit the block entirely → CM is non-taxable.
       let taxStatusError: string | null = null;
       if (anyTaxable) {
         try {
@@ -737,6 +769,11 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
             payload.TxnTaxDetail = {
               TxnTaxCodeRef: { value: taxStatus.taxCodeRef },
             };
+          }
+          if (taxStatus.failedDocNumbers.length > 0) {
+            // Partial lookup failure — don't block, but surface it on the
+            // response so the operator knows the tax mirror may be off.
+            taxStatusError = `tax lookup failed for source invoice(s) ${taxStatus.failedDocNumbers.join(", ")} — tax status may be incomplete; verify in QBO`;
           }
         } catch (err) {
           // Don't block CM creation on a tax-lookup failure — we keep

@@ -51,6 +51,30 @@ export class ShopifyApiError extends Error {
 
 const DEFAULT_RETRY_AFTER_MS = 2000;
 
+// Envelope shape of an Admin GraphQL response. `errors` are top-level
+// transport/validation errors (bad query, access denied, throttled);
+// mutation-specific userErrors live inside `data` and are the caller's
+// responsibility to inspect.
+type GraphQLEnvelope<T> = {
+  data?: T;
+  errors?: Array<{ message: string; extensions?: { code?: string } }>;
+};
+
+// Shopify's GraphQL access-denied (missing scope, e.g. write_customers)
+// arrives as HTTP 200 + a top-level error with extensions.code
+// ACCESS_DENIED. Detect it so graphql() can surface a 403-status
+// ShopifyApiError — callers (e.g. the hold-toggle route) key their
+// "re-run OAuth" hint on status 403, same as the REST surface gave them.
+function isGraphQLAccessDenied(
+  errors: NonNullable<GraphQLEnvelope<unknown>["errors"]>,
+): boolean {
+  return errors.some(
+    (e) =>
+      e.extensions?.code === "ACCESS_DENIED" ||
+      /access denied/i.test(e.message),
+  );
+}
+
 export class ShopifyClient {
   private readonly cfg: Required<Omit<ShopifyClientConfig, "fetchImpl" | "sleep">> &
     Pick<ShopifyClientConfig, "fetchImpl" | "sleep">;
@@ -128,6 +152,62 @@ export class ShopifyClient {
       throw new ShopifyApiError(res.status, path, `non-JSON body: ${text.slice(0, 200)}`);
     }
     return { data, res };
+  }
+
+  // Admin GraphQL POST. Same base path + version as the REST surface —
+  // /admin/api/<version>/graphql.json — and the same auth/429-retry
+  // behavior via request(). Throws ShopifyApiError on non-2xx, a
+  // non-JSON body, top-level GraphQL `errors`, or a missing `data` key.
+  // Access-denied GraphQL errors (missing scope — HTTP 200 on the wire)
+  // throw with status 403 so callers' scope-missing handling fires.
+  // Mutation userErrors are returned inside T for the caller to inspect.
+  // Note: GraphQL rate-limiting arrives as HTTP 200 + extensions.code
+  // THROTTLED, which the HTTP-429 retry loop never sees — not retried
+  // here (low-frequency operator actions; fine for now).
+  async graphql<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+  ): Promise<T> {
+    const path = "/graphql.json";
+    const res = await this.request(path, {
+      method: "POST",
+      body: JSON.stringify({ query, variables }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new ShopifyApiError(res.status, path, text);
+    }
+    let envelope: GraphQLEnvelope<T>;
+    try {
+      envelope = JSON.parse(text) as GraphQLEnvelope<T>;
+    } catch {
+      throw new ShopifyApiError(
+        res.status,
+        path,
+        `non-JSON body: ${text.slice(0, 200)}`,
+      );
+    }
+    if (envelope.errors && envelope.errors.length > 0) {
+      // Map access-denied to status 403 (the HTTP status is 200 for
+      // GraphQL-level errors) so scope-missing keeps its distinct
+      // signature for callers.
+      const status = isGraphQLAccessDenied(envelope.errors)
+        ? 403
+        : res.status;
+      throw new ShopifyApiError(
+        status,
+        path,
+        `GraphQL errors: ${envelope.errors.map((e) => e.message).join("; ")}`,
+      );
+    }
+    if (envelope.data === undefined) {
+      throw new ShopifyApiError(
+        res.status,
+        path,
+        `GraphQL response missing data: ${text.slice(0, 200)}`,
+      );
+    }
+    return envelope.data;
   }
 
   // Paginated GET. Pulls up to `pageSize` per call; caller drives pagination

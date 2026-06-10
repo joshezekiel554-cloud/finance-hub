@@ -12,7 +12,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { searchEmails } from "../../integrations/gmail/client.js";
+import { searchEmails, getMessage } from "../../integrations/gmail/client.js";
 import { classifyExtensivEmail } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
@@ -21,6 +21,7 @@ import {
   parseShipmentHtml,
   reconcile,
   sendInvoiceUpdate,
+  checkVerifyGate,
   type ReconcileAction,
   type InvoiceLineForReconcile,
   type ShipmentForReconcile,
@@ -225,6 +226,18 @@ const sendBodySchema = z.object({
   // the send date — matches operator expectation that invoices are dated when
   // they leave finance-hub, not when they were first drafted in Shopify.
   txnDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // ── Parse-gap verify gate (audit #15) ────────────────────────────────────
+  // Gmail id of the source shipment email. The invoice branch re-fetches and
+  // re-parses it to re-derive the unreadable-rows flag server-side; required
+  // for invoice sends unless unreadAck is true (the ack covers unreadable
+  // rows by definition). Ignored for sales receipts (never gated).
+  gmailId: z.string().min(1).max(64).optional(),
+  // QBO Line.Ids of flagged removals the operator verified against the
+  // source email — same identifier the UI's verifiedLineIds Set holds.
+  // Defaults to [] so a stale client posting flagged removes fails closed.
+  verifiedRemoveLineIds: z.array(z.string().min(1).max(64)).max(500).default([]),
+  // Operator's "checked the email" acknowledgement for unreadable rows.
+  unreadAck: z.boolean().default(false),
 });
 
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
@@ -767,6 +780,9 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       billEmailCc,
       billEmailBcc,
       txnDate,
+      gmailId,
+      verifiedRemoveLineIds,
+      unreadAck,
     } = parse.data;
 
     // Today in America/New_York — matches QBO's default timezone for TxnDate.
@@ -911,6 +927,68 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // Default Invoice branch — the existing reconcile + send flow.
+
+    // ── Parse-gap verify gate (server-side; audit #15) ──────────────────────
+    // Mirrors the UI gate in invoicing-today.tsx exactly: every flagged
+    // removal (last remove per SKU — matching ReconcileTable's per-SKU
+    // collapse) must be covered by verifiedRemoveLineIds, and unreadable
+    // source-email rows require unreadAck. Flagged removes re-derive from the
+    // posted actions alone; unreadable rows re-derive by re-parsing the
+    // stored source email (the same parseShipmentHtml pass GET /today ran).
+    // Fail closed: a stale client that sends neither field gets a 400 telling
+    // the operator to refresh and re-verify. Sales receipts returned above —
+    // their send path ignores line actions, so they are never gated.
+    // NOTE: the gmailId↔invoiceId binding is trust-on-client (any shipment
+    // email id is accepted); the threat model is operator mistakes / stale
+    // clients, not malice — don't mistake this for a hardened check.
+    {
+      let unparsedRows: string[] = [];
+      if (!unreadAck) {
+        // The ack covers unreadable rows by definition — only re-fetch and
+        // re-parse the source email when the operator hasn't acknowledged.
+        if (!gmailId) {
+          return reply.code(400).send({
+            error:
+              "parse-gap verification required: missing source email id — refresh the page and resend so removed/unreadable lines can be verified",
+          });
+        }
+        try {
+          const sourceEmail = await getMessage(gmailId);
+          unparsedRows = parseShipmentHtml(sourceEmail.htmlBody).unparsedRows;
+        } catch (err) {
+          log.error(
+            { err, gmailId, invoiceId },
+            "parse-gap gate: source email refetch failed",
+          );
+          return reply.code(502).send({
+            error:
+              "parse-gap verification failed: could not re-read the source email — try again",
+          });
+        }
+      }
+      const gate = checkVerifyGate({
+        actions: actions as ReconcileAction[],
+        unparsedRows,
+        verifiedRemoveLineIds,
+        unreadAck,
+      });
+      if (!gate.ok) {
+        log.warn(
+          {
+            invoiceId,
+            unverifiedRemoves: gate.unverifiedRemoves,
+            unreadRowCount: gate.unacknowledgedUnreadRows.length,
+          },
+          "send blocked by parse-gap verify gate",
+        );
+        return reply.code(400).send({
+          error: gate.error,
+          unverifiedRemoves: gate.unverifiedRemoves,
+          unacknowledgedUnreadRows: gate.unacknowledgedUnreadRows,
+        });
+      }
+    }
+
     let invoice: QboInvoice | null = null;
     try {
       invoice = await qbClient.getInvoiceById(invoiceId);

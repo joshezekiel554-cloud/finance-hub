@@ -40,6 +40,8 @@ vi.mock("../../integrations/qb/client.js", () => ({
 import {
   buildCreditMemoLineDescription,
   buildAndPushCreditMemo,
+  assertFeeItemConfigured,
+  classifyOperatorFeeLine,
 } from "./credit-memo-builder.js";
 import type { RmaItem, Rma } from "../../db/schema/returns.js";
 
@@ -575,5 +577,183 @@ describe("buildAndPushCreditMemo", () => {
     expect(payload.TxnTaxDetail).toEqual({
       TxnTaxCodeRef: { value: "qb-tax-7" },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assertFeeItemConfigured + classifyOperatorFeeLine — fee-line parity for
+// the /process-return operator-supplied-lines path (audit #17)
+// ---------------------------------------------------------------------------
+
+describe("assertFeeItemConfigured", () => {
+  it("throws when the fee item id is empty or whitespace", () => {
+    expect(() => assertFeeItemConfigured("shipping", "")).toThrow(
+      /rma_shipping_fee_item_id is not configured/,
+    );
+    expect(() => assertFeeItemConfigured("restocking", "   ")).toThrow(
+      /rma_restocking_fee_item_id is not configured/,
+    );
+  });
+
+  it("passes for a configured id", () => {
+    expect(() => assertFeeItemConfigured("shipping", "qb-item-9")).not.toThrow();
+  });
+});
+
+describe("classifyOperatorFeeLine", () => {
+  const settings = {
+    rma_shipping_fee_item_id: "ship-item",
+    rma_restocking_fee_item_id: "restock-item",
+  };
+  const blankSettings = {
+    rma_shipping_fee_item_id: "",
+    rma_restocking_fee_item_id: "",
+  };
+
+  it("classifies a negative line on the configured shipping item", () => {
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "ship-item",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Return shipping costs deducted",
+        },
+        settings,
+      ),
+    ).toBe("shipping");
+  });
+
+  it("classifies a negative line on the configured restocking item", () => {
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "restock-item",
+          quantity: "1",
+          unitPrice: "-10.00",
+          description: "Restocking fee",
+        },
+        settings,
+      ),
+    ).toBe("restocking");
+  });
+
+  it("returns null for a positive line even on a fee item", () => {
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "ship-item",
+          quantity: "1",
+          unitPrice: "5.00",
+          description: "Return shipping costs deducted",
+        },
+        settings,
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for a negative line on an unrelated item", () => {
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-other-item",
+          quantity: "2",
+          unitPrice: "-3.00",
+          description: "Price adjustment",
+        },
+        settings,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a fee line when the matching configured id is whitespace-only", () => {
+    // A whitespace-only configured id can still "match" a whitespace item id;
+    // the assertFeeItemConfigured guard must catch it, same as the builder.
+    expect(() =>
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "  ",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Adjustment",
+        },
+        {
+          rma_shipping_fee_item_id: "  ",
+          rma_restocking_fee_item_id: "restock-item",
+        },
+      ),
+    ).toThrow(/rma_shipping_fee_item_id is not configured/);
+  });
+
+  it("rejects a negative shipping-looking line when fee items are unconfigured", () => {
+    expect(() =>
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Shipping deduction",
+        },
+        blankSettings,
+      ),
+    ).toThrow(/rma_shipping_fee_item_id is not configured/);
+  });
+
+  it("rejects a negative restocking-looking line when fee items are unconfigured", () => {
+    expect(() =>
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-10.00",
+          description: "Restocking charge",
+        },
+        blankSettings,
+      ),
+    ).toThrow(/rma_restocking_fee_item_id is not configured/);
+  });
+
+  it("rejects a generic fee-looking negative line when BOTH fee items are unconfigured", () => {
+    expect(() =>
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-2.50",
+          description: "Processing fee",
+        },
+        blankSettings,
+      ),
+    ).toThrow(/is not configured/);
+  });
+
+  it("allows a negative line with an unrelated description when fee items are unconfigured", () => {
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-3.00",
+          description: "Goodwill credit",
+        },
+        blankSettings,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not throw for a shipping-looking negative line on another item when shipping IS configured", () => {
+    // Config exists — the operator just used a different item. Not a
+    // misconfiguration; leave the line as the operator entered it.
+    expect(
+      classifyOperatorFeeLine(
+        {
+          qbItemId: "some-item",
+          quantity: "1",
+          unitPrice: "-5.00",
+          description: "Shipping deduction",
+        },
+        settings,
+      ),
+    ).toBeNull();
   });
 });

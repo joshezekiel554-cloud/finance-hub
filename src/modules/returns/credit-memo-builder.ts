@@ -117,7 +117,7 @@ function formatInvoiceDate(date: Date | string): string {
 // Returns section. When unset the deduction path throws — see
 // assertFeeItemConfigured — rather than silently posting a CM against
 // the wrong QBO item.
-function assertFeeItemConfigured(
+export function assertFeeItemConfigured(
   kind: "shipping" | "restocking",
   itemId: string,
 ): asserts itemId is string {
@@ -127,6 +127,73 @@ function assertFeeItemConfigured(
         `Create the service item in QBO and set the id in /settings → Returns before issuing CMs with ${kind} fees.`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// classifyOperatorFeeLine — fee-line parity for the /process-return path.
+//
+// The redesigned CM create page lets the operator post free-form lines, so
+// shipping/restocking deductions arrive as negative lines referencing the
+// configured fee items rather than through the shippingDeduction /
+// restockingFee inputs above. Classify such a line by matching its item id
+// against the configured fee item ids; when it matches, run the same
+// assertFeeItemConfigured guard the builder path uses so both paths reject
+// fee lines against a missing/blank configuration. Returns null for ordinary
+// (non-fee) lines, including negative adjustments on unrelated items.
+//
+// quantity/unitPrice/description are the route's string-typed body fields
+// (mirrors the processReturnBodySchema line shape).
+// ---------------------------------------------------------------------------
+export function classifyOperatorFeeLine(
+  line: {
+    qbItemId: string;
+    quantity: string;
+    unitPrice: string;
+    description: string;
+  },
+  settings: {
+    rma_shipping_fee_item_id: string;
+    rma_restocking_fee_item_id: string;
+  },
+): "shipping" | "restocking" | null {
+  const unitPrice = parseFloat(line.unitPrice);
+  const amount = parseFloat(line.quantity) * unitPrice;
+  const isNegative = unitPrice < 0 || amount < 0;
+  if (!isNegative) return null;
+
+  if (line.qbItemId === settings.rma_shipping_fee_item_id) {
+    assertFeeItemConfigured("shipping", settings.rma_shipping_fee_item_id);
+    return "shipping";
+  }
+  if (line.qbItemId === settings.rma_restocking_fee_item_id) {
+    assertFeeItemConfigured("restocking", settings.rma_restocking_fee_item_id);
+    return "restocking";
+  }
+
+  // The matched-id paths above only fire when the setting is non-blank
+  // (qbItemId is schema-guaranteed non-empty), so they can't catch the real
+  // misconfiguration hazard: a negative line that LOOKS like a fee — its
+  // description mentions shipping/restocking/fee — posted while the fee
+  // items are unconfigured. Without this it would silently land in QBO as a
+  // goods line against whatever item the operator picked. Route the
+  // blank-config case through the same guard the builder uses (each branch
+  // only runs when the setting is blank, so the assert always throws).
+  const desc = line.description;
+  if (/restock/i.test(desc) && !settings.rma_restocking_fee_item_id.trim()) {
+    assertFeeItemConfigured("restocking", settings.rma_restocking_fee_item_id);
+  }
+  if (/shipping/i.test(desc) && !settings.rma_shipping_fee_item_id.trim()) {
+    assertFeeItemConfigured("shipping", settings.rma_shipping_fee_item_id);
+  }
+  if (
+    /fee/i.test(desc) &&
+    !settings.rma_shipping_fee_item_id.trim() &&
+    !settings.rma_restocking_fee_item_id.trim()
+  ) {
+    assertFeeItemConfigured("shipping", settings.rma_shipping_fee_item_id);
+  }
+
+  return null;
 }
 
 export async function buildAndPushCreditMemo(

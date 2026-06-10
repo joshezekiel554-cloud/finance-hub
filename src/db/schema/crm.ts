@@ -1,5 +1,6 @@
 import {
   boolean,
+  foreignKey,
   index,
   int,
   json,
@@ -13,6 +14,7 @@ import {
 } from "drizzle-orm/mysql-core";
 import { customers } from "./customers";
 import { users } from "./auth";
+import { aiProposals } from "./ai-proposals";
 
 export const ACTIVITY_KINDS = [
   "email_in",
@@ -76,6 +78,8 @@ export const activities = mysqlTable(
     meta: json("meta").$type<Record<string, unknown>>(),
     // FK back to ai_proposals when this activity originated from an
     // approved autopilot proposal. Nullable; non-null = AI-originated.
+    // Constraint declared in the extra-config below with its existing
+    // prod name (created by 0036_autopilot.sql).
     aiProposalId: varchar("ai_proposal_id", { length: 24 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -88,6 +92,11 @@ export const activities = mysqlTable(
     ),
     kindIdx: index("idx_activities_kind").on(t.kind),
     refIdx: index("idx_activities_ref").on(t.refType, t.refId),
+    aiProposalFk: foreignKey({
+      name: "fk_activities_ai_proposal",
+      columns: [t.aiProposalId],
+      foreignColumns: [aiProposals.id],
+    }).onDelete("set null"),
   }),
 );
 
@@ -298,6 +307,8 @@ export const emailLog = mysqlTable(
     // "Draft reply" on), since that's the unambiguous handle at draft time.
     draftAiNotes: text("draft_ai_notes"),
     // FK back to ai_proposals for AI-originated outbound emails.
+    // Constraint declared in the extra-config below with its existing
+    // prod name (created by 0036_autopilot.sql).
     aiProposalId: varchar("ai_proposal_id", { length: 24 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -313,6 +324,11 @@ export const emailLog = mysqlTable(
       t.actionedAt,
       t.emailDate,
     ),
+    aiProposalFk: foreignKey({
+      name: "fk_email_log_ai_proposal",
+      columns: [t.aiProposalId],
+      foreignColumns: [aiProposals.id],
+    }).onDelete("set null"),
   }),
 );
 
@@ -341,11 +357,18 @@ export const statementSends = mysqlTable(
       .notNull()
       .default("open_items"),
     // FK back to ai_proposals for AI-originated statement sends.
+    // Constraint declared in the extra-config below with its existing
+    // prod name (created by 0036_autopilot.sql).
     aiProposalId: varchar("ai_proposal_id", { length: 24 }),
   },
   (t) => ({
     customerIdIdx: index("idx_statement_sends_customer_id").on(t.customerId),
     sentAtIdx: index("idx_statement_sends_sent_at").on(t.sentAt),
+    aiProposalFk: foreignKey({
+      name: "fk_statement_sends_ai_proposal",
+      columns: [t.aiProposalId],
+      foreignColumns: [aiProposals.id],
+    }).onDelete("set null"),
   }),
 );
 

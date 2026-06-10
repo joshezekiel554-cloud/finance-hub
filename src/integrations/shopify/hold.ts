@@ -1,27 +1,49 @@
 // Shopify customer matching + tag mutation helpers for the hold/release
 // feature. "Put on hold" removes the configured B2B tag from the matched
-// Shopify customer; "Release" re-adds it. The mutation surface is
-// intentionally tag-array oriented (get → mutate locally → set) so the
-// rest of the customer's Shopify tag set is preserved verbatim — we only
-// touch the one tag.
+// Shopify customer; "Release" re-adds it.
+//
+// Tag writes go through the Admin GraphQL tagsAdd/tagsRemove mutations,
+// which mutate individual tags atomically server-side. This eliminates
+// the read-modify-write race the old REST flow had (audit #13): two
+// concurrent toggles (operator + operator, or operator + autopilot) used
+// to read the tag set, mutate it in JS, then PUT the FULL set back —
+// clobbering each other's unrelated tags. With tagsAdd/tagsRemove only
+// the named tags are touched; the rest of the customer's tag set is
+// never rewritten. Requires the `write_customers` scope on the Admin
+// token (already granted).
 //
 // Match strategy: by email, exact-match. The spec calls for matching the
 // finance-hub customer to a Shopify customer via the customers' primary
 // email; Shopify's customers/search.json with `email:"foo@bar"` runs a
 // case-insensitive exact-match on the email field.
 //
-// Auth: tokens injected by ShopifyClient from env. Hold mutations need
-// the `write_customers` scope on the Admin API access token; reads only
-// need `read_customers` (already granted in week-4 setup).
-//
 // Returned tag arrays are normalized: trimmed, lowercased, de-duplicated
 // while preserving first-seen order. Shopify itself stores tags as a
 // single comma-joined string and returns them that way; we split on
-// commas, trim each entry, and round-trip through the same normalizer
-// when writing so we never persist whitespace-padded tags.
+// commas and trim each entry. Input tags are normalized the same way
+// before mutating — Shopify tags are case-preserving but
+// case-insensitively unique, so we never end up with "B2B" alongside
+// "b2b".
 
 import type { ShopifyClient } from "./client.js";
 import type { ShopifyCustomer } from "./types.js";
+
+// Atomic single-tag mutations. tagsAdd/tagsRemove are idempotent on the
+// Shopify side (adding a present tag / removing an absent tag is a
+// no-op) and only touch the named tags — never the full set.
+const TAGS_ADD = `mutation tagsAdd($id: ID!, $tags: [String!]!) {
+  tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+}`;
+const TAGS_REMOVE = `mutation tagsRemove($id: ID!, $tags: [String!]!) {
+  tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
+}`;
+
+type TagMutationName = "tagsAdd" | "tagsRemove";
+
+type TagMutationData = Record<
+  TagMutationName,
+  { userErrors?: Array<{ field?: string[] | null; message: string }> } | null
+>;
 
 // Splits Shopify's comma-joined tags string into a normalized array.
 // Empty/whitespace-only entries are dropped.
@@ -39,9 +61,33 @@ export function parseTags(raw: string | null | undefined): string[] {
   return out;
 }
 
-// Joins a tag array back into the comma-string Shopify expects on PUT.
-function joinTags(tags: string[]): string {
-  return tags.join(", ");
+// GraphQL node id for a customer given its numeric REST id.
+function customerGid(shopifyCustomerId: number | string): string {
+  return `gid://shopify/Customer/${shopifyCustomerId}`;
+}
+
+// Runs one tagsAdd/tagsRemove mutation and throws when Shopify reports
+// userErrors (top-level GraphQL errors already throw inside
+// client.graphql as ShopifyApiError).
+async function runTagsMutation(
+  client: ShopifyClient,
+  mutationName: TagMutationName,
+  shopifyCustomerId: number | string,
+  tags: string[],
+): Promise<void> {
+  const mutation = mutationName === "tagsAdd" ? TAGS_ADD : TAGS_REMOVE;
+  const data = await client.graphql<Partial<TagMutationData>>(mutation, {
+    id: customerGid(shopifyCustomerId),
+    tags,
+  });
+  const userErrors = data[mutationName]?.userErrors ?? [];
+  if (userErrors.length > 0) {
+    throw new Error(
+      `shopify ${mutationName} failed for customer ${shopifyCustomerId}: ${userErrors
+        .map((e) => e.message)
+        .join("; ")}`,
+    );
+  }
 }
 
 // Looks up a Shopify customer record by email (exact-match). Returns
@@ -76,36 +122,11 @@ export async function getCustomerTags(
   return parseTags(data.customer?.tags);
 }
 
-// Writes the full tag set back to Shopify. The PUT body uses the
-// `customer` envelope with `tags` as a comma-joined string — Shopify
-// rejects array-shaped tags on this endpoint. Caller is responsible for
-// having normalized the tags array first (parseTags + addTag/removeTag
-// do this).
-export async function setCustomerTags(
-  client: ShopifyClient,
-  shopifyCustomerId: number | string,
-  tags: string[],
-): Promise<void> {
-  const path = `/customers/${shopifyCustomerId}.json`;
-  const body = JSON.stringify({
-    customer: {
-      id: Number(shopifyCustomerId),
-      tags: joinTags(tags),
-    },
-  });
-  const res = await client.request(path, { method: "PUT", body });
-  if (!res.ok) {
-    const text = await res.text();
-    // Surface the same error type as the rest of the client so callers
-    // can inspect status (e.g. 403 → write_customers scope missing).
-    const { ShopifyApiError } = await import("./client.js");
-    throw new ShopifyApiError(res.status, path, text);
-  }
-}
-
-// Adds a tag if not already present. Idempotent: returns the resulting
-// tag array either way. The tag is normalized (trim + lowercase) before
-// comparison so we never end up with "B2B" alongside "b2b".
+// Adds a tag via an atomic tagsAdd mutation. Idempotent (Shopify no-ops
+// when the tag is already present) and touches ONLY this tag — no
+// read-modify-write of the full set. The tag is normalized (trim +
+// lowercase) before sending so we never end up with "B2B" alongside
+// "b2b". Returns the fresh post-mutation tag set.
 export async function addTag(
   client: ShopifyClient,
   shopifyCustomerId: number | string,
@@ -115,18 +136,14 @@ export async function addTag(
   if (!normalized) {
     throw new Error("addTag: tag must be non-empty");
   }
-  const current = await getCustomerTags(client, shopifyCustomerId);
-  if (current.includes(normalized)) {
-    return { tagsAfter: current };
-  }
-  const next = [...current, normalized];
-  await setCustomerTags(client, shopifyCustomerId, next);
-  return { tagsAfter: next };
+  await runTagsMutation(client, "tagsAdd", shopifyCustomerId, [normalized]);
+  const tagsAfter = await getCustomerTags(client, shopifyCustomerId);
+  return { tagsAfter };
 }
 
-// Removes a tag if present. Idempotent: returns the resulting tag array
-// either way. Comparison is case-insensitive after the same normalize
-// pass parseTags applies on read.
+// Removes a tag via an atomic tagsRemove mutation. Idempotent (Shopify
+// no-ops when the tag is absent) and touches ONLY this tag. Same
+// normalize pass as addTag. Returns the fresh post-mutation tag set.
 export async function removeTag(
   client: ShopifyClient,
   shopifyCustomerId: number | string,
@@ -136,11 +153,7 @@ export async function removeTag(
   if (!normalized) {
     throw new Error("removeTag: tag must be non-empty");
   }
-  const current = await getCustomerTags(client, shopifyCustomerId);
-  if (!current.includes(normalized)) {
-    return { tagsAfter: current };
-  }
-  const next = current.filter((t) => t !== normalized);
-  await setCustomerTags(client, shopifyCustomerId, next);
-  return { tagsAfter: next };
+  await runTagsMutation(client, "tagsRemove", shopifyCustomerId, [normalized]);
+  const tagsAfter = await getCustomerTags(client, shopifyCustomerId);
+  return { tagsAfter };
 }

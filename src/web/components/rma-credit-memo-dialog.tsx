@@ -59,6 +59,9 @@ type SourceInvoiceTaxStatus = {
   hadTax: boolean;
   ratePercent: number;
   taxCodeRef: string | null;
+  // Source invoices whose QBO tax lookup errored — when non-empty the
+  // hadTax default may be wrong (a taxed sale can read as non-taxable).
+  failedDocNumbers?: string[];
 };
 
 // Per-row override for received quantity
@@ -589,6 +592,21 @@ export default function RmaCreditMemoDialog({
                     {applyTax ? `$${salesTaxAmount.toFixed(2)}` : "—"}
                   </span>
                 </div>
+
+                {/* Tax-lookup failure warning: when QBO lookups errored and
+                    no surviving lookup showed tax, the unchecked default may
+                    be wrong — the operator should verify before sending. */}
+                {(taxStatusQuery.data?.failedDocNumbers?.length ?? 0) > 0 &&
+                  !taxStatusQuery.data?.hadTax && (
+                    <div className="flex items-start gap-2 rounded-md border border-accent-warning/40 bg-accent-warning/5 px-3 py-2 text-xs text-secondary">
+                      <AlertCircle className="mt-0.5 size-4 shrink-0 text-accent-warning" />
+                      <span>
+                        Couldn&apos;t verify sales tax for invoice(s){" "}
+                        {taxStatusQuery.data?.failedDocNumbers?.join(", ")} —
+                        check QBO before crediting without tax.
+                      </span>
+                    </div>
+                  )}
 
                 <div className="border-t border-default pt-2 flex items-center justify-between font-semibold">
                   <span>Total credit</span>

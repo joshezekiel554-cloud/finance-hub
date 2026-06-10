@@ -259,6 +259,123 @@ describe("buildPayload — Line transformations", () => {
   });
 });
 
+describe("buildPayload — qty_change preserves baked-in line discounts (audit #14)", () => {
+  // The 3rd-party Shopify→QB sync bakes special pricing into Amount, so a
+  // line can have Amount ≠ UnitPrice×Qty (e.g. list 100, qty 10, billed 850).
+  // A qty change must rebill at the effective per-unit rate, not list price.
+  function discountedLine(): QboInvoiceLine {
+    return makeLine({
+      Id: "1",
+      Amount: 850, // effective rate $85/unit, not the $100 list
+      SalesItemLineDetail: {
+        ItemRef: { value: "1000", name: "Test Product" },
+        Qty: 10,
+        UnitPrice: 100,
+        TaxCodeRef: { value: "NON" },
+      },
+    });
+  }
+
+  const QTY_TO_8: ReconcileAction = {
+    type: "qty_change",
+    lineId: "1",
+    sku: "SKU1",
+    fromQty: 10,
+    toQty: 8,
+    reason: "shipped_less",
+  };
+
+  it("rebills at the effective rate when Amount ≠ UnitPrice×Qty", () => {
+    const invoice = makeInvoice({ Line: [discountedLine()] });
+    const payload = buildPayload(invoice, [SET_METADATA, QTY_TO_8]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(85);
+    expect(payload.Line[0]?.Amount).toBe(680); // 85 × 8, NOT 800
+  });
+
+  it("keeps exact old behavior when Amount === UnitPrice×Qty (no discount)", () => {
+    const invoice = makeInvoice({
+      Line: [makeLine({ Id: "1", Amount: 100 })], // unit 10, qty 10 — exact
+    });
+    const payload = buildPayload(invoice, [SET_METADATA, QTY_TO_8]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(10);
+    expect(payload.Line[0]?.Amount).toBe(80);
+  });
+
+  it("treats ≤1¢ delta as rounding noise, not a discount", () => {
+    const invoice = makeInvoice({
+      Line: [makeLine({ Id: "1", Amount: 100.01 })], // unit 10, qty 10 → 1¢ off
+    });
+    const payload = buildPayload(invoice, [SET_METADATA, QTY_TO_8]);
+    // List price used, not 100.01/10 = 10.001.
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(10);
+    expect(payload.Line[0]?.Amount).toBe(80);
+  });
+
+  it("guards origQty=0 — falls back to UnitPrice instead of dividing by zero", () => {
+    const invoice = makeInvoice({
+      Line: [
+        makeLine({
+          Id: "1",
+          Amount: 850,
+          SalesItemLineDetail: {
+            ItemRef: { value: "1000", name: "Test Product" },
+            Qty: 0,
+            UnitPrice: 100,
+            TaxCodeRef: { value: "NON" },
+          },
+        }),
+      ],
+    });
+    const payload = buildPayload(invoice, [SET_METADATA, QTY_TO_8]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(100);
+    expect(payload.Line[0]?.Amount).toBe(800);
+  });
+
+  it("bounds the effective rate to 5dp on repeating decimals (QBO penny drift)", () => {
+    // 847/9 = 94.1111... — sending the raw float as UnitPrice risks QBO
+    // recomputing Amount from a differently-truncated rate. Pin both the
+    // 5dp UnitPrice and the Amount derived from that same rounded figure.
+    const invoice = makeInvoice({
+      Line: [
+        makeLine({
+          Id: "1",
+          Amount: 847,
+          SalesItemLineDetail: {
+            ItemRef: { value: "1000", name: "Test Product" },
+            Qty: 9,
+            UnitPrice: 100,
+            TaxCodeRef: { value: "NON" },
+          },
+        }),
+      ],
+    });
+    const payload = buildPayload(invoice, [SET_METADATA, QTY_TO_8]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(94.11111);
+    expect(payload.Line[0]?.Amount).toBe(752.89); // round2(94.11111 × 8)
+  });
+
+  it("zeroes Amount but keeps the rounded effective rate on qty_change to 0", () => {
+    const invoice = makeInvoice({ Line: [discountedLine()] });
+    const payload = buildPayload(invoice, [
+      SET_METADATA,
+      { ...QTY_TO_8, toQty: 0, reason: "not_shipped" },
+    ]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.Qty).toBe(0);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(85);
+    expect(payload.Line[0]?.Amount).toBe(0);
+  });
+
+  it("unitPriceOverride still wins over the effective rate", () => {
+    const invoice = makeInvoice({ Line: [discountedLine()] });
+    const payload = buildPayload(invoice, [
+      SET_METADATA,
+      { ...QTY_TO_8, unitPriceOverride: 90, reason: "user_override" },
+    ]);
+    expect(payload.Line[0]?.SalesItemLineDetail?.UnitPrice).toBe(90);
+    expect(payload.Line[0]?.Amount).toBe(720);
+  });
+});
+
 describe("buildPayload — realistic 18294-shaped scenario", () => {
   it("aligns the 5-line Bais Hasforim invoice to match a Feldart shipment", () => {
     // Shape lifted from the live 18294 discovery:

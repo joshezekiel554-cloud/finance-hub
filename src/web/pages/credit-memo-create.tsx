@@ -117,6 +117,9 @@ type SourceInvoiceTaxDto = {
   hadTax: boolean;
   ratePercent: number;
   taxCodeRef: string | null;
+  // Source invoices whose QBO tax lookup errored — when non-empty the
+  // hadTax default may be wrong (a taxed sale can read as non-taxable).
+  failedDocNumbers?: string[];
 };
 
 // One row of the editable table. `key` is a stable React identity even
@@ -1041,6 +1044,20 @@ export default function CreditMemoCreatePage() {
           a preview, not the authoritative figure. */}
       <Card>
         <CardBody>
+          {/* Tax-lookup failure warning: when QBO lookups errored and no
+              surviving lookup showed tax, the non-taxable default may be
+              wrong — the operator should verify before submitting. */}
+          {(taxStatusQuery.data?.failedDocNumbers?.length ?? 0) > 0 &&
+            !taxStatusQuery.data?.hadTax && (
+              <div className="mb-3 flex items-start gap-2 rounded-md border border-accent-warning/40 bg-accent-warning/5 px-3 py-2 text-xs text-secondary">
+                <AlertCircle className="mt-0.5 size-4 shrink-0 text-accent-warning" />
+                <span>
+                  Couldn&apos;t verify sales tax for invoice(s){" "}
+                  {taxStatusQuery.data?.failedDocNumbers?.join(", ")} — check
+                  QBO before crediting without tax.
+                </span>
+              </div>
+            )}
           <div className="flex justify-end">
             <div className="w-full max-w-xs space-y-1.5 text-sm">
               <TotalRow

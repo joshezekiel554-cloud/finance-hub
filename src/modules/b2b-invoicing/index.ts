@@ -1,6 +1,13 @@
 export { parseShipmentEml, parseShipmentHtml } from "./parser.js";
 export { reconcile } from "./reconciler.js";
 export {
+  checkVerifyGate,
+  deriveFlaggedRemoves,
+  type FlaggedRemove,
+  type VerifyGateInput,
+  type VerifyGateResult,
+} from "./verify-gate.js";
+export {
   buildPayload,
   sendInvoiceUpdate,
   type SendOutcome,

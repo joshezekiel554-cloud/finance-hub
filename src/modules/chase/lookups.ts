@@ -1,28 +1,35 @@
 // Drizzle lookups for chase candidate accounts.
 //
 // 1.0 read denormalized `qb_customer_state` rows; 2.0 reads from `customers` +
-// `invoices` directly. We pull all customers with a positive `overdue_balance`,
-// fetch their open invoices in one batched query, and let scoring.ts compute
-// severity per row. Sort by score desc so top-of-list is highest priority.
+// `invoices` directly. We pull all candidate customers, fetch their open
+// invoices in one batched query, and let scoring.ts compute severity per row.
+// Sort by score desc so top-of-list is highest priority.
 //
 // Origin-scoped variant: when an `origin` ('feldart' | 'tj') is supplied, the
 // candidate set, overdue figures and severity are computed from ONLY that
 // book's invoices (and that book's unapplied credit, netted via
 // computeOriginBalances) rather than the blended denormalized customer fields.
+//
+// Blended path (audit #12): severity is computed from the loaded invoice set —
+// per-origin overdue via computeOriginBalances, each book netted by its own
+// credit, then summed — never from the denormalized `customers.overdue_balance`
+// (which can be stale or per-book and under-tiers high-value accounts).
 
-import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { creditMemos } from "../../db/schema/credit-memos.js";
 import { customers, type Customer } from "../../db/schema/customers.js";
 import { invoices, type Invoice } from "../../db/schema/invoices.js";
 import type { InvoiceOrigin } from "../invoicing/origin.js";
 import { computeOriginBalances } from "./balances.js";
-import { computeSeverity } from "./scoring.js";
-import type { OverdueCustomer } from "./types.js";
+import { computeSeverity, startOfDayUtc } from "./scoring.js";
+import type { OverdueCustomer, Severity } from "./types.js";
 
 // Exclude TJ invoices parked for bookkeeper verification from every
 // chase/digest candidate query (feldart invoices never carry a dispute_state).
-const notVerifyingSql = sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;
+// Exported for blended callers outside this module (dashboard chase-queue
+// widget) so they apply the same exclusion.
+export const notVerifyingSql = sql`(${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')`;
 
 export async function getOverdueCustomers(
   origin?: InvoiceOrigin,
@@ -32,32 +39,55 @@ export async function getOverdueCustomers(
     : getOverdueCustomersBlended();
 }
 
-// Blended (both books) — unchanged behaviour for the dashboard/agent callers.
+// Candidate pre-filter for the blended path. The denormalized overdue_balance
+// is cheap but can be stale, so we OR it with an EXISTS over open, past-due,
+// non-verifying invoices — a customer whose denormalized figure lags at 0 but
+// who has real overdue invoices still enters the candidate set. Severity itself
+// is always recomputed from the loaded invoices. Exported so the dashboard
+// chase-queue widget can apply the same candidate condition.
+export const hasOpenOverdueInvoiceSql = sql`EXISTS (
+  SELECT 1 FROM ${invoices}
+  WHERE ${invoices.customerId} = ${customers.id}
+    AND ${invoices.balance} > 0
+    AND ${invoices.dueDate} IS NOT NULL
+    AND ${invoices.dueDate} < CURRENT_DATE()
+    AND (${invoices.disputeState} IS NULL OR ${invoices.disputeState} <> 'verifying')
+)`;
+
+// Blended (both books) — dashboard/agent callers. Severity comes from the
+// invoice set (per-origin netting summed), not the denormalized customer field.
 async function getOverdueCustomersBlended(): Promise<OverdueCustomer[]> {
   const overdueCustomers = await db
     .select()
     .from(customers)
-    .where(gt(customers.overdueBalance, "0"));
+    .where(or(gt(customers.overdueBalance, "0"), hasOpenOverdueInvoiceSql));
 
   if (overdueCustomers.length === 0) return [];
 
   const ids = overdueCustomers.map((c) => c.id);
-  const openInvoices = await db
-    .select()
-    .from(invoices)
-    .where(
-      and(
-        inArray(invoices.customerId, ids),
-        gt(invoices.balance, "0"),
-        notVerifyingSql,
+  const [openInvoices, feldartCredit, tjCredit] = await Promise.all([
+    db
+      .select()
+      .from(invoices)
+      .where(
+        and(
+          inArray(invoices.customerId, ids),
+          gt(invoices.balance, "0"),
+          notVerifyingSql,
+        ),
       ),
-    );
+    loadOriginCreditByCustomer("feldart", ids),
+    loadOriginCreditByCustomer("tj", ids),
+  ]);
 
   const invoicesByCustomer = groupByCustomer(openInvoices);
 
   const rows: OverdueCustomer[] = overdueCustomers.map((customer) => {
     const customerInvoices = invoicesByCustomer.get(customer.id) ?? [];
-    const severity = computeSeverity(customer, customerInvoices);
+    const severity = blendedSeverity(customer, customerInvoices, {
+      feldart: feldartCredit.get(customer.id) ?? 0,
+      tj: tjCredit.get(customer.id) ?? 0,
+    });
     return {
       customerId: customer.id,
       customer,
@@ -142,7 +172,14 @@ export async function getOverdueForCustomer(
     const creditByCustomer = await loadOriginCreditByCustomer(origin, [customerId]);
     severity = originSeverity(customer, customerInvoices, origin, creditByCustomer.get(customerId) ?? 0);
   } else {
-    severity = computeSeverity(customer, customerInvoices);
+    const [feldartCredit, tjCredit] = await Promise.all([
+      loadOriginCreditByCustomer("feldart", [customerId]),
+      loadOriginCreditByCustomer("tj", [customerId]),
+    ]);
+    severity = blendedSeverity(customer, customerInvoices, {
+      feldart: feldartCredit.get(customerId) ?? 0,
+      tj: tjCredit.get(customerId) ?? 0,
+    });
   }
   if (severity.totalOverdue <= 0) return null;
 
@@ -154,6 +191,36 @@ export async function getOverdueForCustomer(
   };
 }
 
+// Blended severity from the invoice set: per-origin overdue via
+// computeOriginBalances (each book netted by its OWN unapplied credit — TJ
+// credit never offsets Feldart and vice versa), summed and fed to
+// computeSeverity as an override so the denormalized, possibly-stale
+// `customers.overdue_balance` is never the figure severity is computed from.
+// Exported for unit tests (pure function; no DB access).
+export function blendedSeverity(
+  customer: Customer,
+  customerInvoices: Invoice[],
+  credit: { feldart: number; tj: number },
+): Severity {
+  // Cutoff at UTC start-of-day so the overdue filter matches scoring.ts
+  // (due exactly today is NOT overdue in either figure).
+  const now = new Date();
+  const balances = computeOriginBalances(
+    customerInvoices.map((i) => ({
+      origin: i.origin,
+      balance: i.balance,
+      dueDate: i.dueDate,
+    })),
+    credit,
+    now,
+    startOfDayUtc(now),
+  );
+  return computeSeverity(customer, customerInvoices, {
+    rawOverdueOverride: balances.feldart.overdue + balances.tj.overdue,
+    unappliedCreditOverride: 0,
+  });
+}
+
 // Compute severity for one book: net the origin's overdue via
 // computeOriginBalances, then feed it to computeSeverity as an override so the
 // score/tier/days reflect that book alone (not the blended customer fields).
@@ -163,6 +230,8 @@ function originSeverity(
   origin: InvoiceOrigin,
   credit: number,
 ) {
+  // Same day-boundary cutoff as blendedSeverity — see comment there.
+  const now = new Date();
   const balances = computeOriginBalances(
     customerInvoices.map((i) => ({
       origin,
@@ -170,6 +239,8 @@ function originSeverity(
       dueDate: i.dueDate,
     })),
     { feldart: origin === "feldart" ? credit : 0, tj: origin === "tj" ? credit : 0 },
+    now,
+    startOfDayUtc(now),
   );
   return computeSeverity(customer, customerInvoices, {
     rawOverdueOverride: balances[origin].overdue,
@@ -177,7 +248,9 @@ function originSeverity(
   });
 }
 
-async function loadOriginCreditByCustomer(
+// Unapplied credit-memo balance per customer for ONE origin. Exported for
+// blended callers outside this module (dashboard chase-queue widget).
+export async function loadOriginCreditByCustomer(
   origin: InvoiceOrigin,
   ids: string[],
 ): Promise<Map<string, number>> {

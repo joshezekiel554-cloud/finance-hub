@@ -419,6 +419,14 @@ function DetailBody(props: DetailBodyProps) {
               ? billEmailBcc.trim()
               : undefined,
           txnDate: txnDate !== todayNY ? txnDate : undefined,
+          // Parse-gap verify gate (server-side). This mobile detail page has
+          // no verify UI yet, so it sends the fail-closed defaults: if the
+          // server finds flagged removals or unreadable source-email rows it
+          // responds 400 with guidance — verify on the desktop review screen
+          // (or restore the removed line's qty here). Clean sends pass.
+          gmailId: row.gmailId,
+          verifiedRemoveLineIds: [],
+          unreadAck: false,
         }),
       });
       const body = await res.json().catch(() => ({}));

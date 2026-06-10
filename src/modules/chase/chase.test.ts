@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Customer } from "../../db/schema/customers.js";
 import type { Invoice } from "../../db/schema/invoices.js";
 import { computeScore, computeSeverity, tierForScore } from "./scoring.js";
+import { blendedSeverity } from "./lookups.js";
 import { buildDailyDigest, toChaseAccount } from "./digest.js";
 import type { generateChaseDigest } from "../../integrations/anthropic/chase-digest.js";
 import type { OverdueCustomer } from "./types.js";
@@ -288,6 +289,140 @@ describe("computeSeverity", () => {
     // score = 600 * min(30, 365) / 30 = 600
     expect(sev.totalOverdue).toBe(600);
     expect(sev.score).toBe(600);
+  });
+});
+
+// ---------- blendedSeverity (audit #12) ----------
+
+describe("blendedSeverity", () => {
+  it("derives overdue from the invoice set, not a stale denormalized balance", () => {
+    // Denormalized figure is stale at 2000; real exposure is Feldart 500 @ 10d
+    // + TJ 15000 @ 180d = 15500 @ 180d.
+    const customer = makeCustomer({ overdueBalance: "2000.00" });
+    const invoices = [
+      makeInvoice({
+        id: "f1",
+        origin: "feldart",
+        balance: "500.00",
+        dueDate: daysAgo(10),
+      }),
+      makeInvoice({
+        id: "t1",
+        origin: "tj",
+        balance: "15000.00",
+        dueDate: daysAgo(180),
+      }),
+    ];
+
+    const sev = blendedSeverity(customer, invoices, { feldart: 0, tj: 0 });
+    expect(sev.totalOverdue).toBe(15500);
+    expect(sev.daysOverdue).toBe(180);
+    // 15500 * 180/30 = 93000 → CRITICAL
+    expect(sev.score).toBe(93_000);
+    expect(sev.tier).toBe("CRITICAL");
+
+    // Contrast: the old path (no override) trusted the stale 2000 and
+    // under-tiered the account.
+    const old = computeSeverity(customer, invoices);
+    expect(old.totalOverdue).toBe(2000);
+    expect(old.tier).not.toBe("CRITICAL");
+  });
+
+  it("nets TJ credit against the TJ portion only", () => {
+    const customer = makeCustomer({ overdueBalance: "2000.00" });
+    const invoices = [
+      makeInvoice({
+        id: "f1",
+        origin: "feldart",
+        balance: "500.00",
+        dueDate: daysAgo(10),
+      }),
+      makeInvoice({
+        id: "t1",
+        origin: "tj",
+        balance: "15000.00",
+        dueDate: daysAgo(180),
+      }),
+    ];
+
+    const sev = blendedSeverity(customer, invoices, { feldart: 0, tj: 5000 });
+    // TJ netted to 10000 + Feldart 500 untouched.
+    expect(sev.totalOverdue).toBe(10500);
+    expect(sev.daysOverdue).toBe(180);
+    expect(sev.tier).toBe("CRITICAL"); // 10500 * 180/30 = 63000
+  });
+
+  it("does not let Feldart credit bleed into the TJ portion (floors per origin)", () => {
+    const customer = makeCustomer({ overdueBalance: "0.00" });
+    const invoices = [
+      makeInvoice({
+        id: "f1",
+        origin: "feldart",
+        balance: "500.00",
+        dueDate: daysAgo(10),
+      }),
+      makeInvoice({
+        id: "t1",
+        origin: "tj",
+        balance: "15000.00",
+        dueDate: daysAgo(180),
+      }),
+    ];
+
+    // Feldart credit exceeds Feldart overdue — floors at 0, TJ stays whole.
+    const sev = blendedSeverity(customer, invoices, { feldart: 600, tj: 0 });
+    expect(sev.totalOverdue).toBe(15000);
+  });
+
+  it("treats an invoice due exactly today as NOT overdue (boundary aligned with scoring)", () => {
+    // scoring.ts counts overdue with due < startOfDayUtc(today), so a
+    // due-today invoice contributes daysOverdue = 0. The blended override
+    // must use the same cutoff — otherwise totalOverdue > 0 pairs with
+    // daysOverdue = 0 ⇒ score 0 with a positive amount shown.
+    const customer = makeCustomer({ overdueBalance: "0.00" });
+    const invoices = [
+      makeInvoice({
+        id: "f1",
+        origin: "feldart",
+        balance: "500.00",
+        dueDate: daysAgo(10),
+      }),
+      makeInvoice({
+        id: "t1",
+        origin: "tj",
+        balance: "15000.00",
+        dueDate: daysAgo(0), // due today (UTC midnight)
+      }),
+    ];
+
+    const sev = blendedSeverity(customer, invoices, { feldart: 0, tj: 0 });
+    expect(sev.totalOverdue).toBe(500);
+    expect(sev.daysOverdue).toBe(10);
+  });
+
+  it("excludes not-yet-due invoices from the blended overdue figure", () => {
+    const future = new Date();
+    future.setUTCHours(0, 0, 0, 0);
+    future.setUTCDate(future.getUTCDate() + 30);
+    const customer = makeCustomer({ overdueBalance: "9999.00" });
+    const invoices = [
+      makeInvoice({
+        id: "f1",
+        origin: "feldart",
+        balance: "500.00",
+        dueDate: daysAgo(10),
+      }),
+      makeInvoice({
+        id: "t1",
+        origin: "tj",
+        balance: "15000.00",
+        dueDate: future,
+      }),
+    ];
+
+    const sev = blendedSeverity(customer, invoices, { feldart: 0, tj: 0 });
+    expect(sev.totalOverdue).toBe(500);
+    expect(sev.daysOverdue).toBe(10);
   });
 });
 
