@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardBody } from "../ui/card";
 import { Button } from "../ui/button";
+import { cn } from "../../lib/cn";
 
 export type Proposal = {
   id: string;
@@ -9,6 +10,9 @@ export type Proposal = {
   entityType: string;
   entityId: string;
   status: string;
+  // Which receivable book the proposal belongs to. NULL for book-agnostic
+  // categories (ops_*, cadence_*). Drives the /autopilot section split.
+  origin: "feldart" | "tj" | null;
   candidateSummary: Record<string, unknown>;
   draftedPreview: string | null;
   draftedAction: { tool: string; args: Record<string, unknown> } | null;
@@ -163,8 +167,24 @@ export function ProposalCard({
     [bodyHtml],
   );
 
+  // tj_dispute_nudge drafts go to the BOOKKEEPER, not the customer — the
+  // candidate summary carries recipient: "bookkeeper" so the card can make
+  // that unmistakable next to the category badge.
+  const recipient =
+    typeof proposal.candidateSummary.recipient === "string"
+      ? proposal.candidateSummary.recipient
+      : null;
+
   return (
-    <Card className="border-default">
+    <Card
+      className={cn(
+        "border-default",
+        // Subtle amber left edge keys TJ proposals to the TJ book, matching
+        // the customer-detail TJ panel treatment.
+        proposal.origin === "tj" &&
+          "border-l-2 border-l-accent-warning/60",
+      )}
+    >
       <CardBody className="space-y-3">
         <div className="flex items-start gap-2">
           {canSelectForDraft && (
@@ -176,9 +196,19 @@ export function ProposalCard({
             />
           )}
           <div className="flex-1 min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              {categoryLabel(proposal.category)} ·{" "}
-              <span className="text-accent-info">{proposal.status}</span>
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              <span>
+                {categoryLabel(proposal.category)} ·{" "}
+                <span className="text-accent-info">{proposal.status}</span>
+              </span>
+              {recipient ? (
+                <span
+                  title={`This email goes to the ${recipient}, not the customer`}
+                  className="inline-flex items-center rounded-full border border-accent-warning/40 bg-accent-warning/10 px-1.5 py-px font-medium normal-case tracking-normal text-accent-warning"
+                >
+                  → {recipient}
+                </span>
+              ) : null}
             </div>
             <div className="text-sm text-primary">
               {summaryLine(proposal.candidateSummary) || ""}

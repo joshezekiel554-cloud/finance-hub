@@ -11,6 +11,10 @@ import {
 import ComposeModal, {
   type ComposeContext,
 } from "../components/compose-modal";
+import {
+  BookSectionHeader,
+  KpiChip,
+} from "../components/book-sections/book-section-header";
 
 const CHASE_ALIAS = "accounts@feldart.com";
 
@@ -52,6 +56,53 @@ function customerName(p: Proposal): string {
     (p.candidateSummary as { customerName?: string }).customerName ??
     p.entityId
   );
+}
+
+// Group customer-typed proposals by entityId; non-customer kept separate.
+// The OUTER customer groups are sorted by the active sort key — within a
+// group, proposals stay in API order (no within-group sort yet). Runs once
+// per book section (origin-split-2 §3): the split happens before grouping,
+// the grouping + sort behaviour inside a section is unchanged.
+function groupAndSort(
+  rows: Proposal[],
+  sortKey: SortKey,
+): { customerEntries: [string, Proposal[]][]; nonCustomer: Proposal[] } {
+  const byCustomer = new Map<string, Proposal[]>();
+  const nonCustomer: Proposal[] = [];
+  for (const p of rows) {
+    if (p.entityType === "customer") {
+      const list = byCustomer.get(p.entityId) ?? [];
+      list.push(p);
+      byCustomer.set(p.entityId, list);
+    } else {
+      nonCustomer.push(p);
+    }
+  }
+  const entries = Array.from(byCustomer.entries());
+  const compareByKey = (
+    a: [string, Proposal[]],
+    b: [string, Proposal[]],
+  ): number => {
+    if (sortKey === "name") {
+      return customerName(a[1][0]!).localeCompare(customerName(b[1][0]!));
+    }
+    if (sortKey === "oldest") {
+      const minA = Math.min(...a[1].map((p) => Date.parse(p.createdAt)));
+      const minB = Math.min(...b[1].map((p) => Date.parse(p.createdAt)));
+      return minA - minB;
+    }
+    if (sortKey === "newest") {
+      const maxA = Math.max(...a[1].map((p) => Date.parse(p.createdAt)));
+      const maxB = Math.max(...b[1].map((p) => Date.parse(p.createdAt)));
+      return maxB - maxA;
+    }
+    // urgency (default): group score = max urgencyScore in the group
+    const scoreA = Math.max(...a[1].map(urgencyScore));
+    const scoreB = Math.max(...b[1].map(urgencyScore));
+    return scoreB - scoreA;
+  };
+  entries.sort(compareByKey);
+  return { customerEntries: entries, nonCustomer };
 }
 
 export default function AutopilotPage() {
@@ -160,50 +211,93 @@ export default function AutopilotPage() {
 
   const rows = data?.rows ?? [];
 
-  // Group customer-typed proposals by entityId; non-customer kept separate.
-  // Then sort the OUTER customer groups by the active sort key — within a
-  // group, proposals stay in API order (no within-group sort yet).
-  const { sortedCustomerEntries, nonCustomer } = useMemo(() => {
-    const byCustomer = new Map<string, Proposal[]>();
-    const nonCust: Proposal[] = [];
-    for (const p of rows) {
-      if (p.entityType === "customer") {
-        const list = byCustomer.get(p.entityId) ?? [];
-        list.push(p);
-        byCustomer.set(p.entityId, list);
-      } else {
-        nonCust.push(p);
-      }
-    }
-    const entries = Array.from(byCustomer.entries());
-    const compareByKey = (
-      a: [string, Proposal[]],
-      b: [string, Proposal[]],
-    ): number => {
-      if (sortKey === "name") {
-        return customerName(a[1][0]!).localeCompare(customerName(b[1][0]!));
-      }
-      if (sortKey === "oldest") {
-        const minA = Math.min(...a[1].map((p) => Date.parse(p.createdAt)));
-        const minB = Math.min(...b[1].map((p) => Date.parse(p.createdAt)));
-        return minA - minB;
-      }
-      if (sortKey === "newest") {
-        const maxA = Math.max(...a[1].map((p) => Date.parse(p.createdAt)));
-        const maxB = Math.max(...b[1].map((p) => Date.parse(p.createdAt)));
-        return maxB - maxA;
-      }
-      // urgency (default): group score = max urgencyScore in the group
-      const scoreA = Math.max(...a[1].map(urgencyScore));
-      const scoreB = Math.max(...b[1].map(urgencyScore));
-      return scoreB - scoreA;
+  // Per-book split (origin-split-2 §3): origin='tj' proposals get their own
+  // amber section; everything else (feldart + NULL book-agnostic ops/cadence)
+  // stays in the main Feldart section. Grouping + sort runs per section.
+  const { feldart, tj } = useMemo(() => {
+    const tjRows = rows.filter((p) => p.origin === "tj");
+    const feldartRows = rows.filter((p) => p.origin !== "tj");
+    return {
+      feldart: groupAndSort(feldartRows, sortKey),
+      tj: groupAndSort(tjRows, sortKey),
     };
-    entries.sort(compareByKey);
-    return { sortedCustomerEntries: entries, nonCustomer: nonCust };
   }, [rows, sortKey]);
+  const feldartCount =
+    feldart.customerEntries.reduce((n, [, ps]) => n + ps.length, 0) +
+    feldart.nonCustomer.length;
+  const tjCount =
+    tj.customerEntries.reduce((n, [, ps]) => n + ps.length, 0) +
+    tj.nonCustomer.length;
 
   const pendingCount = rows.filter((r) => r.status === "pending").length;
   const draftedCount = rows.filter((r) => r.status === "drafted").length;
+
+  const toggleSelected = (id: string, yes: boolean) => {
+    const next = new Set(selected);
+    if (yes) {
+      next.add(id);
+    } else {
+      next.delete(id);
+    }
+    setSelected(next);
+  };
+
+  // One book section's contents: per-customer cards (sorted by the active
+  // key) followed by an Operational card for non-customer proposals. Shared
+  // by both the Feldart and TJ sections.
+  const renderSectionBody = ({
+    customerEntries,
+    nonCustomer,
+  }: ReturnType<typeof groupAndSort>) => (
+    <>
+      {customerEntries.map(([custId, props]) => {
+        const name =
+          (props[0]!.candidateSummary as { customerName?: string })
+            .customerName ?? custId;
+        return (
+          <Card key={custId}>
+            <CardHeader>
+              <div>
+                <h3 className="text-sm font-medium">{name}</h3>
+                <p className="text-xs text-muted">
+                  {props.map((p) => categoryLabel(p.category)).join(" · ")}
+                </p>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-2">
+              {props.map((p) => (
+                <ProposalCard
+                  key={p.id}
+                  proposal={p}
+                  selected={selected.has(p.id)}
+                  onSelect={(yes) => toggleSelected(p.id, yes)}
+                  onEditAndSend={openEditAndSend}
+                />
+              ))}
+            </CardBody>
+          </Card>
+        );
+      })}
+      {nonCustomer.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-medium">Operational</h3>
+          </CardHeader>
+          <CardBody className="space-y-2">
+            {nonCustomer.map((p) => (
+              <ProposalCard
+                key={p.id}
+                proposal={p}
+                selected={selected.has(p.id)}
+                onSelect={(yes) => toggleSelected(p.id, yes)}
+                onEditAndSend={openEditAndSend}
+              />
+            ))}
+          </CardBody>
+        </Card>
+      )}
+    </>
+  );
 
   const selectedAiCount = Array.from(selected)
     .map((id) => rows.find((r) => r.id === id))
@@ -306,69 +400,40 @@ export default function AutopilotPage() {
         </Card>
       ) : (
         <>
-          {sortedCustomerEntries.map(([custId, props]) => {
-            const customerName =
-              (props[0]!.candidateSummary as { customerName?: string })
-                .customerName ?? custId;
-            return (
-              <Card key={custId}>
-                <CardHeader>
-                  <div>
-                    <h2 className="text-sm font-medium">{customerName}</h2>
-                    <p className="text-xs text-muted">
-                      {props
-                        .map((p) => categoryLabel(p.category))
-                        .join(" · ")}
-                    </p>
-                  </div>
-                </CardHeader>
-                <CardBody className="space-y-2">
-                  {props.map((p) => (
-                    <ProposalCard
-                      key={p.id}
-                      proposal={p}
-                      selected={selected.has(p.id)}
-                      onSelect={(yes) => {
-                        const next = new Set(selected);
-                        if (yes) {
-                          next.add(p.id);
-                        } else {
-                          next.delete(p.id);
-                        }
-                        setSelected(next);
-                      }}
-                      onEditAndSend={openEditAndSend}
-                    />
-                  ))}
-                </CardBody>
-              </Card>
-            );
-          })}
-          {nonCustomer.length > 0 && (
-            <Card>
-              <CardHeader>
-                <h2 className="text-sm font-medium">Operational</h2>
-              </CardHeader>
-              <CardBody className="space-y-2">
-                {nonCustomer.map((p) => (
-                  <ProposalCard
-                    key={p.id}
-                    proposal={p}
-                    selected={selected.has(p.id)}
-                    onSelect={(yes) => {
-                      const next = new Set(selected);
-                      if (yes) {
-                        next.add(p.id);
-                      } else {
-                        next.delete(p.id);
-                      }
-                      setSelected(next);
-                    }}
-                    onEditAndSend={openEditAndSend}
-                  />
-                ))}
-              </CardBody>
-            </Card>
+          {/* ── Feldart section: feldart + book-agnostic proposals ────── */}
+          {feldartCount > 0 && (
+            <section className="rounded-lg border border-default bg-subtle shadow-sm">
+              <BookSectionHeader
+                book="feldart"
+                title="Feldart"
+                kpis={
+                  <KpiChip>
+                    {feldartCount} proposal{feldartCount === 1 ? "" : "s"}
+                  </KpiChip>
+                }
+              />
+              <div className="space-y-3 px-4 py-3">
+                {renderSectionBody(feldart)}
+              </div>
+            </section>
+          )}
+
+          {/* ── TJ section: hidden entirely when no TJ proposals ──────── */}
+          {tjCount > 0 && (
+            <section className="rounded-lg border border-accent-warning/30 bg-accent-warning/[0.04] shadow-sm">
+              <BookSectionHeader
+                book="tj"
+                title="Torah Judaica"
+                kpis={
+                  <KpiChip tone="warning">
+                    {tjCount} proposal{tjCount === 1 ? "" : "s"}
+                  </KpiChip>
+                }
+              />
+              <div className="space-y-3 px-4 py-3">
+                {renderSectionBody(tj)}
+              </div>
+            </section>
           )}
         </>
       )}
