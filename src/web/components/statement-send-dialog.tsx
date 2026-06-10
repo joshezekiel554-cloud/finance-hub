@@ -101,6 +101,10 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   customerId: string;
   customerName: string;
+  // Book scope forwarded on the send POST (origin-split-2). The
+  // statement-send route filters open invoices to this origin; omitted
+  // = legacy blended send (removed once every caller passes it, W1 T5).
+  origin?: "feldart" | "tj";
   onSent?: (result: StatementSendSuccess) => void;
 };
 
@@ -154,6 +158,7 @@ export default function StatementSendDialog({
   onOpenChange,
   customerId,
   customerName,
+  origin,
   onSent,
 }: Props) {
   const queryClient = useQueryClient();
@@ -235,6 +240,7 @@ export default function StatementSendDialog({
             subject: subjectOverride,
             body: bodyOverride,
             userSignatureId,
+            origin,
           }),
         },
       );

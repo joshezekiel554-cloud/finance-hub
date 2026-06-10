@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams, Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
@@ -25,7 +25,6 @@ import {
   DropdownMenuItem,
 } from "../components/ui/dropdown-menu";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
-import { effectiveOverdue } from "../../modules/customer-balance/effective-overdue";
 import { CollapsibleCard } from "../components/ui/collapsible-card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -70,6 +69,11 @@ import InvoiceReminderDialog, {
   type InvoiceReminderSuccess,
 } from "../components/invoice-reminder-dialog";
 import { buildBookkeeperCompose } from "../lib/bookkeeper-compose";
+import {
+  BookSectionHeader,
+  KpiChip,
+  type Book,
+} from "../components/book-sections/book-section-header";
 import { cn } from "../lib/cn";
 
 const customerDetailRouteApi = getRouteApi("/customers/$customerId");
@@ -125,6 +129,9 @@ type CustomerKpi = {
   tjBalance: string;
   tjOverdue: string;
   tjOpenCount: number;
+  // Open TJ invoices parked at disputeState='verifying' (claims-paid
+  // loop). Drives the header TJ pill + TJ panel chip.
+  tjVerifyingCount: number;
 };
 
 type DetailResponse = {
@@ -195,14 +202,22 @@ export default function CustomerDetailPage() {
   const rmaStatus = search.rmaStatus;
   const rmaType = search.rmaType;
   const [holdDialogOpen, setHoldDialogOpen] = useState(false);
-  const [statementDialogOpen, setStatementDialogOpen] = useState(false);
+  // Statement dialog state — null when closed, else the book scope the
+  // triggering surface owns (Feldart panel → 'feldart', TJ batch lives
+  // on /chase). Origin rides the send POST so the statement only
+  // covers that book's invoices.
+  const [statementDialog, setStatementDialog] = useState<{
+    origin: "feldart" | "tj";
+  } | null>(null);
   const [statementSuccess, setStatementSuccess] =
     useState<StatementSendSuccess | null>(null);
   // Chase email dialog state. invoiceIds is undefined when chasing all
-  // open (the header button); populated when chasing a subset (the
-  // Invoices tab bulk-action button).
+  // open invoices of `origin` (the per-book panel buttons); populated
+  // when chasing a selected subset (the Invoices tab bulk-action
+  // button — operator-picked set, any book, so origin stays 'both').
   const [chaseDialog, setChaseDialog] = useState<{
     invoiceIds?: string[];
+    origin: "feldart" | "tj" | "both";
   } | null>(null);
   const [chaseSuccess, setChaseSuccess] = useState<{
     level: 1 | 2 | 3;
@@ -402,12 +417,22 @@ export default function CustomerDetailPage() {
   if (!data) return null;
 
   const { customer, recentActivities, kpi } = data;
-  const balance = Number(customer.balance);
-  const credits = Number(customer.unappliedCreditBalance);
-  const overdue = effectiveOverdue(
-    customer.overdueBalance,
-    customer.unappliedCreditBalance,
-  );
+  // Per-book figures only — the blended customers.balance/overdueBalance
+  // fields stay server-side for sync bookkeeping but are never rendered
+  // (origin-split-2 spec §5).
+  const feldartBalance = Number(kpi?.feldartBalance ?? "0");
+  const feldartOverdue = Number(kpi?.feldartOverdue ?? "0");
+  const tjBalance = Number(kpi?.tjBalance ?? "0");
+  const tjOverdue = Number(kpi?.tjOverdue ?? "0");
+  const tjVerifyingCount = kpi?.tjVerifyingCount ?? 0;
+  const tjOpenCount = kpi?.tjOpenCount ?? 0;
+  // "No TJ history" — hides the TJ pill (and, with a rows-on-file
+  // escape hatch, the TJ panel). Locked predicate from the Wave 1 plan.
+  const hasTjHistory =
+    tjBalance !== 0 ||
+    tjOverdue !== 0 ||
+    tjVerifyingCount !== 0 ||
+    tjOpenCount !== 0;
 
   // AI card action handler. Each kind maps to an existing surface — no
   // parallel autopilot logic. send_* opens the compose modal pre-filled;
@@ -433,7 +458,9 @@ export default function CustomerDetailPage() {
         return;
       }
       case "send_statement":
-        setStatementDialogOpen(true);
+        // AI card is book-agnostic in Wave 1 — statements default to the
+        // living (Feldart) book; TJ statements go via the /chase panel.
+        setStatementDialog({ origin: "feldart" });
         return;
       case "view_rma": {
         const rmaId =
@@ -549,6 +576,37 @@ export default function CustomerDetailPage() {
               </span>
             ) : null}
           </div>
+          {/* Per-book exposure pills — the only money figures in the
+              header. Feldart always renders (living book, even $0); TJ
+              only when the customer has TJ history. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <HeaderBookPill
+              book="feldart"
+              title="Open Feldart balance, net of Feldart credits"
+            >
+              Feldart owes ${feldartBalance.toFixed(2)}
+              {feldartOverdue > 0 ? (
+                <span className="font-normal opacity-80">
+                  {" "}
+                  · ${feldartOverdue.toFixed(2)} overdue
+                </span>
+              ) : null}
+            </HeaderBookPill>
+            {hasTjHistory ? (
+              <HeaderBookPill
+                book="tj"
+                title="Open Torah Judaica balance, net of TJ credits"
+              >
+                TJ owes ${tjBalance.toFixed(2)}
+                {tjVerifyingCount > 0 ? (
+                  <span className="font-normal opacity-80">
+                    {" "}
+                    · {tjVerifyingCount} verifying
+                  </span>
+                ) : null}
+              </HeaderBookPill>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex flex-col items-end gap-2">
@@ -619,37 +677,10 @@ export default function CustomerDetailPage() {
               </DropdownMenu>
             </div>
           </div>
-          {/* Messaging row — the primary outbound actions. Each gated on
-              having something to send. Held customers are still chase-able. */}
+          {/* Messaging row. Statement + Chase moved into the per-book
+              invoice panels (origin-split-2) so every send is book-
+              scoped; the header keeps the book-agnostic actions. */}
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setStatementDialogOpen(true)}
-              disabled={!(balance > 0)}
-              title={
-                balance > 0
-                  ? "Send a statement of open invoices to this customer"
-                  : "No open balance — nothing to send"
-              }
-            >
-              <FileText className="size-3.5" />
-              Statement
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setChaseDialog({})}
-              disabled={!(balance > 0)}
-              title={
-                balance > 0
-                  ? "Send a chase email covering all open invoices (L1 by default — switch level inside the dialog)"
-                  : "No open balance — nothing to chase"
-              }
-            >
-              <Send className="size-3.5" />
-              Chase
-            </Button>
             <Button
               variant="secondary"
               size="sm"
@@ -715,10 +746,13 @@ export default function CustomerDetailPage() {
       )}
 
       <StatementSendDialog
-        open={statementDialogOpen}
-        onOpenChange={setStatementDialogOpen}
+        open={statementDialog !== null}
+        onOpenChange={(next) => {
+          if (!next) setStatementDialog(null);
+        }}
         customerId={customer.id}
         customerName={customer.displayName}
+        origin={statementDialog?.origin}
         onSent={(result) => setStatementSuccess(result)}
       />
 
@@ -766,9 +800,10 @@ export default function CustomerDetailPage() {
           }}
           customerId={customer.id}
           customerName={customer.displayName}
-          // Chases the operator-selected invoice set as-is (any book); the
-          // dedicated TJ-template chase lives on the /chase TJ list.
-          origin="both"
+          // Panel buttons pass their book ('feldart'/'tj' → that book's
+          // open invoices + templates); the bulk-selection action passes
+          // 'both' because the operator picked the exact set.
+          origin={chaseDialog.origin}
           level={1}
           invoiceIds={chaseDialog.invoiceIds}
           onSent={(_result: ChaseSendSuccess) => {
@@ -776,11 +811,15 @@ export default function CustomerDetailPage() {
             // We just stash the success metadata so the auto-fading
             // pill above renders. invoiceCount is the number of
             // invoices the dialog scope covered — for "all open"
-            // (undefined invoiceIds) we approximate from the kpi
-            // openInvoiceCount; for a subset we know exactly.
+            // (undefined invoiceIds) we approximate from the kpi's
+            // per-book open count; for a subset we know exactly.
             const count =
               chaseDialog.invoiceIds?.length ??
-              kpi?.openInvoiceCount ??
+              (chaseDialog.origin === "feldart"
+                ? kpi?.feldartOpenCount
+                : chaseDialog.origin === "tj"
+                  ? kpi?.tjOpenCount
+                  : kpi?.openInvoiceCount) ??
               0;
             setChaseSuccess({ level: _result.level, invoiceCount: count });
             setChaseDialog(null);
@@ -907,7 +946,13 @@ export default function CustomerDetailPage() {
               <InvoicesPanel
                 customerId={customer.id}
                 customerName={customer.displayName}
-                onBulkChase={(invoiceIds) => setChaseDialog({ invoiceIds })}
+                kpi={kpi}
+                hasTjHistory={hasTjHistory}
+                onChase={(origin) => setChaseDialog({ origin })}
+                onStatement={(origin) => setStatementDialog({ origin })}
+                onBulkChase={(invoiceIds) =>
+                  setChaseDialog({ invoiceIds, origin: "both" })
+                }
                 onDisputeChanged={() => {
                   void queryClient.invalidateQueries({
                     queryKey: ["customer-invoices", customer.id],
@@ -980,12 +1025,44 @@ export default function CustomerDetailPage() {
         {/* Persistent context rail. Stacks below the main column on mobile. */}
         <CustomerContextRail
           customer={customer}
-          kpi={kpi}
           notes={recentActivities.filter((a) => a.kind === "manual_note")}
           onAction={handleAiCardAction}
         />
       </div>
     </div>
+  );
+}
+
+// Compact per-book exposure pill for the header — indigo for Feldart,
+// amber for Torah Judaica (same palette as the book panels' accents).
+function HeaderBookPill({
+  book,
+  title,
+  children,
+}: {
+  book: Book;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium tabular-nums",
+        book === "feldart"
+          ? "border-indigo-500/30 bg-indigo-500/10 text-indigo-500"
+          : "border-accent-warning/30 bg-accent-warning/10 text-accent-warning",
+      )}
+    >
+      <span
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          book === "feldart" ? "bg-indigo-500" : "bg-accent-warning",
+        )}
+        aria-hidden
+      />
+      <span>{children}</span>
+    </span>
   );
 }
 
@@ -1427,97 +1504,21 @@ function NotesRailCard({
   );
 }
 
-// Per-track "owed" card for the rail. Shows the netted balance large,
-// the overdue slice as a sub-figure, and the open-doc count. Two of
-// these stack in the rail — one for Feldart (indigo accent), one for
-// Torah Judaica (amber accent, matching the Notes card treatment).
-function KpiRailCard({
-  label,
-  balance,
-  overdue,
-  openInvoices,
-  accent,
-}: {
-  label: string;
-  balance: number;
-  overdue: number;
-  openInvoices: number | null;
-  accent: "feldart" | "tj";
-}) {
-  const accentClass =
-    accent === "feldart"
-      ? "border-indigo-500/30 bg-indigo-500/5"
-      : "border-accent-warning/30 bg-accent-warning/5";
-  const labelClass =
-    accent === "feldart" ? "text-indigo-500" : "text-accent-warning";
-  return (
-    <div className={cn("rounded-xl border p-3", accentClass)}>
-      <div
-        className={cn(
-          "text-[10px] font-semibold uppercase tracking-wide",
-          labelClass,
-        )}
-      >
-        {label}
-      </div>
-      <div className="mt-0.5 text-lg font-semibold tabular-nums">
-        ${balance.toFixed(2)}
-      </div>
-      <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted">
-        <span
-          className={cn("tabular-nums", overdue > 0 && "text-accent-danger")}
-        >
-          {overdue > 0 ? `$${overdue.toFixed(2)} overdue` : "none overdue"}
-        </span>
-        {openInvoices != null && openInvoices > 0 ? (
-          <>
-            <span aria-hidden>·</span>
-            <span className="tabular-nums">{openInvoices} open</span>
-          </>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-// The persistent context rail: KPIs → AI summary → Notes → AI context
-// (collapsible) → recipients/terms. Composed from the existing rail pieces.
+// The persistent context rail: AI summary → Notes → AI context
+// (collapsible) → recipients/terms. The per-book KPI cards that used to
+// lead the rail are superseded by the header pills + panel KPI chips
+// (origin-split-2 — no triple display of the same figures).
 function CustomerContextRail({
   customer,
-  kpi,
   notes,
   onAction,
 }: {
   customer: Customer;
-  kpi: CustomerKpi | null;
   notes: Activity[];
   onAction: (action: AiCardAction) => void;
 }) {
-  // Two-track exposure split. Hide the TJ card when there's no TJ
-  // exposure so pure-Feldart customers see a single clean card.
-  const tjBalance = Number(kpi?.tjBalance ?? "0");
-  const tjOverdue = Number(kpi?.tjOverdue ?? "0");
-  const showTj = tjBalance !== 0 || tjOverdue !== 0;
   return (
     <aside className="flex w-full flex-col gap-3 md:w-[330px] md:shrink-0">
-      <div className="flex flex-col gap-2.5">
-        <KpiRailCard
-          label="Feldart owed"
-          balance={Number(kpi?.feldartBalance ?? "0")}
-          overdue={Number(kpi?.feldartOverdue ?? "0")}
-          openInvoices={kpi?.feldartOpenCount ?? null}
-          accent="feldart"
-        />
-        {showTj ? (
-          <KpiRailCard
-            label="Torah Judaica owed"
-            balance={tjBalance}
-            overdue={tjOverdue}
-            openInvoices={kpi?.tjOpenCount ?? null}
-            accent="tj"
-          />
-        ) : null}
-      </div>
       <CustomerAiCard customerId={customer.id} onAction={onAction} />
       <NotesRailCard customerId={customer.id} notes={notes} />
       <details className="rounded-xl border border-default bg-subtle">
@@ -2273,6 +2274,13 @@ type InvoiceRow = {
   lastChasedLevel: number | null;
 };
 
+// Selection key — docType-qualified so invoices and credit memos with
+// overlapping QBO ids don't collide. Module-scoped so the per-book
+// sections share it with the panel.
+function rowKey(r: InvoiceRow): string {
+  return `${r.docType}:${r.qbId}`;
+}
+
 type StatusFilter = "all" | "open" | "paid" | "overdue" | "sent" | "void";
 type TypeFilter = "all" | "invoice" | "credit_memo";
 type SortKey =
@@ -2286,6 +2294,10 @@ type SortDir = "asc" | "desc";
 function InvoicesPanel({
   customerId,
   customerName,
+  kpi,
+  hasTjHistory,
+  onChase,
+  onStatement,
   onBulkChase,
   onDisputeChanged,
   onEmailBookkeeper,
@@ -2302,6 +2314,16 @@ function InvoicesPanel({
 }: {
   customerId: string;
   customerName: string;
+  // Per-book rollups for the panel KPI chips (server-computed, net of
+  // that book's credits).
+  kpi: CustomerKpi | null;
+  // Locked TJ-history predicate from the parent — the TJ panel hides
+  // for customers with no TJ exposure at all.
+  hasTjHistory: boolean;
+  // Panel header actions — parent owns the chase/statement dialogs and
+  // threads the book through to them.
+  onChase: (origin: "feldart" | "tj") => void;
+  onStatement: (origin: "feldart" | "tj") => void;
   // Operator clicked "Send chase email" with N invoices selected.
   // The parent owns the dialog state; we just hand it the ids of
   // the selected invoice rows (credit memos filtered out — chase is
@@ -2356,9 +2378,6 @@ function InvoicesPanel({
   const [bulkPdfPending, setBulkPdfPending] = useState<boolean>(false);
   const [bulkPdfError, setBulkPdfError] = useState<string | null>(null);
 
-  function rowKey(r: InvoiceRow): string {
-    return `${r.docType}:${r.qbId}`;
-  }
   function toggleRow(r: InvoiceRow) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -2416,33 +2435,47 @@ function InvoicesPanel({
       });
   }, [allRows, statusFilter, typeFilter, search, sortKey, sortDir]);
 
-  const totals = useMemo(() => {
-    let totalSum = 0;
-    let openSum = 0;
-    for (const r of filteredRows) {
-      totalSum += Number(r.total);
-      if (Number(r.balance) > 0) openSum += Number(r.balance);
-    }
-    return { totalSum, openSum };
-  }, [filteredRows]);
-
-  // Origin-grouped view: Feldart first, then Torah Judaica. Preserves
-  // the existing within-group sort (filteredRows is already sorted).
-  // Each group carries its own balance subtotal for the section header.
-  const originGroups = useMemo(() => {
-    const make = (origin: "feldart" | "tj", label: string) => {
-      const rows = filteredRows.filter((r) => r.origin === origin);
-      let balanceSum = 0;
-      for (const r of rows) {
-        if (Number(r.balance) > 0) balanceSum += Number(r.balance);
-      }
-      return { origin, label, rows, balanceSum };
-    };
-    return [
-      make("feldart", "Feldart"),
-      make("tj", "Torah Judaica"),
-    ].filter((g) => g.rows.length > 0);
-  }, [filteredRows]);
+  // Filters apply across both books, THEN rows split by origin — each
+  // per-book panel renders its slice (already sorted via filteredRows).
+  const feldartRows = useMemo(
+    () => filteredRows.filter((r) => r.origin === "feldart"),
+    [filteredRows],
+  );
+  const tjRows = useMemo(
+    () => filteredRows.filter((r) => r.origin === "tj"),
+    [filteredRows],
+  );
+  // Unfiltered per-book doc counts — drive the panels' "no documents
+  // on file" vs "no matching invoices" empty states + the TJ panel's
+  // paid-history escape hatch.
+  const feldartDocCount = useMemo(
+    () => allRows.filter((r) => r.origin === "feldart").length,
+    [allRows],
+  );
+  const tjDocCount = useMemo(
+    () => allRows.filter((r) => r.origin === "tj").length,
+    [allRows],
+  );
+  // Customer-level bookkeeper action targets the OLDEST verifying TJ
+  // invoice (by due date, issue-date fallback). Computed from the
+  // unfiltered rows so the button doesn't vanish under filters; null →
+  // button omitted.
+  const oldestVerifying = useMemo<InvoiceRow | null>(() => {
+    const verifying = allRows.filter(
+      (r) =>
+        r.origin === "tj" &&
+        r.docType === "invoice" &&
+        r.disputeState === "verifying",
+    );
+    if (verifying.length === 0) return null;
+    return verifying
+      .slice()
+      .sort((a, b) =>
+        (a.dueDate ?? a.issueDate ?? "9999-12-31").localeCompare(
+          b.dueDate ?? b.issueDate ?? "9999-12-31",
+        ),
+      )[0] ?? null;
+  }, [allRows]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -2453,26 +2486,18 @@ function InvoicesPanel({
     }
   }
 
-  // True when every currently-visible (filtered) row is selected;
-  // drives the header checkbox's tri-state look.
-  const allVisibleSelected =
-    filteredRows.length > 0 &&
-    filteredRows.every((r) => selected.has(rowKey(r)));
-  const someVisibleSelected =
-    !allVisibleSelected &&
-    filteredRows.some((r) => selected.has(rowKey(r)));
-
-  function toggleSelectAllVisible() {
+  // Per-section select-all: toggles just that book's visible rows
+  // (preserving any selection outside the section / current filter).
+  function toggleSelectRows(rows: InvoiceRow[]) {
     setSelected((prev) => {
-      if (allVisibleSelected) {
-        // Deselect just the visible ones (preserve any selection
-        // outside the current filter).
-        const next = new Set(prev);
-        for (const r of filteredRows) next.delete(rowKey(r));
-        return next;
-      }
+      const allSelected =
+        rows.length > 0 && rows.every((r) => prev.has(rowKey(r)));
       const next = new Set(prev);
-      for (const r of filteredRows) next.add(rowKey(r));
+      if (allSelected) {
+        for (const r of rows) next.delete(rowKey(r));
+      } else {
+        for (const r of rows) next.add(rowKey(r));
+      }
       return next;
     });
   }
@@ -2549,12 +2574,22 @@ function InvoicesPanel({
     );
   }
 
+  const feldartBalance = Number(kpi?.feldartBalance ?? "0");
+  const feldartOverdue = Number(kpi?.feldartOverdue ?? "0");
+  const tjBalance = Number(kpi?.tjBalance ?? "0");
+  const tjVerifyingCount = kpi?.tjVerifyingCount ?? 0;
+  // Locked predicate hides the TJ panel for no-TJ-history customers —
+  // plus an escape hatch: if TJ docs exist on file (e.g. all paid,
+  // wind-down complete), keep the panel so that history stays
+  // browsable under the Paid/Void filters.
+  const showTjPanel = hasTjHistory || tjDocCount > 0;
+
   return (
-    <Card>
+    <div className="space-y-3">
       {sentSuccess ? (
         <div
           role="status"
-          className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+          className="flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
         >
           <CheckCircle2 className="size-4" />
           <span>
@@ -2573,7 +2608,7 @@ function InvoicesPanel({
       {reminderSuccess ? (
         <div
           role="status"
-          className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+          className="flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
         >
           <CheckCircle2 className="size-4" />
           <span>
@@ -2585,8 +2620,8 @@ function InvoicesPanel({
         </div>
       ) : null}
 
-      <CardBody className="space-y-3 py-3">
-        {/* Filter + search row */}
+      <div className="space-y-3">
+        {/* Filter + search row — applies across BOTH book panels below. */}
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <FilterChip
             label="All"
@@ -2723,154 +2758,136 @@ function InvoicesPanel({
           </div>
         ) : null}
 
-        {filteredRows.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted">
-            {allRows.length === 0
-              ? "No documents on file."
-              : "No documents match the current filters."}
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-md border border-default">
-            <table className="w-full text-sm">
-              <thead className="bg-elevated text-left text-[11px] uppercase tracking-wide text-muted">
-                <tr>
-                  <th className="w-8 px-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={allVisibleSelected}
-                      ref={(el) => {
-                        // tri-state: indeterminate when partial.
-                        if (el) el.indeterminate = someVisibleSelected;
-                      }}
-                      onChange={toggleSelectAllVisible}
-                      aria-label={
-                        allVisibleSelected
-                          ? "Deselect all visible"
-                          : "Select all visible"
-                      }
-                      className="cursor-pointer"
-                    />
-                  </th>
-                  <SortHeader
-                    label="Doc #"
-                    sortKey="docNumber"
-                    activeKey={sortKey}
-                    activeDir={sortDir}
-                    onClick={toggleSort}
-                  />
-                  <th className="px-3 py-2 font-medium">Type</th>
-                  <SortHeader
-                    label="Issued"
-                    sortKey="issueDate"
-                    activeKey={sortKey}
-                    activeDir={sortDir}
-                    onClick={toggleSort}
-                  />
-                  <th className="px-3 py-2 font-medium">Due</th>
-                  <th className="px-3 py-2 font-medium">Memo</th>
-                  <SortHeader
-                    label="Total"
-                    sortKey="total"
-                    activeKey={sortKey}
-                    activeDir={sortDir}
-                    onClick={toggleSort}
-                    align="right"
-                  />
-                  <SortHeader
-                    label="Balance"
-                    sortKey="balance"
-                    activeKey={sortKey}
-                    activeDir={sortDir}
-                    onClick={toggleSort}
-                    align="right"
-                  />
-                  <SortHeader
-                    label="Last chased"
-                    sortKey="lastChasedAt"
-                    activeKey={sortKey}
-                    activeDir={sortDir}
-                    onClick={toggleSort}
-                  />
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 text-right font-medium">Actions</th>
-                </tr>
-              </thead>
-              {originGroups.map((group) => (
-                <tbody key={group.origin}>
-                  <tr className="bg-elevated/60">
-                    <td
-                      colSpan={11}
-                      className="border-t border-default px-3 py-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-secondary">
-                          <OriginChip origin={group.origin} />
-                          {group.label}
-                          <span className="font-normal text-muted">
-                            ({group.rows.length})
-                          </span>
-                        </span>
-                        <span className="text-[11px] tabular-nums text-muted">
-                          {group.balanceSum > 0 ? (
-                            <>
-                              open{" "}
-                              <span className="font-medium text-accent-warning">
-                                ${group.balanceSum.toFixed(2)}
-                              </span>
-                            </>
-                          ) : (
-                            "nothing open"
-                          )}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                  {group.rows.map((row) => (
-                    <InvoiceTableRow
-                      key={`${row.docType}:${row.qbId}`}
-                      row={row}
-                      selected={selected.has(rowKey(row))}
-                      onToggle={() => toggleRow(row)}
-                      onSend={() => setSending(row)}
-                      onRemind={() => setReminding(row)}
-                      onDisputeChanged={onDisputeChanged}
-                      onEmailBookkeeper={() => onEmailBookkeeper(row)}
-                    />
-                  ))}
-                </tbody>
-              ))}
-            </table>
-          </div>
-        )}
+        {/* ── Feldart panel — the living book, always rendered. ──────── */}
+        <BookInvoiceSection
+          book="feldart"
+          title="Feldart"
+          kpis={
+            <>
+              <KpiChip>
+                {kpi?.feldartOpenCount ?? 0} open
+              </KpiChip>
+              <KpiChip title="Open Feldart balance, net of Feldart credits">
+                ${feldartBalance.toFixed(2)}
+              </KpiChip>
+              <KpiChip
+                tone={feldartOverdue > 0 ? "danger" : "neutral"}
+                title="Feldart balance past its due date"
+              >
+                ${feldartOverdue.toFixed(2)} overdue
+              </KpiChip>
+            </>
+          }
+          actions={
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onChase("feldart")}
+                disabled={!(feldartBalance > 0)}
+                title={
+                  feldartBalance > 0
+                    ? "Send a chase email covering all open Feldart invoices (L1 by default — switch level inside the dialog)"
+                    : "No open Feldart balance — nothing to chase"
+                }
+              >
+                <Send className="size-3.5" />
+                Chase
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onStatement("feldart")}
+                disabled={!(feldartBalance > 0)}
+                title={
+                  feldartBalance > 0
+                    ? "Send a statement of open Feldart invoices to this customer"
+                    : "No open Feldart balance — nothing to send"
+                }
+              >
+                <FileText className="size-3.5" />
+                Statement
+              </Button>
+            </>
+          }
+          rows={feldartRows}
+          bookDocCount={feldartDocCount}
+          selected={selected}
+          onToggleRow={toggleRow}
+          onToggleAllRows={toggleSelectRows}
+          sortKey={sortKey}
+          sortDir={sortDir}
+          onToggleSort={toggleSort}
+          onSend={setSending}
+          onRemind={setReminding}
+          onDisputeChanged={onDisputeChanged}
+          onEmailBookkeeper={onEmailBookkeeper}
+        />
 
-        {filteredRows.length > 0 ? (
-          <div className="flex items-center justify-between text-xs text-muted">
-            <div>
-              Showing {filteredRows.length} of {allRows.length}
-            </div>
-            <div className="flex items-center gap-3 tabular-nums">
-              <span>
-                Total{" "}
-                <span className="text-primary">
-                  ${totals.totalSum.toFixed(2)}
-                </span>
-              </span>
-              <span>
-                Open{" "}
-                <span
-                  className={
-                    totals.openSum > 0
-                      ? "text-accent-warning"
-                      : "text-muted"
+        {/* ── Torah Judaica panel — legacy wind-down book. ───────────── */}
+        {showTjPanel ? (
+          <BookInvoiceSection
+            book="tj"
+            title="Torah Judaica"
+            kpis={
+              <>
+                <KpiChip title="Net TJ exposure (TJ credits netted)">
+                  ${tjBalance.toFixed(2)} net
+                </KpiChip>
+                {tjVerifyingCount > 0 ? (
+                  <KpiChip
+                    tone="warning"
+                    title="Invoices parked while the customer's payment claim is verified with the TJ bookkeeper"
+                  >
+                    {tjVerifyingCount} verifying
+                  </KpiChip>
+                ) : null}
+              </>
+            }
+            actions={
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onChase("tj")}
+                  disabled={!(tjBalance > 0)}
+                  title={
+                    tjBalance > 0
+                      ? "Send a TJ-toned chase email covering open Torah Judaica invoices (verifying invoices excluded)"
+                      : "No open TJ balance — nothing to chase"
                   }
                 >
-                  ${totals.openSum.toFixed(2)}
-                </span>
-              </span>
-            </div>
-          </div>
+                  <Send className="size-3.5" />
+                  TJ chase
+                </Button>
+                {oldestVerifying ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onEmailBookkeeper(oldestVerifying)}
+                    title={`Email the TJ bookkeeper about ${oldestVerifying.docNumber ?? oldestVerifying.qbId} (oldest invoice under verification)`}
+                  >
+                    <Mail className="size-3.5" />
+                    Bookkeeper
+                  </Button>
+                ) : null}
+              </>
+            }
+            rows={tjRows}
+            bookDocCount={tjDocCount}
+            selected={selected}
+            onToggleRow={toggleRow}
+            onToggleAllRows={toggleSelectRows}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onToggleSort={toggleSort}
+            onSend={setSending}
+            onRemind={setReminding}
+            onDisputeChanged={onDisputeChanged}
+            onEmailBookkeeper={onEmailBookkeeper}
+          />
         ) : null}
-      </CardBody>
+      </div>
 
       {sending ? (
         <InvoiceSendDialog
@@ -2918,7 +2935,193 @@ function InvoicesPanel({
           }}
         />
       ) : null}
-    </Card>
+    </div>
+  );
+}
+
+// One per-book invoice section: bordered card with a BookSectionHeader
+// (accent band, dot, KPI chips, actions) over the shared invoice table.
+// Both panels render through this — only header content, tint and row
+// slice differ. The TJ variant carries a light amber wash so the
+// legacy book reads visually distinct (mirrors the /chase wind-down
+// panel's treatment).
+function BookInvoiceSection({
+  book,
+  title,
+  kpis,
+  actions,
+  rows,
+  bookDocCount,
+  selected,
+  onToggleRow,
+  onToggleAllRows,
+  sortKey,
+  sortDir,
+  onToggleSort,
+  onSend,
+  onRemind,
+  onDisputeChanged,
+  onEmailBookkeeper,
+}: {
+  book: Book;
+  title: string;
+  kpis: ReactNode;
+  actions: ReactNode;
+  // This book's slice of the (already filtered + sorted) rows.
+  rows: InvoiceRow[];
+  // Unfiltered doc count for this book — distinguishes "no documents on
+  // file" from "filters match nothing".
+  bookDocCount: number;
+  selected: Set<string>;
+  onToggleRow: (row: InvoiceRow) => void;
+  onToggleAllRows: (rows: InvoiceRow[]) => void;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onToggleSort: (key: SortKey) => void;
+  onSend: (row: InvoiceRow) => void;
+  onRemind: (row: InvoiceRow) => void;
+  onDisputeChanged: () => void;
+  onEmailBookkeeper: (row: InvoiceRow) => void;
+}) {
+  const allSelected =
+    rows.length > 0 && rows.every((r) => selected.has(rowKey(r)));
+  const someSelected =
+    !allSelected && rows.some((r) => selected.has(rowKey(r)));
+  // Per-book footer sums over the visible (filtered) slice — never a
+  // blended figure.
+  let totalSum = 0;
+  let openSum = 0;
+  for (const r of rows) {
+    totalSum += Number(r.total);
+    if (Number(r.balance) > 0) openSum += Number(r.balance);
+  }
+  return (
+    <section
+      className={cn(
+        "rounded-lg border shadow-sm",
+        book === "tj"
+          ? "border-accent-warning/30 bg-accent-warning/[0.04]"
+          : "border-default bg-subtle",
+      )}
+    >
+      <BookSectionHeader book={book} title={title} kpis={kpis} actions={actions} />
+      <div className="space-y-3 px-4 py-3">
+        {rows.length === 0 ? (
+          <div className="py-6 text-center text-sm text-muted">
+            {bookDocCount === 0
+              ? `No ${title} documents on file.`
+              : "No matching invoices."}
+          </div>
+        ) : (
+          <>
+            <div className="overflow-hidden rounded-md border border-default">
+              <table className="w-full text-sm">
+                <thead className="bg-elevated text-left text-[11px] uppercase tracking-wide text-muted">
+                  <tr>
+                    <th className="w-8 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={(el) => {
+                          // tri-state: indeterminate when partial.
+                          if (el) el.indeterminate = someSelected;
+                        }}
+                        onChange={() => onToggleAllRows(rows)}
+                        aria-label={
+                          allSelected
+                            ? `Deselect all visible ${title} documents`
+                            : `Select all visible ${title} documents`
+                        }
+                        className="cursor-pointer"
+                      />
+                    </th>
+                    <SortHeader
+                      label="Doc #"
+                      sortKey="docNumber"
+                      activeKey={sortKey}
+                      activeDir={sortDir}
+                      onClick={onToggleSort}
+                    />
+                    <th className="px-3 py-2 font-medium">Type</th>
+                    <SortHeader
+                      label="Issued"
+                      sortKey="issueDate"
+                      activeKey={sortKey}
+                      activeDir={sortDir}
+                      onClick={onToggleSort}
+                    />
+                    <th className="px-3 py-2 font-medium">Due</th>
+                    <th className="px-3 py-2 font-medium">Memo</th>
+                    <SortHeader
+                      label="Total"
+                      sortKey="total"
+                      activeKey={sortKey}
+                      activeDir={sortDir}
+                      onClick={onToggleSort}
+                      align="right"
+                    />
+                    <SortHeader
+                      label="Balance"
+                      sortKey="balance"
+                      activeKey={sortKey}
+                      activeDir={sortDir}
+                      onClick={onToggleSort}
+                      align="right"
+                    />
+                    <SortHeader
+                      label="Last chased"
+                      sortKey="lastChasedAt"
+                      activeKey={sortKey}
+                      activeDir={sortDir}
+                      onClick={onToggleSort}
+                    />
+                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 text-right font-medium">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <InvoiceTableRow
+                      key={rowKey(row)}
+                      row={row}
+                      selected={selected.has(rowKey(row))}
+                      onToggle={() => onToggleRow(row)}
+                      onSend={() => onSend(row)}
+                      onRemind={() => onRemind(row)}
+                      onDisputeChanged={onDisputeChanged}
+                      onEmailBookkeeper={() => onEmailBookkeeper(row)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-between text-xs text-muted">
+              <div>
+                Showing {rows.length} of {bookDocCount}
+              </div>
+              <div className="flex items-center gap-3 tabular-nums">
+                <span>
+                  Total{" "}
+                  <span className="text-primary">${totalSum.toFixed(2)}</span>
+                </span>
+                <span>
+                  Open{" "}
+                  <span
+                    className={
+                      openSum > 0 ? "text-accent-warning" : "text-muted"
+                    }
+                  >
+                    ${openSum.toFixed(2)}
+                  </span>
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -3018,25 +3221,6 @@ function SortHeader({
   );
 }
 
-// Tiny origin pill: Feldart = indigo tint, TJ = amber tint. Used in the
-// group section headers and inline beside each row's doc number.
-function OriginChip({ origin }: { origin: "feldart" | "tj" }) {
-  const isFeldart = origin === "feldart";
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ring-1 ring-inset",
-        isFeldart
-          ? "bg-indigo-500/15 text-indigo-500 ring-indigo-500/30"
-          : "bg-accent-warning/15 text-accent-warning ring-accent-warning/30",
-      )}
-      title={isFeldart ? "Supplied by Feldart" : "Torah Judaica legacy"}
-    >
-      {isFeldart ? "Feldart" : "TJ"}
-    </span>
-  );
-}
-
 function InvoiceTableRow({
   row,
   selected,
@@ -3099,12 +3283,9 @@ function InvoiceTableRow({
           className="cursor-pointer"
         />
       </td>
-      <td className="px-3 py-2 font-mono text-xs">
-        <span className="inline-flex items-center gap-1.5">
-          <OriginChip origin={row.origin} />
-          {row.docNumber ?? "—"}
-        </span>
-      </td>
+      {/* No origin chip — the row's book is implied by which panel it
+          lives in (origin-split-2). */}
+      <td className="px-3 py-2 font-mono text-xs">{row.docNumber ?? "—"}</td>
       <td className="px-3 py-2">
         {row.docType === "credit_memo" ? (
           <Badge tone="info">Credit memo</Badge>

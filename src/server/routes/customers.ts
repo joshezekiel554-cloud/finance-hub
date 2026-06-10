@@ -1139,6 +1139,13 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           tjOpenCount: sql<number>`(
             SELECT COUNT(*) FROM ${invoices}
             WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0 AND ${invoices.origin} = 'tj')`,
+          // Open TJ invoices parked in the claims-paid dispute loop —
+          // drives the header TJ pill's "· N verifying" segment + the
+          // TJ panel KPI chip.
+          tjVerifyingCount: sql<number>`(
+            SELECT COUNT(*) FROM ${invoices}
+            WHERE ${invoices.customerId} = ${id} AND ${invoices.balance} > 0
+              AND ${invoices.origin} = 'tj' AND ${invoices.disputeState} = 'verifying')`,
         })
         .from(customers)
         .where(eq(customers.id, id))
@@ -1177,6 +1184,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
           tjBalance: Number(kpi.tjBalance ?? 0).toFixed(2),
           tjOverdue: Number(kpi.tjOverdue ?? 0).toFixed(2),
           tjOpenCount: Number(kpi.tjOpenCount ?? 0),
+          tjVerifyingCount: Number(kpi.tjVerifyingCount ?? 0),
         }
       : null;
 
