@@ -1,12 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Customer } from "../../db/schema/customers.js";
 import type { Invoice } from "../../db/schema/invoices.js";
 import type { OverdueCustomer, Severity } from "./types.js";
 import {
   getTjWinddown,
+  resetSnapshotUpsertThrottle,
   type TjInvoiceRow,
   type WinddownDeps,
 } from "./winddown.js";
+
+// The snapshot-write throttle is a module-level memo — clear it so each test
+// observes its own upsert behaviour.
+beforeEach(() => {
+  resetSnapshotUpsertThrottle();
+});
 
 // ---------- helpers ----------
 
@@ -303,7 +310,57 @@ describe("getTjWinddown — snapshot upsert + deltaVs28d", () => {
     expect(upsertSnapshot).toHaveBeenCalledWith(daysAgoIso(0), 1234.56);
   });
 
-  it("returns deltaVs28d = null when no snapshot is ≥28 days old", async () => {
+  it("skips the upsert when one already succeeded for today within the last 15 minutes", async () => {
+    const upsertSnapshot = vi.fn(async () => {});
+    const deps = makeDeps({
+      loadTjInvoices: async () => [
+        tjRow({ id: "i1", customerId: "ca", balance: "1000.00", dueDate: daysAgo(40) }),
+      ],
+      upsertSnapshot,
+    });
+
+    await getTjWinddown(deps);
+    await getTjWinddown(deps);
+
+    expect(upsertSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("upserts again once the 15-minute window has passed (same day)", async () => {
+    const upsertSnapshot = vi.fn(async () => {});
+    // Anchor both calls to today at 02:00 UTC so +16min stays the same day.
+    const t0 = new Date(daysAgo(0).getTime() + 2 * 60 * 60 * 1000);
+    const t1 = new Date(t0.getTime() + 16 * 60 * 1000);
+    const deps = {
+      loadTjInvoices: async () => [
+        tjRow({ id: "i1", customerId: "ca", balance: "1000.00", dueDate: daysAgo(40) }),
+      ],
+      upsertSnapshot,
+    };
+
+    await getTjWinddown(makeDeps({ ...deps, now: t0 }));
+    await getTjWinddown(makeDeps({ ...deps, now: t1 }));
+
+    expect(upsertSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries the upsert on the next call when the previous write threw", async () => {
+    const upsertSnapshot = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(new Error("db down"));
+    const deps = makeDeps({
+      loadTjInvoices: async () => [
+        tjRow({ id: "i1", customerId: "ca", balance: "1000.00", dueDate: daysAgo(40) }),
+      ],
+      upsertSnapshot,
+    });
+
+    await expect(getTjWinddown(deps)).rejects.toThrow("db down");
+    await getTjWinddown(deps); // failure must not have armed the throttle
+
+    expect(upsertSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns deltaVs28d + baselineDate = null when no snapshot is ≥28 days old", async () => {
     const loadDeltaSnapshot = vi.fn(async () => null);
     const result = await getTjWinddown(
       makeDeps({
@@ -315,22 +372,24 @@ describe("getTjWinddown — snapshot upsert + deltaVs28d", () => {
     );
 
     expect(result.deltaVs28d).toBeNull();
+    expect(result.baselineDate).toBeNull();
     // Cutoff passed to the lookup is today − 28d.
     expect(loadDeltaSnapshot).toHaveBeenCalledWith(daysAgoIso(28));
   });
 
-  it("returns today's exposure minus the ≥28d-old snapshot exposure", async () => {
+  it("returns today's exposure minus the baseline snapshot exposure, plus the baseline's date", async () => {
     const result = await getTjWinddown(
       makeDeps({
         loadTjInvoices: async () => [
           tjRow({ id: "i1", customerId: "ca", balance: "1300.00", dueDate: daysAgo(40) }),
         ],
-        loadDeltaSnapshot: async () => 2000,
+        loadDeltaSnapshot: async () => ({ snapDate: daysAgoIso(31), exposure: 2000 }),
       }),
     );
 
     // Wind-down going the right way: 1300 − 2000 = −700.
     expect(result.deltaVs28d).toBe(-700);
+    expect(result.baselineDate).toBe(daysAgoIso(31));
   });
 });
 

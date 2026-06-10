@@ -14,9 +14,11 @@
 //     convention, matching chase scoring); not-yet-due balances count toward
 //     exposure but sit in no bucket.
 //   - verifyingCount: open TJ invoices parked in disputeState='verifying'.
-//   - deltaVs28d: exposure now vs the latest tj_exposure_snapshots row dated
-//     ≤ today−28d; null when no such row exists yet. Snapshots are
-//     self-populating — every call upserts today's row (no cron).
+//   - deltaVs28d / baselineDate: exposure now vs the latest
+//     tj_exposure_snapshots row dated ≤ today−28d (and that row's date, for a
+//     precise "vs <date>" label); both null when no such row exists yet.
+//     Snapshots are self-populating — reads upsert today's row (no cron),
+//     throttled to one successful write per 15 minutes in-process.
 //   - customers: panel rows with embedded per-invoice dispute data so the UI
 //     expands client-side without a second fetch. Tier/daysOverdue reuse the
 //     origin-scoped chase severity path (getOverdueCustomers("tj"), which
@@ -26,7 +28,6 @@
 
 import { and, desc, eq, gt, lte } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { creditMemos } from "../../db/schema/credit-memos.js";
 import { customers } from "../../db/schema/customers.js";
 import { invoices, type Invoice } from "../../db/schema/invoices.js";
 import { tjExposureSnapshots } from "../../db/schema/tj-exposure-snapshots.js";
@@ -82,10 +83,15 @@ export type WinddownCustomer = {
 export type TjWinddown = {
   exposure: number;
   deltaVs28d: number | null;
+  // snap_date of the snapshot deltaVs28d was computed against, so the UI can
+  // label "vs <date>" precisely. null whenever deltaVs28d is null.
+  baselineDate: string | null;
   buckets: { b90: number; b180: number; bOver: number };
   verifyingCount: number;
   customers: WinddownCustomer[];
 };
+
+export type WinddownBaseline = { snapDate: string; exposure: number };
 
 // Open TJ invoice + the customer identity the panel row needs, in one query.
 export type TjInvoiceRow = {
@@ -105,10 +111,24 @@ export type WinddownDeps = {
   loadTjCredit?: (customerIds: string[]) => Promise<Map<string, number>>;
   // Upsert today's exposure snapshot (idempotent same-day).
   upsertSnapshot?: (snapDate: string, exposure: number) => Promise<void>;
-  // Exposure of the latest snapshot dated ≤ cutoffDate, or null.
-  loadDeltaSnapshot?: (cutoffDate: string) => Promise<number | null>;
+  // Latest snapshot dated ≤ cutoffDate (date + exposure), or null.
+  loadDeltaSnapshot?: (cutoffDate: string) => Promise<WinddownBaseline | null>;
   now?: Date;
 };
+
+// In-process snapshot-write throttle. The endpoint is read-hot (the /chase TJ
+// panel AND the customers-list TJ strip hit it), but the snapshot only needs
+// day granularity — skip the upsert when one already succeeded for today's
+// date within the last 15 minutes. Single pm2 process, so a module-level memo
+// suffices. Recorded only after a successful write (a throw leaves it unset,
+// so the next call retries).
+const SNAPSHOT_UPSERT_TTL_MS = 15 * 60 * 1000;
+let lastUpsert: { date: string; at: number } | null = null;
+
+// Test seam — clears the throttle memo between unit tests.
+export function resetSnapshotUpsertThrottle(): void {
+  lastUpsert = null;
+}
 
 export async function getTjWinddown(
   deps: WinddownDeps = {},
@@ -224,18 +244,28 @@ export async function getTjWinddown(
 
   exposure = round2(exposure);
 
-  // Self-populating history: write today's figure, then read the comparison
-  // point. Order matters only in principle — the cutoff is strictly in the
-  // past, so today's upsert can never be its own baseline.
+  // Self-populating history: write today's figure (throttled — see memo
+  // above), then read the comparison point. Order matters only in principle —
+  // the cutoff is strictly in the past, so today's upsert can never be its
+  // own baseline.
   const snapDate = isoDate(today);
-  await upsertSnapshot(snapDate, exposure);
+  const nowMs = now.getTime();
+  if (
+    lastUpsert == null ||
+    lastUpsert.date !== snapDate ||
+    nowMs - lastUpsert.at >= SNAPSHOT_UPSERT_TTL_MS
+  ) {
+    await upsertSnapshot(snapDate, exposure);
+    lastUpsert = { date: snapDate, at: nowMs };
+  }
   const cutoff = isoDate(new Date(today.getTime() - DELTA_LOOKBACK_DAYS * DAY_MS));
   const baseline = await loadDeltaSnapshot(cutoff);
-  const deltaVs28d = baseline == null ? null : round2(exposure - baseline);
+  const deltaVs28d = baseline == null ? null : round2(exposure - baseline.exposure);
 
   return {
     exposure,
     deltaVs28d,
+    baselineDate: baseline == null ? null : baseline.snapDate,
     buckets: {
       b90: round2(buckets.b90),
       b180: round2(buckets.b180),
@@ -273,7 +303,7 @@ async function upsertSnapshotInDb(
 
 async function loadDeltaSnapshotFromDb(
   cutoffDate: string,
-): Promise<number | null> {
+): Promise<WinddownBaseline | null> {
   const rows = await db
     .select()
     .from(tjExposureSnapshots)
@@ -283,7 +313,7 @@ async function loadDeltaSnapshotFromDb(
   const row = rows[0];
   if (!row) return null;
   const n = Number(row.exposure);
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(n) ? { snapDate: row.snapDate, exposure: n } : null;
 }
 
 // ---------- date/money helpers (chase-module conventions) ----------
