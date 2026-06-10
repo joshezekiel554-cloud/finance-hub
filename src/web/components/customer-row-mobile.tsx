@@ -12,7 +12,11 @@ type Props = {
   id: string;
   displayName: string;
   primaryEmail: string | null;
+  // Feldart book balance — the list is Feldart-shaped (origin-split-2 §4);
+  // TJ exposure surfaces only as the amber chip below.
   balance: number;
+  // Net TJ exposure — > 0 renders the small amber TJ chip beside the name.
+  tjBalance: number;
   overdueBalance: number;
   daysOverdue: number | null;
   holdStatus: "active" | "hold" | "payment_upfront";
@@ -46,6 +50,7 @@ export function CustomerRowMobile(props: Props) {
     id,
     displayName,
     balance,
+    tjBalance,
     overdueBalance,
     daysOverdue,
     holdStatus,
@@ -82,8 +87,18 @@ export function CustomerRowMobile(props: Props) {
       ) : null}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="truncate text-sm font-semibold text-primary">
-            {displayName}
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="truncate text-sm font-semibold text-primary">
+              {displayName}
+            </span>
+            {tjBalance > 0 && (
+              <span
+                className="inline-flex shrink-0 items-center self-center rounded bg-accent-warning/15 px-1.5 text-[10px] font-bold text-accent-warning ring-1 ring-inset ring-accent-warning/30"
+                title="Carries Torah Judaica exposure"
+              >
+                TJ
+              </span>
+            )}
           </span>
           <span className="shrink-0 text-sm font-semibold tabular-nums">
             {formatMoney(balance)}
