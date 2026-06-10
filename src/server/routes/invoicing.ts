@@ -235,7 +235,7 @@ const sendBodySchema = z.object({
   // QBO Line.Ids of flagged removals the operator verified against the
   // source email — same identifier the UI's verifiedLineIds Set holds.
   // Defaults to [] so a stale client posting flagged removes fails closed.
-  verifiedRemoveLineIds: z.array(z.string()).default([]),
+  verifiedRemoveLineIds: z.array(z.string().min(1).max(64)).max(500).default([]),
   // Operator's "checked the email" acknowledgement for unreadable rows.
   unreadAck: z.boolean().default(false),
 });
@@ -938,6 +938,9 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     // Fail closed: a stale client that sends neither field gets a 400 telling
     // the operator to refresh and re-verify. Sales receipts returned above —
     // their send path ignores line actions, so they are never gated.
+    // NOTE: the gmailId↔invoiceId binding is trust-on-client (any shipment
+    // email id is accepted); the threat model is operator mistakes / stale
+    // clients, not malice — don't mistake this for a hardened check.
     {
       let unparsedRows: string[] = [];
       if (!unreadAck) {
