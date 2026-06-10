@@ -7,7 +7,8 @@
 //      (To/CC/BCC). Lookup of QBO Pay-now InvoiceLink presence is
 //      best-effort; failures render as gray "unknown" dots.
 //   2. User clicks Send → POST /api/customers/:id/statement-send
-//      (no body — the server is authoritative about everything).
+//      with { origin, ...optional subject/body/recipient overrides } —
+//      origin is required; the server renders the statement itself.
 //   3. On success: closes the dialog, fires onSent so the customer
 //      detail page can show a confirmation pill, and invalidates the
 //      ["customer", customerId] query so the activity timeline picks
