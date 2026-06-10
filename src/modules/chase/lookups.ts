@@ -202,6 +202,20 @@ export function blendedSeverity(
   customerInvoices: Invoice[],
   credit: { feldart: number; tj: number },
 ): Severity {
+  return blendedSeverityWithParts(customer, customerInvoices, credit).severity;
+}
+
+// Same computation as blendedSeverity, but also exposes the per-origin
+// overdue components it already derives internally (origin-split-2 spec §5:
+// the dashboard chase widget ranks by blended severity but renders per-book
+// figures — exposing the parts here avoids a second computeOriginBalances
+// pass in the route). Tier/score/ranking are byte-identical to
+// blendedSeverity; this is purely an additive out-shape.
+export function blendedSeverityWithParts(
+  customer: Customer,
+  customerInvoices: Invoice[],
+  credit: { feldart: number; tj: number },
+): { severity: Severity; feldartOverdue: number; tjOverdue: number } {
   // Cutoff at UTC start-of-day so the overdue filter matches scoring.ts
   // (due exactly today is NOT overdue in either figure).
   const now = new Date();
@@ -215,10 +229,15 @@ export function blendedSeverity(
     now,
     startOfDayUtc(now),
   );
-  return computeSeverity(customer, customerInvoices, {
+  const severity = computeSeverity(customer, customerInvoices, {
     rawOverdueOverride: balances.feldart.overdue + balances.tj.overdue,
     unappliedCreditOverride: 0,
   });
+  return {
+    severity,
+    feldartOverdue: balances.feldart.overdue,
+    tjOverdue: balances.tj.overdue,
+  };
 }
 
 // Compute severity for one book: net the origin's overdue via
