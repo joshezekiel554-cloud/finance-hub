@@ -14,7 +14,7 @@ Context notes (survive compact):
 - [x] W1 T1 winddown backend + 0043 — `006e7ec` + polish `b6500b0` (spec ✅, quality ✅; baselineDate + 15-min upsert throttle added). winddown 18 tests, chase suite 57/57. Migration `0043_omniscient_sauron` applied locally.
 - [x] W1 T2 chase two sections — `95376bc` + review fixes `b607d63` (spec ✅ incl. sequential TJ chase queue judged faithful; quality ✅ after per-row statement scoping + shared bookkeeper-compose helper extraction). Full suite 710/710. book-sections/ components born.
 - [x] W1 T3 customers list strip — `09baff4` + spec fix `5f084a0` (Feldart-scoped Overdue + feldartBalance default sort; spec §5 caught blended overdue) + `e126abb` (Days column scoped). Spec ✅, quality ✅. Suite 710/710.
-- [ ] W1 T4 customer-detail panels
+- [x] W1 T4 customer-detail panels — `b1a64e6` + review fixes `3679426` (spec ✅ after pill-age restore + mixed-book bulk-chase guard; quality ✅). Header pills (feldartOldestDays/tjVerifyingCount KPIs added), BookInvoiceSection shared renderer, rail KPI cards + OriginChip + blended footer deleted, header Chase/Statement moved into panels. Suite 710/710. T5 notes: flip statement origin REQUIRED; check AI-card send_statement 'feldart' default for pure-TJ; statement PREVIEW still blended.
 - [ ] W1 T5 statements origin required
 - [ ] W1 T6 dashboard per-book amounts
 - [ ] W1 T7 verify + Opus wave review + MERGE/PUSH/DEPLOY
