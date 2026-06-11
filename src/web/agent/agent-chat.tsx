@@ -15,6 +15,7 @@ import { Loader2, Send, Sparkles, Wrench } from "lucide-react";
 import { cn } from "../lib/cn.js";
 import { useEventStream } from "../lib/use-event-stream.js";
 import { useAgent } from "./agent-store.js";
+import { ChatProposalCard } from "./proposal-card.js";
 
 type AgentMessage = {
   id: string;
@@ -55,6 +56,16 @@ function ToolChip({ content }: { content: Record<string, unknown> }) {
 
 function MessageBubble({ message }: { message: AgentMessage }) {
   if (message.role === "tool_event") {
+    if (message.content.kind === "proposal") {
+      return (
+        <ChatProposalCard
+          proposalId={String(message.content.proposalId)}
+          tool={String(message.content.tool ?? "action")}
+          summary={String(message.content.summary ?? "")}
+          dangerous={message.content.dangerous === true}
+        />
+      );
+    }
     return (
       <div className="my-1">
         <ToolChip content={message.content} />
