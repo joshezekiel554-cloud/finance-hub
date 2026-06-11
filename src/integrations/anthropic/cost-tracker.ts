@@ -30,12 +30,21 @@ const OPUS_PRICING: ModelPricing = {
   cacheWriteMultiplier: 1.25,
 };
 
+const HAIKU_PRICING: ModelPricing = {
+  inputPerMillion: 1.0,
+  outputPerMillion: 5.0,
+  cacheReadMultiplier: 0.1,
+  cacheWriteMultiplier: 1.25,
+};
+
 export const PRICING: Record<string, ModelPricing> = {
   "claude-sonnet-4-6": SONNET_PRICING,
   "claude-sonnet-4-5": SONNET_PRICING,
   "claude-sonnet-4-5-20250929": SONNET_PRICING,
   "claude-opus-4-7": OPUS_PRICING,
   "claude-opus-4-6": OPUS_PRICING,
+  "claude-haiku-4-5": HAIKU_PRICING,
+  "claude-haiku-4-5-20251001": HAIKU_PRICING,
 };
 
 export const DEFAULT_MODEL_FOR_PRICING = "claude-sonnet-4-6";

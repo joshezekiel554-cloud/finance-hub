@@ -104,6 +104,8 @@ const SETTINGS: AppSettingsMap = {
   autopilot_scan_cron_enabled: "",
   tj_bookkeeper_email: "",
   tj_bookkeeper_name: "",
+  agent_enabled: "1",
+  agent_monthly_budget_usd: "150",
 };
 
 describe("renderStatementPdf", () => {
@@ -200,6 +202,8 @@ describe("renderStatementPdf", () => {
         autopilot_scan_cron_enabled: "",
         tj_bookkeeper_email: "",
         tj_bookkeeper_name: "",
+        agent_enabled: "1",
+        agent_monthly_budget_usd: "150",
       },
       statementNumber: 1,
       generatedAt: FROZEN,
