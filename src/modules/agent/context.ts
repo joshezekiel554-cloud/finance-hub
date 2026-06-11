@@ -37,6 +37,15 @@ export function escapeFenceTags(text: string): string {
   return text.replace(/<(\s*\/?\s*)(untrusted|operator-note)/gi, "&lt;$1$2");
 }
 
+// The label interpolates into the fence tag's attribute position, which
+// makes it itself an injection surface: a `>` inside an
+// attacker-controlled From header would close the opening tag early and
+// smuggle the rest OUTSIDE the fence. Strip every angle bracket (and
+// normalize quotes) so no label can terminate or extend the tag.
+function sanitizeLabel(label: string): string {
+  return label.replace(/[<>]/g, " ").replace(/"/g, "'");
+}
+
 // Wrap customer-originated text. `label` carries provenance the model
 // (and provenance-tracking callers) can cite, e.g. 'email from:x@y.com
 // date:2026-06-01'.
@@ -46,7 +55,7 @@ export function fenceUntrusted(
   label?: string,
 ): string {
   const attrs = label
-    ? ` source="${source}" detail="${label.replace(/"/g, "'")}"`
+    ? ` source="${source}" detail="${sanitizeLabel(label)}"`
     : ` source="${source}"`;
   return `<untrusted${attrs}>\n${escapeFenceTags(text)}\n</untrusted>`;
 }
@@ -55,7 +64,7 @@ export function fenceUntrusted(
 // but still data — fenced so the model never confuses a note's phrasing
 // with an instruction from the conversation.
 export function fenceOperator(text: string, label?: string): string {
-  const attrs = label ? ` detail="${label.replace(/"/g, "'")}"` : "";
+  const attrs = label ? ` detail="${sanitizeLabel(label)}"` : "";
   return `<operator-note${attrs}>\n${escapeFenceTags(text)}\n</operator-note>`;
 }
 
