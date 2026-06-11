@@ -26,6 +26,7 @@ vi.mock("../email-compose/signatures.js", () => ({
 vi.mock("../statements/send.js", () => ({
   sendStatement: vi.fn(),
   buildStatementPdfAttachment: vi.fn(),
+  recordAttachedStatement: vi.fn(async () => undefined),
 }));
 const { getPdfMock } = vi.hoisted(() => ({ getPdfMock: vi.fn() }));
 vi.mock("../../integrations/qb/client.js", () => ({
@@ -43,7 +44,10 @@ vi.mock("../../server/lib/bookkeeper-thread-link.js", () => ({
 
 import { db } from "../../db/index.js";
 import { sendEmail } from "../../integrations/gmail/send.js";
-import { buildStatementPdfAttachment } from "../statements/send.js";
+import {
+  buildStatementPdfAttachment,
+  recordAttachedStatement,
+} from "../statements/send.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { getToolByName } from "./tools.js";
 
@@ -283,7 +287,7 @@ describe("send_chase_email recipient resolution + attachments", () => {
     getPdfMock.mockResolvedValueOnce(Buffer.from("PDFBYTES"));
     vi.mocked(buildStatementPdfAttachment).mockResolvedValueOnce({
       buffer: Buffer.from("STMT"),
-      filename: "Statement-42.pdf",
+      filename: "Statement_Acme_42.pdf",
       statementNumber: 42,
     } as never);
     vi.mocked(sendEmail).mockResolvedValueOnce(sendOk as never);
@@ -300,8 +304,15 @@ describe("send_chase_email recipient resolution + attachments", () => {
     };
     expect(call.attachments?.map((a) => a.filename)).toEqual([
       "Invoice-18312.pdf",
-      "Statement-42.pdf",
+      "Statement_Acme_42.pdf",
     ]);
+    expect(vi.mocked(recordAttachedStatement)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerId: "cust-1",
+        statementNumber: 42,
+        messageId: "m-9",
+      }),
+    );
   });
 
   it("aborts BEFORE sending when a requested invoice is not the customer's", async () => {

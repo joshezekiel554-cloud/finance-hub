@@ -21,7 +21,11 @@ import type { EmailAttachment } from "../../integrations/gmail/types.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { resolveRecipients } from "../customer-emails/recipients.js";
 import { appendSignatures } from "../email-compose/signatures.js";
-import { buildStatementPdfAttachment, sendStatement } from "../statements/send.js";
+import {
+  buildStatementPdfAttachment,
+  recordAttachedStatement,
+  sendStatement,
+} from "../statements/send.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { autoActionPriorInbounds } from "../crm/auto-action-emails.js";
 import { linkBookkeeperThread } from "../../server/lib/bookkeeper-thread-link.js";
@@ -118,10 +122,15 @@ async function buildSendAttachments(args: {
   attachInvoiceDocNumbers?: string[];
   attachStatement?: boolean;
 }): Promise<
-  | { ok: true; attachments: EmailAttachment[] }
+  | {
+      ok: true;
+      attachments: EmailAttachment[];
+      statementMeta?: { statementNumber: number; pdfBytes: number };
+    }
   | { ok: false; error: string }
 > {
   const attachments: EmailAttachment[] = [];
+  let statementMeta: { statementNumber: number; pdfBytes: number } | undefined;
   if (args.attachInvoiceDocNumbers?.length) {
     const rows = await db
       .select({
@@ -172,6 +181,10 @@ async function buildSendAttachments(args: {
         mimeType: "application/pdf",
         data: built.buffer,
       });
+      statementMeta = {
+        statementNumber: built.statementNumber,
+        pdfBytes: built.buffer.byteLength,
+      };
     } catch (err) {
       return {
         ok: false,
@@ -179,7 +192,7 @@ async function buildSendAttachments(args: {
       };
     }
   }
-  return { ok: true, attachments };
+  return { ok: true, attachments, statementMeta };
 }
 
 // ── send_chase_email ───────────────────────────────────────────────────
@@ -302,6 +315,19 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
               ? `Autopilot TJ chase ${args.tier}`
               : `Autopilot chase ${args.tier}`,
         });
+        if (built.statementMeta) {
+          stage = "attached-statement bookkeeping";
+          await recordAttachedStatement({
+            customerId: customer.id,
+            statementNumber: built.statementMeta.statementNumber,
+            userId: ctx.userId,
+            sentToEmail: recipients.to,
+            origin: args.origin,
+            pdfBytes: built.statementMeta.pdfBytes,
+            messageId: result.messageId,
+            threadId: result.threadId || null,
+          });
+        }
       } catch (err) {
         log.error(
           {
@@ -446,6 +472,20 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
         threadId: result.threadId || null,
         sentAt,
       });
+      if (built.statementMeta) {
+        await recordAttachedStatement({
+          customerId: customer.id,
+          statementNumber: built.statementMeta.statementNumber,
+          userId: ctx.userId,
+          sentToEmail: recipients.to,
+          // check-in is origin-less; attached statements default to the
+          // feldart book (matches buildSendAttachments' default).
+          origin: "feldart",
+          pdfBytes: built.statementMeta.pdfBytes,
+          messageId: result.messageId,
+          threadId: result.threadId || null,
+        });
+      }
       return { ok: true };
     } catch (err) {
       log.error({ err, proposalId: ctx.proposalId }, "send_check_in_email failed");

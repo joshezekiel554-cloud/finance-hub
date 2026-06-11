@@ -458,11 +458,64 @@ export async function buildStatementPdfAttachment(
     statementNumber,
     generatedAt: now,
   });
+  // Same filename shape as a directly-sent statement.
+  const safeName = customer.displayName.replace(/[^a-z0-9 _-]/gi, "").trim();
   return {
     buffer,
-    filename: `Statement-${statementNumber}.pdf`,
+    filename: `Statement_${safeName}_${statementNumber}.pdf`,
     statementNumber,
   };
+}
+
+// Bookkeeping for a statement that went out ATTACHED to another email
+// (agent chase/check-in). Called by the executor AFTER the carrying
+// email actually sent — never at build time, so a failed send can't
+// mint a phantom history row. The statement_sends row makes the
+// statement visible on the history page; the audit row records the
+// carrier. The allocated number stays consumed either way (gaps on
+// failed sends are acceptable; duplicate numbers are not).
+export async function recordAttachedStatement(input: {
+  customerId: string;
+  statementNumber: number;
+  userId: string;
+  sentToEmail: string;
+  origin: "feldart" | "tj";
+  pdfBytes: number;
+  messageId: string;
+  threadId: string | null;
+}): Promise<void> {
+  const statementSendId = nanoid(24);
+  await db.insert(statementSends).values({
+    id: statementSendId,
+    customerId: input.customerId,
+    sentAt: new Date(),
+    sentByUserId: input.userId,
+    sentToEmail: input.sentToEmail,
+    statementNumber: input.statementNumber,
+    qboResponse: {
+      pdfBytes: input.pdfBytes,
+      messageId: input.messageId,
+      threadId: input.threadId,
+      attachedTo: "agent_email",
+    },
+    statementType: "open_items",
+  });
+  await db.insert(auditLog).values({
+    id: nanoid(24),
+    userId: input.userId,
+    action: "statement.send",
+    entityType: "statement_send",
+    entityId: statementSendId,
+    before: null,
+    after: {
+      customerId: input.customerId,
+      origin: input.origin,
+      to: input.sentToEmail,
+      statementNumber: input.statementNumber,
+      messageId: input.messageId,
+      attachedTo: "agent_email",
+    },
+  });
 }
 
 export async function sendStatement(
