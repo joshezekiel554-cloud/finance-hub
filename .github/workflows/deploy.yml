@@ -34,55 +34,92 @@ jobs:
       - name: Configure SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keygen -l -f ~/.ssh/deploy_key
+          # Host alias so every later step (ssh + rsync) shares one config.
+          cat >> ~/.ssh/config <<EOF
+          Host vps
+            HostName $VPS_HOST
+            User deploy
+            IdentityFile ~/.ssh/deploy_key
+            AddressFamily inet
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 10
+            ConnectionAttempts 3
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
+          EOF
+
+      # Hostinger's network edge intermittently drops port-22 SSH from
+      # GitHub-runner (Azure) IP ranges — connections time out with zero
+      # trace in the VPS sshd log (diagnosed 2026-06-11). The VPS also
+      # listens on 2222 (systemd ssh.socket drop-in), which bypasses the
+      # edge filter. Probe 2222 first, fall back to 22, retry both for
+      # ~3.5 min before giving up.
+      - name: Pick reachable SSH port
+        run: |
+          for i in 1 2 3 4 5 6; do
+            for p in 2222 22; do
+              if ssh -p "$p" -o ConnectionAttempts=1 vps true 2>/dev/null; then
+                echo "Port $p" >> ~/.ssh/config
+                echo "Selected SSH port $p (round $i)"
+                exit 0
+              fi
+            done
+            echo "Both ports unreachable (round $i/6); sleeping 20s"
+            sleep 20
+          done
+          echo "::error::VPS unreachable on ports 2222 and 22 after 6 rounds"
+          exit 1
 
       - name: Rsync artifact to VPS
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           # -vv so the log prints every file rsync touches — makes it
           # obvious when a newly-added path (e.g. a migration folder) didn't
-          # land on the VPS.
-          rsync -avvz --delete \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='node_modules' \
-            --exclude='.env*' \
-            --exclude='src' \
-            --exclude='**/*.test.ts' \
-            --exclude='**/*.test.tsx' \
-            --exclude='vitest.config.*' \
-            --exclude='data' \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-            ./ deploy@"$VPS_HOST":/home/deploy/finance-hub/
+          # land on the VPS. Retried: a transient edge drop mid-transfer
+          # resumes cheaply because rsync is incremental.
+          for i in 1 2 3; do
+            rsync -avvz --delete \
+              --exclude='.git' \
+              --exclude='.github' \
+              --exclude='node_modules' \
+              --exclude='.env*' \
+              --exclude='src' \
+              --exclude='**/*.test.ts' \
+              --exclude='**/*.test.tsx' \
+              --exclude='vitest.config.*' \
+              --exclude='data' \
+              ./ vps:/home/deploy/finance-hub/ && exit 0
+            echo "rsync attempt $i failed; retrying in 15s"
+            sleep 15
+          done
+          echo "::error::rsync failed after 3 attempts"
+          exit 1
 
       # Safety net: verify migrations folder synced (caught silent issues
       # twice in the orders project).
       - name: Verify migration folders synced
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           local_count=$(ls migrations 2>/dev/null | wc -l | tr -d ' ')
-          remote_count=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$VPS_HOST" 'ls /home/deploy/finance-hub/migrations 2>/dev/null | wc -l' | tr -d ' ')
+          remote_count=$(ssh vps 'ls /home/deploy/finance-hub/migrations 2>/dev/null | wc -l' | tr -d ' ')
           echo "Migration folders — local: $local_count, remote: $remote_count"
           if [ "$local_count" != "$remote_count" ]; then
             echo "::error::Migration folder count mismatch. Local has $local_count, remote has $remote_count."
             echo "Local:"
             ls migrations
             echo "Remote:"
-            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$VPS_HOST" 'ls /home/deploy/finance-hub/migrations'
+            ssh vps 'ls /home/deploy/finance-hub/migrations'
             exit 1
           fi
 
       - name: Install prod deps, run migrations, (re)start pm2
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null deploy@"$VPS_HOST" bash <<'EOF'
+          ssh vps bash <<'EOF'
             set -e
             cd /home/deploy/finance-hub
 
@@ -101,8 +138,6 @@ jobs:
           EOF
 
       - name: Smoke test /health
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           # Give pm2 a few seconds to finish restart
           sleep 5
