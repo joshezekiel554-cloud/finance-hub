@@ -38,6 +38,10 @@ type Candidate = {
 // Partial so a category can be registered in AI_PROPOSAL_CATEGORIES before
 // its finder lands — the scan loop warn-logs and skips those (see below).
 // All 7 current categories have finders wired.
+// Categories that never have a finder: chat_action proposals are created
+// by the agent loop, not the scanner.
+const FINDERLESS_CATEGORIES = new Set<string>(["chat_action"]);
+
 const FINDERS: Partial<
   Record<AiProposalCategory, () => Promise<Candidate[]>>
 > = {
@@ -68,6 +72,7 @@ export async function runScan(
   let proposalsGenerated = 0;
 
   for (const category of AI_PROPOSAL_CATEGORIES) {
+    if (FINDERLESS_CATEGORIES.has(category)) continue;
     const finder = FINDERS[category];
     if (!finder) {
       // Should not happen in steady state — every registered category ought

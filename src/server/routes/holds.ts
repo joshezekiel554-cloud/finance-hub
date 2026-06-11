@@ -18,66 +18,20 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
-import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
-import { ShopifyClient, ShopifyApiError } from "../../integrations/shopify/client.js";
-import {
-  addTag,
-  parseTags,
-  removeTag,
-} from "../../integrations/shopify/hold.js";
+import { ShopifyClient } from "../../integrations/shopify/client.js";
+import { parseTags } from "../../integrations/shopify/hold.js";
 import { findShopifyCustomer } from "../../modules/shopify-link/lookup.js";
-import { recordActivity } from "../../modules/crm/index.js";
+import { applyHoldStatus } from "../../modules/holds/apply.js";
 
 const log = createLogger({ component: "routes.holds" });
-
-const B2B_TAG = "b2b";
-const UPFRONT_TAG = "b2b-b2b-upfront";
 
 const toggleBodySchema = z.object({
   targetState: z.enum(["hold", "active", "payment_upfront"]),
 });
-
-// Compute the intent-level tag operations that move a customer from
-// their current tag set to a target account status. Mirrors the inverse
-// of statusFromTags() in the b2b-audit route — same rules:
-//
-//   active           → has b2b, no upfront
-//   payment_upfront  → has b2b AND upfront
-//   hold             → no b2b, no upfront
-//
-// The ops are executed as atomic Shopify tagsAdd/tagsRemove mutations
-// (audit #13) — only the hold-managed tags are ever touched, never the
-// full set, so concurrent unrelated tag changes can't be clobbered.
-// Ops are diffed against the pre-read so a no-op toggle (rapid
-// double-click) skips the API writes entirely; the mutations themselves
-// are also idempotent server-side.
-type TagOp = { kind: "add" | "remove"; tag: string };
-
-function tagOpsForStatus(
-  current: string[],
-  target: "active" | "hold" | "payment_upfront",
-): TagOp[] {
-  const has = (tag: string) => current.includes(tag);
-  const ops: TagOp[] = [];
-  if (target === "hold") {
-    if (has(B2B_TAG)) ops.push({ kind: "remove", tag: B2B_TAG });
-    if (has(UPFRONT_TAG)) ops.push({ kind: "remove", tag: UPFRONT_TAG });
-    return ops;
-  }
-  if (!has(B2B_TAG)) ops.push({ kind: "add", tag: B2B_TAG });
-  if (target === "payment_upfront") {
-    if (!has(UPFRONT_TAG)) ops.push({ kind: "add", tag: UPFRONT_TAG });
-  } else if (has(UPFRONT_TAG)) {
-    // active strips upfront but keeps b2b.
-    ops.push({ kind: "remove", tag: UPFRONT_TAG });
-  }
-  return ops;
-}
 
 const holdsRoute: FastifyPluginAsync = async (app) => {
   // GET /api/customers/:id/shopify-tags — read the customer's current
@@ -145,9 +99,10 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
   });
 
   // POST /api/customers/:id/hold-toggle — flip a customer's hold state.
-  // Body: { targetState: "hold" | "active" }. The server is authoritative
-  // about which Shopify tag operation runs (remove for hold, add for
-  // active) so the UI can't accidentally invert it.
+  // Body: { targetState: "hold" | "active" | "payment_upfront" }. The
+  // whole flow (Shopify atomic tag ops + local mirror + audit + activity)
+  // lives in modules/holds/apply.ts, shared with the AI agent's
+  // set_hold_status tool; this handler just maps the result to HTTP.
   app.post("/:id/hold-toggle", async (req, reply) => {
     const user = await requireAuth(req);
     const id = (req.params as { id: string }).id;
@@ -157,203 +112,21 @@ const holdsRoute: FastifyPluginAsync = async (app) => {
         .code(400)
         .send({ error: "invalid body", details: parse.error.flatten() });
     }
-    const { targetState } = parse.data;
 
-    const beforeRows = await db
-      .select()
-      .from(customers)
-      .where(eq(customers.id, id))
-      .limit(1);
-    const before = beforeRows[0];
-    if (!before) return reply.code(404).send({ error: "customer not found" });
-
-    if (!before.primaryEmail && !before.shopifyCustomerId) {
-      return reply
-        .code(404)
-        .send({ error: "no shopify customer matched by id or email" });
+    const result = await applyHoldStatus(id, parse.data.targetState, user.id);
+    if (result.kind === "ok") {
+      return reply.send({
+        holdStatus: result.holdStatus,
+        tagsAfter: result.tagsAfter,
+      });
     }
-
-    let client: ShopifyClient;
-    try {
-      client = new ShopifyClient();
-    } catch (err) {
-      log.error({ err, customerId: id }, "shopify client init failed");
-      return reply.code(502).send({ error: "shopify client unavailable" });
-    }
-
-    let shopify;
-    try {
-      const resolution = await findShopifyCustomer(
-        {
-          customerId: before.id,
-          shopifyCustomerId: before.shopifyCustomerId,
-          primaryEmail: before.primaryEmail,
-          billingEmails: Array.isArray(before.billingEmails)
-            ? (before.billingEmails as string[])
-            : [],
-        },
-        client,
-      );
-      if (
-        resolution.kind === "none" ||
-        resolution.kind === "ambiguous"
-      ) {
-        return reply
-          .code(404)
-          .send({ error: "no shopify customer matched by id or email" });
-      }
-      shopify = resolution.customer;
-    } catch (err) {
-      log.error(
-        { err, customerId: id },
-        "shopify customer lookup failed",
-      );
-      return reply.code(502).send({ error: "shopify lookup failed" });
-    }
-
-    const tagsBefore = parseTags(shopify.tags);
-    const ops = tagOpsForStatus(tagsBefore, targetState);
-    // Each addTag/removeTag is an atomic single-tag mutation that
-    // returns the fresh post-mutation tag set; the last one wins as the
-    // authoritative tagsAfter. When no ops are needed (already in the
-    // target state) we skip the API entirely and report the pre-read.
-    let tagsAfter = tagsBefore;
-    let currentOp: TagOp | null = null;
-    try {
-      for (const op of ops) {
-        currentOp = op;
-        const result =
-          op.kind === "add"
-            ? await addTag(client, shopify.id, op.tag)
-            : await removeTag(client, shopify.id, op.tag);
-        tagsAfter = result.tagsAfter;
-      }
-    } catch (err) {
-      // A multi-op flip (e.g. payment_upfront → hold removes two tags)
-      // can fail partway: earlier ops already landed in Shopify and
-      // won't be rolled back (the mutations are idempotent — operator
-      // retry converges). Record the partial mutation in the audit
-      // trail so it isn't invisible; the error response below is
-      // unchanged. Best-effort: an audit-write failure must not mask
-      // the original Shopify error.
-      try {
-        await db.insert(auditLog).values({
-          id: nanoid(24),
-          userId: user.id,
-          action: "shopify.tag_set_failed",
-          entityType: "shopify_customer",
-          entityId: String(shopify.id),
-          before: { tags: tagsBefore },
-          after: {
-            tags: tagsAfter,
-            targetState,
-            failedOp: currentOp,
-            error: err instanceof Error ? err.message : String(err),
-          },
-        });
-      } catch (auditErr) {
-        log.error(
-          { err: auditErr, customerId: id, shopifyCustomerId: shopify.id },
-          "failed to audit-log partial tag flip",
-        );
-      }
-      // 403 → likely missing write_customers scope. Bubble up a
-      // distinct status so the UI can suggest a re-OAuth.
-      if (err instanceof ShopifyApiError && err.status === 403) {
-        log.error(
-          { err, customerId: id, shopifyCustomerId: shopify.id, targetState },
-          "shopify tag mutation forbidden — write_customers scope missing?",
-        );
-        return reply.code(403).send({
-          error:
-            "shopify rejected the tag write — the Admin token likely needs the write_customers scope. Re-run the Shopify OAuth flow.",
-        });
-      }
-      log.error(
-        { err, customerId: id, shopifyCustomerId: shopify.id, targetState },
-        "shopify tag mutation failed",
-      );
-      return reply.code(502).send({ error: "shopify tag write failed" });
-    }
-
-    // Local mirror — flip customers.holdStatus to the requested state.
-    await db
-      .update(customers)
-      .set({ holdStatus: targetState })
-      .where(eq(customers.id, id));
-
-    // Audit-log the local row change AND the Shopify tag mutation
-    // separately so the audit trail records both sides.
-    await db.insert(auditLog).values({
-      id: nanoid(24),
-      userId: user.id,
-      action: "customer.hold_toggle",
-      entityType: "customer",
-      entityId: id,
-      before: { holdStatus: before.holdStatus },
-      after: { holdStatus: targetState },
-    });
-    await db.insert(auditLog).values({
-      id: nanoid(24),
-      userId: user.id,
-      action: "shopify.tag_set",
-      entityType: "shopify_customer",
-      entityId: String(shopify.id),
-      before: { tags: tagsBefore },
-      after: { tags: tagsAfter, targetState },
-    });
-
-    // Activity row so the customer timeline shows the status flip.
-    // hold_on/hold_off only fire when crossing the hold boundary; flips
-    // between active and payment_upfront log a manual_note so the
-    // timeline still records what happened without misclassifying the
-    // hold-state change.
-    const wasHold = before.holdStatus === "hold";
-    const isHold = targetState === "hold";
-    const activityKind = isHold
-      ? "hold_on"
-      : wasHold
-        ? "hold_off"
-        : "manual_note";
-    const subject =
-      targetState === "hold"
-        ? `Put on hold — Shopify b2b tag removed`
-        : targetState === "payment_upfront"
-          ? `Status: ${before.holdStatus} → payment upfront — Shopify b2b-b2b-upfront tag added`
-          : wasHold
-            ? `Hold released — Shopify b2b tag re-added`
-            : `Status: ${before.holdStatus} → active — Shopify b2b-b2b-upfront tag removed`;
-    await recordActivity({
-      customerId: id,
-      kind: activityKind,
-      source: "user_action",
-      userId: user.id,
-      subject,
-      refType: "shopify_customer",
-      refId: String(shopify.id),
-      meta: {
-        shopifyCustomerId: String(shopify.id),
-        targetState,
-        tagsBefore,
-        tagsAfter,
-      },
-    });
-
-    log.info(
-      {
-        userId: user.id,
-        customerId: id,
-        shopifyCustomerId: shopify.id,
-        targetState,
-        tagsAfter,
-      },
-      "hold toggled",
-    );
-
-    return reply.send({
-      holdStatus: targetState,
-      tagsAfter,
-    });
+    const status =
+      result.code === "customer_not_found" || result.code === "no_shopify_match"
+        ? 404
+        : result.code === "shopify_forbidden"
+          ? 403
+          : 502;
+    return reply.code(status).send({ error: result.message });
   });
 };
 

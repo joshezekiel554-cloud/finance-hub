@@ -12,6 +12,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
+import { isDangerousAction } from "../../modules/agent/chat-proposals.js";
 import { db } from "../../db/index.js";
 import { auditLog, chaseLog } from "../../db/schema/audit.js";
 import {
@@ -354,6 +355,10 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
       const bodySchema = z
         .object({
           editedArgs: z.record(z.string(), z.unknown()).optional(),
+          // Dangerous actions (QBO void) require the typed confirmation
+          // to reach the SERVER — the chat card's VOID box is UX, this
+          // check is the actual gate.
+          confirm: z.string().max(16).optional(),
         })
         .optional();
       const parse = bodySchema.safeParse(req.body ?? {});
@@ -375,6 +380,29 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
         return reply
           .code(409)
           .send({ error: `cannot approve from status ${p.status}` });
+      }
+
+      // Server-side dangerous-action gate: an irreversible action (QBO
+      // void) can only be approved with the typed confirmation, no matter
+      // which surface (chat card, /autopilot queue, raw API) sends the
+      // approve. Checked against the EFFECTIVE args (edited if provided).
+      {
+        const action = p.draftedAction as
+          | { tool: string; args: Record<string, unknown> }
+          | null;
+        if (action) {
+          const effectiveArgs = (editedArgs ?? action.args) as Record<string, unknown>;
+          if (
+            isDangerousAction(action.tool, effectiveArgs) &&
+            parse.data?.confirm?.trim().toUpperCase() !== "VOID"
+          ) {
+            return reply.code(400).send({
+              error:
+                'this action is irreversible — approval requires confirm: "VOID" in the request body',
+              code: "confirmation_required",
+            });
+          }
+        }
       }
 
       if (!force) {

@@ -12,7 +12,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
-import { emailLog } from "../../db/schema/crm.js";
+import { emailLog, tasks } from "../../db/schema/crm.js";
 import { auditLog, chaseLog } from "../../db/schema/audit.js";
 import { notifications } from "../../db/schema/notifications.js";
 import { statementSends } from "../../db/schema/crm.js";
@@ -22,6 +22,14 @@ import { sendStatement } from "../statements/send.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { autoActionPriorInbounds } from "../crm/auto-action-emails.js";
 import { linkBookkeeperThread } from "../../server/lib/bookkeeper-thread-link.js";
+import { users } from "../../db/schema/auth.js";
+import { recordActivity } from "../crm/index.js";
+import {
+  disputeClaimsPaid,
+  disputeResolvePaid,
+  disputeResolveUnpaid,
+} from "../crm/dispute-actions.js";
+import { applyHoldStatus } from "../holds/apply.js";
 import { createLogger } from "../../lib/logger.js";
 
 const log = createLogger({ module: "ai-agent.tools" });
@@ -534,6 +542,351 @@ const createAdminNotificationTool: Tool<
   },
 };
 
+// ── Wave B tools (agent doer; spec 2026-06-11 §3) ──────────────────────
+// Proposal-gated like everything in this registry: the agent loop
+// proposalizes write tool_use calls; the BullMQ executor runs these on
+// operator approve.
+
+const CreateTaskArgs = z.object({
+  title: z.string().min(1).max(512),
+  body: z.string().max(8000).optional(),
+  customerId: z.string().max(64).optional(),
+  // Team member to assign; resolved to a user id at EXECUTION time so the
+  // model never addresses an id directly. Unknown email = clean error.
+  assigneeEmail: z.string().email().optional(),
+  // Concrete ISO date/datetime; the MODEL converts natural language
+  // ("the 15th") to ISO at draft time — the executor accepts only dates.
+  dueAtIso: z.string().optional(),
+  priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+});
+type CreateTaskArgsT = z.infer<typeof CreateTaskArgs>;
+
+const createTaskTool: Tool<CreateTaskArgsT> = {
+  name: "create_task",
+  description:
+    "Create a team task, optionally linked to a customer, assigned to a team member (by email) with a due date.",
+  argsSchema: CreateTaskArgs,
+  execute: async (args, ctx) => {
+    try {
+      let assigneeUserId: string | null = null;
+      if (args.assigneeEmail) {
+        const u = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, args.assigneeEmail))
+          .limit(1);
+        if (!u[0]) {
+          return {
+            ok: false,
+            error: `no team member with email ${args.assigneeEmail}`,
+          };
+        }
+        assigneeUserId = u[0].id;
+      }
+      let dueAt: Date | null = null;
+      if (args.dueAtIso) {
+        const d = new Date(args.dueAtIso);
+        if (Number.isNaN(d.getTime())) {
+          return { ok: false, error: `invalid dueAtIso: ${args.dueAtIso}` };
+        }
+        dueAt = d;
+      }
+      const id = nanoid(24);
+      await db.insert(tasks).values({
+        id,
+        title: args.title,
+        body: args.body ?? null,
+        customerId: args.customerId ?? null,
+        assigneeUserId: assigneeUserId ?? ctx.userId,
+        createdByUserId: ctx.userId,
+        dueAt,
+        priority: args.priority ?? "normal",
+        aiProposed: true,
+      });
+      await db.insert(auditLog).values({
+        id: nanoid(24),
+        userId: ctx.userId,
+        action: "task.create",
+        entityType: "task",
+        entityId: id,
+        before: null,
+        after: {
+          title: args.title,
+          dueAt: args.dueAtIso ?? null,
+          aiProposalId: ctx.proposalId,
+        },
+      });
+      if (args.customerId) {
+        await recordActivity({
+          customerId: args.customerId,
+          kind: "task_created",
+          source: "ai_agent",
+          userId: ctx.userId,
+          subject: `Task created: ${args.title}`,
+          refType: "task",
+          refId: id,
+          meta: { aiProposalId: ctx.proposalId },
+        });
+      }
+      return { ok: true, note: `task ${id} created` };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "create_task failed");
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
+const CompleteTaskArgs = z.object({ taskId: z.string().max(64) });
+type CompleteTaskArgsT = z.infer<typeof CompleteTaskArgs>;
+
+const completeTaskTool: Tool<CompleteTaskArgsT> = {
+  name: "complete_task",
+  description: "Mark an open task as completed.",
+  argsSchema: CompleteTaskArgs,
+  execute: async (args, ctx) => {
+    try {
+      const rows = await db
+        .select({ id: tasks.id, status: tasks.status, title: tasks.title })
+        .from(tasks)
+        .where(eq(tasks.id, args.taskId))
+        .limit(1);
+      const t = rows[0];
+      if (!t) return { ok: false, error: "task not found" };
+      if (t.status !== "open") {
+        return { ok: false, error: `task is ${t.status}, not open` };
+      }
+      await db
+        .update(tasks)
+        .set({
+          status: "completed",
+          completedAt: new Date(),
+          completedByUserId: ctx.userId,
+        })
+        .where(eq(tasks.id, args.taskId));
+      await db.insert(auditLog).values({
+        id: nanoid(24),
+        userId: ctx.userId,
+        action: "task.complete",
+        entityType: "task",
+        entityId: args.taskId,
+        before: { status: t.status },
+        after: { status: "completed", aiProposalId: ctx.proposalId },
+      });
+      return { ok: true, note: `task "${t.title}" completed` };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "complete_task failed");
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
+const UpdateCustomerContextArgs = z.object({
+  customerId: z.string().max(64),
+  // Appended, never replacing — operator context is preserved and the
+  // addition is attributed to the agent with a date stamp.
+  append: z.string().min(1).max(4000),
+});
+type UpdateCustomerContextArgsT = z.infer<typeof UpdateCustomerContextArgs>;
+
+const updateCustomerContextTool: Tool<UpdateCustomerContextArgsT> = {
+  name: "update_customer_context",
+  description:
+    "Append a durable fact to the customer's AI context (visible and editable on the customer page). Appends with attribution; never replaces existing context.",
+  argsSchema: UpdateCustomerContextArgs,
+  execute: async (args, ctx) => {
+    try {
+      const rows = await db
+        .select({ ctx: customers.aiCustomerContext })
+        .from(customers)
+        .where(eq(customers.id, args.customerId))
+        .limit(1);
+      if (rows.length === 0) return { ok: false, error: "customer not found" };
+      const existing = rows[0]!.ctx?.trim() ?? "";
+      const stamp = new Date().toISOString().slice(0, 10);
+      const next = `${existing ? existing + "\n\n" : ""}[agent ${stamp}] ${args.append.trim()}`;
+      await db
+        .update(customers)
+        .set({ aiCustomerContext: next })
+        .where(eq(customers.id, args.customerId));
+      await db.insert(auditLog).values({
+        id: nanoid(24),
+        userId: ctx.userId,
+        action: "customer.ai_context_append",
+        entityType: "customer",
+        entityId: args.customerId,
+        before: { length: existing.length },
+        after: {
+          appended: args.append.slice(0, 500),
+          aiProposalId: ctx.proposalId,
+        },
+      });
+      return { ok: true };
+    } catch (err) {
+      log.error(
+        { err, proposalId: ctx.proposalId },
+        "update_customer_context failed",
+      );
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
+const RecordInteractionArgs = z.object({
+  customerId: z.string().max(64),
+  channel: z.enum(["whatsapp", "phone", "in_person", "other"]),
+  summary: z.string().min(1).max(8000),
+  occurredAtIso: z.string().optional(),
+});
+type RecordInteractionArgsT = z.infer<typeof RecordInteractionArgs>;
+
+const recordInteractionTool: Tool<RecordInteractionArgsT> = {
+  name: "record_interaction",
+  description:
+    "Log an out-of-band customer interaction (WhatsApp, phone outside the system, in person) on the customer's activity timeline, as dictated by the operator.",
+  argsSchema: RecordInteractionArgs,
+  execute: async (args, ctx) => {
+    try {
+      let occurredAt: Date | undefined;
+      if (args.occurredAtIso) {
+        const d = new Date(args.occurredAtIso);
+        if (!Number.isNaN(d.getTime())) occurredAt = d;
+      }
+      const channelLabel =
+        args.channel === "in_person" ? "in person" : args.channel;
+      const activityId = await recordActivity({
+        customerId: args.customerId,
+        kind: "manual_note",
+        source: "ai_agent",
+        userId: ctx.userId,
+        occurredAt,
+        subject: `Operator-logged ${channelLabel} interaction`,
+        body: args.summary,
+        meta: { channel: args.channel, aiProposalId: ctx.proposalId },
+      });
+      if (!activityId) return { ok: false, error: "customer not found" };
+      return { ok: true, note: "logged to the customer timeline" };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "record_interaction failed");
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
+const SetHoldStatusArgs = z.object({
+  customerId: z.string().max(64),
+  targetState: z.enum(["active", "hold", "payment_upfront"]),
+});
+type SetHoldStatusArgsT = z.infer<typeof SetHoldStatusArgs>;
+
+const setHoldStatusTool: Tool<SetHoldStatusArgsT> = {
+  name: "set_hold_status",
+  description:
+    "Put a customer on hold, release them, or set payment-upfront. Flips the Shopify B2B tags atomically and mirrors locally (same path as the customer page's Hold button).",
+  argsSchema: SetHoldStatusArgs,
+  execute: async (args, ctx) => {
+    const result = await applyHoldStatus(
+      args.customerId,
+      args.targetState,
+      ctx.userId,
+    );
+    if (result.kind === "ok") {
+      return { ok: true, note: `now ${result.holdStatus}` };
+    }
+    return { ok: false, error: result.message };
+  },
+};
+
+const SetPaymentTermsArgs = z.object({
+  customerId: z.string().max(64),
+  terms: z.string().min(1).max(64),
+});
+type SetPaymentTermsArgsT = z.infer<typeof SetPaymentTermsArgs>;
+
+const setPaymentTermsTool: Tool<SetPaymentTermsArgsT> = {
+  name: "set_payment_terms",
+  description:
+    'Change the payment terms on a customer record (e.g. "Net 30", "Prepay"). Local CRM field; does not write to QuickBooks.',
+  argsSchema: SetPaymentTermsArgs,
+  execute: async (args, ctx) => {
+    try {
+      const rows = await db
+        .select({ terms: customers.paymentTerms })
+        .from(customers)
+        .where(eq(customers.id, args.customerId))
+        .limit(1);
+      if (rows.length === 0) return { ok: false, error: "customer not found" };
+      const before = rows[0]!.terms;
+      await db
+        .update(customers)
+        .set({ paymentTerms: args.terms })
+        .where(eq(customers.id, args.customerId));
+      await db.insert(auditLog).values({
+        id: nanoid(24),
+        userId: ctx.userId,
+        action: "customer.terms_change",
+        entityType: "customer",
+        entityId: args.customerId,
+        before: { paymentTerms: before },
+        after: { paymentTerms: args.terms, aiProposalId: ctx.proposalId },
+      });
+      await recordActivity({
+        customerId: args.customerId,
+        kind: "terms_changed",
+        source: "ai_agent",
+        userId: ctx.userId,
+        subject: `Payment terms: ${before ?? "(none)"} -> ${args.terms}`,
+        meta: { aiProposalId: ctx.proposalId },
+      });
+      return { ok: true };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "set_payment_terms failed");
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+};
+
+const DisputeTransitionArgs = z.object({
+  invoiceId: z.string().max(64),
+  action: z.enum(["claims_paid", "not_paid", "paid_void"]),
+  note: z.string().max(2000).optional(),
+});
+type DisputeTransitionArgsT = z.infer<typeof DisputeTransitionArgs>;
+
+const disputeTransitionTool: Tool<DisputeTransitionArgsT> = {
+  name: "dispute_transition",
+  description:
+    "Move a Torah Judaica invoice through the dispute flow: claims_paid (park for bookkeeper verification), not_paid (resume chasing), or paid_void (VOIDS the invoice in QuickBooks - irreversible; requires the operator's typed confirmation).",
+  argsSchema: DisputeTransitionArgs,
+  execute: async (args, ctx) => {
+    const result =
+      args.action === "claims_paid"
+        ? await disputeClaimsPaid(args.invoiceId, ctx.userId, args.note)
+        : args.action === "not_paid"
+          ? await disputeResolveUnpaid(args.invoiceId, ctx.userId)
+          : await disputeResolvePaid(args.invoiceId, ctx.userId);
+    if (result.kind === "ok") {
+      return { ok: true, note: `dispute state: ${result.disputeState}` };
+    }
+    return { ok: false, error: result.message };
+  },
+};
+
+
 // ── Registry ───────────────────────────────────────────────────────────
 const TOOLS: Record<string, Tool> = {
   send_chase_email: sendChaseEmailTool as Tool,
@@ -542,6 +895,13 @@ const TOOLS: Record<string, Tool> = {
   send_bookkeeper_email: sendBookkeeperEmailTool as Tool,
   nudge_warehouse_email: nudgeWarehouseEmailTool as Tool,
   create_admin_notification: createAdminNotificationTool as Tool,
+  create_task: createTaskTool as Tool,
+  complete_task: completeTaskTool as Tool,
+  update_customer_context: updateCustomerContextTool as Tool,
+  record_interaction: recordInteractionTool as Tool,
+  set_hold_status: setHoldStatusTool as Tool,
+  set_payment_terms: setPaymentTermsTool as Tool,
+  dispute_transition: disputeTransitionTool as Tool,
 };
 
 export function getToolByName(name: string): Tool | null {

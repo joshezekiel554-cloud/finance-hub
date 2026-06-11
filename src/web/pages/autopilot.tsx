@@ -22,6 +22,8 @@ const CHASE_ALIAS = "accounts@feldart.com";
 const NO_DRAFT_CATEGORIES = new Set([
   "cadence_statement",
   "ops_cron_fail",
+  // Chat-born proposals arrive pre-drafted by the agent loop.
+  "chat_action",
 ]);
 
 // Rough estimate per AI draft, in USD. Refined from real cost-tracker data

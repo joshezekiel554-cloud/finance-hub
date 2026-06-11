@@ -31,7 +31,7 @@ import {
   runAgentTurn,
   type AgentTurnEvent,
 } from "../../modules/agent/loop.js";
-import { registerAgentReadTools } from "../../modules/agent/tools/index.js";
+import { registerAllAgentTools } from "../../modules/agent/tools/index.js";
 import { recordNotification } from "../../modules/notifications/index.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -55,8 +55,9 @@ export const createConversationBodySchema = z.object({
 });
 
 const agentRoute: FastifyPluginAsync = async (app) => {
-  // Read tools register once at boot (idempotent).
-  registerAgentReadTools();
+  // All agent tools register once at boot (idempotent). Write tools are
+  // declarations only — the loop proposalizes them.
+  registerAllAgentTools();
 
   app.get("/me", async (req) => {
     const user = await requireAuth(req);

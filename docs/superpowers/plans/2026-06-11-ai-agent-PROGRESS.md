@@ -22,5 +22,6 @@ Context notes (survive compact):
 - [x] WA T5 routes + SSE events + kill switch — `f5f08c5`
 - [x] WA T6 web (panel/page/chat/useAuth) — `897c449`
 - [x] WA T7 verify — live E2E turn vs real API (15 tool calls, books separate, graceful QB-fail), SPA-nav persistence + /agent dock verified in browser; 841 tests, tsc, build green; Opus wave review FIX-FIRST caught fence-label breakout → fixed `67f33c2` → SHIP
-- [ ] Wave B plan + execution + SHIP
+- [x] WAVE A SHIPPED 2026-06-11 — merge `7c66d8a`, deploy green FIRST TRY, prod verified (46 migrations, agent_* tables, 401 unauth). Live E2E on prod pending operator login test.
+- [x] WAVE B COMPLETE: plan `52c69ba`; T1 write tools + holds/dispute extractions `e405b97`; T2 chat proposals + loop write-path `9a405f3`; T3 in-chat proposal cards `766a27f`; review fix — dangerous-action confirm enforced SERVER-side `4a0ccb6` (Opus wave review caught client-only VOID gate, both bypasses closed). Live E2E: agent searched, clarified a wrong name, then produced a correct create_task proposal (ISO date, real customer); approve untestable locally (Redis down) — executor unit-covered, Redis live in prod. Suite 847/847. SHIP next.
 - [ ] Wave C plan + execution + SHIP
