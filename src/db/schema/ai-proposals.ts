@@ -45,6 +45,9 @@ export const aiProposals = mysqlTable(
     // tj_dispute_nudge) insert 'tj'; chase_next inserts 'feldart'; null =
     // book-agnostic categories (cadence_*, ops_*).
     origin: mysqlEnum("origin", ["feldart", "tj"]),
+    // Where the proposal came from: the autopilot scanner ('scan') or an
+    // agent chat turn ('chat', Wave B). One queue + one executor either way.
+    source: mysqlEnum("source", ["scan", "chat"]).default("scan").notNull(),
     entityType: varchar("entity_type", { length: 64 }).notNull(),
     entityId: varchar("entity_id", { length: 64 }).notNull(),
     status: varchar("status", { length: 32 }).notNull(),

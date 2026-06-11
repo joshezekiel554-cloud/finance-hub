@@ -20,6 +20,8 @@ import { cn } from "./lib/cn";
 import { NotificationBell } from "./components/notification-bell";
 import { UserPill } from "./components/user-pill";
 import { MobileNavDrawer, type NavItem } from "./components/mobile-nav-drawer";
+import { AgentProvider, useAgent } from "./agent/agent-store";
+import { AgentPanel } from "./agent/agent-panel";
 
 const navItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -40,7 +42,8 @@ export default function App({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen bg-base text-primary">
+    <AgentProvider>
+      <div className="flex min-h-screen bg-base text-primary">
       {/* Desktop sidebar — unchanged */}
       <aside className="hidden w-60 shrink-0 border-r border-default bg-subtle md:flex md:flex-col">
         <div className="flex h-14 items-center gap-2 border-b border-default px-4">
@@ -79,6 +82,7 @@ export default function App({ children }: { children: ReactNode }) {
         <header className="hidden h-14 items-center justify-between border-b border-default bg-base px-6 md:flex">
           <div className="text-sm font-medium text-primary">Welcome back</div>
           <div className="flex items-center gap-3">
+            <AgentToggleButton />
             <NotificationBell />
             <UserPill />
           </div>
@@ -116,6 +120,7 @@ export default function App({ children }: { children: ReactNode }) {
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <AgentToggleButton />
             <NotificationBell />
             <UserPill />
           </div>
@@ -129,13 +134,33 @@ export default function App({ children }: { children: ReactNode }) {
         <div className="flex-1 p-4 md:p-6">{children}</div>
       </main>
 
-      <MobileNavDrawer
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
-        items={navItems}
-        footer={<SignOutFooter />}
-      />
-    </div>
+        <MobileNavDrawer
+          open={drawerOpen}
+          onOpenChange={setDrawerOpen}
+          items={navItems}
+          footer={<SignOutFooter />}
+        />
+        <AgentPanel />
+      </div>
+    </AgentProvider>
+  );
+}
+
+// Header sparkles button — opens the agent overlay (Ctrl/Cmd+K works
+// anywhere). Hidden on /agent where the conversation is docked.
+function AgentToggleButton() {
+  const { togglePanel, onAgentPage } = useAgent();
+  if (onAgentPage) return null;
+  return (
+    <button
+      type="button"
+      onClick={togglePanel}
+      title="Agent (Ctrl+K)"
+      aria-label="Toggle AI agent panel"
+      className="flex h-10 w-10 items-center justify-center rounded-md text-primary hover:bg-elevated md:h-8 md:w-8"
+    >
+      <Sparkles className="size-5 text-accent-primary md:size-4" />
+    </button>
   );
 }
 

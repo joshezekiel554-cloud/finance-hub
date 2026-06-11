@@ -54,6 +54,9 @@ export type AppSettingsMap = {
   // index by any canonical key without a type error.
   tj_bookkeeper_email: string;
   tj_bookkeeper_name: string;
+  // AI agent: kill switch ("1"/"") + soft monthly USD budget ceiling.
+  agent_enabled: string;
+  agent_monthly_budget_usd: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -81,6 +84,9 @@ const DEFAULTS: AppSettingsMap = {
   autopilot_scan_cron_enabled: "",
   tj_bookkeeper_email: "",
   tj_bookkeeper_name: "",
+  // Agent ships enabled; the kill switch is for incidents, not opt-in.
+  agent_enabled: "1",
+  agent_monthly_budget_usd: "150",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

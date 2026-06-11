@@ -65,6 +65,20 @@ export type SSEEvent =
       customerId: string;
       communicationId: string;
     }
+  | {
+      type: "agent.tool";
+      conversationId: string;
+      tool: string;
+      ok: boolean;
+      durationMs: number;
+    }
+  | {
+      type: "agent.assistant";
+      conversationId: string;
+      messageId: string;
+      text: string;
+    }
+  | { type: "agent.complete"; conversationId: string; error?: string }
   | { type: "ping"; ts: number };
 
 export type SSEEventType = SSEEvent["type"];

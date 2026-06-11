@@ -31,6 +31,7 @@ import SeasonsPage from "./pages/seasons";
 import AutopilotPage from "./pages/autopilot";
 import AiTrainingPage from "./pages/ai-training";
 import OriginReviewPage from "./pages/origin-review";
+import AgentPage from "./pages/agent";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { tasksSearchSchema } from "./lib/search-schemas/tasks";
@@ -205,6 +206,12 @@ const originReviewRoute = createRoute({
   component: OriginReviewPage,
 });
 
+const agentRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/agent",
+  component: AgentPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -227,6 +234,7 @@ const routeTree = rootRoute.addChildren([
   autopilotRoute,
   aiTrainingRoute,
   originReviewRoute,
+  agentRoute,
 ]);
 
 const router = createRouter({ routeTree });

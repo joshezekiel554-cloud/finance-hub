@@ -78,6 +78,23 @@ export type SSEEvent =
       customerId: string;
       communicationId: string;
     }
+  // Agent turn lifecycle (spec 2026-06-11 §2). `agent.tool` per tool call
+  // (chip rendering), `agent.assistant` per persisted assistant message,
+  // `agent.complete` once per turn — error carries the failure reason.
+  | {
+      type: "agent.tool";
+      conversationId: string;
+      tool: string;
+      ok: boolean;
+      durationMs: number;
+    }
+  | {
+      type: "agent.assistant";
+      conversationId: string;
+      messageId: string;
+      text: string;
+    }
+  | { type: "agent.complete"; conversationId: string; error?: string }
   | { type: "ping"; ts: number };
 
 export type SSEBroker = {
@@ -93,6 +110,9 @@ export type SSEBroker = {
   publishAll: (event: SSEEvent) => void;
   // Active connection count, exposed for /health surfaces and tests.
   size: () => { users: number; connections: number };
+  // Whether a user has any open SSE connection — the agent loop uses
+  // this to decide if a finished background turn needs a notification.
+  hasSubscribers: (userId: string) => boolean;
 };
 
 declare module "fastify" {
@@ -161,6 +181,10 @@ function createBroker(): SSEBroker {
       let connections = 0;
       for (const set of subscribers.values()) connections += set.size;
       return { users: subscribers.size, connections };
+    },
+
+    hasSubscribers(userId) {
+      return (subscribers.get(userId)?.size ?? 0) > 0;
     },
   };
 }

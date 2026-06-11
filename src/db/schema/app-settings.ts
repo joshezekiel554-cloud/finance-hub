@@ -84,5 +84,13 @@ export const APP_SETTING_KEYS = [
   // opens compose with no recipient pre-filled.
   "tj_bookkeeper_email",
   "tj_bookkeeper_name",
+  // "1"/"" kill switch for the conversational AI agent (spec
+  // 2026-06-11-ai-agent-design §5). Off = the chat turn route returns a
+  // friendly 403; existing AI surfaces (card, autopilot) are unaffected.
+  "agent_enabled",
+  // Soft monthly spend ceiling for ALL Anthropic usage, in USD (plain
+  // number as text, e.g. "150"). Never blocks — drives the 80%/100%
+  // notifications + the /agent spend dashboard (Wave C).
+  "agent_monthly_budget_usd",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];
