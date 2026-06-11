@@ -16,6 +16,8 @@ import { z } from "zod";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
 import {
+  buildStatementPdfAttachment,
+  recordAttachedStatement,
   sendStatement,
   SendStatementError,
 } from "../../modules/statements/index.js";
@@ -104,6 +106,68 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
       );
       const message = err instanceof Error ? err.message : "send failed";
       return reply.code(500).send({ error: message });
+    }
+  });
+
+  // GET /:id/statement-pdf-download?origin= — build the statement PDF
+  // for out-of-band delivery (print, manual mail). UNLIKE the preview,
+  // this is a real run: it allocates a statement number and writes a
+  // statement_sends row, so it shows in the history and resets the
+  // 30-day cadence clock (the agent's statement proposer won't re-fire
+  // off a balance the operator just handled by hand).
+  app.get("/:id/statement-pdf-download", async (req, reply) => {
+    const user = await requireAuth(req);
+    const parse = paramsSchema.safeParse(req.params);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid params", details: parse.error.flatten() });
+    }
+    const queryParse = z
+      .object({ origin: z.enum(["feldart", "tj"]) })
+      .safeParse(req.query ?? {});
+    if (!queryParse.success) {
+      return reply
+        .code(400)
+        .send({ error: "origin is required ('feldart' or 'tj')" });
+    }
+    const customerId = parse.data.id;
+    const origin = queryParse.data.origin;
+
+    try {
+      const built = await buildStatementPdfAttachment(customerId, origin);
+      await recordAttachedStatement({
+        customerId,
+        statementNumber: built.statementNumber,
+        userId: user.id,
+        sentToEmail: null,
+        origin,
+        pdfBytes: built.buffer.byteLength,
+        carrier: "download",
+      });
+      reply.header("Content-Type", "application/pdf");
+      reply.header(
+        "Content-Disposition",
+        `attachment; filename="${built.filename}"`,
+      );
+      reply.header("X-Statement-Number", String(built.statementNumber));
+      return reply.send(built.buffer);
+    } catch (err) {
+      if (err instanceof SendStatementError) {
+        const status = mapErrorToStatus(err.code);
+        log.warn(
+          { err, customerId, userId: user.id, code: err.code },
+          "statement download rejected",
+        );
+        return reply.code(status).send({ error: err.message, code: err.code });
+      }
+      log.error(
+        { err, customerId, userId: user.id },
+        "statement download failed unexpectedly",
+      );
+      return reply
+        .code(500)
+        .send({ error: err instanceof Error ? err.message : "download failed" });
     }
   });
 };

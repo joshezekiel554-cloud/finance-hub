@@ -17,6 +17,7 @@ import {
   Plus,
   ClipboardList,
   ChevronDown,
+  Download,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -214,6 +215,15 @@ export default function CustomerDetailPage() {
   } | null>(null);
   const [statementSuccess, setStatementSuccess] =
     useState<StatementSendSuccess | null>(null);
+  // Download-statement feedback. A download is a real statement run
+  // (allocates a number, writes statement_sends, resets the cadence) —
+  // the pill says so, so the operator knows it counted.
+  const [statementDownload, setStatementDownload] = useState<
+    | { state: "downloading" }
+    | { state: "done"; statementNumber: string | null }
+    | { state: "error"; message: string }
+    | null
+  >(null);
   // Chase email dialog state. invoiceIds is undefined when chasing all
   // open invoices of `origin` (the per-book panel buttons); populated
   // when chasing a selected subset (the Invoices tab bulk-action
@@ -437,6 +447,42 @@ export default function CustomerDetailPage() {
     tjOverdue !== 0 ||
     tjVerifyingCount !== 0 ||
     tjOpenCount !== 0;
+
+  async function downloadStatementPdf(origin: "feldart" | "tj") {
+    setStatementDownload({ state: "downloading" });
+    try {
+      const res = await fetch(
+        `/api/customers/${customer.id}/statement-pdf-download?origin=${origin}`,
+      );
+      if (!res.ok) {
+        const eb = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(eb?.error ?? `HTTP ${res.status}`);
+      }
+      const statementNumber = res.headers.get("X-Statement-Number");
+      const cd = res.headers.get("Content-Disposition") ?? "";
+      const filename =
+        /filename="([^"]+)"/.exec(cd)?.[1] ??
+        `Statement-${statementNumber ?? "download"}.pdf`;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setStatementDownload({ state: "done", statementNumber });
+      setTimeout(() => setStatementDownload(null), 8000);
+    } catch (err) {
+      setStatementDownload({
+        state: "error",
+        message: err instanceof Error ? err.message : "download failed",
+      });
+    }
+  }
 
   // AI card action handler. Each kind maps to an existing surface — no
   // parallel autopilot logic. send_* opens the compose modal pre-filled;
@@ -750,6 +796,41 @@ export default function CustomerDetailPage() {
           </span>
         </div>
       )}
+      {statementDownload && statementDownload.state !== "downloading" && (
+        <div
+          role="status"
+          className={
+            statementDownload.state === "done"
+              ? "flex items-center gap-2 rounded-md border border-accent-success/30 bg-accent-success/10 px-3 py-2 text-sm text-accent-success"
+              : "flex items-center justify-between gap-2 rounded-md border border-accent-danger/30 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger"
+          }
+        >
+          {statementDownload.state === "done" ? (
+            <>
+              <CheckCircle2 className="size-4" />
+              <span>
+                Statement
+                {statementDownload.statementNumber
+                  ? ` #${statementDownload.statementNumber}`
+                  : ""}{" "}
+                downloaded — recorded as a statement run (counts toward the
+                cadence).
+              </span>
+            </>
+          ) : (
+            <>
+              <span>Statement download failed: {statementDownload.message}</span>
+              <button
+                type="button"
+                onClick={() => setStatementDownload(null)}
+                className="shrink-0 underline"
+              >
+                Dismiss
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {chaseSuccess && (
         <div
           role="status"
@@ -971,6 +1052,8 @@ export default function CustomerDetailPage() {
                 hasTjHistory={hasTjHistory}
                 onChase={(origin) => setChaseDialog({ origin })}
                 onStatement={(origin) => setStatementDialog({ origin })}
+                onDownloadStatement={(origin) => void downloadStatementPdf(origin)}
+                statementDownloading={statementDownload?.state === "downloading"}
                 onBulkChase={(invoiceIds, origin) =>
                   setChaseDialog({ invoiceIds, origin })
                 }
@@ -2326,6 +2409,8 @@ function InvoicesPanel({
   hasTjHistory,
   onChase,
   onStatement,
+  onDownloadStatement,
+  statementDownloading,
   onBulkChase,
   onDisputeChanged,
   onEmailBookkeeper,
@@ -2352,6 +2437,10 @@ function InvoicesPanel({
   // threads the book through to them.
   onChase: (origin: "feldart" | "tj") => void;
   onStatement: (origin: "feldart" | "tj") => void;
+  // Download the statement PDF for out-of-band delivery. Counts as a
+  // real statement run server-side.
+  onDownloadStatement: (origin: "feldart" | "tj") => void;
+  statementDownloading: boolean;
   // Operator clicked "Send chase email" with N invoices selected.
   // The parent owns the dialog state; we just hand it the ids of
   // the selected invoice rows (credit memos filtered out — chase is
@@ -2852,6 +2941,20 @@ function InvoicesPanel({
                 <FileText className="size-3.5" />
                 Statement
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onDownloadStatement("feldart")}
+                disabled={!(feldartBalance > 0) || statementDownloading}
+                title={
+                  feldartBalance > 0
+                    ? "Download the Feldart statement PDF (counts as a statement run — recorded in history, resets the cadence)"
+                    : "No open Feldart balance — nothing to download"
+                }
+              >
+                <Download className="size-3.5" />
+                {statementDownloading ? "Preparing…" : "Download"}
+              </Button>
             </>
           }
           rows={feldartRows}
@@ -2915,6 +3018,20 @@ function InvoicesPanel({
                     Bookkeeper
                   </Button>
                 ) : null}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onDownloadStatement("tj")}
+                  disabled={!(tjBalance > 0) || statementDownloading}
+                  title={
+                    tjBalance > 0
+                      ? "Download the Torah Judaica statement PDF (counts as a statement run)"
+                      : "No open TJ balance — nothing to download"
+                  }
+                >
+                  <Download className="size-3.5" />
+                  {statementDownloading ? "Preparing…" : "Download"}
+                </Button>
               </>
             }
             rows={tjRows}

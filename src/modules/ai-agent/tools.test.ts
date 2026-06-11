@@ -285,6 +285,8 @@ describe("send_chase_email recipient resolution + attachments", () => {
           ]),
       } as never);
     getPdfMock.mockResolvedValueOnce(Buffer.from("PDFBYTES"));
+    // attachStatement triggers the global-BCC layer, which reads settings
+    vi.mocked(loadAppSettings).mockResolvedValueOnce({} as never);
     vi.mocked(buildStatementPdfAttachment).mockResolvedValueOnce({
       buffer: Buffer.from("STMT"),
       filename: "Statement_Acme_42.pdf",
@@ -333,5 +335,74 @@ describe("send_chase_email recipient resolution + attachments", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toContain("invoice 99999 not found");
     expect(vi.mocked(sendEmail)).not.toHaveBeenCalled();
+  });
+});
+
+describe("statement-carrying emails layer the global statement BCC", () => {
+  const args = {
+    customerId: "cust-1",
+    tier: "HIGH",
+    origin: "feldart",
+    subject: "Overdue",
+    body: "<p>Pay.</p>",
+    attachStatement: true,
+  };
+
+  it("adds statement_bcc_email to BCC when a statement is attached", async () => {
+    vi.mocked(db.select).mockReturnValueOnce(
+      selectChain([
+        {
+          id: "cust-1",
+          primaryEmail: "c@example.com",
+          statementBccEmails: ["existing@example.com"],
+          statementToEmails: ["c@example.com"],
+          tags: [],
+        },
+      ]),
+    );
+    vi.mocked(loadAppSettings).mockResolvedValueOnce({
+      statement_bcc_email: "books@feldart.com",
+    } as never);
+    vi.mocked(buildStatementPdfAttachment).mockResolvedValueOnce({
+      buffer: Buffer.from("STMT"),
+      filename: "Statement_Acme_43.pdf",
+      statementNumber: 43,
+    } as never);
+    vi.mocked(sendEmail).mockResolvedValueOnce({
+      messageId: "m-1",
+      threadId: "t-1",
+      from: "accounts@feldart.com",
+    } as never);
+    vi.mocked(db.insert).mockReturnValue({
+      values: vi.fn().mockResolvedValue(undefined),
+    } as never);
+
+    const tool = getToolByName("send_chase_email")!;
+    const result = await tool.execute(args, ctx);
+    expect(result.ok).toBe(true);
+    const call = vi.mocked(sendEmail).mock.calls[0]![0] as { bcc?: string };
+    expect(call.bcc).toContain("existing@example.com");
+    expect(call.bcc).toContain("books@feldart.com");
+  });
+
+  it("does NOT add the global BCC to a plain chase (no statement attached)", async () => {
+    vi.mocked(db.select).mockReturnValueOnce(
+      selectChain([{ id: "cust-1", primaryEmail: "c@example.com", tags: [] }]),
+    );
+    vi.mocked(sendEmail).mockResolvedValueOnce({
+      messageId: "m-2",
+      threadId: "t-2",
+      from: "accounts@feldart.com",
+    } as never);
+    vi.mocked(db.insert).mockReturnValue({
+      values: vi.fn().mockResolvedValue(undefined),
+    } as never);
+
+    const tool = getToolByName("send_chase_email")!;
+    const result = await tool.execute({ ...args, attachStatement: undefined }, ctx);
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(loadAppSettings)).not.toHaveBeenCalled();
+    const call = vi.mocked(sendEmail).mock.calls[0]![0] as { bcc?: string };
+    expect(call.bcc ?? "").not.toContain("books@feldart.com");
   });
 });

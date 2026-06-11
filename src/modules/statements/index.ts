@@ -1,4 +1,6 @@
 export {
+  buildStatementPdfAttachment,
+  recordAttachedStatement,
   sendStatement,
   SendStatementError,
   buildOpenInvoiceConditions,

@@ -478,11 +478,14 @@ export async function recordAttachedStatement(input: {
   customerId: string;
   statementNumber: number;
   userId: string;
-  sentToEmail: string;
+  // null for downloads — the operator takes the PDF out-of-band (print,
+  // WhatsApp, manual mail) and the run still counts toward the cadence.
+  sentToEmail: string | null;
   origin: "feldart" | "tj";
   pdfBytes: number;
-  messageId: string;
-  threadId: string | null;
+  messageId?: string;
+  threadId?: string | null;
+  carrier: "agent_email" | "download";
 }): Promise<void> {
   const statementSendId = nanoid(24);
   await db.insert(statementSends).values({
@@ -494,9 +497,9 @@ export async function recordAttachedStatement(input: {
     statementNumber: input.statementNumber,
     qboResponse: {
       pdfBytes: input.pdfBytes,
-      messageId: input.messageId,
-      threadId: input.threadId,
-      attachedTo: "agent_email",
+      messageId: input.messageId ?? null,
+      threadId: input.threadId ?? null,
+      attachedTo: input.carrier,
     },
     statementType: "open_items",
   });
@@ -512,8 +515,8 @@ export async function recordAttachedStatement(input: {
       origin: input.origin,
       to: input.sentToEmail,
       statementNumber: input.statementNumber,
-      messageId: input.messageId,
-      attachedTo: "agent_email",
+      messageId: input.messageId ?? null,
+      attachedTo: input.carrier,
     },
   });
 }

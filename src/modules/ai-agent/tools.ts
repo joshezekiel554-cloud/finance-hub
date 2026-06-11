@@ -105,6 +105,27 @@ async function resolveSendRecipients(customer: {
   };
 }
 
+// An email that CARRIES a statement is a statement delivery — layer the
+// global statement_bcc_email setting into its BCC exactly like a direct
+// statement send does (bookkeeper oversight copy).
+async function layerStatementBcc(
+  recipients: { to: string; cc?: string; bcc?: string },
+  attachStatement: boolean | undefined,
+): Promise<{ to: string; cc?: string; bcc?: string }> {
+  if (!attachStatement) return recipients;
+  const settings = await loadAppSettings();
+  const configured = settings.statement_bcc_email?.trim();
+  if (!configured) return recipients;
+  const existing = (recipients.bcc ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
+  if (existing.some((e) => e.toLowerCase() === configured.toLowerCase())) {
+    return recipients;
+  }
+  return { ...recipients, bcc: [...existing, configured].join(", ") };
+}
+
 // Attachment args shared by chase + check-in sends. Invoice PDFs come
 // from QBO by docNumber (scoped to THIS customer — a docNumber belonging
 // to anyone else is an error); the statement is built by the statements
@@ -233,13 +254,14 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
           error: `customer ${args.customerId} not found — the id must come from search_customers/get_customer`,
         };
       }
-      const recipients = await resolveSendRecipients(customer);
+      let recipients = await resolveSendRecipients(customer);
       if (!recipients) {
         return {
           ok: false,
           error: "no statement/chase recipients configured for this customer",
         };
       }
+      recipients = await layerStatementBcc(recipients, args.attachStatement);
       const built = await buildSendAttachments({
         customerId: customer.id,
         origin: args.origin,
@@ -326,6 +348,7 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
             pdfBytes: built.statementMeta.pdfBytes,
             messageId: result.messageId,
             threadId: result.threadId || null,
+            carrier: "agent_email",
           });
         }
       } catch (err) {
@@ -423,13 +446,14 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
           error: `customer ${args.customerId} not found — the id must come from search_customers/get_customer`,
         };
       }
-      const recipients = await resolveSendRecipients(customer);
+      let recipients = await resolveSendRecipients(customer);
       if (!recipients) {
         return {
           ok: false,
           error: "no statement/chase recipients configured for this customer",
         };
       }
+      recipients = await layerStatementBcc(recipients, args.attachStatement);
       const built = await buildSendAttachments({
         customerId: customer.id,
         attachInvoiceDocNumbers: args.attachInvoiceDocNumbers,
@@ -484,6 +508,7 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
           pdfBytes: built.statementMeta.pdfBytes,
           messageId: result.messageId,
           threadId: result.threadId || null,
+          carrier: "agent_email",
         });
       }
       return { ok: true };
