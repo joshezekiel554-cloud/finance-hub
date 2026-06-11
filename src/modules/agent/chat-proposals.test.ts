@@ -8,6 +8,7 @@ import {
   deriveEntity,
   isDangerousAction,
   summarizeAction,
+  validateEntityRefs,
 } from "./chat-proposals.js";
 
 describe("deriveEntity", () => {
@@ -106,5 +107,35 @@ describe("summarizeAction", () => {
     });
     expect(s).toContain("set hold status");
     expect(s).toContain("targetState=hold");
+  });
+});
+
+describe("validateEntityRefs", () => {
+  it("rejects an invented customerId with a corrective message", async () => {
+    const result = await validateEntityRefs(
+      { customerId: "gifts-by-gilda", subject: "x" },
+      { customerId: async () => false },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('"gifts-by-gilda" does not exist');
+      expect(result.error).toContain("Never invent or guess ids");
+    }
+  });
+
+  it("passes when every referenced entity exists", async () => {
+    const result = await validateEntityRefs(
+      { customerId: "real1", invoiceId: "real2" },
+      { customerId: async () => true, invoiceId: async () => true },
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("ignores args that are not entity refs or not strings", async () => {
+    const result = await validateEntityRefs(
+      { subject: "hello", attachStatement: true, customerId: 42 as unknown },
+      { customerId: async () => false },
+    );
+    expect(result).toEqual({ ok: true });
   });
 });

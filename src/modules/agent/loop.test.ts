@@ -32,6 +32,7 @@ vi.mock("./chat-proposals.js", () => ({
     dangerous: false,
     summary: "send money · test",
   })),
+  validateEntityRefs: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("./context.js", async (importOriginal) => {
@@ -55,7 +56,7 @@ import {
 } from "../../integrations/anthropic/tool-registry.js";
 import { trackUsage } from "../../integrations/anthropic/cost-tracker.js";
 import { setTitle } from "./conversations.js";
-import { createChatProposal } from "./chat-proposals.js";
+import { createChatProposal, validateEntityRefs } from "./chat-proposals.js";
 import {
   MAX_TOOL_ITERATIONS,
   projectHistory,
