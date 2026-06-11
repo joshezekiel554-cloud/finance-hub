@@ -141,6 +141,18 @@ tools are added to the existing registry in `ai-agent/tools.ts` (not
 (no approval; zero external blast radius), surfaced as "📝 noted" in
 chat, stored visibly (see §7).
 
+**Interaction logging:** `record_interaction` — the operator dictates
+out-of-band conversations ("Brown & Co WhatsApped: they'll pay £5k
+Friday") and the agent writes an operator-reported entry to the
+customer's `activities` timeline (kind: whatsapp/phone/in-person/other,
+with the dictated summary), visible in the Activity tab beside emails
+and calls. Free-write like memory (it's the operator's own report;
+deletable), confirmed inline ("📝 logged to Brown & Co's timeline").
+When the dictation contains a durable fact or commitment, the agent
+also distills it into AI context — and payment promises recorded this
+way become first-class watch signals in Phase 2 ("promised payment not
+received").
+
 ### 4. Batch approval UX
 
 The doer's core interaction. A multi-action plan renders as a compact
