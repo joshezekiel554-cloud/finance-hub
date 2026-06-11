@@ -86,10 +86,13 @@ export function ChatProposalCard({
       const editedEntries = Object.entries(edits).filter(
         ([k, v]) => String(args[k] ?? "") !== v,
       );
-      const body =
+      const body: Record<string, unknown> =
         kind === "approve" && editedEntries.length > 0
           ? { editedArgs: { ...args, ...Object.fromEntries(editedEntries) } }
           : {};
+      // The server enforces the typed confirmation for dangerous actions;
+      // this forwards what the operator typed.
+      if (kind === "approve" && dangerous) body.confirm = confirmText.trim();
       const res = await fetch(
         `/api/autopilot/proposals/${proposalId}/${kind}`,
         {

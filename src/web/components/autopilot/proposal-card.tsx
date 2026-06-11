@@ -105,11 +105,26 @@ export function ProposalCard({
   const refetch = () =>
     queryClient.invalidateQueries({ queryKey: ["autopilot"] });
 
+  // Dangerous chat actions (QBO void) carry a typed-confirmation
+  // requirement enforced SERVER-side; prompt for it here so the queue
+  // surface matches the chat card.
+  const isDangerous = proposal.candidateSummary.dangerous === true;
+
   const approveMutation = useMutation({
     mutationFn: async () => {
+      let approveBody = "{}";
+      if (isDangerous) {
+        const typed = window.prompt(
+          "This action is IRREVERSIBLE (QuickBooks void). Type VOID to approve.",
+        );
+        if ((typed ?? "").trim().toUpperCase() !== "VOID") {
+          throw new Error("approval cancelled — confirmation not typed");
+        }
+        approveBody = JSON.stringify({ confirm: typed!.trim() });
+      }
       const res = await fetch(
         `/api/autopilot/proposals/${encodeURIComponent(proposal.id)}/approve`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+        { method: "POST", headers: { "content-type": "application/json" }, body: approveBody },
       );
       if (res.status === 409) {
         const json = await res.json().catch(() => ({}));
@@ -121,7 +136,7 @@ export function ProposalCard({
         ) {
           const force = await fetch(
             `/api/autopilot/proposals/${encodeURIComponent(proposal.id)}/approve?force=true`,
-            { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+            { method: "POST", headers: { "content-type": "application/json" }, body: approveBody },
           );
           if (!force.ok) throw new Error(`HTTP ${force.status}`);
           return;
