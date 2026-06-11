@@ -121,7 +121,10 @@ tools are added to the existing registry in `ai-agent/tools.ts` (not
 `agent/` contributes only read + artifact tools.
 - Existing six sends (chase/check-in/statement/bookkeeper/warehouse/
   notification) — unchanged executors.
-- New: create/complete task; update customer notes / AI context;
+- New: create/complete/assign tasks — assignable to any team member
+  (default: the requesting operator), with due dates parsed from natural
+  language ("charge their card on the 15th" → task assigned, due the
+  15th, linked to the customer); update customer notes / AI context;
   hold/release (Shopify tag flip via the atomic tagsAdd/Remove path);
   payment-terms change; dispute transitions (claims-paid / not-paid);
   QBO void + credit memo (dispute resolution path) — these two carry a
@@ -251,8 +254,9 @@ PDF via the house template; CSV for tabular asks.
 At Gmail-ingest time (poller), a Haiku classifier runs per new inbound
 email for exactly three high-confidence patterns:
 1. tracking number present → RMA-update proposal,
-2. payment claim → dispute-flow proposal (TJ) / payment-check task
-   (Feldart),
+2. payment claim or payment instruction → dispute-flow proposal (TJ) /
+   payment-check task (Feldart); instructions carrying a date ("charge
+   my card on the 15th") become dated task proposals,
 3. statement or invoice-copy request → send proposal.
 
 Anything else: untouched. Proposals carry the triggering email as
