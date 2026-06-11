@@ -35,15 +35,26 @@ export function buildAgentWriteToolDeclarations(): ToolDefinition<never>[] {
   return [
     declare(
       "send_chase_email",
-      "Propose a chase (dunning) email to a customer about overdue invoices. The level/tier controls tone (1 gentle, 2 firmer, 3 firm). Recipient is resolved server-side from the customer record.",
+      "Propose a chase (dunning) email to a customer about overdue invoices. The level/tier controls tone (1 gentle, 2 firmer, 3 firm). Recipients are resolved server-side from the customer record. Can attach invoice PDFs (by doc number) and/or the customer's open-items statement PDF.",
       {
         type: "object",
         properties: {
-          customerId: str(),
+          customerId: str("REAL id from search_customers/get_customer — never invent ids"),
           tier: { type: "string", enum: ["MEDIUM", "HIGH", "CRITICAL"] },
           subject: str(),
           body: str("plain text, written in the Feldart voice"),
           origin: { type: "string", enum: ["feldart", "tj"] },
+          attachInvoiceDocNumbers: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "invoice doc numbers (e.g. 18312) to attach as PDFs from QuickBooks — must belong to this customer; max 5",
+          },
+          attachStatement: {
+            type: "boolean",
+            description:
+              "attach the customer's current open-items statement PDF (book per origin)",
+          },
         },
         required: ["customerId", "tier", "subject", "body"],
         additionalProperties: false,
@@ -65,13 +76,19 @@ export function buildAgentWriteToolDeclarations(): ToolDefinition<never>[] {
     ),
     declare(
       "send_check_in_email",
-      "Propose a friendly non-dunning check-in email to a customer.",
+      "Propose a friendly non-dunning check-in email to a customer. Can attach invoice PDFs and/or the statement PDF.",
       {
         type: "object",
         properties: {
-          customerId: str(),
+          customerId: str("REAL id from search_customers/get_customer — never invent ids"),
           subject: str(),
           body: str(),
+          attachInvoiceDocNumbers: {
+            type: "array",
+            items: { type: "string" },
+            description: "invoice doc numbers to attach as PDFs — must belong to this customer; max 5",
+          },
+          attachStatement: { type: "boolean", description: "attach the open-items statement PDF" },
         },
         required: ["customerId", "subject", "body"],
         additionalProperties: false,

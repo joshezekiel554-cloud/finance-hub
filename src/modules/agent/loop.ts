@@ -35,7 +35,7 @@ import {
   setTitle,
   type Summarizer,
 } from "./conversations.js";
-import { createChatProposal } from "./chat-proposals.js";
+import { createChatProposal, validateEntityRefs } from "./chat-proposals.js";
 import { fileToModelBlock, getAgentFile } from "./files.js";
 import { checkBudgetAndNotify } from "./budget.js";
 
@@ -101,7 +101,17 @@ export function projectHistory(
       const page = composePageContextBlock(
         (c.pageContext as PageContext | undefined) ?? null,
       );
-      out.push({ role: "user", content: page ? `${page}\n${text}` : text });
+      // Historical attachments are not re-sent as base64 every turn —
+      // a marker keeps the model aware files existed on this message.
+      const files = (c as { fileIds?: unknown }).fileIds;
+      const marker =
+        Array.isArray(files) && files.length
+          ? `\n[${files.length} file(s) were attached to this message]`
+          : "";
+      out.push({
+        role: "user",
+        content: (page ? `${page}\n${text}` : text) + marker,
+      });
     } else {
       out.push({ role: "assistant", content: text });
     }
@@ -309,20 +319,34 @@ export async function runAgentTurn(
         } else if (def.requiresConfirmation) {
           // Write tool: NEVER executed from the loop. Proposalize — the
           // operator approves in chat (or the /autopilot queue) and the
-          // BullMQ executor runs the real implementation.
-          try {
-            const created = await createChatProposal({
-              tool: tu.name,
-              args: (tu.input ?? {}) as Record<string, unknown>,
-              userId,
-              conversationId,
-            });
-            proposalEvent = created;
-            okFlag = true;
-            resultText = `Proposal ${created.proposalId} created for ${tu.name} (${created.summary}). The operator must review and approve it in the chat before anything happens${created.dangerous ? " — this one is irreversible and needs typed confirmation" : ""}. Do not repeat the action or assume it executed; tell the operator it is awaiting their approval.`;
-          } catch (err) {
-            resultText = `Error creating proposal: ${err instanceof Error ? err.message : "failed"}`;
-            log.error({ err, tool: tu.name, conversationId }, "chat proposal failed");
+          // BullMQ executor runs the real implementation. Entity ids are
+          // validated FIRST: an invented id (prod case: customerId
+          // "gifts-by-gilda") bounces back as a tool error so the model
+          // self-corrects in-turn instead of minting a doomed proposal.
+          const writeArgs = (tu.input ?? {}) as Record<string, unknown>;
+          const refCheck = await validateEntityRefs(writeArgs).catch(
+            (err: unknown) => {
+              log.error({ err, tool: tu.name }, "entity ref validation failed");
+              return { ok: true as const };
+            },
+          );
+          if (!refCheck.ok) {
+            resultText = `Error: ${refCheck.error}`;
+          } else {
+            try {
+              const created = await createChatProposal({
+                tool: tu.name,
+                args: writeArgs,
+                userId,
+                conversationId,
+              });
+              proposalEvent = created;
+              okFlag = true;
+              resultText = `Proposal ${created.proposalId} created for ${tu.name} (${created.summary}). The operator must review and approve it in the chat before anything happens${created.dangerous ? " — this one is irreversible and needs typed confirmation" : ""}. Do not repeat the action or assume it executed; tell the operator it is awaiting their approval.`;
+            } catch (err) {
+              resultText = `Error creating proposal: ${err instanceof Error ? err.message : "failed"}`;
+              log.error({ err, tool: tu.name, conversationId }, "chat proposal failed");
+            }
           }
         } else {
           try {

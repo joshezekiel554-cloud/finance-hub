@@ -380,6 +380,91 @@ export function buildOpenInvoiceConditions(
 // statement_sends row + activity + audit log, returns the result. All
 // failure modes throw a SendStatementError; the route layer catches
 // and maps to HTTP statuses.
+// Build the statement PDF WITHOUT sending it — for attaching to another
+// email (the agent's chase/check-in sends with attachStatement). Reuses
+// the same module-private assembly steps as sendStatement (invoice
+// scoping, QBO links, credit memos, settings, atomic statement number)
+// so the attached document is identical to a sent one. Throws
+// SendStatementError with the same codes on failure.
+export async function buildStatementPdfAttachment(
+  customerId: string,
+  origin: "feldart" | "tj" = "feldart",
+): Promise<{ buffer: Buffer; filename: string; statementNumber: number }> {
+  const now = new Date();
+  const customerRows = await db
+    .select()
+    .from(customers)
+    .where(eq(customers.id, customerId))
+    .limit(1);
+  const customer = customerRows[0];
+  if (!customer) {
+    throw new SendStatementError(
+      "customer_not_found",
+      `customer ${customerId} not found`,
+    );
+  }
+  if (!customer.qbCustomerId) {
+    throw new SendStatementError(
+      "qbo_failed",
+      `customer ${customerId} is not linked to a QBO customer; sync first`,
+    );
+  }
+
+  const openInvoices = await db
+    .select()
+    .from(invoices)
+    .where(buildOpenInvoiceConditions(customerId, origin))
+    .orderBy(asc(invoices.issueDate));
+  if (openInvoices.length === 0) {
+    throw new SendStatementError("no_open_invoices", "no open invoices to attach");
+  }
+  if (openInvoices.length > MAX_INVOICES_PER_SEND) {
+    throw new SendStatementError(
+      "too_many_invoices",
+      `too many open invoices (${openInvoices.length}); cap is ${MAX_INVOICES_PER_SEND}`,
+    );
+  }
+
+  const qbInvoiceIds = openInvoices.map((i) => i.qbInvoiceId);
+  let invoiceLinks: Map<string, string>;
+  let creditMemos: StatementCreditMemoInput[];
+  let settings: AppSettingsMap;
+  try {
+    [invoiceLinks, creditMemos, settings] = await Promise.all([
+      fetchInvoiceLinks(qbInvoiceIds),
+      fetchUnappliedCreditMemos(customer.qbCustomerId),
+      loadAppSettings(),
+    ]);
+  } catch (err) {
+    if (err instanceof SendStatementError) throw err;
+    throw new SendStatementError(
+      "qbo_failed",
+      err instanceof Error ? err.message : "QBO lookup failed",
+    );
+  }
+
+  const statementNumber = await allocateNextStatementNumber();
+  const statementInvoices: StatementInvoiceInput[] = openInvoices.map(
+    (inv) => ({
+      ...inv,
+      invoiceLink: invoiceLinks.get(inv.qbInvoiceId) ?? null,
+    }),
+  );
+  const buffer = await renderStatementPdf({
+    customer,
+    openInvoices: statementInvoices,
+    creditMemos,
+    settings,
+    statementNumber,
+    generatedAt: now,
+  });
+  return {
+    buffer,
+    filename: `Statement-${statementNumber}.pdf`,
+    statementNumber,
+  };
+}
+
 export async function sendStatement(
   input: ManagerInput,
 ): Promise<SendStatementResult> {

@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 import { nanoid } from "nanoid";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
@@ -17,8 +17,11 @@ import { auditLog, chaseLog } from "../../db/schema/audit.js";
 import { notifications } from "../../db/schema/notifications.js";
 import { statementSends } from "../../db/schema/crm.js";
 import { sendEmail } from "../../integrations/gmail/send.js";
+import type { EmailAttachment } from "../../integrations/gmail/types.js";
+import { QboClient } from "../../integrations/qb/client.js";
+import { resolveRecipients } from "../customer-emails/recipients.js";
 import { appendSignatures } from "../email-compose/signatures.js";
-import { sendStatement } from "../statements/send.js";
+import { buildStatementPdfAttachment, sendStatement } from "../statements/send.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { autoActionPriorInbounds } from "../crm/auto-action-emails.js";
 import { linkBookkeeperThread } from "../../server/lib/bookkeeper-thread-link.js";
@@ -57,6 +60,128 @@ export type Tool<A = unknown> = {
   execute: (args: A, ctx: ToolContext) => Promise<ToolResult>;
 };
 
+// ── shared send helpers ────────────────────────────────────────────────
+
+// Recipients come from the canonical per-channel resolver (chase emails
+// reuse the statement set by spec — see customer-emails/recipients.ts).
+// primary_email is a legacy display field and only used as a last-resort
+// fallback so a customer with no configured lists still gets a delivery,
+// matching the statement-send behavior.
+async function resolveSendRecipients(customer: {
+  primaryEmail: string | null;
+  billingEmails: unknown;
+  invoiceToEmails: unknown;
+  invoiceCcEmails: unknown;
+  invoiceBccEmails: unknown;
+  statementToEmails: unknown;
+  statementCcEmails: unknown;
+  statementBccEmails: unknown;
+  tags: unknown;
+}): Promise<{ to: string; cc?: string; bcc?: string } | null> {
+  const resolved = await resolveRecipients("statement", {
+    primaryEmail: customer.primaryEmail,
+    billingEmails: customer.billingEmails as string[] | null,
+    invoiceToEmails: customer.invoiceToEmails as string[] | null,
+    invoiceCcEmails: customer.invoiceCcEmails as string[] | null,
+    invoiceBccEmails: customer.invoiceBccEmails as string[] | null,
+    statementToEmails: customer.statementToEmails as string[] | null,
+    statementCcEmails: customer.statementCcEmails as string[] | null,
+    statementBccEmails: customer.statementBccEmails as string[] | null,
+    tags: customer.tags as string[] | null,
+  });
+  const to =
+    resolved.to.length > 0
+      ? resolved.to.join(", ")
+      : (customer.primaryEmail ?? null);
+  if (!to) return null;
+  return {
+    to,
+    cc: resolved.cc.length > 0 ? resolved.cc.join(", ") : undefined,
+    bcc: resolved.bcc.length > 0 ? resolved.bcc.join(", ") : undefined,
+  };
+}
+
+// Attachment args shared by chase + check-in sends. Invoice PDFs come
+// from QBO by docNumber (scoped to THIS customer — a docNumber belonging
+// to anyone else is an error); the statement is built by the statements
+// module. Any fetch failure aborts BEFORE the send: the operator asked
+// for the attachment, so sending without it silently is worse than
+// failing loudly.
+const AttachmentArgs = {
+  attachInvoiceDocNumbers: z.array(z.string().min(1).max(64)).max(5).optional(),
+  attachStatement: z.boolean().optional(),
+};
+
+async function buildSendAttachments(args: {
+  customerId: string;
+  origin?: "feldart" | "tj";
+  attachInvoiceDocNumbers?: string[];
+  attachStatement?: boolean;
+}): Promise<
+  | { ok: true; attachments: EmailAttachment[] }
+  | { ok: false; error: string }
+> {
+  const attachments: EmailAttachment[] = [];
+  if (args.attachInvoiceDocNumbers?.length) {
+    const rows = await db
+      .select({
+        docNumber: invoices.docNumber,
+        qbInvoiceId: invoices.qbInvoiceId,
+        status: invoices.status,
+      })
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.customerId, args.customerId),
+          inArray(invoices.docNumber, args.attachInvoiceDocNumbers),
+        ),
+      );
+    const byDoc = new Map(rows.map((r) => [r.docNumber, r]));
+    const qb = new QboClient();
+    for (const doc of args.attachInvoiceDocNumbers) {
+      const inv = byDoc.get(doc);
+      if (!inv) {
+        return {
+          ok: false,
+          error: `invoice ${doc} not found on this customer — check the doc number`,
+        };
+      }
+      try {
+        const pdf = await qb.getPdf("invoice", inv.qbInvoiceId);
+        attachments.push({
+          filename: `Invoice-${doc}.pdf`,
+          mimeType: "application/pdf",
+          data: pdf,
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          error: `could not fetch the PDF for invoice ${doc} from QuickBooks: ${err instanceof Error ? err.message : "fetch failed"}`,
+        };
+      }
+    }
+  }
+  if (args.attachStatement) {
+    try {
+      const built = await buildStatementPdfAttachment(
+        args.customerId,
+        args.origin,
+      );
+      attachments.push({
+        filename: built.filename,
+        mimeType: "application/pdf",
+        data: built.buffer,
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: `could not build the statement PDF: ${err instanceof Error ? err.message : "build failed"}`,
+      };
+    }
+  }
+  return { ok: true, attachments };
+}
+
 // ── send_chase_email ───────────────────────────────────────────────────
 const SendChaseEmailArgs = z.object({
   customerId: z.string().min(1).max(24),
@@ -67,6 +192,7 @@ const SendChaseEmailArgs = z.object({
   origin: z.enum(["feldart", "tj"]).default("feldart"),
   subject: z.string().min(1).max(998),
   body: z.string().min(1).max(50_000),
+  ...AttachmentArgs,
 });
 
 const tierToChaseSeverity = {
@@ -88,9 +214,26 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
         .where(eq(customers.id, args.customerId))
         .limit(1);
       const customer = rows[0];
-      if (!customer || !customer.primaryEmail) {
-        return { ok: false, error: "customer or primary email missing" };
+      if (!customer) {
+        return {
+          ok: false,
+          error: `customer ${args.customerId} not found — the id must come from search_customers/get_customer`,
+        };
       }
+      const recipients = await resolveSendRecipients(customer);
+      if (!recipients) {
+        return {
+          ok: false,
+          error: "no statement/chase recipients configured for this customer",
+        };
+      }
+      const built = await buildSendAttachments({
+        customerId: customer.id,
+        origin: args.origin,
+        attachInvoiceDocNumbers: args.attachInvoiceDocNumbers,
+        attachStatement: args.attachStatement,
+      });
+      if (!built.ok) return { ok: false, error: built.error };
       const aliasEmail = "accounts@feldart.com";
       const finalHtml = await appendSignatures(db, {
         bodyHtml: args.body,
@@ -98,10 +241,13 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
         aliasEmail,
       });
       const result = await sendEmail({
-        to: customer.primaryEmail,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
         subject: args.subject,
         html: finalHtml,
         alias: aliasEmail,
+        attachments: built.attachments.length ? built.attachments : undefined,
       });
       // ── Post-send bookkeeping: NEVER fatal past this point. ───────────
       // The execute queue retries failed jobs (attempts: 3 in queues.ts),
@@ -127,7 +273,7 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
           direction: "outbound",
           aliasUsed: aliasEmail,
           fromAddress: aliasEmail,
-          toAddress: customer.primaryEmail,
+          toAddress: recipients.to,
           subject: args.subject,
           snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
           emailDate: sentAt,
@@ -230,6 +376,7 @@ const SendCheckInEmailArgs = z.object({
   customerId: z.string().min(1).max(24),
   subject: z.string().min(1).max(998),
   body: z.string().min(1).max(50_000),
+  ...AttachmentArgs,
 });
 
 const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
@@ -244,9 +391,25 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
         .where(eq(customers.id, args.customerId))
         .limit(1);
       const customer = rows[0];
-      if (!customer || !customer.primaryEmail) {
-        return { ok: false, error: "customer or primary email missing" };
+      if (!customer) {
+        return {
+          ok: false,
+          error: `customer ${args.customerId} not found — the id must come from search_customers/get_customer`,
+        };
       }
+      const recipients = await resolveSendRecipients(customer);
+      if (!recipients) {
+        return {
+          ok: false,
+          error: "no statement/chase recipients configured for this customer",
+        };
+      }
+      const built = await buildSendAttachments({
+        customerId: customer.id,
+        attachInvoiceDocNumbers: args.attachInvoiceDocNumbers,
+        attachStatement: args.attachStatement,
+      });
+      if (!built.ok) return { ok: false, error: built.error };
       const aliasEmail = "accounts@feldart.com";
       const finalHtml = await appendSignatures(db, {
         bodyHtml: args.body,
@@ -254,10 +417,13 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
         aliasEmail,
       });
       const result = await sendEmail({
-        to: customer.primaryEmail,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
         subject: args.subject,
         html: finalHtml,
         alias: aliasEmail,
+        attachments: built.attachments.length ? built.attachments : undefined,
       });
       const sentAt = new Date();
       await db.insert(emailLog).values({
@@ -269,7 +435,7 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
         direction: "outbound",
         aliasUsed: aliasEmail,
         fromAddress: aliasEmail,
-        toAddress: customer.primaryEmail,
+        toAddress: recipients.to,
         subject: args.subject,
         snippet: args.body.slice(0, 200).replace(/<[^>]+>/g, " ").trim(),
         emailDate: sentAt,
