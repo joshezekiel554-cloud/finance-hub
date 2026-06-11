@@ -4,7 +4,7 @@
 // join this page in Wave C.
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { MessageSquarePlus, Sparkles, Trash2 } from "lucide-react";
+import { Download, FileText, MessageSquarePlus, Sparkles, Trash2 } from "lucide-react";
 import { cn } from "../lib/cn.js";
 import { AgentChat } from "../agent/agent-chat.js";
 import { useAgent } from "../agent/agent-store.js";
@@ -107,6 +107,118 @@ export default function AgentPage() {
           <AgentChat conversationId={activeConversationId} autoFocus />
         </div>
       </section>
+
+      <aside className="hidden w-72 shrink-0 flex-col gap-4 xl:flex">
+        <SpendCard />
+        <ReportsCard />
+      </aside>
+    </div>
+  );
+}
+
+function SpendCard() {
+  const { data } = useQuery({
+    queryKey: ["agent", "spend"],
+    queryFn: async () => {
+      const res = await fetch("/api/agent/spend");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<{
+        spentUsd: number;
+        budgetUsd: number;
+        pct: number;
+        bySurface: Array<{ surface: string; costUsd: number; calls: number }>;
+      }>;
+    },
+    staleTime: 60_000,
+  });
+  if (!data) return null;
+  const pct = Math.min(100, Math.round(data.pct));
+  return (
+    <div className="rounded-lg border border-default bg-base p-3">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+        AI spend this month
+      </h2>
+      <p className="mt-1 text-lg font-semibold">
+        ${data.spentUsd.toFixed(2)}
+        <span className="text-xs font-normal text-muted">
+          {" "}/ ${data.budgetUsd.toFixed(0)} budget
+        </span>
+      </p>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-elevated">
+        <div
+          className={
+            pct >= 100
+              ? "h-full bg-accent-danger"
+              : pct >= 80
+                ? "h-full bg-accent-warning"
+                : "h-full bg-accent-success"
+          }
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <ul className="mt-2 space-y-0.5 text-xs text-secondary">
+        {data.bySurface
+          .slice()
+          .sort((a, b) => b.costUsd - a.costUsd)
+          .slice(0, 5)
+          .map((r) => (
+            <li key={r.surface} className="flex justify-between">
+              <span>{r.surface.replace(/_/g, " ")}</span>
+              <span>${r.costUsd.toFixed(2)}</span>
+            </li>
+          ))}
+      </ul>
+    </div>
+  );
+}
+
+function ReportsCard() {
+  const { data } = useQuery({
+    queryKey: ["agent", "reports"],
+    queryFn: async () => {
+      const res = await fetch("/api/agent/reports");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<{
+        reports: Array<{
+          id: string;
+          title: string;
+          kind: string;
+          createdAt: string;
+        }>;
+      }>;
+    },
+    staleTime: 30_000,
+  });
+  const reports = data?.reports ?? [];
+  return (
+    <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-default bg-base p-3">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+        Reports library
+      </h2>
+      {reports.length === 0 && (
+        <p className="mt-2 text-xs text-muted">
+          Ask the agent for a PDF report or CSV export and it lands here.
+        </p>
+      )}
+      <ul className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">
+        {reports.map((r) => (
+          <li key={r.id} className="flex items-center gap-2 text-xs">
+            <FileText className="h-3.5 w-3.5 shrink-0 text-accent-primary" aria-hidden />
+            <span className="min-w-0 flex-1 truncate" title={r.title}>
+              {r.title}
+            </span>
+            <span className="uppercase text-muted">{r.kind}</span>
+            <a
+              href={`/api/agent/reports/${r.id}/download`}
+              className="rounded p-1 text-muted hover:bg-subtle hover:text-primary"
+              title="Download"
+              aria-label={`Download ${r.title}`}
+            >
+              <Download className="h-3.5 w-3.5" aria-hidden />
+            </a>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

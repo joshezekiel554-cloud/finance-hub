@@ -8,6 +8,7 @@ import { extensivReceipts } from "~/db/schema/returns.js";
 import { createLogger } from "~/lib/logger.js";
 import { recordActivity } from "~/modules/crm/index.js";
 import { autoActionPriorInbounds } from "~/modules/crm/auto-action-emails.js";
+import { triageInboundEmail } from "~/modules/agent/triage.js";
 import { classifyExtensivEmail } from "~/modules/returns/extensiv-receipt-classifier.js";
 import { matchReceiptToRma } from "~/modules/returns/rma-matcher.js";
 import { linkCustomerReplyIfRmaThread } from "~/modules/returns/rma-customer-reply-linker.js";
@@ -416,6 +417,19 @@ export async function pollNewEmails(opts: PollOptions = {}): Promise<PollResult>
         customerId,
         threadId: email.threadId ?? null,
         sentAt: occurredAt,
+      });
+    }
+
+    // Agent inbound triage (spec 2026-06-11 §10): Haiku classifies new
+    // matched inbound mail for 3 high-confidence patterns and raises
+    // pre-drafted proposals. Fire-and-forget — triage failures are
+    // swallowed inside; ingestion never blocks on an AI call.
+    if (direction === "inbound" && customerId) {
+      void triageInboundEmail({
+        emailLogId,
+        customerId,
+        subject: email.subject ?? null,
+        body: email.body ?? null,
       });
     }
 

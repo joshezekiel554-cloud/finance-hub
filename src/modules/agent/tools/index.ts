@@ -10,6 +10,7 @@ import {
 } from "../../../integrations/anthropic/tool-registry.js";
 import { buildAgentReadTools } from "./read-tools.js";
 import { buildAgentWriteToolDeclarations } from "./write-tools.js";
+import { buildAgentArtifactTools } from "./artifact-tools.js";
 
 export function registerAgentReadTools(): void {
   for (const def of buildAgentReadTools()) {
@@ -23,7 +24,14 @@ export function registerAgentWriteToolDeclarations(): void {
   }
 }
 
+export function registerAgentArtifactTools(): void {
+  for (const def of buildAgentArtifactTools()) {
+    if (!getTool(def.name)) registerTool(def);
+  }
+}
+
 export function registerAllAgentTools(): void {
   registerAgentReadTools();
   registerAgentWriteToolDeclarations();
+  registerAgentArtifactTools();
 }

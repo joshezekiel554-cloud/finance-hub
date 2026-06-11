@@ -11,7 +11,7 @@ import {
   type FormEvent,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Send, Sparkles, Wrench } from "lucide-react";
+import { Loader2, Paperclip, Send, Sparkles, Wrench, X } from "lucide-react";
 import { cn } from "../lib/cn.js";
 import { useEventStream } from "../lib/use-event-stream.js";
 import { useAgent } from "./agent-store.js";
@@ -73,6 +73,9 @@ function MessageBubble({ message }: { message: AgentMessage }) {
     );
   }
   const text = String(message.content.text ?? "");
+  const fileCount = Array.isArray(message.content.fileIds)
+    ? message.content.fileIds.length
+    : 0;
   const isUser = message.role === "user";
   const isError = message.content.error === true;
   return (
@@ -85,6 +88,12 @@ function MessageBubble({ message }: { message: AgentMessage }) {
         isError && "border-accent-danger/40 bg-accent-danger/5",
       )}
     >
+      {fileCount > 0 && (
+        <div className="mb-1 flex items-center gap-1 text-[11px] text-muted">
+          <Paperclip className="h-3 w-3" aria-hidden />
+          {fileCount} file{fileCount > 1 ? "s" : ""} attached
+        </div>
+      )}
       {text}
     </div>
   );
@@ -101,6 +110,11 @@ export function AgentChat({
   const { busy, setBusy, pageContext, setActiveConversationId } = useAgent();
   const [draft, setDraft] = useState("");
   const [turnError, setTurnError] = useState<string | null>(null);
+  const [stagedFiles, setStagedFiles] = useState<
+    Array<{ id: string; filename: string }>
+  >([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const { data, isPending } = useQuery({
@@ -149,6 +163,47 @@ export function AgentChat({
     if (el) el.scrollTop = el.scrollHeight;
   }, [data?.messages.length, busy]);
 
+  async function ensureConversation(): Promise<string> {
+    if (conversationId) return conversationId;
+    const created = await fetch("/api/agent/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!created.ok) throw new Error(`HTTP ${created.status}`);
+    const id = ((await created.json()) as { id: string }).id;
+    setActiveConversationId(id);
+    return id;
+  }
+
+  async function onPickFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setTurnError(null);
+    try {
+      const convId = await ensureConversation();
+      for (const file of Array.from(files).slice(0, 5)) {
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch(`/api/agent/conversations/${convId}/files`, {
+          method: "POST",
+          body: form,
+        });
+        if (!res.ok) {
+          const eb = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(eb?.error ?? `upload failed (${res.status})`);
+        }
+        const saved = (await res.json()) as { id: string; filename: string };
+        setStagedFiles((list) => [...list, saved]);
+      }
+    } catch (err) {
+      setTurnError(err instanceof Error ? err.message : "upload failed");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
   const sendMutation = useMutation({
     mutationFn: async (text: string) => {
       let id = conversationId;
@@ -165,7 +220,11 @@ export function AgentChat({
       const res = await fetch(`/api/agent/conversations/${id}/message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, pageContext }),
+        body: JSON.stringify({
+          text,
+          pageContext,
+          fileIds: stagedFiles.length ? stagedFiles.map((f) => f.id) : undefined,
+        }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as {
@@ -181,6 +240,7 @@ export function AgentChat({
     },
     onSuccess: (id) => {
       setDraft("");
+      setStagedFiles([]);
       void queryClient.invalidateQueries({ queryKey: conversationKey(id) });
       void queryClient.invalidateQueries({
         queryKey: ["agent", "conversations"],
@@ -233,10 +293,55 @@ export function AgentChat({
           <p className="text-sm text-accent-danger">{turnError}</p>
         )}
       </div>
+      {stagedFiles.length > 0 && (
+        <div className="flex flex-wrap gap-1 border-t border-default px-3 pt-2">
+          {stagedFiles.map((f) => (
+            <span
+              key={f.id}
+              className="inline-flex items-center gap-1 rounded-full border border-default bg-subtle px-2 py-0.5 text-[11px]"
+            >
+              <Paperclip className="h-3 w-3" aria-hidden />
+              {f.filename}
+              <button
+                type="button"
+                aria-label={`Remove ${f.filename}`}
+                onClick={() =>
+                  setStagedFiles((list) => list.filter((x) => x.id !== f.id))
+                }
+                className="text-muted hover:text-accent-danger"
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <form
         onSubmit={onSubmit}
         className="flex items-end gap-2 border-t border-default p-3"
       >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+          multiple
+          className="hidden"
+          onChange={(e) => void onPickFiles(e.target.files)}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          title="Attach images or PDFs"
+          aria-label="Attach files"
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-strong text-secondary hover:bg-subtle disabled:opacity-50"
+        >
+          {uploading ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          ) : (
+            <Paperclip className="h-4 w-4" aria-hidden />
+          )}
+        </button>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

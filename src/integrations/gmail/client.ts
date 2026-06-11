@@ -473,6 +473,70 @@ export async function getThread(
 // a full body decode. Used by the "Reply all" path to grab the original
 // recipient list. Returns the raw header strings (comma-separated; may
 // be empty if the header was absent).
+// List a message's attachments (filename/mime/size/attachmentId) from
+// the raw payload parts — formatMessage() drops attachments, so this is
+// the agent's discovery path.
+export type AttachmentMeta = {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  attachmentId: string;
+};
+
+export async function getMessageAttachmentsMeta(
+  messageId: string,
+  externalAccountId?: string,
+): Promise<AttachmentMeta[]> {
+  const { gmail } = await getClient(externalAccountId);
+  const res = await withRetry(
+    () => gmail.users.messages.get({ userId: "me", id: messageId, format: "full" }),
+    `messages.get(${messageId})`,
+  );
+  const out: AttachmentMeta[] = [];
+  type Part = {
+    filename?: string | null;
+    mimeType?: string | null;
+    body?: { attachmentId?: string | null; size?: number | null } | null;
+    parts?: Part[] | null;
+  };
+  const walk = (parts: Part[] | null | undefined) => {
+    for (const p of parts ?? []) {
+      if (p.filename && p.body?.attachmentId) {
+        out.push({
+          filename: p.filename,
+          mimeType: p.mimeType ?? "application/octet-stream",
+          sizeBytes: p.body.size ?? 0,
+          attachmentId: p.body.attachmentId,
+        });
+      }
+      if (p.parts) walk(p.parts);
+    }
+  };
+  walk((res.data.payload as Part | undefined)?.parts);
+  return out;
+}
+
+// Fetch one attachment's bytes (base64url-decoded).
+export async function getAttachment(
+  messageId: string,
+  attachmentId: string,
+  externalAccountId?: string,
+): Promise<Buffer | null> {
+  const { gmail } = await getClient(externalAccountId);
+  const res = await withRetry(
+    () =>
+      gmail.users.messages.attachments.get({
+        userId: "me",
+        messageId,
+        id: attachmentId,
+      }),
+    `attachments.get(${messageId})`,
+  );
+  const data = res.data.data;
+  if (!data) return null;
+  return Buffer.from(data, "base64url");
+}
+
 export async function getMessageRecipients(
   messageId: string,
   externalAccountId?: string,

@@ -31,7 +31,7 @@ type Props = {
   onEditAndSend: (proposal: Proposal) => void;
 };
 
-const NO_DRAFT_CATEGORIES = new Set(["cadence_statement", "ops_cron_fail", "chat_action"]);
+const NO_DRAFT_CATEGORIES = new Set(["cadence_statement", "ops_cron_fail", "chat_action", "inbound_triage"]);
 
 // Email tools whose draft can be opened in the full composer for editing.
 const EDITABLE_EMAIL_TOOLS = new Set([
@@ -53,6 +53,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   tj_chase: "TJ chase",
   tj_dispute_nudge: "Dispute nudge",
   chat_action: "Agent chat",
+  inbound_triage: "Inbound triage",
 };
 
 export function categoryLabel(c: string): string {

@@ -21,14 +21,28 @@ export type ToolHandlerContext = {
   // Auth.js v5 user id of the operator initiating the call. Null for
   // background-proposing jobs that run without a session.
   userId: string | null;
+  // Set when the call originates from an agent chat turn — lets tools
+  // associate produced artifacts (saved attachments) with the thread.
+  conversationId?: string;
   // BullMQ-friendly: write tools schedule a job rather than executing inline,
   // so handlers receive the queue handle. Populated by the agent loop wrapper
   // when it lands; free-form for now to avoid circular deps with src/jobs.
   enqueue?: (jobName: string, payload: unknown) => Promise<void>;
 };
 
+// Read tools may return binary attachments alongside text: images are
+// embedded in the tool_result (the API supports image blocks there);
+// documents (PDFs) are appended by the loop as a follow-up user message
+// (document blocks are not valid inside tool_result).
+export type ToolResultAttachment = {
+  kind: "image" | "document";
+  mime: string;
+  data: string; // base64
+  label?: string;
+};
+
 export type ToolHandlerResult =
-  | { ok: true; output: string }
+  | { ok: true; output: string; attachments?: ToolResultAttachment[] }
   | { ok: true; proposalId: string; output: string }
   | { ok: false; error: string };
 

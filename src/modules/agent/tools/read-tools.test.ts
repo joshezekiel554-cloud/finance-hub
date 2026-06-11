@@ -20,11 +20,11 @@ import {
 afterEach(() => __resetRegistry());
 
 describe("registerAgentReadTools", () => {
-  it("registers all 10 read tools, idempotently, none requiring confirmation", () => {
+  it("registers all 11 read tools, idempotently, none requiring confirmation", () => {
     registerAgentReadTools();
     registerAgentReadTools(); // second call must not throw on duplicates
     const tools = listTools();
-    expect(tools).toHaveLength(10);
+    expect(tools).toHaveLength(11);
     for (const t of tools) {
       expect(t.category).toBe("read");
       expect(t.requiresConfirmation).toBe(false);
@@ -34,6 +34,7 @@ describe("registerAgentReadTools", () => {
       "get_customer",
       "list_invoices",
       "get_emails",
+      "get_email_attachments",
       "get_calls",
       "get_rmas",
       "get_tasks",

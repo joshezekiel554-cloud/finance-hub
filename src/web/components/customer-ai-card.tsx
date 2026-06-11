@@ -7,6 +7,7 @@
 // what each kind does (opens compose, opens statement dialog, navigates,
 // etc.) — keeps this component free of routing + modal state.
 
+import { useAgent } from "../agent/agent-store.js";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Sparkles } from "lucide-react";
 
@@ -164,6 +165,7 @@ export default function CustomerAiCard({ customerId, onAction }: Props) {
             Generated {relativeAge(data.generatedAt)}
             {data.isStale ? " · stale" : ""}
           </span>
+          <AskAgentButton />
           <button
             type="button"
             onClick={() => regen.mutate()}
@@ -215,5 +217,22 @@ export default function CustomerAiCard({ customerId, onAction }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+// Opens the agent overlay — the panel's context chip already carries this
+// customer (page-context derivation), so the conversation starts aware.
+function AskAgentButton() {
+  const { openPanel } = useAgent();
+  return (
+    <button
+      type="button"
+      onClick={openPanel}
+      title="Open the agent with this customer in context (Ctrl+K)"
+      className="flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 hover:bg-elevated"
+    >
+      <Sparkles className="size-3 text-accent-primary" />
+      Ask the agent
+    </button>
   );
 }
