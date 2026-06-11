@@ -261,7 +261,7 @@ const agentRoute: FastifyPluginAsync = async (app) => {
     reply.header("Content-Type", file.mime);
     reply.header(
       "Content-Disposition",
-      `inline; filename="${file.filename.replace(/"/g, "")}"`,
+      `inline; filename="${file.filename.replace(/[^a-z0-9 ._-]/gi, "")}"`,
     );
     return reply.send(bytes);
   });

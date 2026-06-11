@@ -127,8 +127,11 @@ function ReportDoc({ content, generatedAt }: { content: ReportContent; generated
 }
 
 export function csvEscape(cell: string): string {
-  if (/[",\n\r]/.test(cell)) return `"${cell.replace(/"/g, '""')}"`;
-  return cell;
+  // Excel treats =+-@ leading cells as live formulas — prefix with ' so
+  // an agent-generated cell can never execute when the CSV is opened.
+  const deFormula = /^[=+\-@]/.test(cell) ? `'${cell}` : cell;
+  if (/[",\n\r]/.test(deFormula)) return `"${deFormula.replace(/"/g, '""')}"`;
+  return deFormula;
 }
 
 export function buildCsv(columns: string[], rows: string[][]): string {
@@ -174,6 +177,8 @@ export async function renderReportPdf(
 
 export async function readAgentReportBytes(storagePath: string): Promise<Buffer> {
   const full = path.resolve(AGENT_REPORTS_DIR, storagePath);
-  if (!full.startsWith(AGENT_REPORTS_DIR)) throw new Error("invalid storage path");
+  if (!full.startsWith(AGENT_REPORTS_DIR + path.sep)) {
+    throw new Error("invalid storage path");
+  }
   return fs.readFile(full);
 }

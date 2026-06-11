@@ -76,7 +76,9 @@ export async function readAgentFileBytes(storagePath: string): Promise<Buffer> {
   // storagePath is always our own nanoid-derived relative name; resolve
   // defensively anyway so a tampered row can't escape the directory.
   const full = path.resolve(AGENT_FILES_DIR, storagePath);
-  if (!full.startsWith(AGENT_FILES_DIR)) throw new Error("invalid storage path");
+  if (!full.startsWith(AGENT_FILES_DIR + path.sep)) {
+    throw new Error("invalid storage path");
+  }
   return fs.readFile(full);
 }
 
