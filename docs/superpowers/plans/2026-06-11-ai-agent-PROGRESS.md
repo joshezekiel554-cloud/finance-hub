@@ -13,14 +13,14 @@ Context notes (survive compact):
 
 ## Status log
 - [x] Spec approved + committed (`d4ca559` tip; incl. record_interaction + task assignees/dates)
-- [ ] Recon for Wave A plan
-- [ ] Wave A plan written
-- [ ] WA T1 schema (conversations/messages/files/reports + proposals.source) + migration 0045
-- [ ] WA T2 context assembly + fencing + injection suite
-- [ ] WA T3 read tools
-- [ ] WA T4 agent loop + SSE + conversation persistence
-- [ ] WA T5 routes (conversations CRUD, chat turn, SSE)
-- [ ] WA T6 overlay panel + /agent page
-- [ ] WA T7 verify + wave review + SHIP
+- [x] Recon for Wave A plan (2 agents)
+- [x] Wave A plan written — `59a644a`
+- [x] WA T1 schema + migration 0045 — `ddb08b5`
+- [x] WA T2 context+fencing+injection suite — `997a80e` + breakout fix `67f33c2`
+- [x] WA T3 read tools (10, fenced) — `7a8753a`
+- [x] WA T4 loop + conversations — `86b6f65`
+- [x] WA T5 routes + SSE events + kill switch — `f5f08c5`
+- [x] WA T6 web (panel/page/chat/useAuth) — `897c449`
+- [x] WA T7 verify — live E2E turn vs real API (15 tool calls, books separate, graceful QB-fail), SPA-nav persistence + /agent dock verified in browser; 841 tests, tsc, build green; Opus wave review FIX-FIRST caught fence-label breakout → fixed `67f33c2` → SHIP
 - [ ] Wave B plan + execution + SHIP
 - [ ] Wave C plan + execution + SHIP
