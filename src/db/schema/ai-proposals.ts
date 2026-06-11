@@ -21,6 +21,8 @@ export const AI_PROPOSAL_CATEGORIES = [
   // Chat-born write proposals from the AI agent (spec 2026-06-11) —
   // arrive pre-drafted; no finder, no draft step.
   "chat_action",
+  // Inbound-email triage (agent spec §10) — pre-drafted, no finder/draft.
+  "inbound_triage",
 ] as const;
 export type AiProposalCategory = (typeof AI_PROPOSAL_CATEGORIES)[number];
 

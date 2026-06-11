@@ -40,7 +40,7 @@ type Candidate = {
 // All 7 current categories have finders wired.
 // Categories that never have a finder: chat_action proposals are created
 // by the agent loop, not the scanner.
-const FINDERLESS_CATEGORIES = new Set<string>(["chat_action"]);
+const FINDERLESS_CATEGORIES = new Set<string>(["chat_action", "inbound_triage"]);
 
 const FINDERS: Partial<
   Record<AiProposalCategory, () => Promise<Candidate[]>>

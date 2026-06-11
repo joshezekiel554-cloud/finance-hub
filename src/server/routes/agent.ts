@@ -41,6 +41,13 @@ import {
   readAgentFileBytes,
   saveAgentFile,
 } from "../../modules/agent/files.js";
+import { readAgentReportBytes } from "../../modules/agent/reports.js";
+import { getBudgetStatus } from "../../modules/agent/budget.js";
+import { aiInteractions } from "../../db/schema/audit.js";
+import { sql } from "drizzle-orm";
+import { agentReports } from "../../db/schema/agent.js";
+import { desc, eq } from "drizzle-orm";
+import { db } from "../../db/index.js";
 import { recordNotification } from "../../modules/notifications/index.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -123,6 +130,77 @@ const agentRoute: FastifyPluginAsync = async (app) => {
     return reply.code(204).send();
   });
 
+
+
+
+  // ── Spend dashboard (spec §11) ────────────────────────────────────────
+  app.get("/spend", async (req) => {
+    await requireAuth(req);
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const [status, bySurface, byDay] = await Promise.all([
+      getBudgetStatus(now),
+      db
+        .select({
+          surface: aiInteractions.surface,
+          costUsd: sql<string>`COALESCE(SUM(${aiInteractions.costUsd}), 0)`,
+          calls: sql<string>`COUNT(*)`,
+        })
+        .from(aiInteractions)
+        .where(sql`${aiInteractions.occurredAt} >= ${monthStart}`)
+        .groupBy(aiInteractions.surface),
+      db
+        .select({
+          day: sql<string>`DATE(${aiInteractions.occurredAt})`,
+          costUsd: sql<string>`COALESCE(SUM(${aiInteractions.costUsd}), 0)`,
+        })
+        .from(aiInteractions)
+        .where(sql`${aiInteractions.occurredAt} >= ${monthStart}`)
+        .groupBy(sql`DATE(${aiInteractions.occurredAt})`)
+        .orderBy(sql`DATE(${aiInteractions.occurredAt})`),
+    ]);
+    return {
+      ...status,
+      bySurface: bySurface.map((r) => ({
+        surface: r.surface,
+        costUsd: Number(r.costUsd),
+        calls: Number(r.calls),
+      })),
+      byDay: byDay.map((r) => ({ day: r.day, costUsd: Number(r.costUsd) })),
+    };
+  });
+
+  // ── Reports library (spec §9) ─────────────────────────────────────────
+  app.get("/reports", async (req) => {
+    await requireAuth(req);
+    const rows = await db
+      .select()
+      .from(agentReports)
+      .orderBy(desc(agentReports.createdAt))
+      .limit(200);
+    return { reports: rows };
+  });
+
+  app.get("/reports/:id/download", async (req, reply) => {
+    await requireAuth(req);
+    const rows = await db
+      .select()
+      .from(agentReports)
+      .where(eq(agentReports.id, (req.params as { id: string }).id))
+      .limit(1);
+    const report = rows[0];
+    if (!report) return reply.code(404).send({ error: "not found" });
+    const bytes = await readAgentReportBytes(report.storagePath);
+    reply.header(
+      "Content-Type",
+      report.kind === "pdf" ? "application/pdf" : "text/csv",
+    );
+    reply.header(
+      "Content-Disposition",
+      `attachment; filename="${report.title.replace(/[^a-z0-9 _-]/gi, "")}.${report.kind}"`,
+    );
+    return reply.send(bytes);
+  });
 
   // ── Files: upload / download / link (spec §8) ─────────────────────────
   const memUpload = multer({

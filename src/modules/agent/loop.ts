@@ -37,6 +37,7 @@ import {
 } from "./conversations.js";
 import { createChatProposal } from "./chat-proposals.js";
 import { fileToModelBlock, getAgentFile } from "./files.js";
+import { checkBudgetAndNotify } from "./budget.js";
 
 const log = createLogger({ component: "agent.loop" });
 
@@ -419,6 +420,7 @@ export async function runAgentTurn(
       if (title) await setTitle(conversationId, title);
     }
     void maybeCompact(conversationId, summarize);
+    void checkBudgetAndNotify();
 
     if (!deps.hasSubscribers(userId)) {
       await deps
