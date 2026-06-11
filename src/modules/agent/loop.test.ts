@@ -26,6 +26,14 @@ vi.mock("./conversations.js", () => ({
   setTitle: vi.fn(async () => undefined),
 }));
 
+vi.mock("./chat-proposals.js", () => ({
+  createChatProposal: vi.fn(async () => ({
+    proposalId: "prop-1",
+    dangerous: false,
+    summary: "send money · test",
+  })),
+}));
+
 vi.mock("./context.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("./context.js")>();
   return {
@@ -47,6 +55,7 @@ import {
 } from "../../integrations/anthropic/tool-registry.js";
 import { trackUsage } from "../../integrations/anthropic/cost-tracker.js";
 import { setTitle } from "./conversations.js";
+import { createChatProposal } from "./chat-proposals.js";
 import {
   MAX_TOOL_ITERATIONS,
   projectHistory,
@@ -165,7 +174,7 @@ describe("runAgentTurn", () => {
     expect(appended[appended.length - 1]!.content.text).toBe("Found the thing.");
   });
 
-  it("write tools are refused in Wave A even if registered", async () => {
+  it("write tools are proposalized, never executed", async () => {
     registerTool({
       name: "send_money",
       description: "",
@@ -178,16 +187,32 @@ describe("runAgentTurn", () => {
     const create = vi.fn(async (params: Record<string, unknown>) => {
       calls.push(params);
       return calls.length === 1
-        ? toolUseResponse("send_money", {})
+        ? toolUseResponse("send_money", { customerId: "cust9" })
         : textResponse("ok");
     });
     const { deps } = makeDeps();
     await runAgentTurn(baseInput, { ...deps, createMessage: create as never });
 
+    expect(createChatProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "send_money",
+        args: { customerId: "cust9" },
+        userId: "user1",
+        conversationId: "conv1",
+      }),
+    );
     const second = calls[1]!.messages as Array<{ role: string; content: unknown }>;
     const resultJson = JSON.stringify(second[second.length - 1]!.content);
-    expect(resultJson).toContain("requires operator approval");
+    expect(resultJson).toContain("Proposal prop-1 created");
+    expect(resultJson).toContain("awaiting their approval");
     expect(resultJson).not.toContain("SHOULD NEVER RUN");
+    // the persisted tool_event carries the proposal payload for the UI card
+    const evt = appended.find(
+      (a) => a.role === "tool_event" && a.content.kind === "proposal",
+    );
+    expect(evt).toBeDefined();
+    expect(evt!.content.proposalId).toBe("prop-1");
+    expect(evt!.content.args).toEqual({ customerId: "cust9" });
   });
 
   it("unknown tool returns an error result without crashing the turn", async () => {

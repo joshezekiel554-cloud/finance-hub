@@ -18,6 +18,9 @@ export const AI_PROPOSAL_CATEGORIES = [
   "ops_cron_fail",
   "tj_chase",
   "tj_dispute_nudge",
+  // Chat-born write proposals from the AI agent (spec 2026-06-11) —
+  // arrive pre-drafted; no finder, no draft step.
+  "chat_action",
 ] as const;
 export type AiProposalCategory = (typeof AI_PROPOSAL_CATEGORIES)[number];
 

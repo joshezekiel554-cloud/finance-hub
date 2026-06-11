@@ -34,6 +34,7 @@ import {
   setTitle,
   type Summarizer,
 } from "./conversations.js";
+import { createChatProposal } from "./chat-proposals.js";
 
 const log = createLogger({ component: "agent.loop" });
 
@@ -273,13 +274,28 @@ export async function runAgentTurn(
         const def = getTool(tu.name);
         let resultText: string;
         let okFlag = false;
+        let proposalEvent: { proposalId: string; summary: string; dangerous: boolean } | null =
+          null;
         if (!def) {
           resultText = `Unknown tool: ${tu.name}`;
         } else if (def.requiresConfirmation) {
-          // Wave A: no write tools in the loop. Defense in depth — the
-          // registry only holds reads today, but the guard outlives that.
-          resultText =
-            "This action requires operator approval and is not yet available in chat (coming in the next update).";
+          // Write tool: NEVER executed from the loop. Proposalize — the
+          // operator approves in chat (or the /autopilot queue) and the
+          // BullMQ executor runs the real implementation.
+          try {
+            const created = await createChatProposal({
+              tool: tu.name,
+              args: (tu.input ?? {}) as Record<string, unknown>,
+              userId,
+              conversationId,
+            });
+            proposalEvent = created;
+            okFlag = true;
+            resultText = `Proposal ${created.proposalId} created for ${tu.name} (${created.summary}). The operator must review and approve it in the chat before anything happens${created.dangerous ? " — this one is irreversible and needs typed confirmation" : ""}. Do not repeat the action or assume it executed; tell the operator it is awaiting their approval.`;
+          } catch (err) {
+            resultText = `Error creating proposal: ${err instanceof Error ? err.message : "failed"}`;
+            log.error({ err, tool: tu.name, conversationId }, "chat proposal failed");
+          }
         } else {
           try {
             const res = await def.handler(tu.input, { userId });
@@ -296,6 +312,15 @@ export async function runAgentTurn(
           tool: tu.name,
           ok: okFlag,
           durationMs,
+          ...(proposalEvent
+            ? {
+                kind: "proposal",
+                proposalId: proposalEvent.proposalId,
+                summary: proposalEvent.summary,
+                dangerous: proposalEvent.dangerous,
+                args: tu.input ?? {},
+              }
+            : {}),
         });
         deps.publish(userId, {
           kind: "tool",
