@@ -1,9 +1,10 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { appSettings } from "../../db/schema/app-settings.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
 import type { AiProposalCategory } from "../../db/schema/ai-proposals.js";
 import { customers } from "../../db/schema/customers.js";
+import { activities } from "../../db/schema/crm.js";
 import {
   aiCompanyFacts,
   FACT_TAG_GLOBAL,
@@ -114,9 +115,10 @@ export async function buildDraftContext(
   }
 
   // 4. per-customer context (#4). The operator-authored AI context field is
-  // the primary source; internal notes are also folded in so the model has
-  // knowledge of everything recorded on the customer (operator-authored, so
-  // trusted), each on its own labelled line.
+  // the primary source; the legacy internal_notes column and the customer's
+  // recent manual notes (the amber "Notes" card = manual_note activities) are
+  // also folded in so the model has knowledge of everything the team has
+  // recorded on the account — all operator-authored, so trusted.
   let customerContext: string | null = null;
   if (customerId) {
     const cRows = await db
@@ -133,6 +135,30 @@ export async function buildDraftContext(
     const notesVal = cRows[0]?.notes;
     if (notesVal && notesVal.trim().length > 0) {
       parts.push(`Internal notes: ${notesVal.trim()}`);
+    }
+    // Recent manual notes from the activity timeline, newest first. Capped so
+    // a chatty account doesn't blow the prompt; the model gets the most
+    // relevant recent context.
+    const noteRows = await db
+      .select({ body: activities.body })
+      .from(activities)
+      .where(
+        and(
+          eq(activities.customerId, customerId),
+          eq(activities.kind, "manual_note"),
+        ),
+      )
+      .orderBy(desc(activities.occurredAt))
+      .limit(10);
+    const noteBodies = noteRows
+      .map((r) => r.body?.trim())
+      .filter((b): b is string => !!b && b.length > 0);
+    if (noteBodies.length > 0) {
+      parts.push(
+        `Operator notes (most recent first):\n${noteBodies
+          .map((b) => `- ${b}`)
+          .join("\n")}`,
+      );
     }
     customerContext = parts.length > 0 ? parts.join("\n\n") : null;
   }

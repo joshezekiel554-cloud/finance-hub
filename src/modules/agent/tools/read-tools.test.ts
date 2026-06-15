@@ -167,6 +167,18 @@ describe("formatCustomerDetail", () => {
     });
     expect(out).not.toContain("<operator-note");
   });
+
+  it("fences recent manual notes when provided", () => {
+    const out = formatCustomerDetail({
+      ...base,
+      internalNotes: null,
+      aiCustomerContext: null,
+      recentNotes: ["Called re: PO 1234", "Prefers WhatsApp"],
+    });
+    expect(out).toContain("Called re: PO 1234");
+    expect(out).toContain("Prefers WhatsApp");
+    expect((out.match(/<operator-note[\s>]/g) ?? []).length).toBe(1);
+  });
 });
 
 describe("truncateBody", () => {

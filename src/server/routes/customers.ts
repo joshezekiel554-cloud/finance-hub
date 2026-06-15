@@ -57,7 +57,11 @@ import { loadAppSettings } from "../../modules/statements/settings.js";
 import { buildOpenInvoiceConditions } from "../../modules/statements/send.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
-import { recordActivity } from "../../modules/crm/activity-ingester.js";
+import {
+  recordActivity,
+  updateManualNote,
+  deleteManualNote,
+} from "../../modules/crm/activity-ingester.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
 import { QboClient } from "../../integrations/qb/client.js";
 
@@ -733,6 +737,57 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       body: parse.data.body,
     });
     return reply.send({ activityId });
+  });
+
+  // PATCH /api/customers/:id/notes/:activityId — edit a manual_note. Scoped
+  // (in updateManualNote) to kind="manual_note" + this customer so system
+  // activity rows can't be mutated through here. 404 when no such note.
+  app.patch("/:id/notes/:activityId", async (req, reply) => {
+    const user = await requireAuth(req);
+    const { id, activityId } = req.params as {
+      id: string;
+      activityId: string;
+    };
+    const bodySchema = z.object({
+      body: z.string().min(1).max(10_000),
+      subject: z.string().max(255).nullable().optional(),
+    });
+    const parse = bodySchema.safeParse(req.body ?? {});
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const result = await updateManualNote({
+      activityId,
+      customerId: id,
+      userId: user.id,
+      body: parse.data.body,
+      subject: parse.data.subject ?? null,
+    });
+    if (result === "not_found") {
+      return reply.code(404).send({ error: "note not found" });
+    }
+    return reply.send({ ok: true });
+  });
+
+  // DELETE /api/customers/:id/notes/:activityId — delete a manual_note. Same
+  // scoping as the PATCH; the deleted row is preserved in audit_log.before.
+  app.delete("/:id/notes/:activityId", async (req, reply) => {
+    const user = await requireAuth(req);
+    const { id, activityId } = req.params as {
+      id: string;
+      activityId: string;
+    };
+    const result = await deleteManualNote({
+      activityId,
+      customerId: id,
+      userId: user.id,
+    });
+    if (result === "not_found") {
+      return reply.code(404).send({ error: "note not found" });
+    }
+    return reply.send({ ok: true });
   });
 
   app.post("/:id/sync-emails", async (req, reply) => {

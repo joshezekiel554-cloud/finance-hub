@@ -12,6 +12,7 @@
 // references they already have (refType + refId) so the activity row links
 // back to its source record.
 
+import { and, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db, type DB } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
@@ -118,6 +119,108 @@ export async function recordActivity(
   });
 
   return id;
+}
+
+export type ManualNoteMutationResult = "ok" | "not_found";
+
+// Edit the body/subject of an existing manual_note activity. Scoped to
+// kind="manual_note" AND the owning customer so the notes API can never
+// mutate system-generated activity rows (emails, QBO events, holds, …).
+// Writes a before/after audit_log row in the same transaction as the
+// update, mirroring recordActivity's atomicity guarantee. Returns
+// "not_found" (no transaction) when no matching note exists.
+export async function updateManualNote(
+  input: {
+    activityId: string;
+    customerId: string;
+    userId?: string | null;
+    body: string;
+    subject?: string | null;
+  },
+  database: DB = db,
+): Promise<ManualNoteMutationResult> {
+  const existing = await database
+    .select()
+    .from(activities)
+    .where(
+      and(
+        eq(activities.id, input.activityId),
+        eq(activities.customerId, input.customerId),
+        eq(activities.kind, "manual_note"),
+      ),
+    )
+    .limit(1);
+  const before = existing[0];
+  if (!before) return "not_found";
+
+  const after: Activity = {
+    ...before,
+    subject: input.subject ?? null,
+    body: input.body,
+  };
+
+  await database.transaction(async (tx) => {
+    await tx
+      .update(activities)
+      .set({ subject: input.subject ?? null, body: input.body })
+      .where(eq(activities.id, input.activityId));
+    await tx.insert(auditLog).values({
+      id: nanoid(24),
+      userId: input.userId ?? null,
+      action: "activity_updated",
+      entityType: "activity",
+      entityId: input.activityId,
+      before: serializableActivity(before),
+      after: serializableActivity(after),
+    });
+  });
+
+  log.info(
+    { activityId: input.activityId, customerId: input.customerId },
+    "manual note updated",
+  );
+  return "ok";
+}
+
+// Delete an existing manual_note activity. Same kind/customer scoping as
+// updateManualNote; writes an audit_log row capturing the deleted row in
+// `before` (after=null) so the note is recoverable from the audit trail.
+export async function deleteManualNote(
+  input: { activityId: string; customerId: string; userId?: string | null },
+  database: DB = db,
+): Promise<ManualNoteMutationResult> {
+  const existing = await database
+    .select()
+    .from(activities)
+    .where(
+      and(
+        eq(activities.id, input.activityId),
+        eq(activities.customerId, input.customerId),
+        eq(activities.kind, "manual_note"),
+      ),
+    )
+    .limit(1);
+  const before = existing[0];
+  if (!before) return "not_found";
+
+  await database.transaction(async (tx) => {
+    await tx.delete(activities).where(eq(activities.id, input.activityId));
+    await tx.insert(auditLog).values({
+      id: nanoid(24),
+      userId: input.userId ?? null,
+      action: "activity_deleted",
+      entityType: "activity",
+      entityId: input.activityId,
+      before: serializableActivity(before),
+      after: null,
+    });
+  });
+
+  log.info(
+    { activityId: input.activityId, customerId: input.customerId },
+    "manual note deleted",
+  );
+  return "ok";
 }
 
 // JSON-safe view of the activity row for audit_log.after. occurredAt is a

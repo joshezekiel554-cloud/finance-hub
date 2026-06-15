@@ -9,15 +9,17 @@ type Mock = ReturnType<typeof vi.fn>;
 
 // Drizzle chain stub. Query order in buildDraftContext:
 //   1. voice guide   .from().where().limit(1)
-//   2. facts         .from().where()            (awaited, no limit)
-//   3. corrections   .from().where()            (awaited, no limit)
-//   4. customer ctx  .from().where().limit(1)   (only when customerId)
-//   5. example       .from().where().limit(1)   (only when slug)
+//   2. facts         .from().where()                       (awaited, no limit)
+//   3. corrections   .from().where()                       (awaited, no limit)
+//   4. customer ctx  .from().where().limit(1)              (only when customerId)
+//   5. manual notes  .from().where().orderBy().limit(N)    (only when customerId)
+//   6. example       .from().where().limit(1)              (only when slug)
 function chain(rows: unknown[]) {
   const c: Record<string, unknown> = {};
   c.from = () => c;
   c.where = () => ({
     limit: () => Promise.resolve(rows),
+    orderBy: () => ({ limit: () => Promise.resolve(rows) }),
     then: (r: (v: unknown) => unknown) => Promise.resolve(rows).then(r),
   });
   return c;
@@ -87,7 +89,8 @@ describe("buildDraftContext", () => {
       .mockReturnValueOnce(chain([{ value: "G" }])) // voice guide
       .mockReturnValueOnce(chain([])) // facts
       .mockReturnValueOnce(chain([])) // corrections
-      .mockReturnValueOnce(chain([{ ctx: "Pays late but always pays" }])); // customer (cadence_cold: no example)
+      .mockReturnValueOnce(chain([{ ctx: "Pays late but always pays" }])) // customer (cadence_cold: no example)
+      .mockReturnValueOnce(chain([])); // manual notes: none
     const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
     expect(ctx.customerContext).toBe("Pays late but always pays");
   });
@@ -97,7 +100,8 @@ describe("buildDraftContext", () => {
       .mockReturnValueOnce(chain([{ value: "G" }]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-      .mockReturnValueOnce(chain([{ ctx: "", notes: "" }]));
+      .mockReturnValueOnce(chain([{ ctx: "", notes: "" }]))
+      .mockReturnValueOnce(chain([])); // manual notes: none
     const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
     expect(ctx.customerContext).toBeNull();
   });
@@ -109,7 +113,8 @@ describe("buildDraftContext", () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(
         chain([{ ctx: "Pays late but always pays", notes: "Owner is Shmuel; prefers phone" }]),
-      );
+      )
+      .mockReturnValueOnce(chain([])); // manual notes: none
     const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
     expect(ctx.customerContext).toContain("Pays late but always pays");
     expect(ctx.customerContext).toContain("Owner is Shmuel; prefers phone");
@@ -120,9 +125,27 @@ describe("buildDraftContext", () => {
       .mockReturnValueOnce(chain([{ value: "G" }]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-      .mockReturnValueOnce(chain([{ ctx: null, notes: "Disputes every invoice — verify before chasing" }]));
+      .mockReturnValueOnce(chain([{ ctx: null, notes: "Disputes every invoice — verify before chasing" }]))
+      .mockReturnValueOnce(chain([])); // manual notes: none
     const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
     expect(ctx.customerContext).toContain("Disputes every invoice — verify before chasing");
+  });
+
+  it("folds the customer's recent manual notes into customerContext", async () => {
+    (db.select as Mock)
+      .mockReturnValueOnce(chain([{ value: "G" }]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([{ ctx: null, notes: null }])) // no AI context / legacy notes
+      .mockReturnValueOnce(
+        chain([
+          { body: "Called re: PO 1234, will pay Friday" },
+          { body: "Prefers WhatsApp over email" },
+        ]),
+      ); // manual notes timeline
+    const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
+    expect(ctx.customerContext).toContain("Called re: PO 1234, will pay Friday");
+    expect(ctx.customerContext).toContain("Prefers WhatsApp over email");
   });
 
   it("leaves corrections empty when none are active; no template query for cadence_cold", async () => {
