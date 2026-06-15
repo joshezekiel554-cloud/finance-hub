@@ -97,9 +97,32 @@ describe("buildDraftContext", () => {
       .mockReturnValueOnce(chain([{ value: "G" }]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-      .mockReturnValueOnce(chain([{ ctx: "" }]));
+      .mockReturnValueOnce(chain([{ ctx: "", notes: "" }]));
     const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
     expect(ctx.customerContext).toBeNull();
+  });
+
+  it("folds internal notes into customerContext alongside AI context", async () => {
+    (db.select as Mock)
+      .mockReturnValueOnce(chain([{ value: "G" }]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(
+        chain([{ ctx: "Pays late but always pays", notes: "Owner is Shmuel; prefers phone" }]),
+      );
+    const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
+    expect(ctx.customerContext).toContain("Pays late but always pays");
+    expect(ctx.customerContext).toContain("Owner is Shmuel; prefers phone");
+  });
+
+  it("surfaces internal notes even when AI context is empty", async () => {
+    (db.select as Mock)
+      .mockReturnValueOnce(chain([{ value: "G" }]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([{ ctx: null, notes: "Disputes every invoice — verify before chasing" }]));
+    const ctx = await buildDraftContext("cadence_cold", {}, "cust_1");
+    expect(ctx.customerContext).toContain("Disputes every invoice — verify before chasing");
   });
 
   it("leaves corrections empty when none are active; no template query for cadence_cold", async () => {

@@ -95,10 +95,14 @@ export const customers = mysqlTable(
     })
       .notNull()
       .default("0"),
+    // Operator-authored free-text notes. Also folded into AI context
+    // (autopilot drafts/skip decisions via voice.ts, and the conversational
+    // agent's customer read tool) so the model has knowledge of everything
+    // recorded on the account — operator-authored, so trusted.
     internalNotes: text("internal_notes"),
     // Operator-authored, AI-visible context for this customer (#4). Injected
-    // into the customer's autopilot drafts + skip decisions. Distinct from
-    // internal_notes, which is human-only and never sent to the model.
+    // into the customer's autopilot drafts + skip decisions, dedicated to
+    // steering the model. internal_notes is also injected (see above).
     aiCustomerContext: text("ai_customer_context"),
     lastSyncedAt: timestamp("last_synced_at"),
     vocatechLastPushedAt: timestamp("vocatech_last_pushed_at"),

@@ -113,16 +113,28 @@ export async function buildDraftContext(
     else if (tags.includes(category)) categoryCorrections.push(c.correction);
   }
 
-  // 4. per-customer context (#4)
+  // 4. per-customer context (#4). The operator-authored AI context field is
+  // the primary source; internal notes are also folded in so the model has
+  // knowledge of everything recorded on the customer (operator-authored, so
+  // trusted), each on its own labelled line.
   let customerContext: string | null = null;
   if (customerId) {
     const cRows = await db
-      .select({ ctx: customers.aiCustomerContext })
+      .select({
+        ctx: customers.aiCustomerContext,
+        notes: customers.internalNotes,
+      })
       .from(customers)
       .where(eq(customers.id, customerId))
       .limit(1);
-    const v = cRows[0]?.ctx;
-    customerContext = v && v.trim().length > 0 ? v : null;
+    const parts: string[] = [];
+    const ctxVal = cRows[0]?.ctx;
+    if (ctxVal && ctxVal.trim().length > 0) parts.push(ctxVal.trim());
+    const notesVal = cRows[0]?.notes;
+    if (notesVal && notesVal.trim().length > 0) {
+      parts.push(`Internal notes: ${notesVal.trim()}`);
+    }
+    customerContext = parts.length > 0 ? parts.join("\n\n") : null;
   }
 
   // 5. example template
