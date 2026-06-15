@@ -2353,9 +2353,9 @@ function PhonesCard({
           Additional ({extras.length}/10)
         </span>
         {extras.length > 0 ? (
-          <ul className="mb-1 space-y-1">
+          <ul className="mb-1 space-y-2">
             {extras.map((e, i) => (
-              <li key={i} className="flex gap-1">
+              <li key={i} className="space-y-1">
                 <input
                   type="text"
                   value={e.label}
@@ -2364,61 +2364,65 @@ function PhonesCard({
                   }
                   onBlur={saveExtras}
                   placeholder="Label"
-                  className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                  className="w-full rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
                 />
-                <input
-                  type="tel"
-                  value={e.number}
-                  onChange={(ev) =>
-                    updateExtra(i, { number: ev.target.value })
-                  }
-                  onBlur={saveExtras}
-                  placeholder="Number"
-                  className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeExtra(i)}
-                  className="rounded p-1 text-muted hover:text-accent-danger"
-                  aria-label={`Remove ${e.label || "phone"}`}
-                >
-                  <X className="size-3" />
-                </button>
+                <div className="flex gap-1">
+                  <input
+                    type="tel"
+                    value={e.number}
+                    onChange={(ev) =>
+                      updateExtra(i, { number: ev.target.value })
+                    }
+                    onBlur={saveExtras}
+                    placeholder="Number"
+                    className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeExtra(i)}
+                    className="rounded p-1 text-muted hover:text-accent-danger"
+                    aria-label={`Remove ${e.label || "phone"}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
         ) : null}
         {extras.length < 10 ? (
-          <div className="flex gap-1">
+          <div className="space-y-1">
             <input
               type="text"
               value={newLabel}
               onChange={(e) => setNewLabel(e.target.value)}
               placeholder="Label"
-              className="w-20 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+              className="w-full rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
             />
-            <input
-              type="tel"
-              value={newNumber}
-              onChange={(e) => setNewNumber(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addExtra();
-                }
-              }}
-              placeholder="Number"
-              className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={addExtra}
-              disabled={!newLabel.trim() || newNumber.trim().length < 3}
-            >
-              Add
-            </Button>
+            <div className="flex gap-1">
+              <input
+                type="tel"
+                value={newNumber}
+                onChange={(e) => setNewNumber(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addExtra();
+                  }
+                }}
+                placeholder="Number"
+                className="flex-1 rounded-md border border-default bg-base px-1.5 py-0.5 text-[11px]"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={addExtra}
+                disabled={!newLabel.trim() || newNumber.trim().length < 3}
+              >
+                Add
+              </Button>
+            </div>
           </div>
         ) : null}
       </div>
