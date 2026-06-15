@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // to live in vi.hoisted() to also be hoisted. The recorded inserts list and
 // mock db go in there together so they're available when the mock factory
 // runs.
-const { mockDb, insertCalls } = vi.hoisted(() => {
+const { mockDb, insertCalls, updateCalls, deleteCalls } = vi.hoisted(() => {
   type InsertCall = { table: unknown; values: unknown };
   const insertCalls: InsertCall[] = [];
+  const updateCalls: { table: unknown; set: unknown }[] = [];
+  const deleteCalls: { table: unknown }[] = [];
 
   const insert = (table: unknown) => ({
     values: (values: unknown) => {
@@ -15,10 +17,22 @@ const { mockDb, insertCalls } = vi.hoisted(() => {
     },
   });
 
-  // The transaction body receives a tx object that exposes the same insert
-  // surface as the parent db. We wire the same recording function to both so
-  // the test can assert on inserts whether they happened in or out of a tx.
-  const tx = { insert };
+  const update = (table: unknown) => ({
+    set: (set: unknown) => {
+      updateCalls.push({ table, set });
+      return { where: () => Promise.resolve() };
+    },
+  });
+
+  const del = (table: unknown) => {
+    deleteCalls.push({ table });
+    return { where: () => Promise.resolve() };
+  };
+
+  // The transaction body receives a tx object that exposes the same write
+  // surface as the parent db. We wire the same recording functions to both so
+  // the test can assert on writes whether they happened in or out of a tx.
+  const tx = { insert, update, delete: del };
 
   const transaction = vi.fn(
     async (fn: (tx: unknown) => Promise<unknown>) => fn(tx),
@@ -27,7 +41,9 @@ const { mockDb, insertCalls } = vi.hoisted(() => {
 
   return {
     insertCalls,
-    mockDb: { insert, transaction, select },
+    updateCalls,
+    deleteCalls,
+    mockDb: { insert, update, delete: del, transaction, select },
   };
 });
 
@@ -35,7 +51,11 @@ vi.mock("../../db/index.js", () => ({
   db: mockDb,
 }));
 
-import { recordActivity } from "./activity-ingester.js";
+import {
+  recordActivity,
+  updateManualNote,
+  deleteManualNote,
+} from "./activity-ingester.js";
 import { activities } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import {
@@ -46,10 +66,37 @@ import { customers } from "../../db/schema/customers.js";
 
 beforeEach(() => {
   insertCalls.length = 0;
+  updateCalls.length = 0;
+  deleteCalls.length = 0;
   mockDb.transaction.mockClear();
   mockDb.select.mockReset();
   __resetCustomerResolverCache();
 });
+
+// db.select().from().where().limit() resolves to `rows` — the lookup both
+// manual-note mutators run before touching the row.
+function noteLookupReturns(rows: unknown[]) {
+  mockDb.select.mockReturnValue({
+    from: () => ({ where: () => ({ limit: () => Promise.resolve(rows) }) }),
+  });
+}
+
+const SAMPLE_NOTE = {
+  id: "act-1",
+  customerId: "cust-1",
+  userId: "author-1",
+  kind: "manual_note",
+  occurredAt: new Date("2026-05-01T09:00:00.000Z"),
+  subject: null,
+  body: "old body",
+  bodyHtml: null,
+  source: "user_action",
+  refType: null,
+  refId: null,
+  meta: null,
+  aiProposalId: null,
+  createdAt: new Date("2026-05-01T09:00:00.000Z"),
+};
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -172,6 +219,83 @@ describe("recordActivity", () => {
     expect(occurredAt).toBeInstanceOf(Date);
     expect(occurredAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(occurredAt.getTime()).toBeLessThanOrEqual(after);
+  });
+});
+
+describe("updateManualNote", () => {
+  it("updates body+subject and writes a before/after audit row in one tx", async () => {
+    noteLookupReturns([SAMPLE_NOTE]);
+
+    const res = await updateManualNote({
+      activityId: "act-1",
+      customerId: "cust-1",
+      userId: "editor-9",
+      body: "new body",
+      subject: "Follow-up",
+    });
+
+    expect(res).toBe("ok");
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+
+    expect(updateCalls).toHaveLength(1);
+    const set = updateCalls[0]!.set as Record<string, unknown>;
+    expect(set.body).toBe("new body");
+    expect(set.subject).toBe("Follow-up");
+
+    const auditInsert = insertCalls.find((c) => c.table === auditLog);
+    const auditRow = auditInsert!.values as Record<string, unknown>;
+    expect(auditRow.action).toBe("activity_updated");
+    expect(auditRow.entityId).toBe("act-1");
+    expect(auditRow.userId).toBe("editor-9");
+    expect((auditRow.before as Record<string, unknown>).body).toBe("old body");
+    expect((auditRow.after as Record<string, unknown>).body).toBe("new body");
+  });
+
+  it("returns not_found and writes nothing when no matching manual_note exists", async () => {
+    noteLookupReturns([]);
+
+    const res = await updateManualNote({
+      activityId: "nope",
+      customerId: "cust-1",
+      body: "x",
+    });
+
+    expect(res).toBe("not_found");
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(updateCalls).toHaveLength(0);
+    expect(insertCalls).toHaveLength(0);
+  });
+});
+
+describe("deleteManualNote", () => {
+  it("deletes the row and writes an audit row capturing it in `before`", async () => {
+    noteLookupReturns([SAMPLE_NOTE]);
+
+    const res = await deleteManualNote({
+      activityId: "act-1",
+      customerId: "cust-1",
+      userId: "editor-9",
+    });
+
+    expect(res).toBe("ok");
+    expect(deleteCalls).toHaveLength(1);
+
+    const auditInsert = insertCalls.find((c) => c.table === auditLog);
+    const auditRow = auditInsert!.values as Record<string, unknown>;
+    expect(auditRow.action).toBe("activity_deleted");
+    expect(auditRow.entityId).toBe("act-1");
+    expect((auditRow.before as Record<string, unknown>).body).toBe("old body");
+    expect(auditRow.after).toBeNull();
+  });
+
+  it("returns not_found and writes nothing when the note is missing", async () => {
+    noteLookupReturns([]);
+
+    const res = await deleteManualNote({ activityId: "nope", customerId: "c" });
+
+    expect(res).toBe("not_found");
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(deleteCalls).toHaveLength(0);
   });
 });
 

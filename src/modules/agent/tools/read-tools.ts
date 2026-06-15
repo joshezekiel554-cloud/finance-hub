@@ -16,7 +16,12 @@ import { db } from "../../../db/index.js";
 import { customers } from "../../../db/schema/customers.js";
 import { invoices } from "../../../db/schema/invoices.js";
 import { creditMemos } from "../../../db/schema/credit-memos.js";
-import { emailLog, statementSends, tasks } from "../../../db/schema/crm.js";
+import {
+  activities,
+  emailLog,
+  statementSends,
+  tasks,
+} from "../../../db/schema/crm.js";
 import { chaseLog } from "../../../db/schema/audit.js";
 import { rmas } from "../../../db/schema/returns.js";
 import { phoneCommunications } from "../../../db/schema/vocatech.js";
@@ -130,6 +135,9 @@ export type CustomerDetailForAgent = {
   tags: string[] | null;
   internalNotes: string | null;
   aiCustomerContext: string | null;
+  // Recent manual notes from the activity timeline (the amber "Notes" card),
+  // newest first. Operator-authored; fenced like the other operator prose.
+  recentNotes?: string[];
   lastSyncedAt: Date | string | null;
   feldart: { balance: number; overdue: number };
   tj: { balance: number; overdue: number };
@@ -150,6 +158,17 @@ export function formatCustomerDetail(c: CustomerDetailForAgent): string {
   }
   if (c.aiCustomerContext && c.aiCustomerContext.trim()) {
     lines.push(fenceOperator(c.aiCustomerContext, "AI context"));
+  }
+  const notes = (c.recentNotes ?? [])
+    .map((n) => n?.trim())
+    .filter((n): n is string => !!n && n.length > 0);
+  if (notes.length > 0) {
+    lines.push(
+      fenceOperator(
+        notes.map((n) => `- ${n}`).join("\n"),
+        "operator notes",
+      ),
+    );
   }
   return lines.join("\n");
 }
@@ -227,7 +246,7 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
         .limit(1);
       const c = rows[0];
       if (!c) return fail(`customer ${id} not found`);
-      const [invRows, cmRows] = await Promise.all([
+      const [invRows, cmRows, noteRows] = await Promise.all([
         db
           .select({
             origin: invoices.origin,
@@ -242,6 +261,17 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
           .where(
             and(eq(creditMemos.customerId, id), gt(creditMemos.balance, "0")),
           ),
+        db
+          .select({ body: activities.body })
+          .from(activities)
+          .where(
+            and(
+              eq(activities.customerId, id),
+              eq(activities.kind, "manual_note"),
+            ),
+          )
+          .orderBy(desc(activities.occurredAt))
+          .limit(10),
       ]);
       const credit = { feldart: 0, tj: 0 };
       for (const cm of cmRows) {
@@ -267,6 +297,9 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
           tags: c.tags,
           internalNotes: c.internalNotes,
           aiCustomerContext: c.aiCustomerContext,
+          recentNotes: noteRows
+            .map((r) => r.body)
+            .filter((b): b is string => !!b),
           lastSyncedAt: c.lastSyncedAt,
           feldart: {
             balance: balances.feldart.balance,

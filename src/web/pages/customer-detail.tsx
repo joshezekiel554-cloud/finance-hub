@@ -15,6 +15,7 @@ import {
   Send,
   RotateCcw,
   Plus,
+  Trash2,
   ClipboardList,
   ChevronDown,
 } from "lucide-react";
@@ -1404,6 +1405,184 @@ function TasksPanel({
 // activity via the standard recordActivity path; on success we
 // invalidate ["customer", customerId] so the new note appears in
 // recentActivities → flows back into this panel.
+// A single note in the rail. Owns its edit / delete / read-more state.
+// Edit → PATCH /api/customers/:id/notes/:activityId (subject preserved so a
+// body-only edit doesn't wipe it). Delete is a two-step inline confirm (no
+// native dialog). Both invalidate the customer query so the list + timeline
+// refresh. Bodies longer than NOTE_PREVIEW_CHARS collapse to "Read more".
+const NOTE_PREVIEW_CHARS = 220;
+
+function NoteItem({
+  customerId,
+  note,
+}: {
+  customerId: string;
+  note: Activity;
+}) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(note.body ?? "");
+  const [expanded, setExpanded] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+
+  const editMutation = useMutation({
+    mutationFn: async (body: string) => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/notes/${encodeURIComponent(note.id)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body, subject: note.subject }),
+        },
+      );
+      if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidate();
+      setEditing(false);
+      setError(null);
+    },
+    onError: (err) =>
+      setError(err instanceof Error ? err.message : "Failed to save note"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/notes/${encodeURIComponent(note.id)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+      return res.json();
+    },
+    onSuccess: invalidate,
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "Failed to delete note");
+      setConfirmingDelete(false);
+    },
+  });
+
+  const body = note.body ?? "";
+  const isLong = body.length > NOTE_PREVIEW_CHARS;
+  const shown = isLong && !expanded ? `${body.slice(0, NOTE_PREVIEW_CHARS)}…` : body;
+
+  if (editing) {
+    return (
+      <div className="border-t border-accent-warning/20 pt-2.5 first:border-t-0 first:pt-0">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={4}
+          autoFocus
+          className="w-full rounded-md border border-accent-warning/40 bg-base px-2.5 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-accent-warning/40"
+        />
+        {error ? (
+          <div className="mt-1 text-xs text-accent-danger">{error}</div>
+        ) : null}
+        <div className="mt-1.5 flex justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setEditing(false);
+              setDraft(note.body ?? "");
+              setError(null);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={editMutation.isPending}
+            disabled={
+              draft.trim().length === 0 ||
+              draft.trim() === (note.body ?? "").trim() ||
+              editMutation.isPending
+            }
+            onClick={() => editMutation.mutate(draft.trim())}
+          >
+            Save
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group border-t border-accent-warning/20 pt-2.5 first:border-t-0 first:pt-0">
+      <div className="whitespace-pre-wrap text-sm text-primary">{shown}</div>
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-0.5 text-[11px] font-medium text-accent-warning hover:underline"
+        >
+          {expanded ? "Show less" : "Read more"}
+        </button>
+      )}
+      <div className="mt-0.5 flex items-center justify-between">
+        <span className="text-[11px] text-muted">
+          {new Date(note.occurredAt).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+          })}
+        </span>
+        {confirmingDelete ? (
+          <span className="flex items-center gap-2 text-[11px]">
+            <span className="text-muted">Delete?</span>
+            <button
+              type="button"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="font-medium text-accent-danger hover:underline"
+            >
+              Confirm
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(false)}
+              className="text-secondary hover:underline"
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <span className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <button
+              type="button"
+              aria-label="Edit note"
+              onClick={() => {
+                setDraft(note.body ?? "");
+                setEditing(true);
+              }}
+              className="text-secondary hover:text-primary"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Delete note"
+              onClick={() => setConfirmingDelete(true)}
+              className="text-secondary hover:text-accent-danger"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </span>
+        )}
+      </div>
+      {error ? (
+        <div className="mt-1 text-xs text-accent-danger">{error}</div>
+      ) : null}
+    </div>
+  );
+}
+
 // Prominent, always-visible notes card for the context rail. Reuses the
 // manual-note POST path; shows the most recent notes (the rest stay in the
 // Activity timeline). Replaces the old standalone Notes tab.
@@ -1506,20 +1685,7 @@ function NotesRailCard({
       ) : (
         <div className="space-y-2.5">
           {recent.map((n) => (
-            <div
-              key={n.id}
-              className="border-t border-accent-warning/20 pt-2.5 first:border-t-0 first:pt-0"
-            >
-              <div className="whitespace-pre-wrap text-sm text-primary">
-                {n.body}
-              </div>
-              <div className="mt-0.5 text-[11px] text-muted">
-                {new Date(n.occurredAt).toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })}
-              </div>
-            </div>
+            <NoteItem key={n.id} customerId={customerId} note={n} />
           ))}
           {notes.length > recent.length && (
             <div className="text-[11px] text-muted">
