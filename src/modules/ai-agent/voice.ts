@@ -4,7 +4,8 @@ import { appSettings } from "../../db/schema/app-settings.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
 import type { AiProposalCategory } from "../../db/schema/ai-proposals.js";
 import { customers } from "../../db/schema/customers.js";
-import { activities } from "../../db/schema/crm.js";
+import { activities, emailLog } from "../../db/schema/crm.js";
+import { fenceUntrusted } from "../agent/context.js";
 import {
   aiCompanyFacts,
   FACT_TAG_GLOBAL,
@@ -158,6 +159,44 @@ export async function buildDraftContext(
         `Operator notes (most recent first):\n${noteBodies
           .map((b) => `- ${b}`)
           .join("\n")}`,
+      );
+    }
+    // Recent email history so the drafter knows what's actually been said on
+    // the account (previously it saw NONE — only notes/facts). Customer text
+    // is UNTRUSTED → the whole block is wrapped via fenceUntrusted so an
+    // injected "ignore previous instructions" in an email body can't steer the
+    // draft. Capped + body-snippet-truncated for the token budget; "all" isn't
+    // feasible for the LLM, so this is the most-recent slice across the
+    // customer's matched addresses.
+    const emailRows = await db
+      .select({
+        direction: emailLog.direction,
+        subject: emailLog.subject,
+        body: emailLog.body,
+        emailDate: emailLog.emailDate,
+      })
+      .from(emailLog)
+      .where(eq(emailLog.customerId, customerId))
+      .orderBy(desc(emailLog.emailDate))
+      .limit(12);
+    if (emailRows.length > 0) {
+      const lines = emailRows.map((e) => {
+        const date = e.emailDate
+          ? new Date(e.emailDate).toISOString().slice(0, 10)
+          : "????-??-??";
+        const dir = e.direction === "outbound" ? "We wrote" : "They wrote";
+        const subj = e.subject?.trim() || "(no subject)";
+        const snippet = (e.body ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 300);
+        return `[${date}] ${dir} — ${subj}${snippet ? `: ${snippet}` : ""}`;
+      });
+      parts.push(
+        `Recent email history (most recent first):\n${fenceUntrusted(
+          lines.join("\n"),
+          "email",
+        )}`,
       );
     }
     customerContext = parts.length > 0 ? parts.join("\n\n") : null;

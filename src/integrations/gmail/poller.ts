@@ -92,31 +92,64 @@ type CustomerMatchRow = {
   id: string;
   primaryEmail: string | null;
   billingEmails: string[] | null;
+  invoiceToEmails: string[] | null;
+  statementToEmails: string[] | null;
 };
 
 // Build a lowercased email → customerId index from the customers table. We
-// scan all rows because `billing_emails` is a JSON array and equality on
+// scan all rows because the address columns are JSON arrays and equality on
 // JSON columns is awkward in MySQL; index in memory instead. The customer
 // list is bounded (low thousands) so a per-poll full scan is fine.
+//
+// Addresses considered: primary + billing + the per-doc "to" lists
+// (invoice_to / statement_to). These are the customer's OWN addresses (where
+// we send TO them / they write FROM), so an email from any of them belongs to
+// that customer. CC/BCC are routing extras, not identities, so they're left
+// out. Broadened from primary+billing only (was orphaning replies sent from a
+// customer's invoice/statement address — invisible to the AI + chase logic).
+//
+// UNAMBIGUOUS-ONLY: an address that appears on MORE THAN ONE customer (a shared
+// bookkeeper/accounts mailbox, a duplicate record) is EXCLUDED from the match
+// index — we leave those emails unlinked rather than mis-link them to the wrong
+// customer. Mirrors the Inbox app's unambiguous-email rule, and also fixes a
+// pre-existing last-writer-wins mis-link on shared addresses.
 async function buildCustomerEmailIndex(): Promise<Map<string, string>> {
   const rows: CustomerMatchRow[] = await db
     .select({
       id: customers.id,
       primaryEmail: customers.primaryEmail,
       billingEmails: customers.billingEmails,
+      invoiceToEmails: customers.invoiceToEmails,
+      statementToEmails: customers.statementToEmails,
     })
     .from(customers);
 
-  const index = new Map<string, string>();
+  // First pass: address → set of distinct customer ids that list it.
+  const addrToCustomers = new Map<string, Set<string>>();
+  const add = (email: unknown, id: string) => {
+    if (typeof email !== "string") return;
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    const set = addrToCustomers.get(key) ?? new Set<string>();
+    set.add(id);
+    addrToCustomers.set(key, set);
+  };
   for (const row of rows) {
-    if (row.primaryEmail) {
-      index.set(row.primaryEmail.toLowerCase(), row.id);
+    add(row.primaryEmail, row.id);
+    for (const arr of [
+      row.billingEmails,
+      row.invoiceToEmails,
+      row.statementToEmails,
+    ]) {
+      if (Array.isArray(arr)) for (const e of arr) add(e, row.id);
     }
-    if (Array.isArray(row.billingEmails)) {
-      for (const e of row.billingEmails) {
-        if (typeof e === "string" && e) index.set(e.toLowerCase(), row.id);
-      }
-    }
+  }
+
+  // Second pass: only addresses that belong to exactly ONE customer become a
+  // match. Shared/ambiguous addresses are intentionally dropped.
+  const index = new Map<string, string>();
+  for (const [addr, ids] of addrToCustomers) {
+    if (ids.size === 1) index.set(addr, ids.values().next().value as string);
   }
   return index;
 }
