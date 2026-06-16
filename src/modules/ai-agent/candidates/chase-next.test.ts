@@ -107,10 +107,11 @@ function daysAgo(n: number): Date {
   return d;
 }
 
-// findCandidates calls db.select three times:
+// findCandidates calls db.select four times:
 //   1st → customers (overdueRows)
 //   2nd → invoices  } Promise.all
 //   3rd → chaseLog  }
+//   4th → email_log (loadRecentHumanContact)
 function chain(value: unknown) {
   return makeQueryChain(value) as unknown as ReturnType<typeof db.select>;
 }
@@ -119,26 +120,31 @@ function mockFindCandidatesDB(
   customerRows: unknown[],
   invoiceRows: unknown[],
   chaseLogRows: unknown[],
+  humanContactRows: unknown[] = [],
 ) {
   vi.mocked(db.select)
     .mockReturnValueOnce(chain(customerRows))
     .mockReturnValueOnce(chain(invoiceRows))
-    .mockReturnValueOnce(chain(chaseLogRows));
+    .mockReturnValueOnce(chain(chaseLogRows))
+    .mockReturnValueOnce(chain(humanContactRows));
 }
 
-// isStillEligible calls db.select three times:
+// isStillEligible calls db.select four times:
 //   1st → customer by id (limit 1)
 //   2nd → open invoices for customer
 //   3rd → chaseLog max(chasedAt) within cooldown
+//   4th → email_log (loadRecentHumanContact)
 function mockIsEligibleDB(
   customerRows: unknown[],
   invoiceRows: unknown[],
   chaseLogRows: unknown[],
+  humanContactRows: unknown[] = [],
 ) {
   vi.mocked(db.select)
     .mockReturnValueOnce(chain(customerRows))
     .mockReturnValueOnce(chain(invoiceRows))
-    .mockReturnValueOnce(chain(chaseLogRows));
+    .mockReturnValueOnce(chain(chaseLogRows))
+    .mockReturnValueOnce(chain(humanContactRows));
 }
 
 beforeEach(() => {
@@ -205,6 +211,32 @@ describe("findCandidates", () => {
     expect(c.summary.overdueBalance).toBeGreaterThan(0);
     expect(c.summary.daysOverdue).toBeGreaterThan(0);
     expect(c.summary.lastChaseAt).toBeNull();
+  });
+
+  it("recent human/Inbox contact suppresses candidate", async () => {
+    // CRITICAL overdue, no recent automated chase — but a non-automated
+    // outbound email went out recently (human reply / Inbox), so the auto
+    // chaser must hold off.
+    const customer = makeCustomer({
+      id: "cust-touched",
+      overdueBalance: "60000.00",
+      unappliedCreditBalance: "0.00",
+    });
+    const inv = makeInvoice({
+      id: "inv-touched",
+      customerId: "cust-touched",
+      balance: "60000.00",
+      dueDate: daysAgo(120),
+    });
+    mockFindCandidatesDB(
+      [customer],
+      [inv],
+      [],
+      [{ customerId: "cust-touched" }], // recent human-contact row
+    );
+
+    const results = await findCandidates();
+    expect(results).toHaveLength(0);
   });
 
   it("LOW tier customer not returned even without recent chase", async () => {
@@ -370,6 +402,21 @@ describe("isStillEligible", () => {
       [{ lastChasedAt: null }],
     );
     expect(await isStillEligible("cust-eligible")).toBe(true);
+  });
+
+  it("returns false when a human/Inbox emailed the customer recently", async () => {
+    const inv = makeInvoice({
+      customerId: "cust-touched",
+      balance: "60000.00",
+      dueDate: daysAgo(120),
+    });
+    mockIsEligibleDB(
+      [makeCustomer({ id: "cust-touched", overdueBalance: "60000.00", unappliedCreditBalance: "0.00" })],
+      [inv],
+      [{ lastChasedAt: null }],
+      [{ customerId: "cust-touched" }], // recent human-contact row
+    );
+    expect(await isStillEligible("cust-touched")).toBe(false);
   });
 
   it("returns false for a TJ-only overdue customer", async () => {

@@ -9,6 +9,11 @@ vi.mock("../../chase/lookups.js", () => ({
   getOverdueCustomers: vi.fn(),
   getOverdueForCustomer: vi.fn(),
 }));
+// Default the recent-human-contact loader to "no contact" so the behavioural
+// tests don't touch a DB; suppression tests inject their own via deps.
+vi.mock("../../chase/chased-tracker.js", () => ({
+  loadRecentHumanContact: vi.fn(async () => new Set<string>()),
+}));
 
 import {
   getOverdueCustomers,
@@ -118,6 +123,15 @@ describe("tj-chase findCandidates", () => {
     expect(results).toHaveLength(0);
   });
 
+  it("recent human/Inbox contact suppresses the TJ candidate", async () => {
+    const results = await findCandidates(undefined, {
+      loadOverdue: async () => [makeOverdueRow({ customerId: "c-touched", tier: "HIGH" })],
+      loadRecentChases: noRecentChases,
+      loadRecentHumanContact: async () => new Set(["c-touched"]),
+    });
+    expect(results).toHaveLength(0);
+  });
+
   it("recent-chase lookup is scoped to a ~7 day cooldown cutoff", async () => {
     let seenCutoff: Date | null = null;
     await findCandidates(undefined, {
@@ -217,6 +231,17 @@ describe("tj-chase isStillEligible", () => {
         loadRecentChases: noRecentChases,
       }),
     ).toBe(true);
+  });
+
+  it("false when a human/Inbox emailed the TJ customer recently", async () => {
+    expect(
+      await isStillEligible("c-touched", {
+        loadOverdueForCustomer: async () =>
+          makeOverdueRow({ customerId: "c-touched", tier: "HIGH" }),
+        loadRecentChases: noRecentChases,
+        loadRecentHumanContact: async () => new Set(["c-touched"]),
+      }),
+    ).toBe(false);
   });
 
   it("default severity loader is getOverdueForCustomer(id, 'tj')", async () => {

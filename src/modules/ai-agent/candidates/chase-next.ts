@@ -5,6 +5,7 @@ import { invoices } from "../../../db/schema/invoices.js";
 import type { Invoice } from "../../../db/schema/invoices.js";
 import { chaseLog } from "../../../db/schema/audit.js";
 import { computeSeverity } from "../../chase/scoring.js";
+import { loadRecentHumanContact } from "../../chase/chased-tracker.js";
 
 export type Candidate = {
   entityType: "customer";
@@ -77,11 +78,14 @@ export async function findCandidates(
   }
 
   const recentlyChased = new Set(recentChases.map((r) => r.customerId));
+  // Don't auto-chase a customer a human (or the Inbox app) just emailed.
+  const recentHumanContact = await loadRecentHumanContact(customerIds);
 
   const candidates: Candidate[] = [];
 
   for (const customer of overdueRows) {
     if (recentlyChased.has(customer.id)) continue;
+    if (recentHumanContact.has(customer.id)) continue;
 
     // Origin-scoped: only Feldart invoices reached invoicesByCustomer, so the
     // raw-overdue override is the customer's Feldart overdue only. A customer
@@ -162,6 +166,11 @@ export async function isStillEligible(entityId: string): Promise<boolean> {
     );
 
   if (chaseRow?.lastChasedAt) return false;
+
+  // Re-check at execute time: a human/Inbox reply since the proposal was made
+  // should cancel the auto-chase.
+  const recentHumanContact = await loadRecentHumanContact([entityId]);
+  if (recentHumanContact.has(entityId)) return false;
 
   return true;
 }
