@@ -27,6 +27,7 @@ import {
   getOverdueCustomers,
   getOverdueForCustomer,
 } from "../../chase/lookups.js";
+import { loadRecentHumanContact as loadRecentHumanContactDefault } from "../../chase/chased-tracker.js";
 import type { OverdueCustomer } from "../../chase/types.js";
 
 export type Candidate = {
@@ -55,6 +56,8 @@ export type TjChaseDeps = {
     customerIds: string[],
     cutoff: Date,
   ) => Promise<RecentChaseRow[]>;
+  // Customers with recent non-automated outbound contact (human/Inbox).
+  loadRecentHumanContact?: (customerIds: string[]) => Promise<Set<string>>;
 };
 
 export async function findCandidates(
@@ -63,6 +66,8 @@ export async function findCandidates(
 ): Promise<Candidate[]> {
   const loadOverdue = deps.loadOverdue ?? (() => getOverdueCustomers("tj"));
   const loadRecentChases = deps.loadRecentChases ?? loadRecentChasesFromDb;
+  const loadRecentHumanContact =
+    deps.loadRecentHumanContact ?? loadRecentHumanContactDefault;
 
   const overdueRows = await loadOverdue();
   const actionable = overdueRows.filter(
@@ -82,9 +87,14 @@ export async function findCandidates(
       .filter((r) => r.lastChasedAt != null)
       .map((r) => r.customerId),
   );
+  // Don't auto-chase a customer a human (or Inbox) just emailed.
+  const recentHumanContact = await loadRecentHumanContact(
+    actionable.map((r) => r.customerId),
+  );
 
   return actionable
     .filter((row) => !recentlyChased.has(row.customerId))
+    .filter((row) => !recentHumanContact.has(row.customerId))
     .map((row) => ({
       entityType: "customer" as const,
       entityId: row.customerId,
@@ -113,6 +123,7 @@ export type TjChaseEligibilityDeps = {
     customerIds: string[],
     cutoff: Date,
   ) => Promise<RecentChaseRow[]>;
+  loadRecentHumanContact?: (customerIds: string[]) => Promise<Set<string>>;
 };
 
 // Approve-time staleness check: the customer must still have actionable TJ
@@ -126,6 +137,8 @@ export async function isStillEligible(
     deps.loadOverdueForCustomer ??
     ((id: string) => getOverdueForCustomer(id, "tj"));
   const loadRecentChases = deps.loadRecentChases ?? loadRecentChasesFromDb;
+  const loadRecentHumanContact =
+    deps.loadRecentHumanContact ?? loadRecentHumanContactDefault;
 
   const row = await loadOverdueForCustomer(entityId);
   if (!row) return false;
@@ -136,6 +149,9 @@ export async function isStillEligible(
   if (recent.some((r) => r.customerId === entityId && r.lastChasedAt != null)) {
     return false;
   }
+  // A human/Inbox reply since the proposal cancels the auto-chase.
+  const recentHumanContact = await loadRecentHumanContact([entityId]);
+  if (recentHumanContact.has(entityId)) return false;
   return true;
 }
 

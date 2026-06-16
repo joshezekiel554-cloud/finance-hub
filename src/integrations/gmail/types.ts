@@ -36,6 +36,19 @@ export type EmailAttachment = {
   data: Buffer;
 };
 
+// The kind of Finance-originated send, stamped into the
+// `X-Feldart-Finance-Send` header so the sibling Inbox app can (1) tag the
+// thread "Sent from Finance" + apply its hide filter, and (2) route by type
+// (chase→Waiting, statement→Done, unknown→Waiting). Presence of the header =
+// "originated in Finance"; absence = a human Inbox send. See spec
+// 2026-06-16-inbox-integration-design §3.3.
+export type FinanceSendType =
+  | "chase"
+  | "statement"
+  | "check-in"
+  | "dispute-bookkeeper"
+  | "rma";
+
 export type SendEmailInput = {
   // Comma-separated list of addresses; we don't split, Gmail does.
   to: string;
@@ -55,6 +68,10 @@ export type SendEmailInput = {
   // thread correctly.
   threadId?: string;
   inReplyTo?: string;
+  // When set, emits `X-Feldart-Finance-Send: <type>` on the message so Inbox
+  // recognizes it as a Finance-originated send. Omit for sends that should NOT
+  // be tagged as from Finance.
+  financeSendType?: FinanceSendType;
 };
 
 export type SendEmailResult = {

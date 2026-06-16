@@ -129,6 +129,15 @@ const schema = z.object({
   // and NODE_ENV is production.
   DEV_USER_EMAIL: z.string().email().optional(),
 
+  // Shared service token for the Inbox↔Finance integration. The sibling
+  // Inbox app (same VPS) sends `Authorization: Bearer <this>` on every
+  // /api/ext request; requireServiceToken compares against it. Operator
+  // generates it (`openssl rand -hex 32`) and sets the SAME value in both
+  // apps' env. Optional so local/dev boot doesn't require it — but when
+  // UNSET the /api/ext routes refuse all callers (fail-closed). Min 32 so a
+  // weak token can't slip in.
+  FINANCE_SERVICE_TOKEN: optionalSecret(32),
+
   VOCATECH_API_KEY: optionalSecret(1),
   VOCATECH_WEBHOOK_SECRET: optionalSecret(1),
   // E.164 or 10-digit US sender number registered to your Vocatech tenant.

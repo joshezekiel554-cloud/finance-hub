@@ -106,6 +106,7 @@ const SETTINGS: AppSettingsMap = {
   tj_bookkeeper_name: "",
   agent_enabled: "1",
   agent_monthly_budget_usd: "150",
+  inbox_integration_enabled: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -204,6 +205,7 @@ describe("renderStatementPdf", () => {
         tj_bookkeeper_name: "",
         agent_enabled: "1",
         agent_monthly_budget_usd: "150",
+        inbox_integration_enabled: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

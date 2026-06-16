@@ -57,6 +57,9 @@ export type AppSettingsMap = {
   // AI agent: kill switch ("1"/"") + soft monthly USD budget ceiling.
   agent_enabled: string;
   agent_monthly_budget_usd: string;
+  // Inbox↔Finance integration master flag — surfaced so loadAppSettings can
+  // index by any canonical key without a type error.
+  inbox_integration_enabled: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -87,6 +90,7 @@ const DEFAULTS: AppSettingsMap = {
   // Agent ships enabled; the kill switch is for incidents, not opt-in.
   agent_enabled: "1",
   agent_monthly_budget_usd: "150",
+  inbox_integration_enabled: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

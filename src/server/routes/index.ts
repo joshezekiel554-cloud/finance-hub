@@ -38,6 +38,7 @@ import customerAiCardRoute from "./customer-ai-card.js";
 import originReviewRoute from "./origin-review.js";
 import disputesRoute from "./disputes.js";
 import agentRoute from "./agent.js";
+import extRoute from "./ext.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -99,6 +100,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(originReviewRoute, { prefix: "/api/origin-review" });
   await app.register(disputesRoute, { prefix: "/api/invoices" });
   await app.register(agentRoute, { prefix: "/api/agent" });
+  await app.register(extRoute, { prefix: "/api/ext" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });

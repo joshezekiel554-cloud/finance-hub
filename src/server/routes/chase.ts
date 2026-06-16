@@ -826,6 +826,7 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         subject: renderedSubject,
         html: finalHtml,
         text: renderedBody,
+        financeSendType: "chase",
       });
     } catch (err) {
       log.error(

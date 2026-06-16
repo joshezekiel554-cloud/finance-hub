@@ -41,6 +41,7 @@ import { ActivityTimeline } from "../components/activity-timeline";
 import type { Activity } from "../components/activity-timeline";
 import RmaRowMenu from "../components/rma-row-menu";
 import { EmailList } from "../components/email-list";
+import { InboxBoardEmbed } from "../components/inbox-board-embed";
 import { CallsSmsTab } from "../components/calls-sms-tab";
 import { HoldBanner } from "../components/hold-banner";
 import { SyncCustomerButton } from "../components/sync-customer-button";
@@ -318,6 +319,11 @@ export default function CustomerDetailPage() {
   });
   const tjBookkeeperEmail =
     appSettingsQuery.data?.settings.tj_bookkeeper_email?.trim() || undefined;
+  // Inbox↔Finance integration master flag. When on, the Emails tab shows the
+  // embedded Inbox board instead of Finance's own EmailList. Flag off → the
+  // existing EmailList renders unchanged, so this is fully reversible.
+  const inboxIntegrationEnabled =
+    appSettingsQuery.data?.settings.inbox_integration_enabled === "true";
 
   // Customer-scoped task list. Used by:
   //   - The Tasks tab (renders the list + an Add task button)
@@ -950,20 +956,23 @@ export default function CustomerDetailPage() {
                 onJumpToCallsSms={() => setTab("calls_sms")}
               />
             )}
-            {tab === "emails" && (
-              <EmailList
-                customerId={customer.id}
-                customerName={customer.displayName}
-                customerEmail={customer.primaryEmail}
-                onTaskCreated={(taskId) =>
-                  setTaskDrawer({ mode: "edit", taskId })
-                }
-                direction={emailDirection}
-                actioned={emailActioned}
-                onDirectionChange={(v) => setFilter("emailDirection", v, { history: "push" })}
-                onActionedChange={(v) => setFilter("emailActioned", v, { history: "push" })}
-              />
-            )}
+            {tab === "emails" &&
+              (inboxIntegrationEnabled ? (
+                <InboxBoardEmbed customerId={customer.id} />
+              ) : (
+                <EmailList
+                  customerId={customer.id}
+                  customerName={customer.displayName}
+                  customerEmail={customer.primaryEmail}
+                  onTaskCreated={(taskId) =>
+                    setTaskDrawer({ mode: "edit", taskId })
+                  }
+                  direction={emailDirection}
+                  actioned={emailActioned}
+                  onDirectionChange={(v) => setFilter("emailDirection", v, { history: "push" })}
+                  onActionedChange={(v) => setFilter("emailActioned", v, { history: "push" })}
+                />
+              ))}
             {tab === "invoices" && (
               <InvoicesPanel
                 customerId={customer.id}

@@ -7,6 +7,7 @@ import {
 import { listAliases } from "./aliases.js";
 import type {
   EmailAttachment,
+  FinanceSendType,
   SendEmailInput,
   SendEmailResult,
 } from "./types.js";
@@ -36,6 +37,7 @@ export function buildRawMessage(input: {
   replyTo?: string;
   inReplyTo?: string;
   attachments?: EmailAttachment[];
+  financeSendType?: FinanceSendType;
 }): string {
   const {
     from,
@@ -48,6 +50,7 @@ export function buildRawMessage(input: {
     replyTo,
     inReplyTo,
     attachments,
+    financeSendType,
   } = input;
   const hasAttachments = (attachments?.length ?? 0) > 0;
 
@@ -74,6 +77,12 @@ export function buildRawMessage(input: {
     "MIME-Version: 1.0",
   );
   if (replyTo) headerLines.push(`Reply-To: ${replyTo}`);
+  // Inbox-integration provenance header. Value is a fixed enum token (ASCII,
+  // no user input) so it needs no encoding. Presence tells the sibling Inbox
+  // app this is a Finance-originated send. See spec §3.3.
+  if (financeSendType) {
+    headerLines.push(`X-Feldart-Finance-Send: ${financeSendType}`);
+  }
   if (inReplyTo) {
     // RFC 5322: angle-bracketed Message-ID. We accept either a bare id
     // or one already wrapped, and normalize.
@@ -180,6 +189,7 @@ export async function sendEmail(
     attachments,
     threadId,
     inReplyTo,
+    financeSendType,
   } = input;
 
   let from: string;
@@ -218,6 +228,7 @@ export async function sendEmail(
     replyTo,
     inReplyTo,
     attachments,
+    financeSendType,
   });
 
   const gmail = await getInternalGmailClient(externalAccountId);
@@ -245,6 +256,7 @@ export async function sendEmail(
       messageId: result.messageId,
       attachmentCount: attachments?.length ?? 0,
       threaded: Boolean(threadId || inReplyTo),
+      financeSendType: financeSendType ?? null,
     },
     "gmail message sent",
   );
