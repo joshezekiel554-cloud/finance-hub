@@ -767,6 +767,7 @@ export async function sendStatement(
       text: "(plain text fallback — see HTML)",
       alias: STATEMENT_ALIAS,
       attachments,
+      financeSendType: "statement",
     });
   } catch (err) {
     log.error(

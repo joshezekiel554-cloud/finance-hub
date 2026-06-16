@@ -261,6 +261,7 @@ const sendChaseEmailTool: Tool<z.infer<typeof SendChaseEmailArgs>> = {
         html: finalHtml,
         alias: aliasEmail,
         attachments: built.attachments.length ? built.attachments : undefined,
+        financeSendType: "chase",
       });
       // ── Post-send bookkeeping: NEVER fatal past this point. ───────────
       // The execute queue retries failed jobs (attempts: 3 in queues.ts),
@@ -450,6 +451,7 @@ const sendCheckInEmailTool: Tool<z.infer<typeof SendCheckInEmailArgs>> = {
         html: finalHtml,
         alias: aliasEmail,
         attachments: built.attachments.length ? built.attachments : undefined,
+        financeSendType: "check-in",
       });
       const sentAt = new Date();
       await db.insert(emailLog).values({
@@ -580,6 +582,7 @@ const sendBookkeeperEmailTool: Tool<z.infer<typeof SendBookkeeperEmailArgs>> = {
         alias: aliasEmail,
         threadId: invoice.bookkeeperThreadId ?? undefined,
         inReplyTo,
+        financeSendType: "dispute-bookkeeper",
       });
 
       // ── Post-send bookkeeping: NEVER fatal past this point. ───────────
