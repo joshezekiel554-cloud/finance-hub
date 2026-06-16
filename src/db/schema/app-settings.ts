@@ -92,5 +92,11 @@ export const APP_SETTING_KEYS = [
   // number as text, e.g. "150"). Never blocks — drives the 80%/100%
   // notifications + the /agent spend dashboard (Wave C).
   "agent_monthly_budget_usd",
+  // "true"/"" master flag for the Inbox↔Finance integration (spec
+  // 2026-06-16-inbox-integration-design). Default off. Gates: the /api/ext
+  // read API and the embedded Inbox board on the customer page. The
+  // outbound X-Feldart-Finance-Send header is NOT gated by this (harmless
+  // to emit early; Inbox ignores it until ready).
+  "inbox_integration_enabled",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];
