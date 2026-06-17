@@ -42,6 +42,7 @@ import {
 } from "./queues.js";
 import { seedDefaultTagEmailSchedules } from "../modules/tag-email/seed.js";
 import { registerSchedules } from "./schedule.js";
+import { registerCardInvalidation } from "../modules/ai-agent/card-invalidation.js";
 import { env } from "../lib/env.js";
 import { createLogger } from "../lib/logger.js";
 
@@ -204,6 +205,11 @@ async function main(): Promise<void> {
   );
 
   const workers = buildWorkers();
+
+  // Invalidate per-customer AI cards when the Gmail poller / QB sync emit
+  // activity events in THIS process (the bus is in-process; the web server
+  // registers its own listener for note events). See card-invalidation.ts.
+  registerCardInvalidation();
 
   // Seed default tag-email schedule rows (idempotent).
   await seedDefaultTagEmailSchedules();

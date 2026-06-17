@@ -354,6 +354,17 @@ export async function getCustomerCard(
   };
 }
 
+// Drop a customer's cached card so it regenerates fresh on next view. Called
+// by the event-driven invalidator (card-invalidation.ts) when something the
+// card summarises changes (new email, note, payment, …). Cheap (a delete, no
+// LLM call); the paid regeneration only happens when the customer is next
+// opened. No-op if there's no card.
+export async function invalidateCustomerCard(customerId: string): Promise<void> {
+  await db
+    .delete(customerAiCards)
+    .where(eq(customerAiCards.customerId, customerId));
+}
+
 export async function generateCustomerCard(
   customerId: string,
   opts: { force?: boolean } = {},

@@ -15,6 +15,7 @@ import { authPlugin } from "./plugins/auth.js";
 import { ssePlugin } from "./plugins/sse.js";
 import { healthRoute } from "./routes/health.js";
 import { registerRoutes } from "./routes/index.js";
+import { registerCardInvalidation } from "../modules/ai-agent/card-invalidation.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,6 +88,11 @@ async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(healthRoute);
   await registerRoutes(app);
+
+  // Invalidate per-customer AI cards on note/email/payment/call events so they
+  // regenerate fresh on next view. In-process bus → also registered in the
+  // worker (where the Gmail poller + QB sync emit). See card-invalidation.ts.
+  registerCardInvalidation();
 
   if (env.NODE_ENV === "production") {
     const fastifyStatic = (await import("@fastify/static")).default;
