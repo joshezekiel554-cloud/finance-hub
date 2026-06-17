@@ -87,9 +87,13 @@ export default function CustomerAiCard({ customerId, onAction }: Props) {
       }
       return (await res.json()) as CardResponse;
     },
-    // Once we have a row, treat it as fresh enough for 5 min on the client
-    // — the server's 24h staleness still drives the visible flag.
-    staleTime: 5 * 60 * 1000,
+    // Re-check the server every time you open a customer (mount): the GET
+    // auto-regenerates the card when there's been new activity since it was
+    // generated, so opening a customer always shows the latest. Not on window
+    // focus, to avoid surprise regenerations while you're working.
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
     // The first fetch may trigger a fresh LLM synth on the server; retrying
     // would multiply cost. Don't retry.
     retry: false,

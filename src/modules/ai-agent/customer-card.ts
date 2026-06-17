@@ -8,7 +8,7 @@
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
-import { emailLog } from "../../db/schema/crm.js";
+import { activities, emailLog } from "../../db/schema/crm.js";
 import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { emailMatchForCustomer } from "../crm/email-match.js";
 import { invoices } from "../../db/schema/invoices.js";
@@ -379,6 +379,64 @@ export async function getCustomerCard(
     isStale: ageHours > CACHE_TTL_HOURS,
     generatedAt: row.generatedAt,
   };
+}
+
+// Has anything the card summarises happened SINCE the card was generated? Used
+// by the GET route to auto-regenerate on view when there's newer activity —
+// robust even when event-invalidation missed it (e.g. an email orphaned by the
+// duplicate-record/shared-address case). Checks, address-aware for email:
+//   - newest email to/from the customer's address-set,
+//   - newest manual note (activities),
+//   - newest call/SMS (phone_communications).
+export async function customerHasActivitySince(
+  customerId: string,
+  since: Date,
+): Promise<boolean> {
+  const cRows = await db
+    .select({
+      primaryEmail: customers.primaryEmail,
+      billingEmails: customers.billingEmails,
+      invoiceToEmails: customers.invoiceToEmails,
+      statementToEmails: customers.statementToEmails,
+    })
+    .from(customers)
+    .where(eq(customers.id, customerId))
+    .limit(1);
+  const cust = cRows[0] ?? {
+    primaryEmail: null,
+    billingEmails: null,
+    invoiceToEmails: null,
+    statementToEmails: null,
+  };
+  const [email, note, call] = await Promise.all([
+    db
+      .select({ d: emailLog.emailDate })
+      .from(emailLog)
+      .where(and(emailMatchForCustomer(customerId, cust), gt(emailLog.emailDate, since)))
+      .limit(1),
+    db
+      .select({ d: activities.occurredAt })
+      .from(activities)
+      .where(
+        and(
+          eq(activities.customerId, customerId),
+          eq(activities.kind, "manual_note"),
+          gt(activities.occurredAt, since),
+        ),
+      )
+      .limit(1),
+    db
+      .select({ d: phoneCommunications.startedAt })
+      .from(phoneCommunications)
+      .where(
+        and(
+          eq(phoneCommunications.customerId, customerId),
+          gt(phoneCommunications.startedAt, since),
+        ),
+      )
+      .limit(1),
+  ]);
+  return email.length > 0 || note.length > 0 || call.length > 0;
 }
 
 // Drop a customer's cached card so it regenerates fresh on next view. Called

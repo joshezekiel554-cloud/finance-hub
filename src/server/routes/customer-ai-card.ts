@@ -9,6 +9,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { requireAuth } from "../lib/auth.js";
 import {
+  customerHasActivitySince,
   generateCustomerCard,
   getCustomerCard,
 } from "../../modules/ai-agent/customer-card.js";
@@ -22,7 +23,11 @@ const customerAiCardRoute: FastifyPluginAsync = async (app) => {
     const id = (req.params as { id: string }).id;
     try {
       const cached = await getCustomerCard(id);
-      if (cached) {
+      // Auto-refresh on view: serve the cached card only if nothing the card
+      // summarises (email/note/call) has happened since it was generated.
+      // Otherwise fall through and regenerate — so opening a customer always
+      // reflects the latest, even when event-invalidation missed it.
+      if (cached && !(await customerHasActivitySince(id, cached.generatedAt))) {
         return reply.send({
           summary: cached.data.summary,
           summaryFeldart: cached.data.summaryFeldart,
