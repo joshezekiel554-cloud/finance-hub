@@ -35,6 +35,7 @@ export const FORWARD_BCC_QUEUE = "forward-bcc";
 export const AUTOPILOT_SCAN_QUEUE = "autopilot-scan";
 export const AUTOPILOT_EXECUTE_QUEUE = "autopilot-execute";
 export const AI_CORRECTIONS_QUEUE = "ai-corrections";
+export const ORDERS_QUEUE = "orders";
 
 export const QB_SYNC_JOB = "qb-sync";
 export const GMAIL_POLL_JOB = "gmail-poll";
@@ -50,6 +51,7 @@ export const FORWARD_BCC_JOB = "forward-bcc";
 export const AUTOPILOT_SCAN_JOB = "autopilot-scan";
 export const AUTOPILOT_EXECUTE_JOB = "autopilot-execute";
 export const AI_CORRECTIONS_DISTILL_JOB = "ai-corrections-distill";
+export const ORDERS_SYNC_JOB = "orders-sync";
 
 let cachedConnection: Redis | undefined;
 
@@ -98,6 +100,7 @@ let cachedQueues:
       autopilotScan: Queue;
       autopilotExecute: Queue;
       aiCorrections: Queue;
+      orders: Queue;
     }
   | undefined;
 
@@ -113,6 +116,7 @@ export type Queues = {
   autopilotScan: Queue;
   autopilotExecute: Queue;
   aiCorrections: Queue;
+  orders: Queue;
 };
 
 export function getQueues(): Queues {
@@ -148,6 +152,7 @@ export function getQueues(): Queues {
       connection,
       defaultJobOptions,
     }),
+    orders: new Queue(ORDERS_QUEUE, { connection, defaultJobOptions }),
   };
   return cachedQueues;
 }
@@ -168,6 +173,7 @@ export async function closeQueues(): Promise<void> {
       cachedQueues.autopilotScan.close(),
       cachedQueues.autopilotExecute.close(),
       cachedQueues.aiCorrections.close(),
+      cachedQueues.orders.close(),
     ]);
     cachedQueues = undefined;
   }

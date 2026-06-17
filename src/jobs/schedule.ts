@@ -28,6 +28,7 @@ import {
   AUTOPILOT_SCAN_JOB,
   CHASE_DIGEST_JOB,
   GMAIL_POLL_JOB,
+  ORDERS_SYNC_JOB,
   QB_SYNC_JOB,
   TAG_EMAIL_DAILY_JOB,
   TAG_EMAIL_MONTHLY_JOB,
@@ -70,6 +71,18 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
     },
   );
   registered.push({ name: GMAIL_POLL_JOB, cron: "*/15 * * * *" });
+
+  // Orders sync — every 15 minutes. Pulls Shopify orders updated since the
+  // last run (checkpoint in app_settings) + upserts payment/fulfilment/tracking.
+  await queues.orders.add(
+    ORDERS_SYNC_JOB,
+    { trigger: "scheduled" },
+    {
+      jobId: `repeat:${ORDERS_SYNC_JOB}`,
+      repeat: { pattern: "*/15 * * * *" },
+    },
+  );
+  registered.push({ name: ORDERS_SYNC_JOB, cron: "*/15 * * * *" });
 
   // Chase digest — 17:00 Europe/London daily. The tz field tracks DST.
   await queues.chase.add(

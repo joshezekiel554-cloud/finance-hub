@@ -48,6 +48,9 @@ export const orders = mysqlTable(
     }),
     orderNumber: varchar("order_number", { length: 64 }),
     orderDate: timestamp("order_date"),
+    // The address the order was placed under — used to match the order to a
+    // finance customer (and shown on the Orders tab).
+    email: varchar("email", { length: 255 }),
     notesRaw: text("notes_raw"),
     lineItems: json("line_items").$type<OrderLineItem[]>(),
     total: decimal("total", { precision: 12, scale: 2 }),
@@ -60,6 +63,23 @@ export const orders = mysqlTable(
       "cancelled",
       "refunded",
     ]),
+    // PAYMENT status — Shopify financial_status verbatim (pending, authorized,
+    // paid, partially_paid, refunded, partially_refunded, voided). Drives the
+    // payment-upfront-but-pending alert + the Orders tab payment column.
+    financialStatus: varchar("financial_status", { length: 32 }),
+    // FULFILMENT status — Shopify fulfillment_status (null=unfulfilled, partial,
+    // fulfilled, restocked). Normalized null → "unfulfilled" on read.
+    fulfillmentStatus: varchar("fulfillment_status", { length: 32 }),
+    // Tracking, from the order's fulfilments (best-effort — only present once a
+    // fulfilment with tracking exists).
+    trackingNumber: varchar("tracking_number", { length: 128 }),
+    trackingUrl: varchar("tracking_url", { length: 512 }),
+    trackingCompany: varchar("tracking_company", { length: 128 }),
+    // Carrier-reported shipment state (in_transit, out_for_delivery, delivered,
+    // …) from the fulfilment, when the carrier reports it. "delivered" here is
+    // what surfaces the Delivered state on the Orders tab.
+    shipmentStatus: varchar("shipment_status", { length: 32 }),
+    cancelledAt: timestamp("cancelled_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
@@ -67,6 +87,7 @@ export const orders = mysqlTable(
     customerIdIdx: index("idx_orders_customer_id").on(t.customerId),
     orderDateIdx: index("idx_orders_order_date").on(t.orderDate),
     statusIdx: index("idx_orders_status").on(t.status),
+    emailIdx: index("idx_orders_email").on(t.email),
   }),
 );
 

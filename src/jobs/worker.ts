@@ -24,6 +24,7 @@ import { forwardBccHandler } from "./definitions/forward-bcc.js";
 import { autopilotScanHandler } from "./definitions/autopilot-scan.js";
 import { autopilotExecuteHandler } from "./definitions/autopilot-execute.js";
 import { aiCorrectionsDistillHandler } from "./definitions/ai-corrections-distill.js";
+import { processOrdersSync } from "./definitions/orders-sync.js";
 import {
   AI_CORRECTIONS_QUEUE,
   AUTOPILOT_EXECUTE_QUEUE,
@@ -34,6 +35,7 @@ import {
   NOTIFICATIONS_QUEUE,
   SYNC_QUEUE,
   TAG_EMAIL_QUEUE,
+  ORDERS_QUEUE,
   VOCATECH_BACKFILL_QUEUE,
   VOCATECH_ROSTER_QUEUE,
   closeQueues,
@@ -132,6 +134,12 @@ function buildWorkers(): Worker[] {
     { connection, concurrency: AI_CORRECTIONS_CONCURRENCY },
   );
 
+  const ordersWorker = new Worker(
+    ORDERS_QUEUE,
+    async (job: Job) => processOrdersSync(job),
+    { connection, concurrency: 1 },
+  );
+
   for (const w of [
     qbWorker,
     gmailWorker,
@@ -144,6 +152,7 @@ function buildWorkers(): Worker[] {
     autopilotScanWorker,
     autopilotExecuteWorker,
     aiCorrectionsWorker,
+    ordersWorker,
   ]) {
     w.on("failed", (job, err) => {
       log.error(
@@ -180,6 +189,7 @@ function buildWorkers(): Worker[] {
     autopilotScanWorker,
     autopilotExecuteWorker,
     aiCorrectionsWorker,
+    ordersWorker,
   ];
 }
 
