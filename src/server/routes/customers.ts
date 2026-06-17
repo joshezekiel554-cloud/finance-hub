@@ -32,6 +32,8 @@ import {
 } from "../../db/schema/crm.js";
 import { invoices, invoiceChases } from "../../db/schema/invoices.js";
 import { creditMemos } from "../../db/schema/credit-memos.js";
+import { orders } from "../../db/schema/catalog.js";
+import { customerAddrSet } from "../../modules/crm/email-match.js";
 import { originFromDocNumber } from "../../modules/invoicing/origin.js";
 import { rmas } from "../../db/schema/returns.js";
 import { phoneCommunications } from "../../db/schema/vocatech.js";
@@ -879,6 +881,63 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       return reply.send({ rows });
     },
   );
+
+  // GET /api/customers/:id/orders — Shopify orders for this customer, newest
+  // first. Drives the per-customer Orders tab. Matched by the stored customerId
+  // link OR by the order's email landing in the customer's address set — the
+  // same address-based philosophy as the email matcher (crm/email-match.ts), so
+  // orders still surface when the origin split has parked an order on a sibling
+  // customer record sharing the address. 200-row cap is plenty per customer;
+  // the orders-sync job keeps payment/fulfilment/tracking fresh every ~15 min.
+  app.get<{ Params: { id: string } }>("/:id/orders", async (req, reply) => {
+    await requireAuth(req);
+    const id = req.params.id;
+    const customerRows = await db
+      .select({
+        id: customers.id,
+        primaryEmail: customers.primaryEmail,
+        billingEmails: customers.billingEmails,
+        invoiceToEmails: customers.invoiceToEmails,
+        statementToEmails: customers.statementToEmails,
+      })
+      .from(customers)
+      .where(eq(customers.id, id))
+      .limit(1);
+    const customer = customerRows[0];
+    if (!customer) return reply.code(404).send({ error: "customer not found" });
+
+    const conds = [eq(orders.customerId, id)];
+    for (const a of customerAddrSet(customer)) {
+      conds.push(sql`lower(${orders.email}) = ${a}`);
+    }
+
+    const rows = await db
+      .select({
+        id: orders.id,
+        shopifyOrderId: orders.shopifyOrderId,
+        orderNumber: orders.orderNumber,
+        orderDate: orders.orderDate,
+        email: orders.email,
+        total: orders.total,
+        itemCount: orders.itemCount,
+        lineItems: orders.lineItems,
+        notesRaw: orders.notesRaw,
+        status: orders.status,
+        financialStatus: orders.financialStatus,
+        fulfillmentStatus: orders.fulfillmentStatus,
+        trackingNumber: orders.trackingNumber,
+        trackingUrl: orders.trackingUrl,
+        trackingCompany: orders.trackingCompany,
+        shipmentStatus: orders.shipmentStatus,
+        cancelledAt: orders.cancelledAt,
+      })
+      .from(orders)
+      .where(or(...conds))
+      .orderBy(desc(orders.orderDate))
+      .limit(200);
+
+    return reply.send({ rows });
+  });
 
   // GET /api/customers/:id/statement-preview — preview the statement
   // payload before the user confirms a send. Returns the open-invoice

@@ -18,6 +18,10 @@ import {
   Trash2,
   ClipboardList,
   ChevronDown,
+  Truck,
+  ExternalLink,
+  PackageCheck,
+  ShoppingBag,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -1033,7 +1037,7 @@ export default function CustomerDetailPage() {
                 onSetInvDir={(v) => setFilter("invDir", v, { history: "push" })}
               />
             )}
-            {tab === "orders" && <PlaceholderPanel label="Orders" />}
+            {tab === "orders" && <OrdersPanel customerId={customer.id} />}
             {tab === "tasks" && (
               <TasksPanel
                 tasks={tasksQuery.data?.rows ?? []}
@@ -1339,6 +1343,288 @@ function CustomerTypeBadge({ type }: { type: "b2b" | "b2c" | null }) {
 // customer. The "b2b" tag is highlighted with the info tone so it's
 // visually distinct from the other (neutral) tags — that's the tag
 // hold/release toggles, so it deserves emphasis.
+// ---------------------------------------------------------------------------
+// Orders tab — Shopify orders for this customer with payment + fulfilment +
+// tracking. Read-only: the orders-sync job (every ~15 min) keeps it fresh.
+// ---------------------------------------------------------------------------
+
+type OrderLineItemView = {
+  sku: string;
+  name?: string;
+  qty: number;
+  unitPrice?: string;
+};
+
+type OrderRow = {
+  id: string;
+  shopifyOrderId: string;
+  orderNumber: string | null;
+  orderDate: string | null;
+  email: string | null;
+  total: string | null;
+  itemCount: number | null;
+  lineItems: OrderLineItemView[] | null;
+  notesRaw: string | null;
+  status: string | null;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  trackingCompany: string | null;
+  shipmentStatus: string | null;
+  cancelledAt: string | null;
+};
+
+const orderGbp = new Intl.NumberFormat("en-GB", {
+  style: "currency",
+  currency: "GBP",
+});
+
+function formatOrderDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// Payment status — Shopify financial_status, mapped to a tone. "pending" is
+// amber (high) because a pending payment is the operationally interesting case
+// the hold/upfront alerts (later phases) key off.
+function OrderPaymentBadge({ status }: { status: string | null }) {
+  const s = (status ?? "").toLowerCase();
+  if (s === "paid") return <Badge tone="success">Paid</Badge>;
+  if (s === "partially_paid") return <Badge tone="high">Part-paid</Badge>;
+  if (s === "pending") return <Badge tone="high">Payment pending</Badge>;
+  if (s === "authorized") return <Badge tone="info">Authorized</Badge>;
+  if (s === "refunded") return <Badge tone="medium">Refunded</Badge>;
+  if (s === "partially_refunded")
+    return <Badge tone="medium">Part-refunded</Badge>;
+  if (s === "voided") return <Badge tone="medium">Voided</Badge>;
+  if (!s) return <Badge tone="neutral">—</Badge>;
+  return <Badge tone="neutral">{status}</Badge>;
+}
+
+// Collapse Shopify's fulfilment + carrier shipment fields into the three states
+// the operator cares about: delivered, shipped (in transit), awaiting.
+function orderFulfilmentState(row: OrderRow): {
+  label: string;
+  tone: BadgeTone;
+  icon: ReactNode;
+} {
+  if (row.cancelledAt) {
+    return { label: "Cancelled", tone: "medium", icon: <X className="size-3" /> };
+  }
+  const ship = (row.shipmentStatus ?? "").toLowerCase();
+  const ful = (row.fulfillmentStatus ?? "").toLowerCase();
+  if (ship === "delivered") {
+    return {
+      label: "Delivered",
+      tone: "success",
+      icon: <PackageCheck className="size-3" />,
+    };
+  }
+  if (ful === "fulfilled" || ful === "partial" || row.trackingNumber) {
+    return {
+      label: ful === "partial" ? "Part-shipped" : "Shipped",
+      tone: "info",
+      icon: <Truck className="size-3" />,
+    };
+  }
+  return { label: "Awaiting fulfilment", tone: "neutral", icon: null };
+}
+
+function OrderTrackingLink({ row }: { row: OrderRow }) {
+  if (!row.trackingNumber && !row.trackingUrl) return null;
+  const label = `${row.trackingCompany ? `${row.trackingCompany} · ` : ""}${
+    row.trackingNumber ?? "Track parcel"
+  }`;
+  if (row.trackingUrl) {
+    return (
+      <a
+        href={row.trackingUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex max-w-full items-center gap-1 truncate text-xs text-accent-primary hover:underline"
+        title={label}
+      >
+        <span className="truncate">{label}</span>
+        <ExternalLink className="size-3 shrink-0" />
+      </a>
+    );
+  }
+  return (
+    <span className="block truncate text-xs text-muted" title={label}>
+      {label}
+    </span>
+  );
+}
+
+function OrdersPanel({ customerId }: { customerId: string }) {
+  const { data, isPending, isError, error } = useQuery<{ rows: OrderRow[] }>({
+    queryKey: ["customer-orders", customerId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/orders`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  if (isPending) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-muted">
+          Loading orders…
+        </CardBody>
+      </Card>
+    );
+  }
+  if (isError) {
+    return (
+      <Card>
+        <CardBody className="py-8 text-center text-sm text-accent-danger">
+          {(error as Error)?.message ?? "Failed to load orders"}
+        </CardBody>
+      </Card>
+    );
+  }
+
+  const rows = data?.rows ?? [];
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <CardBody className="flex flex-col items-center gap-2 py-12 text-center">
+          <ShoppingBag className="size-7 text-muted" />
+          <p className="text-sm font-medium text-secondary">
+            No Shopify orders yet
+          </p>
+          <p className="max-w-xs text-xs text-muted">
+            Orders placed under this customer's email will appear here, with
+            payment and delivery status, once they sync from Shopify.
+          </p>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  const totalValue = rows.reduce((sum, r) => {
+    const n = Number(r.total);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-baseline justify-between gap-3 px-1">
+        <span className="text-sm font-medium text-primary">
+          {rows.length} order{rows.length === 1 ? "" : "s"}
+        </span>
+        <span className="text-xs text-muted">
+          {orderGbp.format(totalValue)} total
+        </span>
+      </div>
+
+      {/* Desktop / tablet table */}
+      <Card className="hidden overflow-hidden md:block">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="border-b border-default bg-subtle text-left text-[11px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-3 py-2 font-medium">Order</th>
+                <th className="px-3 py-2 font-medium">Date</th>
+                <th className="px-3 py-2 text-right font-medium">Items</th>
+                <th className="px-3 py-2 text-right font-medium">Total</th>
+                <th className="px-3 py-2 font-medium">Payment</th>
+                <th className="px-3 py-2 font-medium">Fulfilment</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-subtle">
+              {rows.map((row) => {
+                const ful = orderFulfilmentState(row);
+                return (
+                  <tr key={row.id} className="align-top hover:bg-subtle/60">
+                    <td className="px-3 py-2 font-medium text-primary">
+                      {row.orderNumber ?? `#${row.shopifyOrderId}`}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-secondary">
+                      {formatOrderDate(row.orderDate)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-secondary">
+                      {row.itemCount ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums font-medium text-primary">
+                      {row.total != null ? orderGbp.format(Number(row.total)) : "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      <OrderPaymentBadge status={row.financialStatus} />
+                    </td>
+                    <td className="max-w-[16rem] px-3 py-2">
+                      <div className="flex flex-col gap-1">
+                        <Badge tone={ful.tone}>
+                          {ful.icon ? (
+                            <span className="mr-1 inline-flex">{ful.icon}</span>
+                          ) : null}
+                          {ful.label}
+                        </Badge>
+                        <OrderTrackingLink row={row} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Mobile stacked cards */}
+      <div className="space-y-2 md:hidden">
+        {rows.map((row) => {
+          const ful = orderFulfilmentState(row);
+          return (
+            <Card key={row.id}>
+              <CardBody className="space-y-2 py-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-medium text-primary">
+                    {row.orderNumber ?? `#${row.shopifyOrderId}`}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {formatOrderDate(row.orderDate)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm tabular-nums font-medium text-primary">
+                    {row.total != null
+                      ? orderGbp.format(Number(row.total))
+                      : "—"}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {row.itemCount ?? 0} item{row.itemCount === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <OrderPaymentBadge status={row.financialStatus} />
+                  <Badge tone={ful.tone}>
+                    {ful.icon ? (
+                      <span className="mr-1 inline-flex">{ful.icon}</span>
+                    ) : null}
+                    {ful.label}
+                  </Badge>
+                </div>
+                <OrderTrackingLink row={row} />
+              </CardBody>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PlaceholderPanel({ label }: { label: string }) {
   return (
     <Card>
