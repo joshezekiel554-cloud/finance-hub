@@ -33,7 +33,7 @@ export function InboxBoardEmbed({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="relative h-[calc(100vh-15rem)] min-h-[480px] overflow-hidden rounded-lg border border-default bg-white">
+      <div className="relative h-[calc(100vh-8rem)] min-h-[640px] overflow-hidden rounded-lg border border-default bg-white">
         {!loaded ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white">
             <div className="h-6 w-6 rounded-full border-2 border-default border-t-accent-primary motion-safe:animate-spin" />
