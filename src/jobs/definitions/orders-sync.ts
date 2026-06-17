@@ -208,6 +208,21 @@ export async function processOrdersSync(
     await writeCheckpoint(newestUpdatedAt);
   }
 
+  // Fire hold / payment-upfront alerts for any recent un-alerted violations.
+  // Isolated in its own try/catch so an alert hiccup never fails the sync (the
+  // alert is idempotent and retries next run).
+  try {
+    const { runOrderHoldAlerts } = await import(
+      "../../modules/orders/hold-alerts.js"
+    );
+    const alertResult = await runOrderHoldAlerts();
+    if (alertResult.candidates > 0) {
+      jobLog.info({ stage: "hold-alerts", ...alertResult }, "order hold alerts");
+    }
+  } catch (err) {
+    jobLog.error({ err }, "orders-sync: hold-alert pass failed (non-fatal)");
+  }
+
   const durationMs = Date.now() - startedAt;
   jobLog.info(
     { stage: "completed", fetched, upserted, matched, durationMs },

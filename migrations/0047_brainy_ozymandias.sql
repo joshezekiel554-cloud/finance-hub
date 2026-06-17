@@ -1,0 +1,1 @@
+ALTER TABLE `orders` ADD `hold_alerted_at` timestamp;

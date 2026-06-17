@@ -80,6 +80,10 @@ export const orders = mysqlTable(
     // what surfaces the Delivered state on the Orders tab.
     shipmentStatus: varchar("shipment_status", { length: 32 }),
     cancelledAt: timestamp("cancelled_at"),
+    // Set the first time a hold / payment-upfront-unpaid alert email is sent for
+    // this order, so the alert fires at-most-once even though the orders-sync
+    // job re-evaluates recent orders every run. NULL = not yet alerted.
+    holdAlertedAt: timestamp("hold_alerted_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
