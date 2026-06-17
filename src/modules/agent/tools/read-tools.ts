@@ -28,6 +28,7 @@ import { phoneCommunications } from "../../../db/schema/vocatech.js";
 import { users } from "../../../db/schema/auth.js";
 import { loadAppSettings } from "../../statements/settings.js";
 import { computeOriginBalances } from "../../chase/balances.js";
+import { emailMatchForCustomer } from "../../crm/email-match.js";
 import { fenceOperator, fenceUntrusted } from "../context.js";
 import {
   getAttachment,
@@ -409,8 +410,30 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
       };
       const id = String(args?.customerId ?? "");
       const limit = Math.min(Math.max(Number(args?.limit) || 10, 1), 25);
-      const conds = [eq(emailLog.customerId, id)];
-      if (args?.threadId) conds.push(eq(emailLog.threadId, String(args.threadId)));
+      // Match by the customer's address-set (not just the email_log link) so
+      // origin-split duplicate records + ambiguous-link orphans still surface.
+      const custRows = await db
+        .select({
+          primaryEmail: customers.primaryEmail,
+          billingEmails: customers.billingEmails,
+          invoiceToEmails: customers.invoiceToEmails,
+          statementToEmails: customers.statementToEmails,
+        })
+        .from(customers)
+        .where(eq(customers.id, id))
+        .limit(1);
+      const match = emailMatchForCustomer(
+        id,
+        custRows[0] ?? {
+          primaryEmail: null,
+          billingEmails: null,
+          invoiceToEmails: null,
+          statementToEmails: null,
+        },
+      );
+      const where = args?.threadId
+        ? and(match, eq(emailLog.threadId, String(args.threadId)))
+        : match;
       const rows = await db
         .select({
           id: emailLog.id,
@@ -424,7 +447,7 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
           actionedAt: emailLog.actionedAt,
         })
         .from(emailLog)
-        .where(and(...conds))
+        .where(where)
         .orderBy(desc(emailLog.emailDate))
         .limit(limit);
       return ok(formatEmails(args?.threadId ? rows.reverse() : rows));

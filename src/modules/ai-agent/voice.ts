@@ -6,6 +6,7 @@ import type { AiProposalCategory } from "../../db/schema/ai-proposals.js";
 import { customers } from "../../db/schema/customers.js";
 import { activities, emailLog } from "../../db/schema/crm.js";
 import { fenceUntrusted } from "../agent/context.js";
+import { emailMatchForCustomer } from "../crm/email-match.js";
 import {
   aiCompanyFacts,
   FACT_TAG_GLOBAL,
@@ -126,6 +127,10 @@ export async function buildDraftContext(
       .select({
         ctx: customers.aiCustomerContext,
         notes: customers.internalNotes,
+        primaryEmail: customers.primaryEmail,
+        billingEmails: customers.billingEmails,
+        invoiceToEmails: customers.invoiceToEmails,
+        statementToEmails: customers.statementToEmails,
       })
       .from(customers)
       .where(eq(customers.id, customerId))
@@ -176,7 +181,19 @@ export async function buildDraftContext(
         emailDate: emailLog.emailDate,
       })
       .from(emailLog)
-      .where(eq(emailLog.customerId, customerId))
+      // Match by address-set too, not just the link — robust to origin-split
+      // duplicate records + ambiguous-link orphaning (see crm/email-match).
+      .where(
+        emailMatchForCustomer(
+          customerId,
+          cRows[0] ?? {
+            primaryEmail: null,
+            billingEmails: null,
+            invoiceToEmails: null,
+            statementToEmails: null,
+          },
+        ),
+      )
       .orderBy(desc(emailLog.emailDate))
       .limit(12);
     if (emailRows.length > 0) {
