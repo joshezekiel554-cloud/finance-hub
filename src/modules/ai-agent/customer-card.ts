@@ -5,7 +5,7 @@
 // reads still return stale rows with an is_stale flag so the page renders
 // instantly; the Regenerate button forces a fresh call.
 
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailLog } from "../../db/schema/crm.js";
@@ -380,6 +380,40 @@ export async function getCustomerCard(
   };
 }
 
+// The customer's own addresses (primary + billing + invoice/statement "to"),
+// deduped + lowercased — the identities an email to/from this customer uses.
+type CustomerAddrFields = {
+  primaryEmail: string | null;
+  billingEmails: string[] | null;
+  invoiceToEmails: string[] | null;
+  statementToEmails: string[] | null;
+};
+function customerAddrSet(c: CustomerAddrFields): string[] {
+  const out = new Set<string>();
+  const add = (e: unknown) => {
+    if (typeof e === "string" && e.trim()) out.add(e.trim().toLowerCase());
+  };
+  add(c.primaryEmail);
+  for (const arr of [c.billingEmails, c.invoiceToEmails, c.statementToEmails]) {
+    if (Array.isArray(arr)) for (const e of arr) add(e);
+  }
+  return [...out];
+}
+
+// Match a customer's emails by their ADDRESS-SET (to/from) OR the stored link.
+// Address-matching is resilient to the origin-split case where one real
+// business has two customer records sharing an email (so an email to that
+// address shows on EITHER record), and to ambiguous-address orphaning (emails
+// that didn't link to any record). Mirrors how the Inbox board matches.
+function emailMatchForCustomer(customerId: string, c: CustomerAddrFields) {
+  const conds = [eq(emailLog.customerId, customerId)];
+  for (const a of customerAddrSet(c)) {
+    conds.push(sql`lower(${emailLog.fromAddress}) LIKE ${`%${a}%`}`);
+    conds.push(sql`lower(${emailLog.toAddress}) LIKE ${`%${a}%`}`);
+  }
+  return or(...conds);
+}
+
 // Drop a customer's cached card so it regenerates fresh on next view. Called
 // by the event-driven invalidator (card-invalidation.ts) when something the
 // card summarises changes (new email, note, payment, …). Cheap (a delete, no
@@ -427,7 +461,9 @@ export async function generateCustomerCard(
         emailDate: emailLog.emailDate,
       })
       .from(emailLog)
-      .where(eq(emailLog.customerId, customerId))
+      // Match by address-set OR link — robust to origin-split duplicate records
+      // (shared email across two book-records) and ambiguous-link orphaning.
+      .where(emailMatchForCustomer(customerId, customer))
       .orderBy(desc(emailLog.emailDate))
       .limit(5),
     // Open invoices across both books — feeds the per-book figures the same
