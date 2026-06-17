@@ -47,7 +47,11 @@ export type FinanceSendType =
   | "statement"
   | "check-in"
   | "dispute-bookkeeper"
-  | "rma";
+  | "rma"
+  // Order-hold alert: an order came through for a customer on hold, OR a
+  // payment-upfront customer's order is still unpaid. Inbox routes this to
+  // To-Do with a loud "⚠ HOLD ORDER" badge + always-on team ping.
+  | "hold-alert";
 
 export type SendEmailInput = {
   // Comma-separated list of addresses; we don't split, Gmail does.

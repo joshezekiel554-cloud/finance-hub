@@ -98,5 +98,10 @@ export const APP_SETTING_KEYS = [
   // outbound X-Feldart-Finance-Send header is NOT gated by this (harmless
   // to emit early; Inbox ignores it until ready).
   "inbox_integration_enabled",
+  // Comma-separated recipients for the order-hold alert (an order came through
+  // for a held customer, OR a payment-upfront customer's order is unpaid). The
+  // orders-sync job sends here with X-Feldart-Finance-Send: hold-alert so Inbox
+  // routes it to To-Do, loud, with a team ping. Empty = no alert is sent.
+  "order_hold_alert_recipients",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

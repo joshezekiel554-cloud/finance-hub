@@ -107,6 +107,7 @@ const SETTINGS: AppSettingsMap = {
   agent_enabled: "1",
   agent_monthly_budget_usd: "150",
   inbox_integration_enabled: "",
+  order_hold_alert_recipients: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -206,6 +207,7 @@ describe("renderStatementPdf", () => {
         agent_enabled: "1",
         agent_monthly_budget_usd: "150",
         inbox_integration_enabled: "",
+        order_hold_alert_recipients: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

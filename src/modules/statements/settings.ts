@@ -60,6 +60,9 @@ export type AppSettingsMap = {
   // Inbox↔Finance integration master flag — surfaced so loadAppSettings can
   // index by any canonical key without a type error.
   inbox_integration_enabled: string;
+  // Comma-separated recipients for the order-hold alert (held customer ordered,
+  // or payment-upfront order unpaid). Empty = no alert sent.
+  order_hold_alert_recipients: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -91,6 +94,11 @@ const DEFAULTS: AppSettingsMap = {
   agent_enabled: "1",
   agent_monthly_budget_usd: "150",
   inbox_integration_enabled: "",
+  // Operator-specified default recipients: Feldart inboxes + Bluechip warehouse
+  // (efrayim + shipping) so the order can be physically held. Tweakable in
+  // /settings.
+  order_hold_alert_recipients:
+    "info@feldart.co.uk,info@feldart.com,sales@feldart.com,efrayim@bluechipfulfillment.com,shipping@bluechipfulfillment.com",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is
