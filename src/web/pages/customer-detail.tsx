@@ -1060,12 +1060,17 @@ export default function CustomerDetailPage() {
           </div>
         </div>
 
-        {/* Persistent context rail. Stacks below the main column on mobile. */}
-        <CustomerContextRail
-          customer={customer}
-          notes={recentActivities.filter((a) => a.kind === "manual_note")}
-          onAction={handleAiCardAction}
-        />
+        {/* Persistent context rail. Stacks below the main column on mobile.
+            Hidden on the Emails tab so the embedded Inbox board (5 kanban
+            columns) gets the full page width — the AI summary/notes rail is
+            available on every other tab. */}
+        {tab !== "emails" && (
+          <CustomerContextRail
+            customer={customer}
+            notes={recentActivities.filter((a) => a.kind === "manual_note")}
+            onAction={handleAiCardAction}
+          />
+        )}
       </div>
     </div>
   );
