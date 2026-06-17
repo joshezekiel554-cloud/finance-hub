@@ -79,6 +79,7 @@ export default function SettingsPage() {
       <AliasSignaturesSection />
       <StatementPdfSection />
       <TorahJudaicaSection />
+      <OrderAlertsSection />
       <ReturnsSection />
       <RoutingRulesSection />
       <BccForwardingSection />
@@ -2087,6 +2088,196 @@ function TorahJudaicaSection() {
             onChange={(e) => setBookkeeperNameDraft(e.target.value)}
             className="mt-2 text-xs"
           />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={!dirty || saveMutation.isPending}
+          >
+            <Save className="size-4" />
+            {saveMutation.isPending ? "Saving…" : "Save"}
+          </Button>
+          {savedAt && !dirty && (
+            <span className="text-xs text-muted">Saved.</span>
+          )}
+          {saveMutation.isError && (
+            <span className="text-xs text-accent-danger">
+              {(saveMutation.error as Error).message}
+            </span>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// ─────────────────────── Order alerts ────────────────────────────────────
+
+function OrderAlertsSection() {
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const s = settingsQuery.data?.settings;
+  const initial = useMemo(
+    () => ({
+      order_hold_alert_recipients: s?.order_hold_alert_recipients ?? "",
+      order_overdue_alert_recipients: s?.order_overdue_alert_recipients ?? "",
+      order_overdue_threshold_gbp: s?.order_overdue_threshold_gbp ?? "",
+      order_overdue_no_contact_days: s?.order_overdue_no_contact_days ?? "",
+    }),
+    [s],
+  );
+  type FormKey = keyof typeof initial;
+
+  const [draft, setDraft] = useState(initial);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (settingsQuery.data) setDraft(initial);
+  }, [settingsQuery.data, initial]);
+
+  const set = (k: FormKey, v: string) =>
+    setDraft((d) => ({ ...d, [k]: v }));
+
+  const dirtyKeys = (Object.keys(initial) as FormKey[]).filter(
+    (k) => draft[k].trim() !== initial[k].trim(),
+  );
+  const dirty = dirtyKeys.length > 0;
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, string> = {};
+      for (const k of dirtyKeys) body[k] = draft[k].trim();
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as AppSettingsResponse;
+    },
+    onSuccess: () => {
+      setSavedAt(Date.now());
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-base font-semibold">Order alerts</h2>
+        <p className="mt-1 text-xs text-muted">
+          Who gets alerted about risky Shopify orders, and when. Alerts land in
+          the Inbox To-Do list (loud, with a team ping). Leave a recipients field
+          empty to disable that alert.
+        </p>
+      </CardHeader>
+      <CardBody className="space-y-5">
+        <div>
+          <label
+            htmlFor="order-hold-recipients"
+            className="block text-sm font-medium text-secondary"
+          >
+            Hold-order alert recipients
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Sent when an order comes through for a customer who is on hold, or a
+            payment-upfront customer's order is still unpaid. Comma-separated.
+          </p>
+          <Input
+            id="order-hold-recipients"
+            type="text"
+            placeholder="info@feldart.com, shipping@bluechipfulfillment.com"
+            value={draft.order_hold_alert_recipients}
+            onChange={(e) => set("order_hold_alert_recipients", e.target.value)}
+            className="mt-2 text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="order-overdue-recipients"
+            className="block text-sm font-medium text-secondary"
+          >
+            Overdue-order review recipients
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            Sent when an order comes through for an autopilot-on customer with a
+            large overdue balance who isn't communicating. Comma-separated.
+          </p>
+          <Input
+            id="order-overdue-recipients"
+            type="text"
+            placeholder="info@feldart.com, info@feldart.co.uk"
+            value={draft.order_overdue_alert_recipients}
+            onChange={(e) =>
+              set("order_overdue_alert_recipients", e.target.value)
+            }
+            className="mt-2 text-xs"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="order-overdue-threshold"
+              className="block text-sm font-medium text-secondary"
+            >
+              Large overdue threshold (£)
+            </label>
+            <p className="mt-0.5 text-xs text-muted">
+              Overdue balance at or above this triggers the review. Blank = 1000.
+            </p>
+            <Input
+              id="order-overdue-threshold"
+              type="number"
+              min={0}
+              placeholder="1000"
+              value={draft.order_overdue_threshold_gbp}
+              onChange={(e) =>
+                set("order_overdue_threshold_gbp", e.target.value)
+              }
+              className="mt-2 text-xs"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="order-overdue-days"
+              className="block text-sm font-medium text-secondary"
+            >
+              Not-communicating window (days)
+            </label>
+            <p className="mt-0.5 text-xs text-muted">
+              No contact for this many days counts as "not communicating". Blank
+              = 14.
+            </p>
+            <Input
+              id="order-overdue-days"
+              type="number"
+              min={1}
+              placeholder="14"
+              value={draft.order_overdue_no_contact_days}
+              onChange={(e) =>
+                set("order_overdue_no_contact_days", e.target.value)
+              }
+              className="mt-2 text-xs"
+            />
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
