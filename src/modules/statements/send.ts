@@ -660,8 +660,12 @@ export async function sendStatement(
   // wrap newlines into <p> blocks so the email renders as
   // paragraphs in the recipient's mail client. Already-HTML bodies
   // are left alone — the template seed uses <p> tags.
+  // HTML bodies pass through as-is; bare-newline line breaks (e.g. an
+  // operator-pasted invoice list) are preserved at the send chokepoint
+  // (sendEmail -> bridgeContentNewlines), so they're handled for every send
+  // path, not just statements. Plain-text bodies are wrapped to paragraphs.
   const renderedBody = looksLikeHtml(rawBody)
-    ? bridgeContentNewlines(rawBody)
+    ? rawBody
     : plainTextToHtml(rawBody);
 
   // Render the single Statement.pdf — replaces the per-invoice PDF
@@ -914,22 +918,6 @@ function sanitizeFilenameSegment(s: string): string {
 // the pass-through branch; that's deliberate.
 function looksLikeHtml(s: string): boolean {
   return /<[a-z][\s\S]*>/i.test(s);
-}
-
-// An HTML body can still carry plain-text runs separated by bare newlines
-// (e.g. an operator-pasted or template-rendered invoice list: each row on its
-// own line). HTML collapses those bare newlines, so the list renders as one
-// run-on blob in the recipient's client. Bridge a SINGLE newline to <br/> ONLY
-// when it sits between two content characters — lookbehind/lookaround so we
-// never touch:
-//   - newlines adjacent to a tag boundary ("</p>\n<p>") → formatting
-//     whitespace, left alone to avoid double gaps,
-//   - blank-line paragraph breaks ("\n\n") → the second newline has whitespace
-//     on one side, so neither matches.
-// Lookbehind/lookahead (not capture groups) so consecutive single-newline rows
-// all convert, not every other one.
-export function bridgeContentNewlines(html: string): string {
-  return html.replace(/(?<=[^>\s])[ \t]*\n[ \t]*(?=[^<\s])/g, "<br/>\n");
 }
 
 // Wrap plain text into paragraph-broken HTML. Blank-line-separated

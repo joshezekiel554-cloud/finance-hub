@@ -160,6 +160,19 @@ export function buildRawMessage(input: {
 // more readable in raw MIME, but base64 ("B") is unambiguous and safe
 // for any byte sequence — and recipient clients decode both equally
 // well, so there's no end-user-visible difference.
+// An HTML email body can carry plain-text runs separated by bare newlines
+// (e.g. an operator-pasted invoice list in the statement/chase popup, one row
+// per line). HTML collapses bare newlines, so the list renders as one run-on
+// blob in the recipient's client. Bridge a SINGLE newline to <br/> ONLY when it
+// sits between two content characters (lookbehind/lookahead so consecutive rows
+// all convert) — leaving tag-adjacent whitespace ("</p>\n<p>") and blank-line
+// paragraph breaks ("\n\n") untouched, so well-formed HTML is unaffected.
+// Applied at the send chokepoint (sendEmail) so EVERY finance-originated email
+// is covered: statement, chase, check-in, dispute, RMA, manual compose, etc.
+export function bridgeContentNewlines(html: string): string {
+  return html.replace(/(?<=[^>\s])[ \t]*\n[ \t]*(?=[^<\s])/g, "<br/>\n");
+}
+
 function encodeMimeHeaderValue(value: string): string {
   // The non-ASCII test: any code point outside 0x20-0x7E (printable
   // ASCII) needs encoding. Tabs / newlines aren't allowed in header
@@ -223,7 +236,8 @@ export async function sendEmail(
     cc,
     bcc,
     subject,
-    html,
+    // Preserve line breaks in HTML bodies (pasted lists, etc.) for every send.
+    html: html != null ? bridgeContentNewlines(html) : html,
     text,
     replyTo,
     inReplyTo,
