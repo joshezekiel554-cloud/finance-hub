@@ -47,6 +47,7 @@ describe("buildCardPrompt", () => {
         },
       ],
       recentEmails: [],
+      recentCalls: [],
       context: baseContext,
     });
     expect(out.system).toContain("VOICE");
@@ -55,12 +56,35 @@ describe("buildCardPrompt", () => {
     expect(out.user.toLowerCase()).toContain("json");
   });
 
+  it("renders recent calls & texts (transcripts/SMS) in the prompt", () => {
+    const out = buildCardPrompt({
+      customer: { id: "c1", name: "Acme Ltd" },
+      kpis: { balance: 0, overdueBalance: 0, hasHold: false },
+      candidates: [],
+      recentEmails: [],
+      recentCalls: [
+        {
+          kind: "call_in",
+          date: "2026-06-10",
+          detail: "Asked about overdue invoice 1-100; promised to pay Friday.",
+        },
+        { kind: "sms_out", date: "2026-06-09", detail: "Payment reminder sent." },
+      ],
+      context: baseContext,
+    });
+    expect(out.user).toContain("Recent calls & texts");
+    expect(out.user).toContain("CALL (inbound)");
+    expect(out.user).toContain("promised to pay Friday");
+    expect(out.user).toContain("TEXT (outbound)");
+  });
+
   it("includes the per-customer AI context line when present", () => {
     const out = buildCardPrompt({
       customer: { id: "c1", name: "Acme Ltd" },
       kpis: { balance: 0, overdueBalance: 0, hasHold: false },
       candidates: [],
       recentEmails: [],
+      recentCalls: [],
       context: { ...baseContext, customerContext: "Pays late, key contact = Sarah" },
     });
     expect(out.user).toContain("Pays late, key contact = Sarah");
@@ -72,6 +96,7 @@ describe("buildCardPrompt", () => {
       kpis: { balance: 0, overdueBalance: 0, hasHold: false },
       candidates: [],
       recentEmails: [],
+      recentCalls: [],
       context: baseContext,
     });
     expect(out.user.toLowerCase()).toContain("no autopilot candidates");
@@ -83,6 +108,7 @@ describe("buildCardPrompt", () => {
       kpis: { balance: 100, overdueBalance: 0, hasHold: false },
       candidates: [],
       recentEmails: [],
+      recentCalls: [],
       context: baseContext,
     });
     expect(out.system).not.toContain("summary_feldart");
@@ -95,6 +121,7 @@ describe("buildCardPrompt", () => {
       kpis: { balance: 500, overdueBalance: 420, hasHold: false },
       candidates: [],
       recentEmails: [],
+      recentCalls: [],
       context: baseContext,
       books: bothBooks,
     });
@@ -111,6 +138,7 @@ describe("buildCardPrompt", () => {
       kpis: { balance: 500, overdueBalance: 420, hasHold: false },
       candidates: [],
       recentEmails: [],
+      recentCalls: [],
       context: baseContext,
       books: bothBooks,
     });

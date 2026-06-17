@@ -5,10 +5,11 @@
 // reads still return stale rows with an is_stale flag so the page renders
 // instantly; the Regenerate button forces a fresh call.
 
-import { and, desc, eq, gt } from "drizzle-orm";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { emailLog } from "../../db/schema/crm.js";
+import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { creditMemos } from "../../db/schema/credit-memos.js";
 import {
@@ -50,6 +51,14 @@ export type CardEmail = {
   date: string;
 };
 
+export type CardCall = {
+  kind: "call_in" | "call_out" | "sms_in" | "sms_out";
+  date: string;
+  // Short snippet of the SMS body / call transcript (truncated) so the model
+  // knows what was discussed without a full transcript dominating the prompt.
+  detail: string;
+};
+
 // Per-book figures fed to the prompt when the customer has BOTH receivable
 // books (osplit2 W2 T5). Balances are net of that origin's unapplied credit —
 // same computeOriginBalances convention as the customer-detail KPIs.
@@ -79,6 +88,7 @@ export type CardPromptInput = {
   kpis: CardKpis;
   candidates: CardCandidate[];
   recentEmails: CardEmail[];
+  recentCalls: CardCall[];
   context: DraftContext;
   // Present only for both-books customers — switches the prompt into the
   // two-summary schema. Single-book customers keep the blended schema.
@@ -152,6 +162,21 @@ export function buildCardPrompt(input: CardPromptInput): {
         .join("\n")
     : "(no recent emails)";
 
+  const CALL_KIND_LABEL: Record<CardCall["kind"], string> = {
+    call_in: "CALL (inbound)",
+    call_out: "CALL (outbound)",
+    sms_in: "TEXT (inbound)",
+    sms_out: "TEXT (outbound)",
+  };
+  const callBlock = input.recentCalls.length
+    ? input.recentCalls
+        .map(
+          (c) =>
+            `- ${c.date} ${CALL_KIND_LABEL[c.kind]}${c.detail ? `: ${c.detail}` : ""}`,
+        )
+        .join("\n")
+    : "(no recent calls or texts)";
+
   const ctxBlock = input.context.customerContext
     ? `\n\n## Customer-specific context (operator-curated)\n${input.context.customerContext}`
     : "";
@@ -165,7 +190,8 @@ export function buildCardPrompt(input: CardPromptInput): {
     `on hold: ${input.kpis.hasHold ? "yes" : "no"})` +
     booksBlock +
     `\n\n## Current autopilot candidates for this customer\n${candidatesBlock}\n\n` +
-    `## Recent emails (last 5)\n${emailBlock}` +
+    `## Recent emails (last 5)\n${emailBlock}\n\n` +
+    `## Recent calls & texts (last 5)\n${callBlock}` +
     ctxBlock +
     `\n\nReturn JSON matching the schema. ` +
     (input.books
@@ -393,7 +419,7 @@ export async function generateCustomerCard(
     ...cronFail.map((c) => ({ ...c, category: "ops_cron_fail" })),
   ];
 
-  const [emails, invoiceRows, creditRows] = await Promise.all([
+  const [emails, invoiceRows, creditRows, callRows] = await Promise.all([
     db
       .select({
         direction: emailLog.direction,
@@ -428,6 +454,23 @@ export async function generateCustomerCard(
           gt(creditMemos.balance, "0"),
         ),
       ),
+    // Recent calls + texts (Vocatech). Excludes dismissed rows; newest first.
+    db
+      .select({
+        kind: phoneCommunications.kind,
+        startedAt: phoneCommunications.startedAt,
+        body: phoneCommunications.body,
+        transcription: phoneCommunications.transcription,
+      })
+      .from(phoneCommunications)
+      .where(
+        and(
+          eq(phoneCommunications.customerId, customerId),
+          isNull(phoneCommunications.dismissedAt),
+        ),
+      )
+      .orderBy(desc(phoneCommunications.startedAt))
+      .limit(5),
   ]);
 
   // Both-books predicate — same semantics as the customer-detail header
@@ -494,6 +537,18 @@ export async function generateCustomerCard(
       subject: e.subject ?? "(no subject)",
       date: e.emailDate.toISOString().slice(0, 10),
     })),
+    recentCalls: callRows.map((c) => {
+      // Prefer the call transcript; fall back to the SMS body. Truncate so a
+      // long transcript can't dominate the prompt (or its token budget).
+      const text = (c.transcription ?? c.body ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      return {
+        kind: c.kind,
+        date: c.startedAt.toISOString().slice(0, 10),
+        detail: text.length > 280 ? `${text.slice(0, 280)}…` : text,
+      };
+    }),
     context: ctx,
     books,
   });
