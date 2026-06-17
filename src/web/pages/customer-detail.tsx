@@ -921,6 +921,16 @@ export default function CustomerDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {/* AI summary — pinned to the top of the page, visible on EVERY tab
+          (including Emails, where the context rail is hidden to give the
+          embedded board full width). */}
+      <div className="mb-4">
+        <CustomerAiCard
+          customerId={customer.id}
+          onAction={handleAiCardAction}
+        />
+      </div>
+
       <div className="flex flex-col gap-4 md:flex-row md:items-start">
         {/* Main work column — the section tabs + active tab content. */}
         <div className="min-w-0 flex-1">
@@ -1068,7 +1078,6 @@ export default function CustomerDetailPage() {
           <CustomerContextRail
             customer={customer}
             notes={recentActivities.filter((a) => a.kind === "manual_note")}
-            onAction={handleAiCardAction}
           />
         )}
       </div>
@@ -1719,15 +1728,12 @@ function NotesRailCard({
 function CustomerContextRail({
   customer,
   notes,
-  onAction,
 }: {
   customer: Customer;
   notes: Activity[];
-  onAction: (action: AiCardAction) => void;
 }) {
   return (
     <aside className="flex w-full flex-col gap-3 md:w-[330px] md:shrink-0">
-      <CustomerAiCard customerId={customer.id} onAction={onAction} />
       <NotesRailCard customerId={customer.id} notes={notes} />
       <details className="rounded-xl border border-default bg-subtle">
         <summary className="cursor-pointer list-none px-3.5 py-2.5 text-xs font-semibold uppercase tracking-wide text-secondary [&::-webkit-details-marker]:hidden">
