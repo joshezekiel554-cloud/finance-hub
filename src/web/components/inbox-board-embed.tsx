@@ -33,18 +33,21 @@ export function InboxBoardEmbed({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="relative h-[calc(100vh-15rem)] min-h-[480px] overflow-hidden rounded-lg border border-default bg-base">
+      <div className="relative h-[calc(100vh-15rem)] min-h-[480px] overflow-hidden rounded-lg border border-default bg-white">
         {!loaded ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-base">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white">
             <div className="h-6 w-6 rounded-full border-2 border-default border-t-accent-primary motion-safe:animate-spin" />
             <p className="text-sm text-muted">Loading emails…</p>
           </div>
         ) : null}
+        {/* White to match the embedded Inbox board exactly (board is pure
+            white) so the iframe seam is invisible — overrides the app's
+            faintly-tinted bg-base only at this integration boundary. */}
         <iframe
           title="Customer emails (Inbox)"
           src={src}
           onLoad={() => setLoaded(true)}
-          className="h-full w-full border-0 bg-base"
+          className="h-full w-full border-0 bg-white"
         />
       </div>
       <p className="px-0.5 text-xs text-muted">
