@@ -223,6 +223,23 @@ export async function processOrdersSync(
     jobLog.error({ err }, "orders-sync: hold-alert pass failed (non-fatal)");
   }
 
+  // Overdue-balance / not-communicating review alerts (Phase 4). Same fail-safe
+  // isolation; idempotent + retries next run.
+  try {
+    const { runOrderOverdueAlerts } = await import(
+      "../../modules/orders/overdue-alerts.js"
+    );
+    const overdueResult = await runOrderOverdueAlerts();
+    if (overdueResult.candidates > 0) {
+      jobLog.info(
+        { stage: "overdue-alerts", ...overdueResult },
+        "order overdue alerts",
+      );
+    }
+  } catch (err) {
+    jobLog.error({ err }, "orders-sync: overdue-alert pass failed (non-fatal)");
+  }
+
   const durationMs = Date.now() - startedAt;
   jobLog.info(
     { stage: "completed", fetched, upserted, matched, durationMs },

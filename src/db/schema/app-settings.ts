@@ -103,5 +103,13 @@ export const APP_SETTING_KEYS = [
   // orders-sync job sends here with X-Feldart-Finance-Send: hold-alert so Inbox
   // routes it to To-Do, loud, with a team ping. Empty = no alert is sent.
   "order_hold_alert_recipients",
+  // Phase 4 — overdue-order review alert. Fires when an order comes through for
+  // a customer with a large overdue balance who isn't communicating (and who is
+  // NOT excluded from autopilot). Recipients (comma-separated; empty = no send),
+  // the overdue threshold in GBP, and the "no contact for N days" window are all
+  // operator-tweakable in /settings.
+  "order_overdue_alert_recipients",
+  "order_overdue_threshold_gbp",
+  "order_overdue_no_contact_days",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

@@ -1,0 +1,1 @@
+ALTER TABLE `orders` ADD `overdue_alerted_at` timestamp;

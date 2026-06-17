@@ -84,6 +84,9 @@ export const orders = mysqlTable(
     // this order, so the alert fires at-most-once even though the orders-sync
     // job re-evaluates recent orders every run. NULL = not yet alerted.
     holdAlertedAt: timestamp("hold_alerted_at"),
+    // Set the first time the overdue-balance / not-communicating review alert is
+    // sent for this order (Phase 4). Same at-most-once purpose as above.
+    overdueAlertedAt: timestamp("overdue_alerted_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
