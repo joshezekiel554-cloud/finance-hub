@@ -63,6 +63,11 @@ export type AppSettingsMap = {
   // Comma-separated recipients for the order-hold alert (held customer ordered,
   // or payment-upfront order unpaid). Empty = no alert sent.
   order_hold_alert_recipients: string;
+  // Phase 4 — overdue-order review alert. Recipients (comma-separated, empty =
+  // no send), GBP overdue threshold, and the no-contact window in days.
+  order_overdue_alert_recipients: string;
+  order_overdue_threshold_gbp: string;
+  order_overdue_no_contact_days: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -99,6 +104,12 @@ const DEFAULTS: AppSettingsMap = {
   // /settings.
   order_hold_alert_recipients:
     "info@feldart.co.uk,info@feldart.com,sales@feldart.com,efrayim@bluechipfulfillment.com,shipping@bluechipfulfillment.com",
+  // Operator-specified: the overdue review alert goes to the two Feldart
+  // inboxes (they decide whether to tell Bluechip to hold). £1000 + 14 days are
+  // sensible starting points; tweak in /settings.
+  order_overdue_alert_recipients: "info@feldart.com,info@feldart.co.uk",
+  order_overdue_threshold_gbp: "1000",
+  order_overdue_no_contact_days: "14",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

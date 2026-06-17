@@ -330,6 +330,20 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
     });
   });
 
+  // ── Overdue-balance orders (replaces "unactioned emails today") ─────────
+  // Orders from customers who carry a large overdue balance, aren't in contact,
+  // and are autopilot-ON. The orders-sync job also emails an urgent review for
+  // each (Phase 4); this widget runs the same qualification live so a flag shows
+  // even if the email failed. Thresholds are operator-tweakable in /settings.
+  app.get("/overdue-orders", async (req, reply) => {
+    await requireAuth(req);
+    const { listFlaggedOverdueOrders } = await import(
+      "../../modules/orders/overdue-alerts.js"
+    );
+    const rows = await listFlaggedOverdueOrders(10);
+    return reply.send({ rows });
+  });
+
   // ── RMAs in Flight ─────────────────────────────────────────────────────
   app.get("/rmas", async (req, reply) => {
     await requireAuth(req);

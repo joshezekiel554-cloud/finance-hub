@@ -108,6 +108,9 @@ const SETTINGS: AppSettingsMap = {
   agent_monthly_budget_usd: "150",
   inbox_integration_enabled: "",
   order_hold_alert_recipients: "",
+  order_overdue_alert_recipients: "",
+  order_overdue_threshold_gbp: "1000",
+  order_overdue_no_contact_days: "14",
 };
 
 describe("renderStatementPdf", () => {
@@ -208,6 +211,9 @@ describe("renderStatementPdf", () => {
         agent_monthly_budget_usd: "150",
         inbox_integration_enabled: "",
         order_hold_alert_recipients: "",
+        order_overdue_alert_recipients: "",
+        order_overdue_threshold_gbp: "1000",
+        order_overdue_no_contact_days: "14",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

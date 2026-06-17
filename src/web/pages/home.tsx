@@ -13,7 +13,7 @@ import { AlertTriangle, ArrowRight } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { TasksWidget } from "../components/dashboard/tasks-widget";
-import { EmailsWidget } from "../components/dashboard/emails-widget";
+import { OverdueOrdersWidget } from "../components/dashboard/overdue-orders-widget";
 import { ChaseWidget } from "../components/dashboard/chase-widget";
 import { RmasWidget } from "../components/dashboard/rmas-widget";
 import { HoldsWidget } from "../components/dashboard/holds-widget";
@@ -121,7 +121,7 @@ export default function HomePage() {
       {/* Action-queue widgets — 3 on top, 2 on the bottom. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <TasksWidget />
-        <EmailsWidget />
+        <OverdueOrdersWidget />
         <ChaseWidget />
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
