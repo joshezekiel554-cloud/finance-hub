@@ -34,6 +34,8 @@ const ORDER_FIELDS = [
   "shipping_address",
   "billing_address",
   "line_items",
+  // Tracking + carrier shipment_status (for the Orders tab + delivered state).
+  "fulfillments",
 ].join(",");
 
 export type ListOrdersOptions = {

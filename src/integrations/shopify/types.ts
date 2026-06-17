@@ -75,6 +75,22 @@ export type ShopifyOrder = {
   shipping_address: ShopifyAddress | null;
   billing_address: ShopifyAddress | null;
   line_items: ShopifyLineItem[];
+  // Present when `fulfillments` is in the requested field set. Carries tracking
+  // + the carrier-reported shipment_status (delivered, in_transit, …).
+  fulfillments?: ShopifyFulfillment[];
+};
+
+export type ShopifyFulfillment = {
+  id: number;
+  status?: string | null; // success, cancelled, error, pending
+  shipment_status?: string | null; // in_transit, out_for_delivery, delivered, …
+  tracking_number?: string | null;
+  tracking_numbers?: string[];
+  tracking_url?: string | null;
+  tracking_urls?: string[];
+  tracking_company?: string | null;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type ShopifyVariant = {

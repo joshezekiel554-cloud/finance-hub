@@ -10,6 +10,8 @@
 // regardless — the same way the Inbox board matches.
 
 import { eq, or, sql } from "drizzle-orm";
+import { db } from "../../db/index.js";
+import { customers } from "../../db/schema/customers.js";
 import { emailLog } from "../../db/schema/crm.js";
 
 export type CustomerAddrFields = {
@@ -30,6 +32,43 @@ export function customerAddrSet(c: CustomerAddrFields): string[] {
     if (Array.isArray(arr)) for (const e of arr) add(e);
   }
   return [...out];
+}
+
+// Build a one-shot lowercased email → customerId index over ALL customers, for
+// matching an inbound thing (an order, an email) to a customer. Only
+// UNAMBIGUOUS addresses (belonging to exactly one customer) are included —
+// shared addresses are dropped rather than mis-attributed. Matches the Gmail
+// poller's index semantics.
+export async function buildCustomerEmailIndex(): Promise<Map<string, string>> {
+  const rows = await db
+    .select({
+      id: customers.id,
+      primaryEmail: customers.primaryEmail,
+      billingEmails: customers.billingEmails,
+      invoiceToEmails: customers.invoiceToEmails,
+      statementToEmails: customers.statementToEmails,
+    })
+    .from(customers);
+  const addrToCustomers = new Map<string, Set<string>>();
+  const add = (email: unknown, id: string) => {
+    if (typeof email !== "string") return;
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    const set = addrToCustomers.get(key) ?? new Set<string>();
+    set.add(id);
+    addrToCustomers.set(key, set);
+  };
+  for (const r of rows) {
+    add(r.primaryEmail, r.id);
+    for (const arr of [r.billingEmails, r.invoiceToEmails, r.statementToEmails]) {
+      if (Array.isArray(arr)) for (const e of arr) add(e, r.id);
+    }
+  }
+  const index = new Map<string, string>();
+  for (const [addr, ids] of addrToCustomers) {
+    if (ids.size === 1) index.set(addr, ids.values().next().value as string);
+  }
+  return index;
 }
 
 // SQL predicate: emails linked to this customer id OR to/from any of the
