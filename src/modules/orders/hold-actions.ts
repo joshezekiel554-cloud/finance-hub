@@ -8,10 +8,12 @@
 //   getHoldHistory — the order's hold audit trail (the History drawer).
 
 import { and, asc, eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { orders } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
 import { auditLog } from "../../db/schema/audit.js";
+import { orderReviewDismissals } from "../../db/schema/order-review-dismissals.js";
 import { recordHoldTransition } from "./hold-alerts.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { env } from "../../lib/env.js";
@@ -265,6 +267,39 @@ export async function cancelHoldOrder(
     "order cancelled (Shopify + QBO)",
   );
   return { ok: true, shopifyCancelled: true, qboVoided, note };
+}
+
+// Permanently dismiss an overdue-balance row from the "Orders to review" widget
+// (operator decided it needs no action). Idempotent — a repeat dismiss just
+// refreshes the row. Writes an audit row. Does NOT touch holdState or Shopify.
+export async function dismissOrderReview(
+  orderId: string,
+  userId: string,
+): Promise<HoldActionResult> {
+  const rows = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  if (!rows[0]) return { ok: false, reason: "not_found" };
+
+  await db
+    .insert(orderReviewDismissals)
+    .values({ orderId, dismissedByUserId: userId })
+    .onDuplicateKeyUpdate({
+      set: { dismissedAt: new Date(), dismissedByUserId: userId },
+    });
+  await db.insert(auditLog).values({
+    id: nanoid(24),
+    userId,
+    action: "order.review_dismissed",
+    entityType: "order",
+    entityId: orderId,
+    before: {},
+    after: { reviewDismissed: true },
+  });
+  log.info({ orderId, userId }, "overdue review dismissed");
+  return { ok: true };
 }
 
 export type HoldHistoryEntry = {
