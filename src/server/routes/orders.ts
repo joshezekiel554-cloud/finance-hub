@@ -8,6 +8,7 @@ import { requireAuth } from "../lib/auth.js";
 import {
   releaseHold,
   placeOnHold,
+  cancelHoldOrder,
   getHoldHistory,
 } from "../../modules/orders/hold-actions.js";
 
@@ -30,6 +31,21 @@ const ordersRoute: FastifyPluginAsync = async (app) => {
       return reply.code(code).send({ error: result.reason });
     }
     return reply.send({ ok: true });
+  });
+
+  app.post<{ Params: { id: string } }>("/:id/cancel", async (req, reply) => {
+    const user = await requireAuth(req);
+    const result = await cancelHoldOrder(req.params.id, user.id);
+    if (!result.ok) {
+      const code =
+        result.reason === "not_found"
+          ? 404
+          : result.reason === "shopify_cancel_failed"
+            ? 502
+            : 409;
+      return reply.code(code).send({ error: result.reason });
+    }
+    return reply.send(result);
   });
 
   app.get<{ Params: { id: string } }>("/:id/hold-history", async (req, reply) => {

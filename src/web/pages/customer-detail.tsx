@@ -1679,13 +1679,20 @@ function HoldOrdersBanner({
   heldOrders: HeldOrder[];
 }) {
   const queryClient = useQueryClient();
-  const [releasing, setReleasing] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const releaseMutation = useMutation({
-    mutationFn: async (orderId: string) => {
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    void queryClient.invalidateQueries({
+      queryKey: ["customer-orders", customerId],
+    });
+  };
+  const orderAction = useMutation({
+    mutationFn: async (args: { orderId: string; path: string }) => {
       const res = await fetch(
-        `/api/orders/${encodeURIComponent(orderId)}/good-to-send`,
+        `/api/orders/${encodeURIComponent(args.orderId)}/${args.path}`,
         { method: "POST" },
       );
       if (!res.ok) {
@@ -1693,18 +1700,16 @@ function HoldOrdersBanner({
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
     },
-    onMutate: (orderId: string) => {
-      setReleasing(orderId);
+    onMutate: (args) => {
+      setBusy(args.orderId);
       setError(null);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
-      void queryClient.invalidateQueries({
-        queryKey: ["customer-orders", customerId],
-      });
+      setConfirmCancel(null);
+      invalidate();
     },
     onError: (e) => setError((e as Error).message),
-    onSettled: () => setReleasing(null),
+    onSettled: () => setBusy(null),
   });
 
   return (
@@ -1731,15 +1736,45 @@ function HoldOrdersBanner({
                 {o.holdStartedAt ? ` · held ${daysAgoLabel(o.holdStartedAt)}` : ""}
               </span>
             </span>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => releaseMutation.mutate(o.id)}
-              disabled={releasing === o.id}
-              loading={releasing === o.id}
-            >
-              Good to send
-            </Button>
+            <span className="flex flex-wrap items-center gap-1.5">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => orderAction.mutate({ orderId: o.id, path: "good-to-send" })}
+                disabled={busy === o.id}
+                loading={busy === o.id && confirmCancel !== o.id}
+              >
+                Good to send
+              </Button>
+              {confirmCancel === o.id ? (
+                <>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => orderAction.mutate({ orderId: o.id, path: "cancel" })}
+                    disabled={busy === o.id}
+                    loading={busy === o.id}
+                  >
+                    Confirm cancel
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmCancel(null)}
+                    className="px-1 text-xs text-muted hover:text-primary"
+                  >
+                    No
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmCancel(o.id)}
+                  className="rounded-md border border-accent-danger/40 px-2 py-1 text-xs text-accent-danger hover:bg-accent-danger/10"
+                >
+                  Cancel order
+                </button>
+              )}
+            </span>
           </li>
         ))}
       </ul>

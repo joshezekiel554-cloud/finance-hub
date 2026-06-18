@@ -18,12 +18,13 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
 import axios, { type AxiosError } from "axios";
 import { db } from "../../db/index.js";
 import { customers, type Customer } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { creditMemos } from "../../db/schema/credit-memos.js";
+import { orders } from "../../db/schema/catalog.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 import { QboClient } from "../../integrations/qb/client.js";
@@ -184,6 +185,33 @@ const extRoute: FastifyPluginAsync = async (app) => {
       (o) => Number(invByOrigin.get(o)?.bal ?? 0) > 0,
     );
 
+    // Orders currently on hold — so the Inbox can show an active-hold banner.
+    // reason is mapped to a stable inbox-facing token.
+    const holdRows = await db
+      .select({
+        orderNumber: orders.orderNumber,
+        shopifyOrderId: orders.shopifyOrderId,
+        holdReason: orders.holdReason,
+        holdStartedAt: orders.holdStartedAt,
+      })
+      .from(orders)
+      .where(and(eq(orders.customerId, id), eq(orders.holdState, "on_hold")))
+      .orderBy(desc(orders.holdStartedAt))
+      .limit(20);
+    const holds = holdRows.map((h) => ({
+      orderNumber: h.orderNumber ?? `#${h.shopifyOrderId}`,
+      reason:
+        h.holdReason === "payment_upfront_unpaid"
+          ? "prepay"
+          : h.holdReason === "overdue_non_communicating"
+            ? "overdue"
+            : "on_hold",
+      heldSince:
+        h.holdStartedAt instanceof Date
+          ? h.holdStartedAt.toISOString()
+          : (h.holdStartedAt as string | null),
+    }));
+
     return {
       id: c.id,
       displayName: c.displayName,
@@ -194,6 +222,7 @@ const extRoute: FastifyPluginAsync = async (app) => {
       paymentTerms: c.paymentTerms ?? null,
       openOrigins,
       perBook: { feldart: perBookFor("feldart"), tj: perBookFor("tj") },
+      holds,
     };
   });
 
