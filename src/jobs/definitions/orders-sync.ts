@@ -212,12 +212,20 @@ export async function processOrdersSync(
   // Isolated in its own try/catch so an alert hiccup never fails the sync (the
   // alert is idempotent and retries next run).
   try {
-    const { runOrderHoldAlerts } = await import(
+    const { runOrderHoldAlerts, releaseResolvedHolds } = await import(
       "../../modules/orders/hold-alerts.js"
     );
     const alertResult = await runOrderHoldAlerts();
     if (alertResult.candidates > 0) {
       jobLog.info({ stage: "hold-alerts", ...alertResult }, "order hold alerts");
+    }
+    // Auto-release held orders whose reason has resolved.
+    const releaseResult = await releaseResolvedHolds();
+    if (releaseResult.released > 0) {
+      jobLog.info(
+        { stage: "hold-auto-release", ...releaseResult },
+        "order holds auto-released",
+      );
     }
   } catch (err) {
     jobLog.error({ err }, "orders-sync: hold-alert pass failed (non-fatal)");

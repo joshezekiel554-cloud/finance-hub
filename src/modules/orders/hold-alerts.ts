@@ -21,9 +21,11 @@
 
 import { and, desc, eq, gte, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { orders, type Order } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
+import { auditLog } from "../../db/schema/audit.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { renderTemplate } from "../email-compose/index.js";
 import { env } from "../../lib/env.js";
@@ -77,6 +79,51 @@ export function classifyOrderHoldAlert(args: {
     return "payment_upfront_unpaid";
   }
   return null;
+}
+
+// Does the stored hold reason STILL apply given the customer/order's current
+// state? Used by the auto-clear pass — when it no longer applies, the order is
+// auto-released. overdueThresholdGbp is only consulted for the overdue reason.
+export function holdReasonStillApplies(args: {
+  reason: string | null;
+  holdStatus: string | null;
+  financialStatus: string | null;
+  overdueBalance: string | null;
+  overdueThresholdGbp: number;
+}): boolean {
+  switch (args.reason) {
+    case "customer_on_hold":
+      return args.holdStatus === "hold";
+    case "payment_upfront_unpaid":
+      return (
+        args.holdStatus === "payment_upfront" &&
+        isPaymentPending(args.financialStatus)
+      );
+    case "overdue_non_communicating":
+      return Number(args.overdueBalance ?? 0) >= args.overdueThresholdGbp;
+    default:
+      return false;
+  }
+}
+
+// Append an audit_log row for a hold-state transition. userId null = automated
+// (detection / auto-clear); set = an operator action.
+async function recordHoldTransition(args: {
+  orderId: string;
+  userId: string | null;
+  action: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}): Promise<void> {
+  await db.insert(auditLog).values({
+    id: nanoid(24),
+    userId: args.userId,
+    action: args.action,
+    entityType: "order",
+    entityId: args.orderId,
+    before: args.before,
+    after: args.after,
+  });
 }
 
 const SUBJECT_TPL = "⚠ HOLD ORDER — {{order_number}} ({{customer_name}})";
@@ -215,7 +262,7 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
     const body = renderTemplate(BODY_TPL, vars);
 
     try {
-      await sendEmail({
+      const sendResult = await sendEmail({
         to: recipients,
         subject,
         html: body
@@ -226,10 +273,27 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
         financeSendType: "hold-alert",
         financeCustomerId: o.customerId ?? undefined,
       });
+      const now = new Date();
+      // First alert = the order goes on_hold. Capture the warehouse alert's
+      // Gmail thread so the later "good to send" release can reply in-thread.
       await db
         .update(orders)
-        .set({ holdAlertedAt: new Date() })
+        .set({
+          holdAlertedAt: now,
+          holdState: "on_hold",
+          holdReason: reason,
+          holdStartedAt: now,
+          holdAlertThreadId: sendResult.threadId || null,
+          holdAlertMessageId: sendResult.messageId || null,
+        })
         .where(eq(orders.id, o.id));
+      await recordHoldTransition({
+        orderId: o.id,
+        userId: null,
+        action: "order.hold_started",
+        before: { holdState: o.holdState },
+        after: { holdState: "on_hold", holdReason: reason },
+      });
       sent += 1;
       log.info(
         { orderId: o.id, orderNumber, reason, customerId: o.customerId },
@@ -320,6 +384,63 @@ export async function listHoldableHoldOrders(
       return row;
     })
     .filter((r): r is HoldOrderRow => r !== null);
+}
+
+// Auto-clear: release any on_hold order whose reason no longer applies (prepay
+// order got paid, customer taken off hold, overdue settled below threshold).
+// holdReleasedByUserId stays null to mark it as an automatic release. Runs each
+// orders-sync.
+export async function releaseResolvedHolds(): Promise<{ released: number }> {
+  const settings = await loadAppSettings();
+  const thRaw = (settings.order_overdue_threshold_gbp ?? "").trim();
+  const overdueThresholdGbp =
+    thRaw === "" || !Number.isFinite(Number(thRaw)) ? 1000 : Number(thRaw);
+
+  const rows = await db
+    .select({
+      id: orders.id,
+      holdReason: orders.holdReason,
+      financialStatus: orders.financialStatus,
+      holdStatus: customers.holdStatus,
+      overdueBalance: customers.overdueBalance,
+    })
+    .from(orders)
+    .innerJoin(customers, eq(orders.customerId, customers.id))
+    .where(eq(orders.holdState, "on_hold"))
+    .limit(500);
+
+  let released = 0;
+  for (const r of rows) {
+    const stillHeld = holdReasonStillApplies({
+      reason: r.holdReason,
+      holdStatus: r.holdStatus,
+      financialStatus: r.financialStatus,
+      overdueBalance: r.overdueBalance,
+      overdueThresholdGbp,
+    });
+    if (stillHeld) continue;
+    await db
+      .update(orders)
+      .set({
+        holdState: "released",
+        holdReleasedAt: new Date(),
+        holdReleasedByUserId: null,
+      })
+      .where(eq(orders.id, r.id));
+    await recordHoldTransition({
+      orderId: r.id,
+      userId: null,
+      action: "order.hold_auto_released",
+      before: { holdState: "on_hold", holdReason: r.holdReason },
+      after: { holdState: "released", reason: "resolved" },
+    });
+    released += 1;
+    log.info(
+      { orderId: r.id, holdReason: r.holdReason },
+      "order hold auto-released (reason resolved)",
+    );
+  }
+  return { released };
 }
 
 // Re-exported for callers that want the row type.

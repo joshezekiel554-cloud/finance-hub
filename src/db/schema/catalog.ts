@@ -87,6 +87,30 @@ export const orders = mysqlTable(
     // Set the first time the overdue-balance / not-communicating review alert is
     // sent for this order (Phase 4). Same at-most-once purpose as above.
     overdueAlertedAt: timestamp("overdue_alerted_at"),
+    // ── Per-order hold lifecycle (order-hold-lifecycle feature) ──────────────
+    // The hold lives on the ORDER here (distinct from customer.holdStatus): an
+    // order can be individually held, released ("good to send"), or cancelled.
+    holdState: mysqlEnum("hold_state", [
+      "none",
+      "on_hold",
+      "released",
+      "cancelled",
+    ])
+      .default("none")
+      .notNull(),
+    // Why it's held: customer_on_hold | payment_upfront_unpaid |
+    // overdue_non_communicating. Captured at the moment it goes on_hold.
+    holdReason: varchar("hold_reason", { length: 40 }),
+    // When it entered on_hold — drives the email-ladder timers + the 7-day flag.
+    holdStartedAt: timestamp("hold_started_at"),
+    // Release ("good to send" or auto-clear when the reason resolves).
+    holdReleasedAt: timestamp("hold_released_at"),
+    // null = auto-cleared (reason resolved); set = a human clicked Good-to-send.
+    holdReleasedByUserId: varchar("hold_released_by_user_id", { length: 255 }),
+    // Gmail thread of the Day-0 warehouse hold-alert, so the release can reply
+    // IN-THREAD (Inbox flips that exact thread to Done). messageId kept for ref.
+    holdAlertThreadId: varchar("hold_alert_thread_id", { length: 255 }),
+    holdAlertMessageId: varchar("hold_alert_message_id", { length: 255 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },

@@ -1,8 +1,67 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyOrderHoldAlert,
+  holdReasonStillApplies,
   isPaymentPending,
 } from "./hold-alerts.js";
+
+describe("holdReasonStillApplies (auto-clear)", () => {
+  const base = {
+    holdStatus: "active" as string | null,
+    financialStatus: "paid" as string | null,
+    overdueBalance: "0" as string | null,
+    overdueThresholdGbp: 1000,
+  };
+
+  it("customer_on_hold still applies only while the customer is on hold", () => {
+    expect(
+      holdReasonStillApplies({ ...base, reason: "customer_on_hold", holdStatus: "hold" }),
+    ).toBe(true);
+    expect(
+      holdReasonStillApplies({ ...base, reason: "customer_on_hold", holdStatus: "active" }),
+    ).toBe(false);
+  });
+
+  it("payment_upfront_unpaid clears once the order is paid", () => {
+    expect(
+      holdReasonStillApplies({
+        ...base,
+        reason: "payment_upfront_unpaid",
+        holdStatus: "payment_upfront",
+        financialStatus: "pending",
+      }),
+    ).toBe(true);
+    expect(
+      holdReasonStillApplies({
+        ...base,
+        reason: "payment_upfront_unpaid",
+        holdStatus: "payment_upfront",
+        financialStatus: "paid",
+      }),
+    ).toBe(false);
+  });
+
+  it("overdue_non_communicating clears once overdue drops below threshold", () => {
+    expect(
+      holdReasonStillApplies({
+        ...base,
+        reason: "overdue_non_communicating",
+        overdueBalance: "1500",
+      }),
+    ).toBe(true);
+    expect(
+      holdReasonStillApplies({
+        ...base,
+        reason: "overdue_non_communicating",
+        overdueBalance: "200",
+      }),
+    ).toBe(false);
+  });
+
+  it("releases on an unknown / null reason", () => {
+    expect(holdReasonStillApplies({ ...base, reason: null })).toBe(false);
+  });
+});
 
 describe("isPaymentPending", () => {
   it("treats null / empty as pending", () => {
