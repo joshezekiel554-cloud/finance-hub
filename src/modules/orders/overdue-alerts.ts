@@ -24,6 +24,7 @@ import { db } from "../../db/index.js";
 import { orders } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
+import { orderReviewDismissals } from "../../db/schema/order-review-dismissals.js";
 import { emailLog } from "../../db/schema/crm.js";
 import { customerAiCards } from "../../db/schema/customer-ai-cards.js";
 import { loadAppSettings } from "../statements/settings.js";
@@ -132,6 +133,12 @@ export async function listFlaggedOverdueOrders(
   // Dashboard only surfaces still-holdable orders (the email pass fires
   // regardless of shipped state).
   conds.push(unshippedOrderSql());
+  // Operator-dismissed review rows stay hidden for good (mirrors the chase
+  // widget's chase_dismissals exclusion). Only the widget filters these — the
+  // email pass is unaffected (it's at-most-once via overdue_alerted_at anyway).
+  conds.push(
+    sql`${orders.id} NOT IN (SELECT ${orderReviewDismissals.orderId} FROM ${orderReviewDismissals})`,
+  );
 
   const rows = await db
     .select({

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, PauseCircle, Clock, Mail } from "lucide-react";
+import { AlertTriangle, PauseCircle, Clock, Mail, X } from "lucide-react";
 import { Card, CardBody, CardHeader } from "../ui/card";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -318,6 +318,17 @@ export function OrdersToReviewWidget() {
                         >
                           <PauseCircle className="size-3.5" /> Place on hold
                         </Button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            action.mutate({ orderId: r.orderId, path: "dismiss-review" })
+                          }
+                          disabled={busyOrder === r.orderId}
+                          className="inline-flex items-center gap-1 rounded-md border border-default bg-base px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-primary disabled:opacity-50"
+                          title="Hide this order from the review list for good"
+                        >
+                          <X className="size-3" /> Dismiss
+                        </button>
                       </div>
                     </li>
                   ))}
