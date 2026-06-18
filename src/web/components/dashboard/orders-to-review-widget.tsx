@@ -115,6 +115,7 @@ export function OrdersToReviewWidget() {
   const queryClient = useQueryClient();
   const [openHistory, setOpenHistory] = useState<string | null>(null);
   const [busyOrder, setBusyOrder] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const query = useQuery<{ hold: HoldOrderRow[]; overdue: OverdueOrderRow[] }>({
@@ -240,6 +241,36 @@ export function OrdersToReviewWidget() {
                         >
                           <Clock className="size-3" /> History
                         </button>
+                        {confirmCancel === r.orderId ? (
+                          <span className="inline-flex items-center gap-1">
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={() =>
+                                action.mutate({ orderId: r.orderId, path: "cancel" })
+                              }
+                              disabled={busyOrder === r.orderId}
+                              loading={busyOrder === r.orderId}
+                            >
+                              Confirm cancel
+                            </Button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmCancel(null)}
+                              className="rounded-md px-1.5 py-1 text-xs text-muted hover:text-primary"
+                            >
+                              No
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmCancel(r.orderId)}
+                            className="inline-flex items-center gap-1 rounded-md border border-accent-danger/40 px-2 py-1 text-xs text-accent-danger hover:bg-accent-danger/10"
+                          >
+                            Cancel order
+                          </button>
+                        )}
                       </div>
                       {openHistory === r.orderId && (
                         <div className="pl-5">

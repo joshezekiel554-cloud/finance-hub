@@ -72,8 +72,15 @@ radio with the operator + the Inbox agent, 2026-06-18.
 - [x] **P4 — AI context + 7-day flag**: customer-card prompt gets an "Orders ON
   HOLD" block (flags >7d as STALE), agent get_customer adds `ordersOnHold=…`,
   dashboard hold rows show "held Nd" + an amber badge at ≥7d. DONE.
-- [ ] **P5 — cancel button**: Shopify cancel + QBO void (resolve invoice
-  mapping first). Expose holdState on /api/ext for inbox banner.
+- [x] **P5 — cancel button**: ShopifyClient.cancelOrder (REST, restock:true) +
+  cancelHoldOrder (Shopify cancel must succeed → then best-effort QBO void via
+  getInvoiceByDocNumber(orderNumber − "#")→voidInvoice → holdState=cancelled,
+  audited). Route POST /api/orders/:id/cancel. Cancel button (two-step confirm)
+  on the dashboard hold rows + the customer-detail banner. `holds:[{orderNumber,
+  reason:'prepay'|'overdue'|'on_hold',heldSince}]` exposed on /api/ext for the
+  inbox banner. DONE.
+  NOTE for operator: Shopify cancel uses restock:true (returns items to Shopify
+  inventory). Flag if you'd rather restock:false (warehouse-only physical).
 
 ## Status
 Plan locked 2026-06-18. P1 shipped. Building P2 next.

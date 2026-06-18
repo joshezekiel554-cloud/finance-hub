@@ -173,6 +173,97 @@ Reason: this customer has a large overdue balance and hasn't been in contact. Do
   return { ok: true };
 }
 
+export type CancelResult =
+  | { ok: true; shopifyCancelled: boolean; qboVoided: boolean; note: string }
+  | { ok: false; reason: string };
+
+// Cancel a held order: cancel it in Shopify + void the matching QBO invoice
+// (docNumber == order number), mark holdState=cancelled. Operator-triggered
+// (D3). Shopify cancel must succeed before we mark it; QBO void is best-effort
+// (prepay orders have no QBO invoice). The warehouse already got the Day-10
+// "cancel + restock" email; this does the system-side actions.
+export async function cancelHoldOrder(
+  orderId: string,
+  userId: string,
+): Promise<CancelResult> {
+  const rows = await db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      shopifyOrderId: orders.shopifyOrderId,
+      holdState: orders.holdState,
+      customerId: orders.customerId,
+    })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  const o = rows[0];
+  if (!o) return { ok: false, reason: "not_found" };
+  if (o.holdState === "cancelled") return { ok: false, reason: "already_cancelled" };
+
+  const orderNumber = o.orderNumber ?? `#${o.shopifyOrderId}`;
+
+  // 1) Cancel in Shopify (hard requirement — abort if it fails).
+  if (!env.SHADOW_MODE) {
+    try {
+      const { ShopifyClient } = await import(
+        "../../integrations/shopify/client.js"
+      );
+      await new ShopifyClient().cancelOrder(o.shopifyOrderId, {
+        restock: true,
+        reason: "other",
+        notifyCustomer: false,
+      });
+    } catch (err) {
+      log.error({ err, orderId, orderNumber }, "cancel: Shopify cancel failed");
+      return { ok: false, reason: "shopify_cancel_failed" };
+    }
+  }
+
+  // 2) Void the matching QBO invoice (best-effort; docNumber == order number,
+  // minus Shopify's leading "#"). Prepay orders paid in Shopify have none.
+  let qboVoided = false;
+  let note = "Order cancelled in Shopify.";
+  const docNumber = orderNumber.replace(/^#/, "");
+  if (!env.SHADOW_MODE) {
+    try {
+      const { QboClient } = await import("../../integrations/qb/client.js");
+      const qb = new QboClient();
+      const inv = await qb.getInvoiceByDocNumber(docNumber);
+      if (inv?.Id && inv?.SyncToken) {
+        await qb.voidInvoice(inv.Id, inv.SyncToken);
+        qboVoided = true;
+        note = "Order cancelled in Shopify + QBO invoice voided.";
+      } else {
+        note = "Order cancelled in Shopify. No matching QBO invoice to void.";
+      }
+    } catch (err) {
+      log.error(
+        { err, orderId, orderNumber, docNumber },
+        "cancel: QBO void failed (Shopify cancel already done)",
+      );
+      note = "Order cancelled in Shopify, but the QBO void failed — void it manually.";
+    }
+  }
+
+  await db
+    .update(orders)
+    .set({ holdState: "cancelled", cancelledAt: new Date() })
+    .where(eq(orders.id, orderId));
+  await recordHoldTransition({
+    orderId,
+    userId,
+    action: "order.hold_cancelled",
+    before: { holdState: o.holdState },
+    after: { holdState: "cancelled", shopifyCancelled: true, qboVoided },
+  });
+  log.info(
+    { orderId, orderNumber, userId, qboVoided },
+    "order cancelled (Shopify + QBO)",
+  );
+  return { ok: true, shopifyCancelled: true, qboVoided, note };
+}
+
 export type HoldHistoryEntry = {
   occurredAt: string;
   action: string;

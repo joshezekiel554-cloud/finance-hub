@@ -154,6 +154,27 @@ export class ShopifyClient {
     return { data, res };
   }
 
+  // Cancel an order (REST POST /orders/{id}/cancel.json). `restock` returns
+  // line items to Shopify inventory; `reason` is Shopify's enum
+  // (customer|inventory|fraud|declined|other). Throws ShopifyApiError on non-2xx.
+  async cancelOrder(
+    orderId: string,
+    opts: { restock?: boolean; reason?: string; notifyCustomer?: boolean } = {},
+  ): Promise<void> {
+    const path = `/orders/${orderId}/cancel.json`;
+    const res = await this.request(path, {
+      method: "POST",
+      body: JSON.stringify({
+        restock: opts.restock ?? true,
+        reason: opts.reason ?? "other",
+        email: opts.notifyCustomer ?? false,
+      }),
+    });
+    if (!res.ok) {
+      throw new ShopifyApiError(res.status, path, await res.text());
+    }
+  }
+
   // Admin GraphQL POST. Same base path + version as the REST surface —
   // /admin/api/<version>/graphql.json — and the same auth/429-retry
   // behavior via request(). Throws ShopifyApiError on non-2xx, a
