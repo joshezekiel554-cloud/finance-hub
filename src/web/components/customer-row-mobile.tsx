@@ -25,6 +25,7 @@ type Props = {
   agentModeExcluded: boolean;
   customerType: "b2b" | "b2c" | null;
   unactionedEmailCount: number;
+  hasHoldOrder?: boolean;
   // When true, the row renders a checkbox and tap toggles selection
   // rather than navigating.
   selectable: boolean;
@@ -59,6 +60,7 @@ export function CustomerRowMobile(props: Props) {
     agentModeExcluded,
     customerType,
     unactionedEmailCount,
+    hasHoldOrder,
     selectable,
     selected,
     onToggleSelect,
@@ -134,6 +136,7 @@ export function CustomerRowMobile(props: Props) {
           {holdStatus === "payment_upfront" && (
             <Badge tone="medium">Pay upfront</Badge>
           )}
+          {hasHoldOrder && <Badge tone="critical">Order hold</Badge>}
           {customerType === "b2b" && <Badge tone="neutral">B2B</Badge>}
           {customerType === "b2c" && <Badge tone="neutral">B2C</Badge>}
           {!customerType && <Badge tone="neutral">Uncategorized</Badge>}

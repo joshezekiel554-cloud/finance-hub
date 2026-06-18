@@ -22,6 +22,7 @@ import {
   ExternalLink,
   PackageCheck,
   ShoppingBag,
+  AlertTriangle,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -143,10 +144,20 @@ type CustomerKpi = {
   tjVerifyingCount: number;
 };
 
+type HeldOrder = {
+  id: string;
+  orderNumber: string | null;
+  shopifyOrderId: string;
+  holdReason: string | null;
+  holdStartedAt: string | null;
+  total: string | null;
+};
+
 type DetailResponse = {
   customer: Customer;
   recentActivities: Activity[];
   kpi: CustomerKpi | null;
+  heldOrders?: HeldOrder[];
 };
 
 type TabKey =
@@ -432,6 +443,7 @@ export default function CustomerDetailPage() {
   if (!data) return null;
 
   const { customer, recentActivities, kpi } = data;
+  const heldOrders = data.heldOrders ?? [];
   // Per-book figures only — the blended customers.balance/overdueBalance
   // fields stay server-side for sync bookkeeping but are never rendered
   // (origin-split-2 spec §5).
@@ -925,6 +937,12 @@ export default function CustomerDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Loud banner for any order currently on hold — sits above the AI card
+          so it's the first thing seen on every tab. */}
+      {heldOrders.length > 0 && (
+        <HoldOrdersBanner customerId={customer.id} heldOrders={heldOrders} />
+      )}
+
       {/* AI summary — pinned to the top of the page, visible on EVERY tab
           (including Emails, where the context rail is hidden to give the
           embedded board full width). */}
@@ -1373,6 +1391,9 @@ type OrderRow = {
   trackingCompany: string | null;
   shipmentStatus: string | null;
   cancelledAt: string | null;
+  holdState: "none" | "on_hold" | "released" | "cancelled" | null;
+  holdReason: string | null;
+  holdStartedAt: string | null;
 };
 
 const orderMoney = new Intl.NumberFormat("en-US", {
@@ -1548,7 +1569,12 @@ function OrdersPanel({ customerId }: { customerId: string }) {
                 return (
                   <tr key={row.id} className="align-top hover:bg-subtle/60">
                     <td className="px-3 py-2 font-medium text-primary">
-                      {row.orderNumber ?? `#${row.shopifyOrderId}`}
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {row.orderNumber ?? `#${row.shopifyOrderId}`}
+                        {row.holdState === "on_hold" && (
+                          <Badge tone="critical">HOLD</Badge>
+                        )}
+                      </span>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-secondary">
                       {formatOrderDate(row.orderDate)}
@@ -1589,8 +1615,11 @@ function OrdersPanel({ customerId }: { customerId: string }) {
             <Card key={row.id}>
               <CardBody className="space-y-2 py-3">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-medium text-primary">
+                  <span className="flex flex-wrap items-center gap-1.5 font-medium text-primary">
                     {row.orderNumber ?? `#${row.shopifyOrderId}`}
+                    {row.holdState === "on_hold" && (
+                      <Badge tone="critical">HOLD</Badge>
+                    )}
                   </span>
                   <span className="text-xs text-muted">
                     {formatOrderDate(row.orderDate)}
@@ -1621,6 +1650,100 @@ function OrdersPanel({ customerId }: { customerId: string }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function holdReasonLabel(reason: string | null): string {
+  if (reason === "payment_upfront_unpaid") return "prepay unpaid";
+  if (reason === "customer_on_hold") return "customer on hold";
+  if (reason === "overdue_non_communicating") return "overdue balance";
+  return "on hold";
+}
+
+function daysAgoLabel(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  return days <= 0 ? "today" : `${days}d`;
+}
+
+// Loud red banner listing this customer's on-hold orders, each with a
+// "Good to send" release button. Sits above the AI card.
+function HoldOrdersBanner({
+  customerId,
+  heldOrders,
+}: {
+  customerId: string;
+  heldOrders: HeldOrder[];
+}) {
+  const queryClient = useQueryClient();
+  const [releasing, setReleasing] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const releaseMutation = useMutation({
+    mutationFn: async (orderId: string) => {
+      const res = await fetch(
+        `/api/orders/${encodeURIComponent(orderId)}/good-to-send`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+    },
+    onMutate: (orderId: string) => {
+      setReleasing(orderId);
+      setError(null);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["customer-orders", customerId],
+      });
+    },
+    onError: (e) => setError((e as Error).message),
+    onSettled: () => setReleasing(null),
+  });
+
+  return (
+    <div className="mb-4 rounded-lg border border-accent-danger/40 bg-accent-danger/10 p-3">
+      <div className="flex items-center gap-2 text-sm font-semibold text-accent-danger">
+        <AlertTriangle className="size-4 shrink-0" />
+        {heldOrders.length === 1
+          ? "1 order on hold"
+          : `${heldOrders.length} orders on hold`}
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {heldOrders.map((o) => (
+          <li
+            key={o.id}
+            className="flex flex-wrap items-center justify-between gap-2 text-sm"
+          >
+            <span className="min-w-0 text-primary">
+              <span className="font-medium">
+                {o.orderNumber ?? `#${o.shopifyOrderId}`}
+              </span>
+              <span className="text-muted">
+                {" · "}
+                {holdReasonLabel(o.holdReason)}
+                {o.holdStartedAt ? ` · held ${daysAgoLabel(o.holdStartedAt)}` : ""}
+              </span>
+            </span>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => releaseMutation.mutate(o.id)}
+              disabled={releasing === o.id}
+              loading={releasing === o.id}
+            >
+              Good to send
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="mt-2 text-xs text-accent-danger">{error}</p>}
     </div>
   );
 }

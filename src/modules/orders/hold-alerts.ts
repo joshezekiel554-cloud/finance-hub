@@ -321,54 +321,33 @@ export type HoldOrderRow = {
   orderTotal: string | null;
   customerId: string;
   customerName: string | null;
-  reason: HoldAlertReason;
+  reason: string | null;
 };
 
-// Dashboard data — recent, still-holdable orders for held / payment-upfront-
-// unpaid customers. Independent of whether the email alert sent.
+// Dashboard data — orders currently on_hold (the per-order holdState is the
+// source of truth now), still holdable (unshipped). Covers all hold reasons,
+// including overdue orders an operator manually placed on hold.
 export async function listHoldableHoldOrders(
   limit = 10,
 ): Promise<HoldOrderRow[]> {
-  const cutoff = new Date(Date.now() - HOLD_WIDGET_LOOKBACK_DAYS * 86_400_000);
   const rows = await db
     .select({
       orderId: orders.id,
       orderNumber: orders.orderNumber,
       orderDate: orders.orderDate,
       orderTotal: orders.total,
-      financialStatus: orders.financialStatus,
-      cancelledAt: orders.cancelledAt,
+      holdReason: orders.holdReason,
       customerId: orders.customerId,
       customerName: customers.displayName,
-      holdStatus: customers.holdStatus,
     })
     .from(orders)
     .innerJoin(customers, eq(orders.customerId, customers.id))
-    .where(
-      and(
-        isNull(orders.cancelledAt),
-        gte(orders.orderDate, cutoff),
-        unshippedOrderSql(),
-        or(
-          eq(customers.holdStatus, "hold"),
-          and(
-            eq(customers.holdStatus, "payment_upfront"),
-            sql`(${orders.financialStatus} IS NULL OR LOWER(${orders.financialStatus}) NOT IN ('paid','refunded','partially_refunded','voided'))`,
-          ),
-        ),
-      ),
-    )
-    .orderBy(desc(orders.orderDate))
+    .where(and(eq(orders.holdState, "on_hold"), unshippedOrderSql()))
+    .orderBy(desc(orders.holdStartedAt))
     .limit(limit);
 
   return rows
     .map((r) => {
-      const reason = classifyOrderHoldAlert({
-        cancelledAt: r.cancelledAt,
-        holdStatus: r.holdStatus,
-        financialStatus: r.financialStatus,
-      });
-      if (!reason) return null;
       const row: HoldOrderRow = {
         orderId: r.orderId,
         orderNumber: r.orderNumber,
@@ -379,7 +358,7 @@ export async function listHoldableHoldOrders(
         orderTotal: r.orderTotal,
         customerId: r.customerId as string,
         customerName: r.customerName,
-        reason,
+        reason: r.holdReason,
       };
       return row;
     })
