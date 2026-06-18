@@ -13,6 +13,7 @@ import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { emailMatchForCustomer } from "../crm/email-match.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { creditMemos } from "../../db/schema/credit-memos.js";
+import { orders } from "../../db/schema/catalog.js";
 import {
   customerAiCards,
   type CardAction,
@@ -84,12 +85,19 @@ export type CardBooks = {
   };
 };
 
+export type CardHeldOrder = {
+  orderNumber: string;
+  reason: string | null;
+  heldDays: number;
+};
+
 export type CardPromptInput = {
   customer: { id: string; name: string };
   kpis: CardKpis;
   candidates: CardCandidate[];
   recentEmails: CardEmail[];
   recentCalls: CardCall[];
+  heldOrders?: CardHeldOrder[];
   context: DraftContext;
   // Present only for both-books customers — switches the prompt into the
   // two-summary schema. Single-book customers keep the blended schema.
@@ -182,6 +190,23 @@ export function buildCardPrompt(input: CardPromptInput): {
     ? `\n\n## Customer-specific context (operator-curated)\n${input.context.customerContext}`
     : "";
 
+  // Orders currently on hold — flag any aged >7 days as candidates for
+  // cancellation so the summary/actions can surface it.
+  const heldBlock =
+    input.heldOrders && input.heldOrders.length > 0
+      ? `\n\n## Orders currently ON HOLD (${input.heldOrders.length})\n` +
+        input.heldOrders
+          .map(
+            (h) =>
+              `- ${h.orderNumber}: ${h.reason ?? "on hold"}, held ${h.heldDays}d${
+                h.heldDays >= 7
+                  ? " — ⚠ STALE (>7d): may need cancelling + returning stock"
+                  : ""
+              }`,
+          )
+          .join("\n")
+      : "";
+
   const booksBlock = input.books ? buildBooksBlock(input.books) : "";
 
   const user =
@@ -193,6 +218,7 @@ export function buildCardPrompt(input: CardPromptInput): {
     `\n\n## Current autopilot candidates for this customer\n${candidatesBlock}\n\n` +
     `## Recent emails (last 5)\n${emailBlock}\n\n` +
     `## Recent calls & texts (last 5)\n${callBlock}` +
+    heldBlock +
     ctxBlock +
     `\n\nReturn JSON matching the schema. ` +
     (input.books
@@ -583,6 +609,27 @@ export async function generateCustomerCard(
   // category-specific arrays go unused in buildCardPrompt.
   const ctx = await buildDraftContext("chase_next", {}, customerId);
 
+  // Orders currently on hold for this customer — fed to the summary so the AI
+  // knows about (and can flag stale) holds.
+  const heldOrderRows = await db
+    .select({
+      orderNumber: orders.orderNumber,
+      shopifyOrderId: orders.shopifyOrderId,
+      holdReason: orders.holdReason,
+      holdStartedAt: orders.holdStartedAt,
+    })
+    .from(orders)
+    .where(and(eq(orders.customerId, customerId), eq(orders.holdState, "on_hold")))
+    .orderBy(desc(orders.holdStartedAt))
+    .limit(10);
+  const heldOrders: CardHeldOrder[] = heldOrderRows.map((h) => ({
+    orderNumber: h.orderNumber ?? `#${h.shopifyOrderId}`,
+    reason: h.holdReason,
+    heldDays: h.holdStartedAt
+      ? Math.floor((Date.now() - new Date(h.holdStartedAt).getTime()) / 86_400_000)
+      : 0,
+  }));
+
   const prompt = buildCardPrompt({
     customer: { id: customer.id, name: customer.displayName },
     kpis: {
@@ -610,6 +657,7 @@ export async function generateCustomerCard(
         detail: text.length > 280 ? `${text.slice(0, 280)}…` : text,
       };
     }),
+    heldOrders,
     context: ctx,
     books,
   });

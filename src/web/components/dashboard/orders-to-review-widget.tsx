@@ -21,6 +21,7 @@ type HoldOrderRow = {
   customerId: string;
   customerName: string | null;
   reason: HoldReason;
+  heldDays: number;
 };
 
 type OverdueOrderRow = {
@@ -194,10 +195,20 @@ export function OrdersToReviewWidget() {
                             {r.customerName ?? "(unknown customer)"}
                           </span>
                         </Link>
-                        <Badge tone="critical">HOLD</Badge>
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          {r.heldDays >= 7 && (
+                            <Badge tone="high" title="Held over 7 days — consider cancelling">
+                              held {r.heldDays}d
+                            </Badge>
+                          )}
+                          <Badge tone="critical">HOLD</Badge>
+                        </span>
                       </div>
                       <div className="mt-0.5 pl-5 text-xs text-secondary">
                         {orderMeta(r.orderNumber, r.orderDate, r.orderTotal)}
+                        {r.heldDays > 0 && r.heldDays < 7
+                          ? ` · held ${r.heldDays}d`
+                          : ""}
                       </div>
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-5">
                         <Button

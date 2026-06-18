@@ -322,6 +322,7 @@ export type HoldOrderRow = {
   customerId: string;
   customerName: string | null;
   reason: string | null;
+  heldDays: number;
 };
 
 // Dashboard data — orders currently on_hold (the per-order holdState is the
@@ -337,6 +338,7 @@ export async function listHoldableHoldOrders(
       orderDate: orders.orderDate,
       orderTotal: orders.total,
       holdReason: orders.holdReason,
+      holdStartedAt: orders.holdStartedAt,
       customerId: orders.customerId,
       customerName: customers.displayName,
     })
@@ -359,6 +361,11 @@ export async function listHoldableHoldOrders(
         customerId: r.customerId as string,
         customerName: r.customerName,
         reason: r.holdReason,
+        heldDays: r.holdStartedAt
+          ? Math.floor(
+              (Date.now() - new Date(r.holdStartedAt).getTime()) / 86_400_000,
+            )
+          : 0,
       };
       return row;
     })
