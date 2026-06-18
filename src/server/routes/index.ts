@@ -39,6 +39,7 @@ import originReviewRoute from "./origin-review.js";
 import disputesRoute from "./disputes.js";
 import agentRoute from "./agent.js";
 import extRoute from "./ext.js";
+import ordersRoute from "./orders.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -60,6 +61,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(invoicingRoutes, { prefix: "/api/invoicing" });
   await app.register(eventsRoute, { prefix: "/api/events" });
   await app.register(customersRoute, { prefix: "/api/customers" });
+  await app.register(ordersRoute, { prefix: "/api/orders" });
   await app.register(tasksRoute, { prefix: "/api/tasks" });
   await app.register(commentsRoute, { prefix: "/api/comments" });
   await app.register(usersRoute, { prefix: "/api/users" });

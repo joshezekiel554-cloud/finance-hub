@@ -59,6 +59,7 @@ type CustomerRow = {
   lastContactedAt: string | null;
   unactionedEmailCount: number;
   hasPendingRma: boolean;
+  hasHoldOrder: boolean;
   tags: string[] | null;
   openTaskCount: number;
   mostUrgentTaskDueAt: string | null;
@@ -708,6 +709,7 @@ export default function CustomersPage() {
             agentModeExcluded={row.agentModeExcluded}
             customerType={row.customerType}
             unactionedEmailCount={row.unactionedEmailCount}
+            hasHoldOrder={row.hasHoldOrder}
             selectable={sweepMode}
             selected={selectedIds.has(row.id)}
             onToggleSelect={toggleId}
@@ -884,6 +886,14 @@ export default function CustomersPage() {
                             title="Has an active RMA in progress"
                           >
                             RMA
+                          </span>
+                        ) : null}
+                        {row.hasHoldOrder ? (
+                          <span
+                            className="inline-flex items-center rounded border border-accent-danger/40 bg-accent-danger/10 px-1 text-[9px] font-medium uppercase tracking-wide text-accent-danger"
+                            title="Has an order currently on hold"
+                          >
+                            Order hold
                           </span>
                         ) : null}
                       </Link>

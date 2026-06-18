@@ -60,9 +60,15 @@ radio with the operator + the Inbox agent, 2026-06-18.
   statement recipients + Yiddy sales@ cc, send-types hold-chase/hold-cancel/
   hold-release added to enum. Wired into orders-sync after auto-release. ALSO
   fixed currency £→$ across ALL orders surfaces (operator: system is USD). DONE.
-- [ ] **P3 — surfaces + actions**: dashboard Good-to-send / Chase / History +
-  "Place on hold" (overdue); customer-list "On hold" tag; customer-detail red
-  banner above AI card + Release button; Orders-tab HOLD badge.
+- [x] **P3 — surfaces + actions**: orders route (`/api/orders/:id/good-to-send`
+  · `/place-on-hold` · `/hold-history`) + hold-actions.ts (releaseHold replies
+  in-thread w/ hold-release; placeOnHold for overdue; getHoldHistory).
+  listHoldableHoldOrders rewritten to query holdState='on_hold' (source of
+  truth, covers manual overdue holds). Dashboard widget: Good-to-send / Chase
+  (link) / History (inline) + Place-on-hold; customer-detail HoldOrdersBanner +
+  Release; customer-list + mobile "Order hold" tag; Orders-tab HOLD badge. DONE.
+  Note: Chase is a link to the customer page (the auto-ladder does the real
+  chasing); prefilled-compose is a possible refinement.
 - [ ] **P4 — AI context + 7-day flag**: held-order context into AI card +
   agent get_customer; orders held >7d flagged (dashboard + AI).
 - [ ] **P5 — cancel button**: Shopify cancel + QBO void (resolve invoice

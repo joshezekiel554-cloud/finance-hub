@@ -381,6 +381,16 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       )
     )`;
 
+    // Any Shopify order currently on hold for this customer — drives the small
+    // red "On hold" tag in the list.
+    const hasHoldOrderExpr = sql<boolean>`(
+      EXISTS (
+        SELECT 1 FROM ${orders}
+        WHERE ${orders.customerId} = \`customers\`.\`id\`
+          AND ${orders.holdState} = 'on_hold'
+      )
+    )`;
+
     // Open task count — tasks in an actionable status for this customer.
     const openTaskCountExpr = sql<number>`(
       SELECT COUNT(*) FROM ${tasks}
@@ -425,6 +435,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         lastContactedAt: lastContactedAtExpr,
         unactionedEmailCount: unactionedEmailCountExpr,
         hasPendingRma: hasPendingRmaExpr,
+        hasHoldOrder: hasHoldOrderExpr,
         openTaskCount: openTaskCountExpr,
         mostUrgentTaskDueAt: mostUrgentTaskDueAtExpr,
       })
@@ -466,6 +477,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       lastStatementSentAt: normalizeDateValue(r.lastStatementSentAt),
       // COUNT(*) comes back as a string in some mysql2 modes — coerce.
       unactionedEmailCount: Number(r.unactionedEmailCount ?? 0),
+      hasHoldOrder: Boolean(r.hasHoldOrder),
       openTaskCount: Number(r.openTaskCount ?? 0),
       mostUrgentTaskDueAt: normalizeDateValue(r.mostUrgentTaskDueAt),
     }));
@@ -930,6 +942,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         trackingCompany: orders.trackingCompany,
         shipmentStatus: orders.shipmentStatus,
         cancelledAt: orders.cancelledAt,
+        holdState: orders.holdState,
+        holdReason: orders.holdReason,
+        holdStartedAt: orders.holdStartedAt,
       })
       .from(orders)
       .where(or(...conds))
@@ -1393,10 +1408,31 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       .slice(0, 50)
       .map((x) => x.row);
 
+    // Orders currently on hold for this customer — drives the red banner above
+    // the AI card + the Release button.
+    const heldOrderRows = await db
+      .select({
+        id: orders.id,
+        orderNumber: orders.orderNumber,
+        shopifyOrderId: orders.shopifyOrderId,
+        holdReason: orders.holdReason,
+        holdStartedAt: orders.holdStartedAt,
+        total: orders.total,
+      })
+      .from(orders)
+      .where(and(eq(orders.customerId, id), eq(orders.holdState, "on_hold")))
+      .orderBy(desc(orders.holdStartedAt))
+      .limit(20);
+    const heldOrders = heldOrderRows.map((r) => ({
+      ...r,
+      holdStartedAt: normalizeDateValue(r.holdStartedAt),
+    }));
+
     return reply.send({
       customer,
       recentActivities: merged,
       kpi: normalizedKpi,
+      heldOrders,
     });
   });
 
