@@ -26,14 +26,14 @@ type OverdueOrderRow = {
   alerted: boolean;
 };
 
-const gbp = new Intl.NumberFormat("en-GB", {
+const usd = new Intl.NumberFormat("en-US", {
   style: "currency",
-  currency: "GBP",
+  currency: "USD",
 });
 
 function money(v: string | null): string {
   const n = Number(v);
-  return Number.isFinite(n) ? gbp.format(n) : "—";
+  return Number.isFinite(n) ? usd.format(n) : "—";
 }
 
 function shortDate(iso: string | null): string {

@@ -1375,9 +1375,9 @@ type OrderRow = {
   cancelledAt: string | null;
 };
 
-const orderGbp = new Intl.NumberFormat("en-GB", {
+const orderMoney = new Intl.NumberFormat("en-US", {
   style: "currency",
-  currency: "GBP",
+  currency: "USD",
 });
 
 function formatOrderDate(iso: string | null): string {
@@ -1524,7 +1524,7 @@ function OrdersPanel({ customerId }: { customerId: string }) {
           {rows.length} order{rows.length === 1 ? "" : "s"}
         </span>
         <span className="text-xs text-muted">
-          {orderGbp.format(totalValue)} total
+          {orderMoney.format(totalValue)} total
         </span>
       </div>
 
@@ -1557,7 +1557,7 @@ function OrdersPanel({ customerId }: { customerId: string }) {
                       {row.itemCount ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium text-primary">
-                      {row.total != null ? orderGbp.format(Number(row.total)) : "—"}
+                      {row.total != null ? orderMoney.format(Number(row.total)) : "—"}
                     </td>
                     <td className="px-3 py-2">
                       <OrderPaymentBadge status={row.financialStatus} />
@@ -1599,7 +1599,7 @@ function OrdersPanel({ customerId }: { customerId: string }) {
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm tabular-nums font-medium text-primary">
                     {row.total != null
-                      ? orderGbp.format(Number(row.total))
+                      ? orderMoney.format(Number(row.total))
                       : "—"}
                   </span>
                   <span className="text-xs text-muted">

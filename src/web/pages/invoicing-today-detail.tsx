@@ -940,7 +940,7 @@ function ReconcileLines({
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="£"
+                    placeholder="$"
                     value={a.unitPrice ?? ""}
                     onChange={(e) => onAddPrice(a.sku, Number(e.target.value))}
                     className={fieldInputClsCompact}
@@ -1075,7 +1075,7 @@ function MobileAddLine({ onPick }: { onPick: (item: QbItemSearchHit) => void }) 
                 <div className="truncate text-[11px] text-muted">{item.name}</div>
               </div>
               <div className="shrink-0 text-xs tabular-nums">
-                {item.unitPrice != null ? `£${item.unitPrice.toFixed(2)}` : "—"}
+                {item.unitPrice != null ? `$${item.unitPrice.toFixed(2)}` : "—"}
               </div>
             </button>
           ))}

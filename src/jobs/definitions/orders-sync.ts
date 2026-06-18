@@ -227,6 +227,16 @@ export async function processOrdersSync(
         "order holds auto-released",
       );
     }
+    // Progress the customer email ladder (Day-0 notice → Day-7 warning →
+    // Day-10 internal cancel notice) for still-held orders.
+    const { runHoldLadder } = await import("../../modules/orders/hold-ladder.js");
+    const ladderResult = await runHoldLadder();
+    if (
+      ladderResult.notices + ladderResult.warnings + ladderResult.cancelNotices >
+      0
+    ) {
+      jobLog.info({ stage: "hold-ladder", ...ladderResult }, "hold email ladder");
+    }
   } catch (err) {
     jobLog.error({ err }, "orders-sync: hold-alert pass failed (non-fatal)");
   }

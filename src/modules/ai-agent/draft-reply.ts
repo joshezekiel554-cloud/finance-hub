@@ -72,7 +72,7 @@ export function buildDraftReplyPrompt(input: DraftReplyPromptInput): {
 
   const ctxLine =
     `Customer: ${input.customer.name} ` +
-    `(open balance £${input.customer.balance.toFixed(2)}, ` +
+    `(open balance $${input.customer.balance.toFixed(2)}, ` +
     `on hold: ${input.customer.hasHold ? "yes" : "no"})`;
 
   const ctxBlock = input.context.customerContext

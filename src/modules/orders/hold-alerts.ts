@@ -108,7 +108,7 @@ export function holdReasonStillApplies(args: {
 
 // Append an audit_log row for a hold-state transition. userId null = automated
 // (detection / auto-clear); set = an operator action.
-async function recordHoldTransition(args: {
+export async function recordHoldTransition(args: {
   orderId: string;
   userId: string | null;
   action: string;
@@ -151,7 +151,7 @@ function reasonLine(reason: HoldAlertReason, paymentStatus: string): string {
 
 function fmtMoney(total: string | null): string {
   const n = Number(total);
-  return Number.isFinite(n) ? `£${n.toFixed(2)}` : "—";
+  return Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
 }
 
 function fmtDate(d: Date | string | null): string {
