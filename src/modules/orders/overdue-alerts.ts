@@ -27,6 +27,7 @@ import { invoices } from "../../db/schema/invoices.js";
 import { emailLog } from "../../db/schema/crm.js";
 import { customerAiCards } from "../../db/schema/customer-ai-cards.js";
 import { loadAppSettings } from "../statements/settings.js";
+import { unshippedOrderSql } from "./hold-alerts.js";
 import { renderTemplate } from "../email-compose/index.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
@@ -128,6 +129,9 @@ export async function listFlaggedOverdueOrders(
     thresholdGbp: cfg.thresholdGbp,
     contactCutoff: new Date(now - cfg.noContactDays * 86_400_000),
   });
+  // Dashboard only surfaces still-holdable orders (the email pass fires
+  // regardless of shipped state).
+  conds.push(unshippedOrderSql());
 
   const rows = await db
     .select({

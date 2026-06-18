@@ -19,7 +19,8 @@
 // orders from the last few days so the first sync (which back-fills ~30 days of
 // history) can't blast alerts for old orders.
 
-import { and, eq, gte, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, or, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { orders, type Order } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
@@ -49,6 +50,16 @@ export function isPaymentPending(financialStatus: string | null): boolean {
   const s = (financialStatus ?? "").trim().toLowerCase();
   if (!s) return true;
   return !PAID_FINANCIAL_STATUSES.has(s);
+}
+
+// "Still holdable" = not yet shipped/fulfilled and not carrier-delivered. Used
+// by the dashboard widgets so we only surface orders the operator can actually
+// still hold (a fulfilled/delivered order is moot). NOT applied to the email
+// alerts — those fire regardless, since a prepay order that shipped unpaid is
+// exactly when you most want to know.
+export function unshippedOrderSql(): SQL {
+  return sql`(${orders.fulfillmentStatus} IS NULL OR LOWER(${orders.fulfillmentStatus}) NOT IN ('fulfilled','restocked'))
+    AND (${orders.shipmentStatus} IS NULL OR LOWER(${orders.shipmentStatus}) <> 'delivered')`;
 }
 
 export type HoldAlertReason = "customer_on_hold" | "payment_upfront_unpaid";
@@ -233,6 +244,81 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
   }
 
   return { candidates: rows.length, sent, skipped };
+}
+
+// Dashboard widget look-back for hold orders.
+export const HOLD_WIDGET_LOOKBACK_DAYS = 30;
+
+export type HoldOrderRow = {
+  orderId: string;
+  orderNumber: string | null;
+  orderDate: string | null;
+  orderTotal: string | null;
+  customerId: string;
+  customerName: string | null;
+  reason: HoldAlertReason;
+};
+
+// Dashboard data — recent, still-holdable orders for held / payment-upfront-
+// unpaid customers. Independent of whether the email alert sent.
+export async function listHoldableHoldOrders(
+  limit = 10,
+): Promise<HoldOrderRow[]> {
+  const cutoff = new Date(Date.now() - HOLD_WIDGET_LOOKBACK_DAYS * 86_400_000);
+  const rows = await db
+    .select({
+      orderId: orders.id,
+      orderNumber: orders.orderNumber,
+      orderDate: orders.orderDate,
+      orderTotal: orders.total,
+      financialStatus: orders.financialStatus,
+      cancelledAt: orders.cancelledAt,
+      customerId: orders.customerId,
+      customerName: customers.displayName,
+      holdStatus: customers.holdStatus,
+    })
+    .from(orders)
+    .innerJoin(customers, eq(orders.customerId, customers.id))
+    .where(
+      and(
+        isNull(orders.cancelledAt),
+        gte(orders.orderDate, cutoff),
+        unshippedOrderSql(),
+        or(
+          eq(customers.holdStatus, "hold"),
+          and(
+            eq(customers.holdStatus, "payment_upfront"),
+            sql`(${orders.financialStatus} IS NULL OR LOWER(${orders.financialStatus}) NOT IN ('paid','refunded','partially_refunded','voided'))`,
+          ),
+        ),
+      ),
+    )
+    .orderBy(desc(orders.orderDate))
+    .limit(limit);
+
+  return rows
+    .map((r) => {
+      const reason = classifyOrderHoldAlert({
+        cancelledAt: r.cancelledAt,
+        holdStatus: r.holdStatus,
+        financialStatus: r.financialStatus,
+      });
+      if (!reason) return null;
+      const row: HoldOrderRow = {
+        orderId: r.orderId,
+        orderNumber: r.orderNumber,
+        orderDate:
+          r.orderDate instanceof Date
+            ? r.orderDate.toISOString()
+            : (r.orderDate as string | null),
+        orderTotal: r.orderTotal,
+        customerId: r.customerId as string,
+        customerName: r.customerName,
+        reason,
+      };
+      return row;
+    })
+    .filter((r): r is HoldOrderRow => r !== null);
 }
 
 // Re-exported for callers that want the row type.
