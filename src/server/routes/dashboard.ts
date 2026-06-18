@@ -330,18 +330,25 @@ const dashboardRoute: FastifyPluginAsync = async (app) => {
     });
   });
 
-  // ── Overdue-balance orders (replaces "unactioned emails today") ─────────
-  // Orders from customers who carry a large overdue balance, aren't in contact,
-  // and are autopilot-ON. The orders-sync job also emails an urgent review for
-  // each (Phase 4); this widget runs the same qualification live so a flag shows
-  // even if the email failed. Thresholds are operator-tweakable in /settings.
-  app.get("/overdue-orders", async (req, reply) => {
+  // ── Orders to review (replaces "unactioned emails today") ───────────────
+  // Two groups of still-holdable (unshipped, not cancelled) orders:
+  //   hold    — customer on hold, OR payment-upfront with an unpaid order
+  //   overdue — large overdue balance + not communicating + autopilot-on
+  // The orders-sync job also emails alerts for these (Phases 3/4); these lists
+  // run the same qualification live (scoped to unshipped) so a flag shows even
+  // if an email failed. Thresholds are operator-tweakable in /settings.
+  app.get("/orders-to-review", async (req, reply) => {
     await requireAuth(req);
-    const { listFlaggedOverdueOrders } = await import(
-      "../../modules/orders/overdue-alerts.js"
-    );
-    const rows = await listFlaggedOverdueOrders(10);
-    return reply.send({ rows });
+    const [{ listHoldableHoldOrders }, { listFlaggedOverdueOrders }] =
+      await Promise.all([
+        import("../../modules/orders/hold-alerts.js"),
+        import("../../modules/orders/overdue-alerts.js"),
+      ]);
+    const [hold, overdue] = await Promise.all([
+      listHoldableHoldOrders(10),
+      listFlaggedOverdueOrders(10),
+    ]);
+    return reply.send({ hold, overdue });
   });
 
   // ── RMAs in Flight ─────────────────────────────────────────────────────
