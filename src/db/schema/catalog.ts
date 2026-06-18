@@ -111,6 +111,13 @@ export const orders = mysqlTable(
     // IN-THREAD (Inbox flips that exact thread to Done). messageId kept for ref.
     holdAlertThreadId: varchar("hold_alert_thread_id", { length: 255 }),
     holdAlertMessageId: varchar("hold_alert_message_id", { length: 255 }),
+    // Email-ladder sent-markers (at-most-once per stage while on_hold):
+    //   notice  — Day 0 customer "your order is on hold pending …"
+    //   warned  — Day 7 customer "resolve in 3 days or it's cancelled"
+    //   cancel  — Day 10 internal "cancel order, return to stock"
+    holdNoticeAt: timestamp("hold_notice_at"),
+    holdWarnedAt: timestamp("hold_warned_at"),
+    holdCancelNotifiedAt: timestamp("hold_cancel_notified_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },

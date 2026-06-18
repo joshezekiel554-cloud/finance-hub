@@ -12,7 +12,7 @@
 // The email carries `X-Feldart-Finance-Send: hold-alert` so Inbox routes it to
 // To-Do, loud, with a team ping (same treatment as the Phase 3 hold alert).
 //
-// Thresholds (overdue £ and no-contact days), recipients, and the autopilot-off
+// Thresholds (overdue $ and no-contact days), recipients, and the autopilot-off
 // exclusion are all operator-controllable. At-most-once per order via
 // orders.overdue_alerted_at. The dashboard widget runs the SAME qualification
 // query live (independent of whether the email sent), so a flagged order always
@@ -187,7 +187,7 @@ Customer record: {{customer_url}}`;
 
 function fmtMoney(total: string | null | undefined): string {
   const n = Number(total);
-  return Number.isFinite(n) ? `£${n.toFixed(2)}` : "—";
+  return Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
 }
 
 function fmtDate(d: Date | string | null): string {

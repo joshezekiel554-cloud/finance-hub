@@ -54,9 +54,12 @@ radio with the operator + the Inbox agent, 2026-06-18.
   on_hold + reason + startedAt + captures alert threadId, `releaseResolvedHolds`
   auto-clear pass (wired into orders-sync), `holdReasonStillApplies` +
   `recordHoldTransition` (audit). 916 tests. DONE.
-- [ ] **P2 — email ladder**: Day-0 customer Email 1 (+ existing warehouse alert)
-  + Yiddy cc; Day-7 Email 2; Day-10 Email 3 internal. Scheduler (orders-sync or
-  daily cron), at-most-once per stage. Send-types `hold-chase`/`hold-cancel`.
+- [x] **P2 — email ladder** (migration 0050): `hold-ladder.ts` runHoldLadder
+  (Day-0 customer notice → Day-7 warning → Day-10 internal cancel notice),
+  sent-markers holdNoticeAt/holdWarnedAt/holdCancelNotifiedAt, reason-aware copy,
+  statement recipients + Yiddy sales@ cc, send-types hold-chase/hold-cancel/
+  hold-release added to enum. Wired into orders-sync after auto-release. ALSO
+  fixed currency £→$ across ALL orders surfaces (operator: system is USD). DONE.
 - [ ] **P3 — surfaces + actions**: dashboard Good-to-send / Chase / History +
   "Place on hold" (overdue); customer-list "On hold" tag; customer-detail red
   banner above AI card + Release button; Orders-tab HOLD badge.

@@ -186,8 +186,8 @@ export function buildCardPrompt(input: CardPromptInput): {
 
   const user =
     `## Customer: ${input.customer.name}\n` +
-    `Open balance: £${input.kpis.balance.toFixed(2)} ` +
-    `(overdue: £${input.kpis.overdueBalance.toFixed(2)}, ` +
+    `Open balance: $${input.kpis.balance.toFixed(2)} ` +
+    `(overdue: $${input.kpis.overdueBalance.toFixed(2)}, ` +
     `on hold: ${input.kpis.hasHold ? "yes" : "no"})` +
     booksBlock +
     `\n\n## Current autopilot candidates for this customer\n${candidatesBlock}\n\n` +
@@ -208,7 +208,7 @@ function fmtBookFigures(f: CardBookFigures): string {
   const oldest =
     f.oldestOverdueDays != null ? `, oldest overdue ${f.oldestOverdueDays}d` : "";
   return (
-    `balance £${f.balance.toFixed(2)} (overdue £${f.overdue.toFixed(2)}, ` +
+    `balance $${f.balance.toFixed(2)} (overdue $${f.overdue.toFixed(2)}, ` +
     `${f.openCount} open invoice${f.openCount === 1 ? "" : "s"}${oldest})`
   );
 }
@@ -218,7 +218,7 @@ function buildBooksBlock(books: CardBooks): string {
     ? books.tj.disputes
         .map(
           (d) =>
-            `- ${d.docNumber ?? "(no doc number)"}: £${d.balance.toFixed(2)}, customer claims paid, verifying with bookkeeper since ${d.claimedAt ?? "(unknown date)"}`,
+            `- ${d.docNumber ?? "(no doc number)"}: $${d.balance.toFixed(2)}, customer claims paid, verifying with bookkeeper since ${d.claimedAt ?? "(unknown date)"}`,
         )
         .join("\n")
     : "(none)";

@@ -2237,7 +2237,7 @@ function OrderAlertsSection() {
               htmlFor="order-overdue-threshold"
               className="block text-sm font-medium text-secondary"
             >
-              Large overdue threshold (£)
+              Large overdue threshold ($)
             </label>
             <p className="mt-0.5 text-xs text-muted">
               Overdue balance at or above this triggers the review. Blank = 1000.

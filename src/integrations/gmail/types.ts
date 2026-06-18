@@ -51,7 +51,16 @@ export type FinanceSendType =
   // Order-hold alert: an order came through for a customer on hold, OR a
   // payment-upfront customer's order is still unpaid. Inbox routes this to
   // To-Do with a loud "⚠ HOLD ORDER" badge + always-on team ping.
-  | "hold-alert";
+  | "hold-alert"
+  // Customer-facing hold chase (Day-0 notice + Day-7 final warning). Inbox →
+  // Waiting (a customer reply auto-reopens).
+  | "hold-chase"
+  // Internal Day-10 "cancel this order, return to stock" notice. Inbox →
+  // Waiting + a distinct "Cancelled" chip.
+  | "hold-cancel"
+  // "Good to send" release, sent as a reply on the hold-alert thread. Inbox →
+  // Done + drops the ⚠ treatment.
+  | "hold-release";
 
 export type SendEmailInput = {
   // Comma-separated list of addresses; we don't split, Gmail does.

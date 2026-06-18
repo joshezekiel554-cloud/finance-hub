@@ -351,6 +351,13 @@
       "when": 1781791250398,
       "tag": "0049_chief_silvermane",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "5",
+      "when": 1781791706883,
+      "tag": "0050_modern_zarek",
+      "breakpoints": true
     }
   ]
 }
