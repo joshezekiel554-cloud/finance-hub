@@ -209,8 +209,11 @@ export async function cancelHoldOrder(
       const { ShopifyClient } = await import(
         "../../integrations/shopify/client.js"
       );
+      // restock:false — inventory is auto-synced from the warehouse system, so
+      // letting Shopify re-add line items here would double-count stock. The
+      // warehouse physically returns items and the sync reflects it.
       await new ShopifyClient().cancelOrder(o.shopifyOrderId, {
-        restock: true,
+        restock: false,
         reason: "other",
         notifyCustomer: false,
       });
