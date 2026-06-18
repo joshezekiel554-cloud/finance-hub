@@ -69,8 +69,9 @@ radio with the operator + the Inbox agent, 2026-06-18.
   Release; customer-list + mobile "Order hold" tag; Orders-tab HOLD badge. DONE.
   Note: Chase is a link to the customer page (the auto-ladder does the real
   chasing); prefilled-compose is a possible refinement.
-- [ ] **P4 — AI context + 7-day flag**: held-order context into AI card +
-  agent get_customer; orders held >7d flagged (dashboard + AI).
+- [x] **P4 — AI context + 7-day flag**: customer-card prompt gets an "Orders ON
+  HOLD" block (flags >7d as STALE), agent get_customer adds `ordersOnHold=…`,
+  dashboard hold rows show "held Nd" + an amber badge at ≥7d. DONE.
 - [ ] **P5 — cancel button**: Shopify cancel + QBO void (resolve invoice
   mapping first). Expose holdState on /api/ext for inbox banner.
 

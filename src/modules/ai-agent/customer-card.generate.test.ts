@@ -89,14 +89,15 @@ function aiResponse(json: Record<string, unknown>) {
 
 // Select order inside generateCustomerCard: customer → emails → invoices →
 // credit memos → phone calls (the latter four sit in one Promise.all, array
-// order).
+// order) → held orders.
 function queueSelects(invoiceRows: unknown[], creditRows: unknown[]) {
   vi.mocked(db.select)
     .mockReturnValueOnce(chain([customerRow]))
     .mockReturnValueOnce(chain([])) // emails
     .mockReturnValueOnce(chain(invoiceRows))
     .mockReturnValueOnce(chain(creditRows))
-    .mockReturnValueOnce(chain([])); // phone calls/texts
+    .mockReturnValueOnce(chain([])) // phone calls/texts
+    .mockReturnValueOnce(chain([])); // held orders
 }
 
 let inserted: Record<string, unknown> | null = null;

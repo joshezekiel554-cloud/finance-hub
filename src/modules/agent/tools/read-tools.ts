@@ -15,6 +15,7 @@ import { and, desc, eq, gt, like, or, sql } from "drizzle-orm";
 import { db } from "../../../db/index.js";
 import { customers } from "../../../db/schema/customers.js";
 import { invoices } from "../../../db/schema/invoices.js";
+import { orders } from "../../../db/schema/catalog.js";
 import { creditMemos } from "../../../db/schema/credit-memos.js";
 import {
   activities,
@@ -143,6 +144,12 @@ export type CustomerDetailForAgent = {
   feldart: { balance: number; overdue: number };
   tj: { balance: number; overdue: number };
   openInvoiceCount: number;
+  // Shopify orders currently on hold (system data, not operator prose).
+  heldOrders?: Array<{
+    orderNumber: string;
+    reason: string | null;
+    heldDays: number;
+  }>;
 };
 
 export function formatCustomerDetail(c: CustomerDetailForAgent): string {
@@ -154,6 +161,19 @@ export function formatCustomerDetail(c: CustomerDetailForAgent): string {
     `torah_judaica: balance=${c.tj.balance.toFixed(2)} overdue=${c.tj.overdue.toFixed(2)} (wind-down book)`,
     `openInvoices=${c.openInvoiceCount}`,
   ];
+  if (c.heldOrders && c.heldOrders.length > 0) {
+    lines.push(
+      `ordersOnHold=${c.heldOrders.length}: ` +
+        c.heldOrders
+          .map(
+            (h) =>
+              `${h.orderNumber} (${h.reason ?? "on hold"}, ${h.heldDays}d${
+                h.heldDays >= 7 ? " — STALE, consider cancelling" : ""
+              })`,
+          )
+          .join("; "),
+    );
+  }
   if (c.internalNotes && c.internalNotes.trim()) {
     lines.push(fenceOperator(c.internalNotes, "internal notes"));
   }
@@ -274,6 +294,27 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
           .orderBy(desc(activities.occurredAt))
           .limit(10),
       ]);
+      const heldOrderRows = await db
+        .select({
+          orderNumber: orders.orderNumber,
+          shopifyOrderId: orders.shopifyOrderId,
+          holdReason: orders.holdReason,
+          holdStartedAt: orders.holdStartedAt,
+        })
+        .from(orders)
+        .where(and(eq(orders.customerId, id), eq(orders.holdState, "on_hold")))
+        .orderBy(desc(orders.holdStartedAt))
+        .limit(10);
+      const heldOrders = heldOrderRows.map((h) => ({
+        orderNumber: h.orderNumber ?? `#${h.shopifyOrderId}`,
+        reason: h.holdReason,
+        heldDays: h.holdStartedAt
+          ? Math.floor(
+              (Date.now() - new Date(h.holdStartedAt).getTime()) / 86_400_000,
+            )
+          : 0,
+      }));
+
       const credit = { feldart: 0, tj: 0 };
       for (const cm of cmRows) {
         credit[cm.origin === "tj" ? "tj" : "feldart"] += Number(cm.balance);
@@ -308,6 +349,7 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
           },
           tj: { balance: balances.tj.balance, overdue: balances.tj.overdue },
           openInvoiceCount: invRows.length,
+          heldOrders,
         }),
       );
     },
