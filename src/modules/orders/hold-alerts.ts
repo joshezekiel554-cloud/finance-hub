@@ -224,6 +224,7 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
           .join("\n"),
         text: body,
         financeSendType: "hold-alert",
+        financeCustomerId: o.customerId ?? undefined,
       });
       await db
         .update(orders)

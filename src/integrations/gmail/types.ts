@@ -76,6 +76,12 @@ export type SendEmailInput = {
   // recognizes it as a Finance-originated send. Omit for sends that should NOT
   // be tagged as from Finance.
   financeSendType?: FinanceSendType;
+  // When set, emits `X-Feldart-Finance-Customer-Id: <id>` so Inbox can link the
+  // thread to that finance customer even when the email never touches the
+  // customer's own address (e.g. a hold-alert sent to the warehouse). Inbox's
+  // per-customer embed includes threads linked by this id. Same id finance
+  // passes to the embed (`?customer=<id>`).
+  financeCustomerId?: string;
 };
 
 export type SendEmailResult = {

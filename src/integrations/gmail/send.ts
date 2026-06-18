@@ -38,6 +38,7 @@ export function buildRawMessage(input: {
   inReplyTo?: string;
   attachments?: EmailAttachment[];
   financeSendType?: FinanceSendType;
+  financeCustomerId?: string;
 }): string {
   const {
     from,
@@ -51,6 +52,7 @@ export function buildRawMessage(input: {
     inReplyTo,
     attachments,
     financeSendType,
+    financeCustomerId,
   } = input;
   const hasAttachments = (attachments?.length ?? 0) > 0;
 
@@ -82,6 +84,12 @@ export function buildRawMessage(input: {
   // app this is a Finance-originated send. See spec §3.3.
   if (financeSendType) {
     headerLines.push(`X-Feldart-Finance-Send: ${financeSendType}`);
+  }
+  // Customer linkage for Inbox (ASCII nanoid — no encoding needed). Lets Inbox
+  // attach an internally-addressed finance send (e.g. a hold-alert) to the
+  // right customer's Emails section even with no address overlap.
+  if (financeCustomerId) {
+    headerLines.push(`X-Feldart-Finance-Customer-Id: ${financeCustomerId}`);
   }
   if (inReplyTo) {
     // RFC 5322: angle-bracketed Message-ID. We accept either a bare id
@@ -203,6 +211,7 @@ export async function sendEmail(
     threadId,
     inReplyTo,
     financeSendType,
+    financeCustomerId,
   } = input;
 
   let from: string;
@@ -243,6 +252,7 @@ export async function sendEmail(
     inReplyTo,
     attachments,
     financeSendType,
+    financeCustomerId,
   });
 
   const gmail = await getInternalGmailClient(externalAccountId);

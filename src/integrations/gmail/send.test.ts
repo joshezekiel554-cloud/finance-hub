@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { bridgeContentNewlines } from "./send.js";
+import { bridgeContentNewlines, buildRawMessage } from "./send.js";
+
+describe("buildRawMessage finance headers", () => {
+  const base = {
+    from: "a@feldart.com",
+    to: "warehouse@bluechipfulfillment.com",
+    subject: "HOLD ORDER 18672",
+    text: "hold it",
+  };
+
+  // buildRawMessage returns the base64url-encoded MIME message; decode to
+  // inspect the headers.
+  const decode = (raw: string) =>
+    Buffer.from(raw, "base64url").toString("utf8");
+
+  it("emits the finance-send + customer-id headers when provided", () => {
+    const msg = decode(
+      buildRawMessage({
+        ...base,
+        financeSendType: "hold-alert",
+        financeCustomerId: "f-uzwGCGbcE9sc8zVV0xUYUB",
+      }),
+    );
+    expect(msg).toContain("X-Feldart-Finance-Send: hold-alert");
+    expect(msg).toContain(
+      "X-Feldart-Finance-Customer-Id: f-uzwGCGbcE9sc8zVV0xUYUB",
+    );
+  });
+
+  it("omits the customer-id header when not provided", () => {
+    const msg = decode(
+      buildRawMessage({ ...base, financeSendType: "hold-alert" }),
+    );
+    expect(msg).not.toContain("X-Feldart-Finance-Customer-Id");
+  });
+});
 
 // bridgeContentNewlines runs at the send chokepoint, so it protects EVERY
 // finance email (statement, chase, compose, RMA, …) from collapsing bare
