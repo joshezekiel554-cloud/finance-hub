@@ -314,6 +314,7 @@ export async function runOrderOverdueAlerts(): Promise<RunOrderOverdueAlertsResu
           .join("\n"),
         text: body,
         financeSendType: "hold-alert",
+        financeCustomerId: customerId,
       });
       await db
         .update(orders)
