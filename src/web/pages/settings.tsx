@@ -80,6 +80,7 @@ export default function SettingsPage() {
       <StatementPdfSection />
       <TorahJudaicaSection />
       <OrderAlertsSection />
+      <OrderEmailTemplatesSection />
       <ReturnsSection />
       <RoutingRulesSection />
       <BccForwardingSection />
@@ -1405,7 +1406,11 @@ function TemplateEditor({
 
 // ───────────────────────── Statement PDF section ─────────────────────────
 
-type AppSettingsResponse = { settings: Record<string, string> };
+type OrderTemplateDefault = { subject: string; body: string };
+type AppSettingsResponse = {
+  settings: Record<string, string>;
+  orderTemplateDefaults?: Record<string, OrderTemplateDefault>;
+};
 
 // Order matters — drives both the form layout and the diff comparison.
 // company_logo_path is omitted from the textual form (handled by the
@@ -2129,7 +2134,8 @@ function OrderAlertsSection() {
   const s = settingsQuery.data?.settings;
   const initial = useMemo(
     () => ({
-      order_hold_alert_recipients: s?.order_hold_alert_recipients ?? "",
+      order_hold_warehouse_recipients: s?.order_hold_warehouse_recipients ?? "",
+      order_hold_team_recipients: s?.order_hold_team_recipients ?? "",
       order_overdue_alert_recipients: s?.order_overdue_alert_recipients ?? "",
       order_overdue_threshold_gbp: s?.order_overdue_threshold_gbp ?? "",
       order_overdue_no_contact_days: s?.order_overdue_no_contact_days ?? "",
@@ -2189,21 +2195,46 @@ function OrderAlertsSection() {
       <CardBody className="space-y-5">
         <div>
           <label
-            htmlFor="order-hold-recipients"
+            htmlFor="order-hold-warehouse-recipients"
             className="block text-sm font-medium text-secondary"
           >
-            Hold-order alert recipients
+            Warehouse recipients
           </label>
           <p className="mt-0.5 text-xs text-muted">
-            Sent when an order comes through for a customer who is on hold, or a
-            payment-upfront customer's order is still unpaid. Comma-separated.
+            The warehouse / fulfilment inboxes (e.g. Bluechip) that physically
+            hold the parcel. Gets the internal "⚠ HOLD ORDER" alert and the
+            Day-10 "cancel + return to stock" notice, together with the accounts
+            team below (deduped). Comma-separated.
           </p>
           <Input
-            id="order-hold-recipients"
+            id="order-hold-warehouse-recipients"
             type="text"
-            placeholder="info@feldart.com, shipping@bluechipfulfillment.com"
-            value={draft.order_hold_alert_recipients}
-            onChange={(e) => set("order_hold_alert_recipients", e.target.value)}
+            placeholder="efrayim@bluechipfulfillment.com, shipping@bluechipfulfillment.com"
+            value={draft.order_hold_warehouse_recipients}
+            onChange={(e) =>
+              set("order_hold_warehouse_recipients", e.target.value)
+            }
+            className="mt-2 text-xs"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="order-hold-team-recipients"
+            className="block text-sm font-medium text-secondary"
+          >
+            Accounts-team recipients
+          </label>
+          <p className="mt-0.5 text-xs text-muted">
+            The accounts-team inboxes copied on the internal hold + cancel
+            notices (merged with the warehouse list, deduped). Comma-separated.
+          </p>
+          <Input
+            id="order-hold-team-recipients"
+            type="text"
+            placeholder="info@feldart.com, info@feldart.co.uk"
+            value={draft.order_hold_team_recipients}
+            onChange={(e) => set("order_hold_team_recipients", e.target.value)}
             className="mt-2 text-xs"
           />
         </div>
@@ -2289,6 +2320,270 @@ function OrderAlertsSection() {
             {saveMutation.isPending ? "Saving…" : "Save"}
           </Button>
           {savedAt && !dirty && (
+            <span className="text-xs text-muted">Saved.</span>
+          )}
+          {saveMutation.isError && (
+            <span className="text-xs text-accent-danger">
+              {(saveMutation.error as Error).message}
+            </span>
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// ──────────────────── Order email templates (editable) ───────────────────
+
+// The 5 operator-editable order/hold templates. `key` maps to the
+// `order_tpl_<key>_subject` / `order_tpl_<key>_body` app_settings keys.
+const ORDER_TEMPLATE_DEFS: {
+  key: string;
+  label: string;
+  audience: string;
+  description: string;
+}[] = [
+  {
+    key: "hold_alert",
+    label: "Hold alert (internal)",
+    audience: "Warehouse + accounts team",
+    description:
+      "Sent when an order is placed on hold (a held customer ordered, a prepay order is unpaid, or you manually hold an overdue order).",
+  },
+  {
+    key: "hold_notice",
+    label: "Hold notice — Day 0 (customer)",
+    audience: "Customer",
+    description: "First customer email: their order is on hold and how to release it.",
+  },
+  {
+    key: "hold_warning",
+    label: "Hold warning — Day 7 (customer)",
+    audience: "Customer",
+    description:
+      "Final warning: resolve within 3 days or the order is cancelled and items returned to stock.",
+  },
+  {
+    key: "hold_cancel",
+    label: "Cancel notice — Day 10 (internal)",
+    audience: "Warehouse + accounts team",
+    description:
+      "Day-10 internal notice to cancel the order and return the items to stock.",
+  },
+  {
+    key: "order_cancelled",
+    label: "Order cancelled (customer)",
+    audience: "Customer",
+    description:
+      "Sent to the customer when you press Cancel on a held order (after Shopify cancel + QBO void succeed).",
+  },
+];
+
+const ORDER_TEMPLATE_PLACEHOLDERS = [
+  "{{order_number}}",
+  "{{customer_name}}",
+  "{{order_total}}",
+  "{{age_days}}",
+  "{{customer_url}}",
+  "{{payment_status}}",
+];
+
+function OrderEmailTemplatesSection() {
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const settings = settingsQuery.data?.settings;
+  const defaults = settingsQuery.data?.orderTemplateDefaults;
+
+  // Effective value = stored override if set, else the default. Draft holds the
+  // full subject/body for every template key.
+  const initial = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const t of ORDER_TEMPLATE_DEFS) {
+      const subKey = `order_tpl_${t.key}_subject`;
+      const bodyKey = `order_tpl_${t.key}_body`;
+      const def = defaults?.[t.key];
+      out[subKey] =
+        (settings?.[subKey] ?? "").trim() !== ""
+          ? (settings?.[subKey] ?? "")
+          : (def?.subject ?? "");
+      out[bodyKey] =
+        (settings?.[bodyKey] ?? "").trim() !== ""
+          ? (settings?.[bodyKey] ?? "")
+          : (def?.body ?? "");
+    }
+    return out;
+  }, [settings, defaults]);
+
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [testState, setTestState] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (settingsQuery.data) setDraft(initial);
+  }, [settingsQuery.data, initial]);
+
+  const set = (k: string, v: string) =>
+    setDraft((d) => ({ ...d, [k]: v }));
+
+  // Only PATCH keys whose effective value changed.
+  const diff = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const k of Object.keys(initial)) {
+      const current = draft[k] ?? "";
+      if (current !== (initial[k] ?? "")) out[k] = current;
+    }
+    return out;
+  }, [draft, initial]);
+  const dirtyCount = Object.keys(diff).length;
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(diff),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as AppSettingsResponse;
+    },
+    onSuccess: () => {
+      setSavedAt(Date.now());
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    },
+  });
+
+  const resetToDefault = (key: string) => {
+    const def = defaults?.[key];
+    if (!def) return;
+    set(`order_tpl_${key}_subject`, def.subject);
+    set(`order_tpl_${key}_body`, def.body);
+  };
+
+  const sendTest = async (key: string) => {
+    setTestState((t) => ({ ...t, [key]: "Sending…" }));
+    try {
+      const res = await fetch(
+        `/api/app-settings/order-templates/${key}/test`,
+        { method: "POST" },
+      );
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        to?: string;
+        shadowMode?: boolean;
+      };
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      setTestState((t) => ({
+        ...t,
+        [key]: body.shadowMode
+          ? "Shadow mode — not sent."
+          : `Test sent to ${body.to ?? "you"}.`,
+      }));
+    } catch (err) {
+      setTestState((t) => ({
+        ...t,
+        [key]: `Failed: ${(err as Error).message}`,
+      }));
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-base font-semibold">Order email templates</h2>
+        <p className="mt-1 text-xs text-muted">
+          Edit the subject + body of the order/hold emails. Plain text only —
+          leave a blank line for a paragraph break and a single newline for a
+          line break. Don't paste raw HTML. Unknown placeholders render blank.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {ORDER_TEMPLATE_PLACEHOLDERS.map((p) => (
+            <code
+              key={p}
+              className="rounded bg-subtle px-1.5 py-0.5 text-[11px] text-secondary"
+            >
+              {p}
+            </code>
+          ))}
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-6">
+        {ORDER_TEMPLATE_DEFS.map((t) => {
+          const subKey = `order_tpl_${t.key}_subject`;
+          const bodyKey = `order_tpl_${t.key}_body`;
+          return (
+            <div key={t.key} className="space-y-2 border-t border-default pt-4 first:border-0 first:pt-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-secondary">
+                  {t.label}
+                </span>
+                <Badge>{t.audience}</Badge>
+              </div>
+              <p className="text-xs text-muted">{t.description}</p>
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium text-secondary">
+                  Subject
+                </span>
+                <Input
+                  value={draft[subKey] ?? ""}
+                  onChange={(e) => set(subKey, e.target.value)}
+                  className="text-xs"
+                />
+              </label>
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium text-secondary">
+                  Body
+                </span>
+                <textarea
+                  value={draft[bodyKey] ?? ""}
+                  onChange={(e) => set(bodyKey, e.target.value)}
+                  rows={8}
+                  className="w-full rounded-md border border-default bg-base px-3 py-2 font-mono text-xs"
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => resetToDefault(t.key)}
+                  disabled={!defaults}
+                >
+                  Reset to default
+                </Button>
+                <Button variant="ghost" onClick={() => sendTest(t.key)}>
+                  Send me a test
+                </Button>
+                {testState[t.key] && (
+                  <span className="text-xs text-muted">{testState[t.key]}</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <div className="flex items-center gap-2 border-t border-default pt-4">
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={dirtyCount === 0 || saveMutation.isPending}
+          >
+            <Save className="size-4" />
+            {saveMutation.isPending
+              ? "Saving…"
+              : dirtyCount > 0
+                ? `Save ${dirtyCount} change${dirtyCount === 1 ? "" : "s"}`
+                : "Save"}
+          </Button>
+          {savedAt && dirtyCount === 0 && (
             <span className="text-xs text-muted">Saved.</span>
           )}
           {saveMutation.isError && (

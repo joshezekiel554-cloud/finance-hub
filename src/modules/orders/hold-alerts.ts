@@ -11,13 +11,17 @@
 //
 // The email carries `X-Feldart-Finance-Send: hold-alert`, so the sibling Inbox
 // app routes it to To-Do with a loud "⚠ HOLD ORDER" badge + an always-on team
-// ping. Recipients come from app_settings.order_hold_alert_recipients (Feldart
-// inboxes + the Bluechip warehouse by default), tweakable in /settings.
+// ping. Recipients are the merged warehouse + accounts-team lists
+// (loadInternalHoldRecipients), tweakable in /settings, and the body comes from
+// the operator-editable hold_alert template (ORDER_EMAIL_DEFAULTS).
 //
-// At-most-once: each order's hold_alerted_at is stamped after a successful send,
-// so re-evaluating recent orders every 15 min never re-alerts. We only look at
-// orders from the last few days so the first sync (which back-fills ~30 days of
-// history) can't blast alerts for old orders.
+// Decoupled (order-email-templates spec §5): an order is flipped to on_hold for
+// every qualifying order REGARDLESS of whether recipients are configured — a
+// missing recipient list never means "no hold". The alert email is sent only
+// when recipients exist. At-most-once: hold_alerted_at is stamped only after a
+// successful send, so an un-emailed hold retries the alert next run without
+// re-flipping the state. We only look at orders from the last few days so the
+// first sync (which back-fills ~30 days of history) can't blast alerts.
 
 import { and, desc, eq, gte, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
@@ -27,7 +31,8 @@ import { orders, type Order } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { loadAppSettings } from "../statements/settings.js";
-import { renderTemplate } from "../email-compose/index.js";
+import { loadOrderTemplate, renderOrderTemplate } from "./templates.js";
+import { loadInternalHoldRecipients } from "./recipients.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -126,22 +131,6 @@ export async function recordHoldTransition(args: {
   });
 }
 
-const SUBJECT_TPL = "⚠ HOLD ORDER — {{order_number}} ({{customer_name}})";
-const BODY_TPL = `Please HOLD order {{order_number}} for {{customer_name}}.
-
-{{reason_line}}
-
-Order: {{order_number}}
-Date: {{order_date}}
-Total: {{order_total}}
-Items: {{item_count}}
-Payment status: {{payment_status}}
-Customer hold status: {{hold_status}}
-
-Do NOT ship this order until the accounts team confirms it's clear. Reply here once it's held.
-
-Customer record: {{customer_url}}`;
-
 function reasonLine(reason: HoldAlertReason, paymentStatus: string): string {
   if (reason === "customer_on_hold") {
     return "Reason: this customer is currently ON HOLD — they should not be able to place orders.";
@@ -208,26 +197,31 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
   }
 
   const settings = await loadAppSettings();
-  const recipients = (settings.order_hold_alert_recipients ?? "").trim();
+  const recipients = loadInternalHoldRecipients(settings);
+  const alertTpl = loadOrderTemplate(settings, "hold_alert");
+
+  // DECOUPLED (order-email-templates spec §5): the per-order state flip to
+  // on_hold MUST happen for every qualifying order regardless of whether alert
+  // recipients are configured. The email is sent only when recipients exist;
+  // a missing recipient list never means "no hold". In shadow mode we still
+  // flip state but never send (and never capture a thread id).
   if (!recipients) {
     log.warn(
       { candidates: rows.length },
-      "order hold alerts: no recipients configured (order_hold_alert_recipients empty) — skipping all",
+      "order hold alerts: no internal recipients configured (warehouse + team empty) — holding orders but not emailing",
     );
-    return { candidates: rows.length, sent: 0, skipped: rows.length };
   }
-
-  // In shadow mode (dev/test) we never send real email. Don't stamp
-  // hold_alerted_at either, so a real prod run still fires.
   if (env.SHADOW_MODE) {
     log.info(
       { candidates: rows.length, reason: "shadow_mode" },
-      "order hold alerts: shadow mode, not sending",
+      "order hold alerts: shadow mode, flipping state but not sending",
     );
-    return { candidates: rows.length, sent: 0, skipped: rows.length };
   }
 
-  const { sendEmail } = await import("../../integrations/gmail/send.js");
+  const canSend = Boolean(recipients) && !env.SHADOW_MODE;
+  const sendEmail = canSend
+    ? (await import("../../integrations/gmail/send.js")).sendEmail
+    : null;
 
   let sent = 0;
   let skipped = 0;
@@ -244,47 +238,75 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
 
     const orderNumber = o.orderNumber ?? `#${o.shopifyOrderId}`;
     const paymentStatus = o.financialStatus ?? "unknown";
-    const vars: Record<string, string> = {
-      order_number: orderNumber,
-      customer_name: customerName ?? "(unknown customer)",
-      reason_line: reasonLine(reason, paymentStatus),
-      order_date: fmtDate(o.orderDate),
-      order_total: fmtMoney(o.total),
-      item_count: String(o.itemCount ?? 0),
-      payment_status: paymentStatus,
-      hold_status: holdStatus ?? "—",
-      customer_url: o.customerId
-        ? `${env.PUBLIC_URL}/customers/${o.customerId}`
-        : "—",
-    };
 
-    const subject = renderTemplate(SUBJECT_TPL, vars);
-    const body = renderTemplate(BODY_TPL, vars);
+    // 1) Send the alert email if we can. Failures here must NOT block the hold
+    // state flip (operator's whole point: a held customer's order is held even
+    // if the warehouse email bounces). Capture the thread for in-thread release.
+    let threadId: string | null = null;
+    let messageId: string | null = null;
+    if (sendEmail) {
+      const vars: Record<string, string> = {
+        order_number: orderNumber,
+        customer_name: customerName ?? "(unknown customer)",
+        reason_line: reasonLine(reason, paymentStatus),
+        order_date: fmtDate(o.orderDate),
+        order_total: fmtMoney(o.total),
+        item_count: String(o.itemCount ?? 0),
+        payment_status: paymentStatus,
+        hold_status: holdStatus ?? "—",
+        customer_url: o.customerId
+          ? `${env.PUBLIC_URL}/customers/${o.customerId}`
+          : "—",
+      };
+      const rendered = renderOrderTemplate(alertTpl, vars);
+      try {
+        const sendResult = await sendEmail({
+          to: recipients,
+          subject: rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+          financeSendType: "hold-alert",
+          financeCustomerId: o.customerId ?? undefined,
+        });
+        threadId = sendResult.threadId || null;
+        messageId = sendResult.messageId || null;
+        sent += 1;
+        log.info(
+          { orderId: o.id, orderNumber, reason, customerId: o.customerId },
+          "order hold alert sent",
+        );
+      } catch (err) {
+        skipped += 1;
+        log.error(
+          { err, orderId: o.id, orderNumber, reason },
+          "order hold alert send failed — order still flipped to on_hold; alert retries next run",
+        );
+        // Leave holdAlertedAt unset (below) so the email retries next run, but
+        // still flip the hold state now.
+      }
+    } else {
+      skipped += 1;
+    }
 
-    try {
-      const sendResult = await sendEmail({
-        to: recipients,
-        subject,
-        html: body
-          .split(/\n{2,}/)
-          .map((p) => `<p>${p.replace(/\n/g, "<br/>")}</p>`)
-          .join("\n"),
-        text: body,
-        financeSendType: "hold-alert",
-        financeCustomerId: o.customerId ?? undefined,
-      });
-      const now = new Date();
-      // First alert = the order goes on_hold. Capture the warehouse alert's
-      // Gmail thread so the later "good to send" release can reply in-thread.
+    // 2) Flip the order to on_hold — but ONLY on the first transition (when it
+    // isn't already on_hold). This keeps the ladder clock (holdStartedAt) and
+    // the audit row at-most-once even when the email couldn't go out and the
+    // order is re-selected next run for an alert retry. holdAlertedAt is the
+    // "alert delivered" marker: stamped only when the email actually sent, so a
+    // hold with no recipients (or a bounced send) is re-evaluated next run to
+    // retry the email without re-flipping or resetting the clock.
+    const now = new Date();
+    const alerted = Boolean(threadId || messageId);
+    if (o.holdState !== "on_hold") {
       await db
         .update(orders)
         .set({
-          holdAlertedAt: now,
+          holdAlertedAt: alerted ? now : null,
           holdState: "on_hold",
           holdReason: reason,
           holdStartedAt: now,
-          holdAlertThreadId: sendResult.threadId || null,
-          holdAlertMessageId: sendResult.messageId || null,
+          holdAlertThreadId: threadId,
+          holdAlertMessageId: messageId,
         })
         .where(eq(orders.id, o.id));
       await recordHoldTransition({
@@ -294,17 +316,17 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
         before: { holdState: o.holdState },
         after: { holdState: "on_hold", holdReason: reason },
       });
-      sent += 1;
-      log.info(
-        { orderId: o.id, orderNumber, reason, customerId: o.customerId },
-        "order hold alert sent",
-      );
-    } catch (err) {
-      skipped += 1;
-      log.error(
-        { err, orderId: o.id, orderNumber, reason },
-        "order hold alert send failed — will retry next run",
-      );
+    } else if (alerted) {
+      // Already on_hold from a prior recipient-less run; now the email landed,
+      // so stamp the marker + capture the thread without touching the clock.
+      await db
+        .update(orders)
+        .set({
+          holdAlertedAt: now,
+          holdAlertThreadId: threadId,
+          holdAlertMessageId: messageId,
+        })
+        .where(eq(orders.id, o.id));
     }
   }
 
