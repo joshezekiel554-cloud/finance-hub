@@ -60,7 +60,12 @@ export type FinanceSendType =
   | "hold-cancel"
   // "Good to send" release, sent as a reply on the hold-alert thread. Inbox →
   // Done + drops the ⚠ treatment.
-  | "hold-release";
+  | "hold-release"
+  // Customer-facing "your order has been cancelled" confirmation, sent
+  // best-effort from the operator Cancel button after the Shopify cancel + QBO
+  // void + state flip succeed. Customer-facing → Inbox routes to Waiting (a
+  // customer reply auto-reopens). NOTE for Inbox: new send type to recognise.
+  | "order-cancelled";
 
 export type SendEmailInput = {
   // Comma-separated list of addresses; we don't split, Gmail does.

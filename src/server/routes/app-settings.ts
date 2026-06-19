@@ -27,6 +27,16 @@ import {
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
+import { loadAppSettings } from "../../modules/statements/settings.js";
+import {
+  ORDER_EMAIL_DEFAULTS,
+  ORDER_TEMPLATE_KEYS,
+  SAMPLE_VARS,
+  loadOrderTemplate,
+  renderOrderTemplate,
+  type OrderTemplateKey,
+} from "../../modules/orders/templates.js";
+import { env } from "../../lib/env.js";
 
 const log = createLogger({ component: "routes.app-settings" });
 
@@ -61,8 +71,57 @@ const appSettingsRoute: FastifyPluginAsync = async (app) => {
     for (const r of rows) {
       map[r.key] = r.value ?? "";
     }
-    return reply.send({ settings: map });
+    // Surface the hardcoded order/hold email-template defaults so the Settings
+    // UI's "Reset to default" can restore them and the textareas can show the
+    // effective (override-or-default) value. Keyed by template key.
+    return reply.send({ settings: map, orderTemplateDefaults: ORDER_EMAIL_DEFAULTS });
   });
+
+  // POST /api/app-settings/order-templates/:key/test — render the effective
+  // template for :key with SAMPLE_VARS and email it to the current user, so the
+  // operator can preview an order/hold email without waiting for a real send.
+  // 400 on an unknown template key.
+  app.post<{ Params: { key: string } }>(
+    "/order-templates/:key/test",
+    async (req, reply) => {
+      const user = await requireAuth(req);
+      const key = req.params.key;
+      if (!(ORDER_TEMPLATE_KEYS as readonly string[]).includes(key)) {
+        return reply.code(400).send({
+          error: "unknown template key",
+          allowedKeys: ORDER_TEMPLATE_KEYS,
+        });
+      }
+      const to = user.email;
+      if (!to) {
+        return reply
+          .code(400)
+          .send({ error: "your account has no email address to send the test to" });
+      }
+
+      const settings = await loadAppSettings();
+      const tpl = loadOrderTemplate(settings, key as OrderTemplateKey);
+      const rendered = renderOrderTemplate(tpl, SAMPLE_VARS);
+
+      if (env.SHADOW_MODE) {
+        log.info(
+          { key, to, reason: "shadow_mode" },
+          "order-template test: shadow mode, not sending",
+        );
+        return reply.send({ ok: true, sent: false, shadowMode: true, to });
+      }
+
+      const { sendEmail } = await import("../../integrations/gmail/send.js");
+      await sendEmail({
+        to,
+        subject: `[TEST] ${rendered.subject}`,
+        html: rendered.html,
+        text: rendered.text,
+      });
+      log.info({ key, to, userId: user.id }, "order-template test email sent");
+      return reply.send({ ok: true, sent: true, to });
+    },
+  );
 
   // PATCH /api/app-settings — partial update. Body: { [key]: value }.
   //

@@ -16,6 +16,12 @@ import { auditLog } from "../../db/schema/audit.js";
 import { orderReviewDismissals } from "../../db/schema/order-review-dismissals.js";
 import { recordHoldTransition } from "./hold-alerts.js";
 import { loadAppSettings } from "../statements/settings.js";
+import { loadOrderTemplate, renderOrderTemplate } from "./templates.js";
+import {
+  loadInternalHoldRecipients,
+  resolveHoldCustomerRecipients,
+} from "./recipients.js";
+import { reasonClause } from "./hold-ladder.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -58,7 +64,7 @@ export async function releaseHold(
 
   const orderNumber = o.orderNumber ?? `#${o.shopifyOrderId}`;
   const settings = await loadAppSettings();
-  const recipients = (settings.order_hold_alert_recipients ?? "").trim();
+  const recipients = loadInternalHoldRecipients(settings);
 
   if (!env.SHADOW_MODE && recipients) {
     const body = `Order ${orderNumber} for ${o.customerName ?? "the customer"} is now CLEARED — good to send. Please go ahead and ship it.`;
@@ -128,21 +134,36 @@ export async function placeOnHold(
   const orderNumber = o.orderNumber ?? `#${o.shopifyOrderId}`;
   const now = new Date();
   const settings = await loadAppSettings();
-  const recipients = (settings.order_hold_alert_recipients ?? "").trim();
+  const recipients = loadInternalHoldRecipients(settings);
 
   let threadId: string | null = null;
   let messageId: string | null = null;
   if (!env.SHADOW_MODE && recipients) {
-    const body = `Please HOLD order ${orderNumber} for ${o.customerName ?? "the customer"}.
-
-Reason: this customer has a large overdue balance and hasn't been in contact. Do NOT ship until the accounts team confirms it's clear. Reply here once held.`;
+    // Manual overdue hold: render the operator-editable hold_alert template.
+    // Vars we don't have here (item_count/payment_status/order_date/hold_status)
+    // strip to blank via renderOrderTemplate — the template stays readable.
+    const orderTotal = Number.isFinite(Number(o.total))
+      ? `$${Number(o.total).toFixed(2)}`
+      : "—";
+    const tpl = loadOrderTemplate(settings, "hold_alert");
+    const rendered = renderOrderTemplate(tpl, {
+      order_number: orderNumber,
+      customer_name: o.customerName ?? "(unknown customer)",
+      reason_line:
+        "Reason: this customer has a large overdue balance and hasn't been in contact.",
+      order_total: orderTotal,
+      hold_status: "overdue",
+      customer_url: o.customerId
+        ? `${env.PUBLIC_URL}/customers/${o.customerId}`
+        : "—",
+    });
     const { sendEmail } = await import("../../integrations/gmail/send.js");
     try {
       const r = await sendEmail({
         to: recipients,
-        subject: `⚠ HOLD ORDER — ${orderNumber} (${o.customerName ?? "customer"})`,
-        html: toHtml(body),
-        text: body,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
         financeSendType: "hold-alert",
         financeCustomerId: o.customerId ?? undefined,
       });
@@ -193,10 +214,23 @@ export async function cancelHoldOrder(
       id: orders.id,
       orderNumber: orders.orderNumber,
       shopifyOrderId: orders.shopifyOrderId,
+      total: orders.total,
       holdState: orders.holdState,
+      holdReason: orders.holdReason,
       customerId: orders.customerId,
+      customerName: customers.displayName,
+      primaryEmail: customers.primaryEmail,
+      billingEmails: customers.billingEmails,
+      invoiceToEmails: customers.invoiceToEmails,
+      invoiceCcEmails: customers.invoiceCcEmails,
+      invoiceBccEmails: customers.invoiceBccEmails,
+      statementToEmails: customers.statementToEmails,
+      statementCcEmails: customers.statementCcEmails,
+      statementBccEmails: customers.statementBccEmails,
+      tags: customers.tags,
     })
     .from(orders)
+    .leftJoin(customers, eq(orders.customerId, customers.id))
     .where(eq(orders.id, orderId))
     .limit(1);
   const o = rows[0];
@@ -266,6 +300,54 @@ export async function cancelHoldOrder(
     { orderId, orderNumber, userId, qboVoided },
     "order cancelled (Shopify + QBO)",
   );
+
+  // Best-effort customer cancellation email — AFTER the cancel + void + state
+  // flip have all succeeded. A failed email must NEVER revert the cancel, so we
+  // log + swallow. Customer-facing → uses the shared customer recipient helper
+  // (incl. Yiddy sales@ CC) and the order-cancelled send type (Inbox: Waiting).
+  if (!env.SHADOW_MODE) {
+    try {
+      const to = await resolveHoldCustomerRecipients(o);
+      if (to) {
+        const settings = await loadAppSettings();
+        const orderTotal = Number.isFinite(Number(o.total))
+          ? `$${Number(o.total).toFixed(2)}`
+          : "the order value";
+        const tpl = loadOrderTemplate(settings, "order_cancelled");
+        const rendered = renderOrderTemplate(tpl, {
+          order_number: orderNumber,
+          customer_name: o.customerName ?? "there",
+          order_total: orderTotal,
+          reason_clause: reasonClause(o.holdReason),
+          customer_url: o.customerId
+            ? `${env.PUBLIC_URL}/customers/${o.customerId}`
+            : "—",
+        });
+        const { sendEmail } = await import("../../integrations/gmail/send.js");
+        await sendEmail({
+          to: to.to,
+          cc: to.cc || undefined,
+          bcc: to.bcc || undefined,
+          subject: rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+          financeSendType: "order-cancelled",
+          financeCustomerId: o.customerId ?? undefined,
+        });
+      } else {
+        log.warn(
+          { orderId, orderNumber },
+          "cancel: no customer email — skipped cancellation notice",
+        );
+      }
+    } catch (err) {
+      log.error(
+        { err, orderId, orderNumber },
+        "cancel: customer cancellation email failed (cancel already committed)",
+      );
+    }
+  }
+
   return { ok: true, shopifyCancelled: true, qboVoided, note };
 }
 

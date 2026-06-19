@@ -98,11 +98,36 @@ export const APP_SETTING_KEYS = [
   // outbound X-Feldart-Finance-Send header is NOT gated by this (harmless
   // to emit early; Inbox ignores it until ready).
   "inbox_integration_enabled",
-  // Comma-separated recipients for the order-hold alert (an order came through
-  // for a held customer, OR a payment-upfront customer's order is unpaid). The
-  // orders-sync job sends here with X-Feldart-Finance-Send: hold-alert so Inbox
-  // routes it to To-Do, loud, with a team ping. Empty = no alert is sent.
+  // DEPRECATED (2026-06-19, order-email-templates feature): the single
+  // order-hold internal recipient list, now split into warehouse + team below.
+  // Migration 0052 copies this value into order_hold_warehouse_recipients on
+  // upgrade. Kept registered so old rows still load + the PATCH allow-list
+  // doesn't reject it, but NEW code must not read it — read warehouse + team
+  // via loadInternalHoldRecipients() instead.
   "order_hold_alert_recipients",
+  // NEW (order-email-templates) — the warehouse / fulfilment (Bluechip) list
+  // that gets the internal "⚠ HOLD ORDER" + Day-10 "cancel + return to stock"
+  // emails. Merged (deduped) with the accounts-team list below for those sends.
+  // Empty = that recipient group contributes nothing.
+  "order_hold_warehouse_recipients",
+  // NEW (order-email-templates) — the accounts-team list, merged (deduped) with
+  // the warehouse list for the internal hold_alert + hold_cancel sends.
+  "order_hold_team_recipients",
+  // NEW (order-email-templates) — operator-editable order/hold email templates.
+  // Each is subject + body; an empty stored value falls back to the hardcoded
+  // default in src/modules/orders/templates.ts (ORDER_EMAIL_DEFAULTS). Bodies
+  // are plain text auto-wrapped to HTML (blank line = paragraph, newline =
+  // <br/>); leftover {{placeholders}} render blank.
+  "order_tpl_hold_alert_subject",
+  "order_tpl_hold_alert_body",
+  "order_tpl_hold_notice_subject",
+  "order_tpl_hold_notice_body",
+  "order_tpl_hold_warning_subject",
+  "order_tpl_hold_warning_body",
+  "order_tpl_hold_cancel_subject",
+  "order_tpl_hold_cancel_body",
+  "order_tpl_order_cancelled_subject",
+  "order_tpl_order_cancelled_body",
   // Phase 4 — overdue-order review alert. Fires when an order comes through for
   // a customer with a large overdue balance who isn't communicating (and who is
   // NOT excluded from autopilot). Recipients (comma-separated; empty = no send),

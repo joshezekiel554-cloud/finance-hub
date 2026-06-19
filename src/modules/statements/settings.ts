@@ -60,9 +60,25 @@ export type AppSettingsMap = {
   // Inbox↔Finance integration master flag — surfaced so loadAppSettings can
   // index by any canonical key without a type error.
   inbox_integration_enabled: string;
-  // Comma-separated recipients for the order-hold alert (held customer ordered,
-  // or payment-upfront order unpaid). Empty = no alert sent.
+  // DEPRECATED — single order-hold internal recipient list, split into
+  // warehouse + team below. Kept so old rows load; new code reads the split.
   order_hold_alert_recipients: string;
+  // Split internal hold recipients (warehouse / Bluechip + accounts team).
+  // Merged + deduped by loadInternalHoldRecipients for hold_alert + hold_cancel.
+  order_hold_warehouse_recipients: string;
+  order_hold_team_recipients: string;
+  // Operator-editable order/hold email templates (empty = use the default
+  // constant from src/modules/orders/templates.ts).
+  order_tpl_hold_alert_subject: string;
+  order_tpl_hold_alert_body: string;
+  order_tpl_hold_notice_subject: string;
+  order_tpl_hold_notice_body: string;
+  order_tpl_hold_warning_subject: string;
+  order_tpl_hold_warning_body: string;
+  order_tpl_hold_cancel_subject: string;
+  order_tpl_hold_cancel_body: string;
+  order_tpl_order_cancelled_subject: string;
+  order_tpl_order_cancelled_body: string;
   // Phase 4 — overdue-order review alert. Recipients (comma-separated, empty =
   // no send), GBP overdue threshold, and the no-contact window in days.
   order_overdue_alert_recipients: string;
@@ -104,6 +120,26 @@ const DEFAULTS: AppSettingsMap = {
   // /settings.
   order_hold_alert_recipients:
     "info@feldart.co.uk,info@feldart.com,sales@feldart.com,efrayim@bluechipfulfillment.com,shipping@bluechipfulfillment.com",
+  // Default warehouse list = the Bluechip fulfilment inboxes (so a fresh
+  // install can still physically hold a parcel). On an existing install the
+  // 0052 data migration overwrites this with the legacy
+  // order_hold_alert_recipients value. The accounts team defaults to the two
+  // Feldart inboxes. The hold_alert + hold_cancel sends use both, deduped.
+  order_hold_warehouse_recipients:
+    "efrayim@bluechipfulfillment.com,shipping@bluechipfulfillment.com",
+  order_hold_team_recipients: "info@feldart.com,info@feldart.co.uk",
+  // Templates default to "" so the effective-value resolver falls through to
+  // ORDER_EMAIL_DEFAULTS. Stored only when an operator customises one.
+  order_tpl_hold_alert_subject: "",
+  order_tpl_hold_alert_body: "",
+  order_tpl_hold_notice_subject: "",
+  order_tpl_hold_notice_body: "",
+  order_tpl_hold_warning_subject: "",
+  order_tpl_hold_warning_body: "",
+  order_tpl_hold_cancel_subject: "",
+  order_tpl_hold_cancel_body: "",
+  order_tpl_order_cancelled_subject: "",
+  order_tpl_order_cancelled_body: "",
   // Operator-specified: the overdue review alert goes to the two Feldart
   // inboxes (they decide whether to tell Bluechip to hold). £1000 + 14 days are
   // sensible starting points; tweak in /settings.
