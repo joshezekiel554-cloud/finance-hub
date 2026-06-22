@@ -138,6 +138,25 @@ const schema = z.object({
   // weak token can't slip in.
   FINANCE_SERVICE_TOKEN: optionalSecret(32),
 
+  // --- Shared tasks: finance → inbox direction (the FLIP of FINANCE_SERVICE_TOKEN) ---
+  // For the unified-tasks feature finance is a CLIENT of the inbox task engine:
+  // it calls INTO inbox (`GET /api/svc/members`, `POST /api/svc/tasks`, …) with
+  // `Authorization: Bearer <INBOX_SERVICE_TOKEN>`. Mirror of how inbox calls our
+  // /api/ext. Operator generates the token (`openssl rand -hex 32`) and sets the
+  // SAME value in both apps' env. optionalSecret(32) — same shape as
+  // FINANCE_SERVICE_TOKEN above, so local/dev/test boot isn't blocked; the inbox
+  // client fails-closed when it's unset. MUST be set on the VPS before the
+  // shared-tasks flag flips; min 32 bars weak tokens.
+  INBOX_SERVICE_TOKEN: optionalSecret(32),
+  // Base URL of the sibling Inbox service. Same VPS → loopback by default
+  // (mirror of inbox's FINANCE_BASE_URL=127.0.0.1:3001).
+  INBOX_BASE_URL: z.string().url().default("http://127.0.0.1:3002"),
+  // HMAC secret used (in M1) to mint the short-lived embed/viewer token inbox
+  // validates to scope the embedded board to a member. Registered now; no logic
+  // consumes it yet this milestone. optionalSecret so dev boot is unblocked;
+  // required on the VPS before M1 ships.
+  TASKS_EMBED_SIGNING_SECRET: optionalSecret(32),
+
   VOCATECH_API_KEY: optionalSecret(1),
   VOCATECH_WEBHOOK_SECRET: optionalSecret(1),
   // E.164 or 10-digit US sender number registered to your Vocatech tenant.
