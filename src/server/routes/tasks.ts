@@ -49,10 +49,11 @@ import {
 
 // --- Shared-tasks embed config (M1) ------------------------------------------
 // The embedded inbox global-tasks board. Finance points an <iframe> at:
-//   `${INBOX_PUBLIC_URL}${EMBED_PATH}?${EMBED_QUERY}&vt=${viewerToken}`
-// Path CONFIRMED with inbox (2026-06-22): https://inbox.feldart.com/tasks?embed=1&vt=<token>
-const EMBED_PATH = "/tasks";
-const EMBED_QUERY = "embed=1";
+//   `${INBOX_PUBLIC_URL}${EMBED_PATH}?vt=${viewerToken}`
+// Path CONFIRMED with inbox (2026-06-22): a DEDICATED chrome-free route OUTSIDE
+// the session-gated /tasks layout — https://inbox.feldart.com/embed/tasks?vt=<token>
+// (the vt token is the auth; no session/redirect on this path).
+const EMBED_PATH = "/embed/tasks";
 
 // Shape of a task as the inbox `GET /api/svc/tasks` endpoint returns it (LOCKED
 // contract with inbox). `ownerId` is the ASSIGNEE member id (the inbox model
@@ -809,7 +810,7 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       }
       throw err;
     }
-    const url = `${env.INBOX_PUBLIC_URL.replace(/\/+$/, "")}${EMBED_PATH}?${EMBED_QUERY}&vt=${encodeURIComponent(token)}`;
+    const url = `${env.INBOX_PUBLIC_URL.replace(/\/+$/, "")}${EMBED_PATH}?vt=${encodeURIComponent(token)}`;
     return reply.send({ url });
   });
 
