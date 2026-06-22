@@ -79,6 +79,7 @@ export default function SettingsPage() {
       <AliasSignaturesSection />
       <StatementPdfSection />
       <TorahJudaicaSection />
+      <SharedTasksSection />
       <OrderAlertsSection />
       <OrderEmailTemplatesSection />
       <ReturnsSection />
@@ -2112,6 +2113,79 @@ function TorahJudaicaSection() {
             </span>
           )}
         </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// ─────────────────────── Shared tasks ────────────────────────────────────
+
+// Master flag for the in-progress unified/shared-tasks surface. While off,
+// the Tasks nav entry + the dashboard My-tasks widget render nothing, so the
+// feature can be deployed and iterated on without exposing anything to the
+// team. Flip on here when it's ready to launch.
+function SharedTasksSection() {
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery<AppSettingsResponse>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const enabled = settingsQuery.data?.settings.shared_tasks_enabled === "true";
+
+  const toggleMutation = useMutation({
+    mutationFn: async (next: boolean) => {
+      const res = await fetch("/api/app-settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ shared_tasks_enabled: next ? "true" : "" }),
+      });
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+      }
+      return (await res.json()) as AppSettingsResponse;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-base font-semibold">Shared tasks</h2>
+        <p className="mt-1 text-xs text-muted">
+          Master switch for the shared-tasks surface (Tasks nav link + the
+          dashboard "My tasks" widget). Off until the feature is ready to
+          launch to the team.
+        </p>
+      </CardHeader>
+      <CardBody>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={!settingsQuery.data || toggleMutation.isPending}
+            onChange={(e) => toggleMutation.mutate(e.target.checked)}
+            className="rounded"
+          />
+          <span className="text-secondary">
+            Enable shared tasks for the team
+          </span>
+        </label>
+        {toggleMutation.isError && (
+          <div className="mt-2 text-xs text-accent-danger">
+            {(toggleMutation.error as Error).message}
+          </div>
+        )}
       </CardBody>
     </Card>
   );

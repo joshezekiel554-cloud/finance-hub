@@ -40,6 +40,7 @@ import {
   requireMemberForUser,
   NoInboxAccountError,
 } from "../../modules/tasks-shared/identity.js";
+import { listMembers } from "../../integrations/inbox/members.js";
 import {
   inboxFetch,
   InboxUnreachableError,
@@ -66,6 +67,86 @@ type InboxMineTask = {
   ownerId: string | null;
 };
 type InboxMineResponse = { tasks: InboxMineTask[] };
+
+// --- Shared-task CREATE (M2) -------------------------------------------------
+// Finance creates a shared task by POSTing to inbox `POST /api/svc/tasks` with
+// the CREATOR as `actingMemberId` and the ASSIGNEE (optional) as `ownerId`.
+// LOCKED contract with inbox (2026-06-22). Comments / @mentions / attachments
+// are authored ON the embedded inbox board, NOT here — M2 finance = creation.
+
+// Body finance accepts from its own UI. ownerId / financeCustomerId are
+// nullable+optional (null/omitted ownerId = unassigned). dueAt/reminderAt are
+// ISO-8601 instants; we forward them to inbox verbatim.
+// Maps finance's task priority vocabulary (crm.ts TASK_PRIORITIES) to the inbox
+// Task model's enum. Locked contract: inbox = LOW|NORMAL|IMPORTANT|URGENT.
+const FINANCE_TO_INBOX_PRIORITY: Record<string, string> = {
+  low: "LOW",
+  normal: "NORMAL",
+  high: "IMPORTANT",
+  urgent: "URGENT",
+};
+
+export const sharedCreateBodySchema = z.object({
+  // inbox caps title at 300 (locked contract) — validate here so we fail fast.
+  title: z.string().trim().min(1).max(300),
+  body: z.string().max(10_000).nullable().optional(),
+  ownerId: z.string().min(1).max(255).nullable().optional(),
+  financeCustomerId: z.string().min(1).max(64).nullable().optional(),
+  dueAt: z.string().datetime({ offset: true }).nullable().optional(),
+  reminderAt: z.string().datetime({ offset: true }).nullable().optional(),
+  priority: z.enum(TASK_PRIORITIES).optional(),
+});
+export type SharedCreateBody = z.infer<typeof sharedCreateBodySchema>;
+
+// What inbox returns from POST /api/svc/tasks (LOCKED contract). `ownerId` is the
+// assignee member id.
+export type InboxCreatedTask = {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  dueAt: string | null;
+  financeCustomerId: string | null;
+  ownerId: string | null;
+};
+type InboxCreateResponse = { task: InboxCreatedTask };
+
+/**
+ * Resolve the finance user → their inbox member, then create the shared task in
+ * inbox (the canonical store) with `actingMemberId` = the creator. Pure of HTTP
+ * framing so it is unit-testable (mock identity + the inbox client). Surfaces
+ * NoInboxAccountError / InboxUnreachableError / InboxApiError to the caller for
+ * status mapping.
+ */
+export async function createSharedTaskForUser(
+  user: { email: string | null | undefined },
+  input: SharedCreateBody,
+): Promise<InboxCreatedTask> {
+  const member = await requireMemberForUser({ email: user.email ?? "" });
+  const res = await inboxFetch<InboxCreateResponse>("/api/svc/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      actingMemberId: member.teamMemberId,
+      title: input.title,
+      // Only forward the optional fields the caller actually set, so we don't
+      // pin inbox defaults (e.g. send `ownerId: null` only when explicitly
+      // unassigning vs omitting).
+      // Field-name reconciliation to the locked inbox model: body→notes,
+      // reminderAt→remindAt, priority mapped to inbox's enum.
+      ...(input.body !== undefined ? { notes: input.body } : {}),
+      ...(input.ownerId !== undefined ? { ownerId: input.ownerId } : {}),
+      ...(input.financeCustomerId !== undefined
+        ? { financeCustomerId: input.financeCustomerId }
+        : {}),
+      ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
+      ...(input.reminderAt !== undefined ? { remindAt: input.reminderAt } : {}),
+      ...(input.priority !== undefined
+        ? { priority: FINANCE_TO_INBOX_PRIORITY[input.priority] ?? "NORMAL" }
+        : {}),
+    }),
+  });
+  return res.task;
+}
 
 const log = createLogger({ component: "routes.tasks" });
 
@@ -764,6 +845,69 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       );
       return reply.send({ tasks: res.tasks ?? [] });
     } catch (err) {
+      if (err instanceof InboxUnreachableError) {
+        return reply.code(503).send({ error: "inbox_unreachable" });
+      }
+      if (err instanceof InboxApiError) {
+        return reply.code(502).send({ error: "inbox_error" });
+      }
+      throw err;
+    }
+  });
+
+  // --- Shared tasks: members + create (M2) -----------------------------------
+
+  // GET /api/tasks/members — the assignee picker source. Returns the inbox
+  // roster filtered to active, trimmed to just {teamMemberId, name} (don't leak
+  // emails/roles to the picker — it only needs to render names + send an id).
+  app.get("/members", async (req, reply) => {
+    await requireAuth(req);
+    try {
+      const all = await listMembers();
+      const members = all
+        .filter((m) => m.active)
+        .map((m) => ({ teamMemberId: m.teamMemberId, name: m.name }));
+      return reply.send({ members });
+    } catch (err) {
+      if (err instanceof InboxUnreachableError) {
+        return reply.code(503).send({ error: "inbox_unreachable" });
+      }
+      if (err instanceof InboxApiError) {
+        return reply.code(502).send({ error: "inbox_error" });
+      }
+      throw err;
+    }
+  });
+
+  // POST /api/tasks/shared — create a shared task in inbox (the canonical
+  // store). Named `/shared` to avoid colliding with the native Kanban
+  // `POST /api/tasks` above (different task system). The current user is the
+  // creator (actingMemberId); `ownerId` (optional) is the assignee.
+  app.post("/shared", async (req, reply) => {
+    const user = await requireAuth(req);
+    const parse = sharedCreateBodySchema.safeParse(req.body);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+
+    try {
+      const task = await createSharedTaskForUser(
+        { email: user.email },
+        parse.data,
+      );
+      log.info(
+        { taskId: task.id, byUserId: user.id, ownerId: task.ownerId },
+        "shared task created",
+      );
+      return reply.code(201).send({ task });
+    } catch (err) {
+      if (err instanceof NoInboxAccountError) {
+        return reply
+          .code(409)
+          .send({ error: "no_inbox_account", message: err.message });
+      }
       if (err instanceof InboxUnreachableError) {
         return reply.code(503).send({ error: "inbox_unreachable" });
       }

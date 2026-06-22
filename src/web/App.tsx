@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Users,
@@ -24,14 +25,13 @@ import { MobileNavDrawer, type NavItem } from "./components/mobile-nav-drawer";
 import { AgentProvider, useAgent } from "./agent/agent-store";
 import { AgentPanel } from "./agent/agent-panel";
 
-const navItems: NavItem[] = [
+const baseNavItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/customers", label: "Customers", icon: Users },
   { to: "/invoicing", label: "Today", icon: FileText },
   { to: "/chase", label: "Chase", icon: AlertCircle },
   { to: "/statements", label: "Statements", icon: Receipt },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
-  { to: "/shared-tasks", label: "Shared tasks", icon: ListChecks },
   { to: "/returns", label: "Returns", icon: RotateCcw },
   { to: "/seasons", label: "Seasons", icon: CalendarRange },
   { to: "/autopilot", label: "Autopilot", icon: Bot },
@@ -42,6 +42,36 @@ const navItems: NavItem[] = [
 
 export default function App({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // App settings — only consumed here for the shared-tasks master flag.
+  // Keyed identically to the customer page's query so the two dedupe.
+  const appSettingsQuery = useQuery<{ settings: Record<string, string> }>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const sharedTasksEnabled =
+    appSettingsQuery.data?.settings.shared_tasks_enabled === "true";
+
+  // The "Shared tasks" nav entry is gated behind shared_tasks_enabled so the
+  // in-progress feature exposes nothing until the operator flips it on. When
+  // on, it sits directly after "Tasks".
+  const navItems = useMemo<NavItem[]>(() => {
+    if (!sharedTasksEnabled) return baseNavItems;
+    const items = [...baseNavItems];
+    const tasksIdx = items.findIndex((i) => i.to === "/tasks");
+    const insertAt = tasksIdx >= 0 ? tasksIdx + 1 : items.length;
+    items.splice(insertAt, 0, {
+      to: "/shared-tasks",
+      label: "Shared tasks",
+      icon: ListChecks,
+    });
+    return items;
+  }, [sharedTasksEnabled]);
 
   return (
     <AgentProvider>

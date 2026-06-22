@@ -66,6 +66,20 @@ export default function HomePage() {
     refetchOnWindowFocus: false,
   });
 
+  // Shared-tasks master flag — gates the My-tasks dashboard widget. Keyed
+  // identically to the rest of the app's app-settings query so it dedupes.
+  const appSettingsQuery = useQuery<{ settings: Record<string, string> }>({
+    queryKey: ["app-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/app-settings");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60_000,
+  });
+  const sharedTasksEnabled =
+    appSettingsQuery.data?.settings.shared_tasks_enabled === "true";
+
   const unsentToday = useMemo(() => {
     if (!todayData) return 0;
     const todayLondon = londonDateFor(new Date());
@@ -128,7 +142,7 @@ export default function HomePage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <RmasWidget />
         <HoldsWidget />
-        <MyTasksWidget />
+        {sharedTasksEnabled ? <MyTasksWidget /> : null}
       </div>
 
       {/* Quick links — most-used pages, one click away. */}

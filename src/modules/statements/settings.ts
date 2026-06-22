@@ -60,6 +60,9 @@ export type AppSettingsMap = {
   // Inbox↔Finance integration master flag — surfaced so loadAppSettings can
   // index by any canonical key without a type error.
   inbox_integration_enabled: string;
+  // Shared-tasks master flag ("true"/"") — gates the finance Tasks nav +
+  // dashboard My-tasks widget. Default off until the feature launches.
+  shared_tasks_enabled: string;
   // DEPRECATED — single order-hold internal recipient list, split into
   // warehouse + team below. Kept so old rows load; new code reads the split.
   order_hold_alert_recipients: string;
@@ -115,6 +118,7 @@ const DEFAULTS: AppSettingsMap = {
   agent_enabled: "1",
   agent_monthly_budget_usd: "150",
   inbox_integration_enabled: "",
+  shared_tasks_enabled: "",
   // Operator-specified default recipients: Feldart inboxes + Bluechip warehouse
   // (efrayim + shipping) so the order can be physically held. Tweakable in
   // /settings.

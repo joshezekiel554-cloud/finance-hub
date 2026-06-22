@@ -7,11 +7,12 @@
 // renders it in a full-height iframe. We re-mint the token on focus so a tab
 // left open past the 5-min TTL refreshes its scope on return.
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
+import { NewTaskDialog } from "../components/tasks/new-task-dialog";
 
 type EmbedUrlResponse = { url: string };
 
@@ -25,6 +26,7 @@ async function fetchEmbedUrl(): Promise<EmbedUrlResponse> {
 }
 
 export default function SharedTasksPage() {
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
   const { data, isPending, isError, error, refetch } = useQuery<EmbedUrlResponse>({
     queryKey: ["tasks", "embed-url"],
     queryFn: fetchEmbedUrl,
@@ -54,15 +56,27 @@ export default function SharedTasksPage() {
             The shared tasks board — your tasks across finance and inbox.
           </p>
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => void refetch()}
-          disabled={isPending}
-        >
-          <RefreshCw className="size-3.5" /> Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => setNewTaskOpen(true)}>
+            <Plus className="size-3.5" /> New task
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void refetch()}
+            disabled={isPending}
+          >
+            <RefreshCw className="size-3.5" /> Refresh
+          </Button>
+        </div>
       </div>
+
+      <NewTaskDialog
+        open={newTaskOpen}
+        onOpenChange={setNewTaskOpen}
+        // Re-mint the embed URL so a just-created task shows on the board.
+        onCreated={() => void refetch()}
+      />
 
       {isPending ? (
         <div className="flex-1 animate-pulse rounded-lg bg-subtle" />

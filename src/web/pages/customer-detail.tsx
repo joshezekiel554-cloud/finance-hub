@@ -69,6 +69,7 @@ import {
 } from "../components/task-detail-drawer";
 import { TaskList } from "../components/task-list";
 import type { TaskCardData } from "../components/task-card";
+import { NewTaskDialog } from "../components/tasks/new-task-dialog";
 import InvoiceSendDialog, {
   type InvoiceSendSuccess,
 } from "../components/invoice-send-dialog";
@@ -258,6 +259,9 @@ export default function CustomerDetailPage() {
   // with `customerId` pre-filled in defaults so the resulting task
   // links back to this customer automatically.
   const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
+  // Shared-task dialog (M2) — distinct from the native Kanban drawer above.
+  // Creates a task in the inbox canonical store, pre-linked to this customer.
+  const [sharedTaskOpen, setSharedTaskOpen] = useState(false);
   const queryClient = useQueryClient();
 
   // Auto-dismiss the "statement sent" pill after ~6s. We don't have a
@@ -752,6 +756,15 @@ export default function CustomerDetailPage() {
               <Plus className="size-3.5" />
               New task
             </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setSharedTaskOpen(true)}
+              title="Create a shared task (assign to a teammate on the shared board)"
+            >
+              <ClipboardList className="size-3.5" />
+              Shared task
+            </Button>
           </div>
         </div>
       </div>
@@ -813,6 +826,12 @@ export default function CustomerDetailPage() {
           (post-create the parent flips drawer to edit mode) animate
           smoothly. The drawer self-handles open/close styling; we
           just supply mode + defaults + currentUser. */}
+      <NewTaskDialog
+        open={sharedTaskOpen}
+        onOpenChange={setSharedTaskOpen}
+        customer={{ id: customer.id, name: customer.displayName }}
+      />
+
       <TaskDetailDrawer
         open={taskDrawer !== null}
         onClose={() => setTaskDrawer(null)}
