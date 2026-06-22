@@ -162,7 +162,7 @@ export function NewTaskDialog({
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="What needs doing?"
-            maxLength={512}
+            maxLength={300}
           />
 
           <div className="flex flex-col gap-1.5">
