@@ -7,7 +7,7 @@
 // renders it in a full-height iframe. We re-mint the token on focus so a tab
 // left open past the 5-min TTL refreshes its scope on return.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
@@ -35,10 +35,10 @@ export default function SharedTasksPage() {
   });
 
   // Re-mint on window focus so a returning tab is never holding a dead token.
-  const [refocusKey, setRefocusKey] = useState(0);
+  // The refetch yields a fresh URL (new token) → keying the iframe on data.url
+  // reloads it only when the URL actually changes (no focus/blur thrash).
   const onFocus = useCallback(() => {
     void refetch();
-    setRefocusKey((k) => k + 1);
   }, [refetch]);
   useEffect(() => {
     window.addEventListener("focus", onFocus);
@@ -89,8 +89,8 @@ export default function SharedTasksPage() {
         </Card>
       ) : (
         <iframe
-          // key forces a reload with the freshly-minted URL on focus/refetch.
-          key={`${data!.url}-${refocusKey}`}
+          // key on the URL: reloads with the freshly-minted token when it changes.
+          key={data!.url}
           src={data!.url}
           title="Shared tasks board"
           className="min-h-0 flex-1 rounded-lg border border-default bg-base"

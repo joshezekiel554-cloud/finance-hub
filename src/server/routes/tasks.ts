@@ -40,27 +40,30 @@ import {
   requireMemberForUser,
   NoInboxAccountError,
 } from "../../modules/tasks-shared/identity.js";
-import { inboxFetch, InboxUnreachableError } from "../../integrations/inbox/client.js";
+import {
+  inboxFetch,
+  InboxUnreachableError,
+  InboxApiError,
+} from "../../integrations/inbox/client.js";
 
 // --- Shared-tasks embed config (M1) ------------------------------------------
-// The embedded inbox global-tasks board. Finance redirects an <iframe> at:
+// The embedded inbox global-tasks board. Finance points an <iframe> at:
 //   `${INBOX_PUBLIC_URL}${EMBED_PATH}?${EMBED_QUERY}&vt=${viewerToken}`
-// TODO(inbox): confirm the EXACT embed path + query inbox expects. Parameterized
-// here so a single edit re-points it. Final form assumed:
-//   https://inbox.feldart.com/tasks?embed=1&vt=<token>
+// Path CONFIRMED with inbox (2026-06-22): https://inbox.feldart.com/tasks?embed=1&vt=<token>
 const EMBED_PATH = "/tasks";
 const EMBED_QUERY = "embed=1";
 
-// Shape of a task as the inbox `GET /api/svc/tasks?mine` endpoint returns it
-// (LOCKED contract assumption — confirm with inbox). The "my tasks" widget only
-// needs these fields.
+// Shape of a task as the inbox `GET /api/svc/tasks` endpoint returns it (LOCKED
+// contract with inbox). `ownerId` is the ASSIGNEE member id (the inbox model
+// names the assignee "owner"). The "my tasks" widget only needs these fields.
 type InboxMineTask = {
   id: string;
   title: string;
   status: string;
+  priority: string;
   dueAt: string | null;
   financeCustomerId: string | null;
-  assigneeId: string | null;
+  ownerId: string | null;
 };
 type InboxMineResponse = { tasks: InboxMineTask[] };
 
@@ -744,19 +747,28 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       if (err instanceof InboxUnreachableError) {
         return reply.code(503).send({ error: "inbox_unreachable" });
       }
+      // A non-2xx from the inbox roster fetch is a sibling-service error, not a
+      // finance bug — degrade to 502 rather than a 500.
+      if (err instanceof InboxApiError) {
+        return reply.code(502).send({ error: "inbox_error" });
+      }
       throw err;
     }
 
     try {
-      // Pass the resolved memberId so inbox scopes "mine" unambiguously; the
-      // bare `mine` flag documents intent per the locked contract.
+      // Locked contract: convey WHO is acting (the service token authenticates
+      // the app, not a user) — inbox derives admin + scopes visibility from
+      // actingMemberId, and `mine=1` filters to ownerId == actingMemberId.
       const res = await inboxFetch<InboxMineResponse>(
-        `/api/svc/tasks?mine&assigneeId=${encodeURIComponent(member.teamMemberId)}`,
+        `/api/svc/tasks?actingMemberId=${encodeURIComponent(member.teamMemberId)}&mine=1`,
       );
       return reply.send({ tasks: res.tasks ?? [] });
     } catch (err) {
       if (err instanceof InboxUnreachableError) {
         return reply.code(503).send({ error: "inbox_unreachable" });
+      }
+      if (err instanceof InboxApiError) {
+        return reply.code(502).send({ error: "inbox_error" });
       }
       throw err;
     }

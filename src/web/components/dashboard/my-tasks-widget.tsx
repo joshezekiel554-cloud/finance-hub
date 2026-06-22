@@ -13,9 +13,10 @@ type MineTask = {
   id: string;
   title: string;
   status: string;
+  priority: string;
   dueAt: string | null;
   financeCustomerId: string | null;
-  assigneeId: string | null;
+  ownerId: string | null; // inbox calls the assignee "owner"
 };
 
 type MineError = { error?: string };
