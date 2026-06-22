@@ -39,9 +39,12 @@ function toHtml(body: string): string {
 }
 
 // "Good to send" — release the hold + tell the warehouse to ship, in-thread.
+// userId is the operator (string) or null for a board-driven action whose
+// actor has no finance account (attribution then lives in a separate audit row
+// written by the caller). The columns + recordHoldTransition already accept null.
 export async function releaseHold(
   orderId: string,
-  userId: string,
+  userId: string | null,
 ): Promise<HoldActionResult> {
   const rows = await db
     .select({
@@ -109,9 +112,10 @@ export async function releaseHold(
 }
 
 // Manually place an (overdue-review) order into the hold ladder.
+// userId: operator string, or null for a board-driven action (see releaseHold).
 export async function placeOnHold(
   orderId: string,
-  userId: string,
+  userId: string | null,
 ): Promise<HoldActionResult> {
   const rows = await db
     .select({
@@ -207,7 +211,7 @@ export type CancelResult =
 // "cancel + restock" email; this does the system-side actions.
 export async function cancelHoldOrder(
   orderId: string,
-  userId: string,
+  userId: string | null,
 ): Promise<CancelResult> {
   const rows = await db
     .select({
@@ -356,7 +360,7 @@ export async function cancelHoldOrder(
 // refreshes the row. Writes an audit row. Does NOT touch holdState or Shopify.
 export async function dismissOrderReview(
   orderId: string,
-  userId: string,
+  userId: string | null,
 ): Promise<HoldActionResult> {
   const rows = await db
     .select({ id: orders.id })
