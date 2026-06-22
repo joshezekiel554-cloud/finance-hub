@@ -31,6 +31,38 @@ import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 import { resolveMentions } from "./comments.js";
 import { recordNotification } from "../../modules/notifications/index.js";
+import { env } from "../../lib/env.js";
+import {
+  mintViewerToken,
+  TasksEmbedSecretMissingError,
+} from "../lib/tasks-embed-token.js";
+import {
+  requireMemberForUser,
+  NoInboxAccountError,
+} from "../../modules/tasks-shared/identity.js";
+import { inboxFetch, InboxUnreachableError } from "../../integrations/inbox/client.js";
+
+// --- Shared-tasks embed config (M1) ------------------------------------------
+// The embedded inbox global-tasks board. Finance redirects an <iframe> at:
+//   `${INBOX_PUBLIC_URL}${EMBED_PATH}?${EMBED_QUERY}&vt=${viewerToken}`
+// TODO(inbox): confirm the EXACT embed path + query inbox expects. Parameterized
+// here so a single edit re-points it. Final form assumed:
+//   https://inbox.feldart.com/tasks?embed=1&vt=<token>
+const EMBED_PATH = "/tasks";
+const EMBED_QUERY = "embed=1";
+
+// Shape of a task as the inbox `GET /api/svc/tasks?mine` endpoint returns it
+// (LOCKED contract assumption — confirm with inbox). The "my tasks" widget only
+// needs these fields.
+type InboxMineTask = {
+  id: string;
+  title: string;
+  status: string;
+  dueAt: string | null;
+  financeCustomerId: string | null;
+  assigneeId: string | null;
+};
+type InboxMineResponse = { tasks: InboxMineTask[] };
 
 const log = createLogger({ component: "routes.tasks" });
 
@@ -668,6 +700,66 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
     });
 
     return reply.send({ comment, mentions: newMentions });
+  });
+
+  // --- Shared tasks (M1) -----------------------------------------------------
+  // These two endpoints back the embedded inbox tasks board + the dashboard
+  // "My tasks" widget. They are DISTINCT from the finance-native task system
+  // above (which is the local Kanban). The board itself is inbox's; finance
+  // only mints the scoped viewer token + proxies the assigned-to-me list.
+
+  // GET /api/tasks/embed-url — mint a fresh short-lived viewer token for the
+  // current finance user and return the inbox board iframe URL scoped to them.
+  app.get("/embed-url", async (req, reply) => {
+    const user = await requireAuth(req);
+    if (!user.email) {
+      return reply.code(409).send({ error: "no_email_on_account" });
+    }
+    let token: string;
+    try {
+      token = mintViewerToken(user.email);
+    } catch (err) {
+      if (err instanceof TasksEmbedSecretMissingError) {
+        log.error("tasks embed secret not configured");
+        return reply.code(503).send({ error: "tasks_not_configured" });
+      }
+      throw err;
+    }
+    const url = `${env.INBOX_PUBLIC_URL.replace(/\/+$/, "")}${EMBED_PATH}?${EMBED_QUERY}&vt=${encodeURIComponent(token)}`;
+    return reply.send({ url });
+  });
+
+  // GET /api/tasks/mine — proxy the current user's assigned tasks from inbox.
+  // Resolves the finance user → inbox member (409 NoInboxAccount), then calls
+  // inbox `GET /api/svc/tasks?mine`. Degrades to 503 when inbox is unreachable.
+  app.get("/mine", async (req, reply) => {
+    const user = await requireAuth(req);
+    let member;
+    try {
+      member = await requireMemberForUser({ email: user.email ?? "" });
+    } catch (err) {
+      if (err instanceof NoInboxAccountError) {
+        return reply.code(409).send({ error: "no_inbox_account", message: err.message });
+      }
+      if (err instanceof InboxUnreachableError) {
+        return reply.code(503).send({ error: "inbox_unreachable" });
+      }
+      throw err;
+    }
+
+    try {
+      // Pass the resolved memberId so inbox scopes "mine" unambiguously; the
+      // bare `mine` flag documents intent per the locked contract.
+      const res = await inboxFetch<InboxMineResponse>(
+        `/api/svc/tasks?mine&assigneeId=${encodeURIComponent(member.teamMemberId)}`,
+      );
+      return reply.send({ tasks: res.tasks ?? [] });
+    } catch (err) {
+      if (err instanceof InboxUnreachableError) {
+        return reply.code(503).send({ error: "inbox_unreachable" });
+      }
+      throw err;
+    }
   });
 };
 
