@@ -149,8 +149,12 @@ const schema = z.object({
   // shared-tasks flag flips; min 32 bars weak tokens.
   INBOX_SERVICE_TOKEN: optionalSecret(32),
   // Base URL of the sibling Inbox service. Same VPS → loopback by default
-  // (mirror of inbox's FINANCE_BASE_URL=127.0.0.1:3001).
+  // (mirror of inbox's FINANCE_BASE_URL=127.0.0.1:3001). Server-to-server ONLY.
   INBOX_BASE_URL: z.string().url().default("http://127.0.0.1:3002"),
+  // PUBLIC origin of the inbox app — used to build the iframe `src` for the
+  // embedded tasks board (the browser loads it, so it must be the externally
+  // reachable URL, NOT the loopback INBOX_BASE_URL above).
+  INBOX_PUBLIC_URL: z.string().url().default("https://inbox.feldart.com"),
   // HMAC secret used (in M1) to mint the short-lived embed/viewer token inbox
   // validates to scope the embedded board to a member. Registered now; no logic
   // consumes it yet this milestone. optionalSecret so dev boot is unblocked;
