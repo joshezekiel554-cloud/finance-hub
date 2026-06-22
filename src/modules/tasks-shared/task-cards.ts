@@ -30,6 +30,7 @@ import { listHoldableHoldOrders } from "../orders/hold-alerts.js";
 import { listFlaggedOverdueOrders } from "../orders/overdue-alerts.js";
 import { getOverdueCustomers } from "../chase/lookups.js";
 import { findCandidates as findStalledRmas } from "../ai-agent/candidates/ops-rma-stalled.js";
+import { isDangerousAction } from "../agent/chat-proposals.js";
 
 const log = createLogger({ component: "tasks-shared.task-cards" });
 
@@ -182,6 +183,7 @@ async function aiProposalCards(): Promise<TaskCard[]> {
       status: aiProposals.status,
       entityType: aiProposals.entityType,
       entityId: aiProposals.entityId,
+      draftedAction: aiProposals.draftedAction,
       candidateSummary: aiProposals.candidateSummary,
       draftedPreview: aiProposals.draftedPreview,
       reasoning: aiProposals.reasoning,
@@ -209,7 +211,16 @@ async function aiProposalCards(): Promise<TaskCard[]> {
     .orderBy(desc(aiProposals.createdAt))
     .limit(PROPOSAL_LIMIT);
 
-  return rows.map((r) => {
+  return rows
+    // Never expose a board "Approve" for an irreversible/dangerous proposal
+    // (e.g. paid_void) — those demand a typed VOID confirmation the board can't
+    // collect. They're excluded from the feed entirely (approve also fails
+    // closed server-side, see approveProposalAndEnqueue).
+    .filter(
+      (r) =>
+        !(r.draftedAction && isDangerousAction(r.draftedAction.tool, r.draftedAction.args)),
+    )
+    .map((r) => {
     const customerId = r.entityType === "customer" ? r.entityId : null;
     const customerName = customerId ? r.customerName : null;
     const subject =

@@ -140,6 +140,49 @@ describe("getTaskCards — ai_proposal", () => {
   });
 });
 
+describe("getTaskCards — ai_proposal danger gate", () => {
+  it("EXCLUDES a dangerous (paid_void) proposal from the board feed", async () => {
+    proposalRows.value = [
+      {
+        id: "safe-1",
+        category: "chase_next",
+        origin: "feldart",
+        status: "drafted",
+        entityType: "customer",
+        entityId: "cust-a",
+        draftedAction: { tool: "send_chase_email", args: {} },
+        candidateSummary: null,
+        draftedPreview: null,
+        reasoning: null,
+        confidence: "0.5",
+        customerName: "Safe Co",
+      },
+      {
+        id: "danger-1",
+        category: "chat_action",
+        origin: "feldart",
+        status: "drafted",
+        entityType: "customer",
+        entityId: "cust-b",
+        // dispute_transition + paid_void is an irreversible QBO void — must NOT
+        // get a one-click board Approve (no typed-confirmation channel here).
+        draftedAction: { tool: "dispute_transition", args: { action: "paid_void" } },
+        candidateSummary: null,
+        draftedPreview: null,
+        reasoning: null,
+        confidence: "0.9",
+        customerName: "Danger Co",
+      },
+    ];
+    const cards = await getTaskCards();
+    const proposalIds = cards
+      .filter((c) => c.type === "ai_proposal")
+      .map((c) => c.id);
+    expect(proposalIds).toContain("ai_proposal:safe-1");
+    expect(proposalIds).not.toContain("ai_proposal:danger-1");
+  });
+});
+
 describe("getTaskCards — chase + rma are link-only", () => {
   it("chase cards carry only a deep-link action", async () => {
     getOverdueCustomers.mockResolvedValue([

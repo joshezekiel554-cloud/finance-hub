@@ -6,17 +6,25 @@ import {
   getQueues,
 } from "../../jobs/queues.js";
 import type { AutopilotExecuteJobData } from "../../jobs/definitions/autopilot-execute.js";
+import { isDangerousAction } from "../agent/chat-proposals.js";
 
 export type ProposalActionResult =
   | { ok: true }
-  | { ok: false; reason: "not_found" | "wrong_status"; status?: string };
+  | {
+      ok: false;
+      reason: "not_found" | "wrong_status" | "confirmation_required";
+      status?: string;
+    };
 
 // Shared approve path (used by the autopilot route AND the inbox board's
 // /api/ext task-card action). Sets status=approved + enqueues the same execute
-// job. NB: the dangerous-action VOID gate + editedArgs + stale guard live in the
-// autopilot HTTP route (operator UI); the board only exposes simple approves, so
-// this helper is the plain enqueue path. userId must be a real finance user id
-// (the AI execute tool + cost tracking require a non-null actor).
+// job. The dangerous-action typed-VOID gate + editedArgs + stale guard live in
+// the autopilot HTTP route (operator UI). This shared helper is the plain
+// enqueue path used by surfaces that CAN'T collect a typed confirmation (the
+// board), so it FAILS CLOSED on a dangerous proposal: an irreversible action
+// (e.g. paid_void) is never approvable from here — only the confirming UI may
+// approve it. userId must be a real finance user id (the AI execute tool + cost
+// tracking require a non-null actor).
 export async function approveProposalAndEnqueue(
   proposalId: string,
   userId: string,
@@ -30,6 +38,14 @@ export async function approveProposalAndEnqueue(
   if (!p) return { ok: false, reason: "not_found" };
   if (p.status !== "drafted" && p.status !== "pending") {
     return { ok: false, reason: "wrong_status", status: p.status };
+  }
+  // Defense in depth (this helper has no typed-confirmation channel): a
+  // dangerous/irreversible proposal can NEVER be approved through the board.
+  if (
+    p.draftedAction &&
+    isDangerousAction(p.draftedAction.tool, p.draftedAction.args)
+  ) {
+    return { ok: false, reason: "confirmation_required" };
   }
 
   await db
