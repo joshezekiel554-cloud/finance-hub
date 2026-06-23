@@ -19,7 +19,7 @@
 //
 // EMBED_MODE is held at "view" until inbox's interactive embed ships; flip this
 // ONE constant to "edit" (coordinated with inbox) to go live with M6.
-const EMBED_MODE: "view" | "edit" = "view";
+const EMBED_MODE: "view" | "edit" = "edit";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
