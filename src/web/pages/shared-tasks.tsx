@@ -21,12 +21,27 @@
 // ONE constant to "edit" (coordinated with inbox) to go live with M6.
 const EMBED_MODE: "view" | "edit" = "view";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { NewTaskDialog } from "../components/tasks/new-task-dialog";
+
+// postMessage token-refresh handshake (shared-tasks M6). The interactive (edit)
+// embed rides a 30-min token; when it nears expiry / a write 401s, the inbox
+// embed asks its parent (us) for a fresh edit token so the session continues
+// WITHOUT reloading the iframe (which would discard an open editor/drag). The
+// message shape + origin discipline are the LOCKED contract with inbox:
+//   embed → parent : { type: "feldart-tasks:need-token" }
+//   parent → embed : { type: "feldart-tasks:token", vt: "<fresh edit token>" }
+// SECURITY: we ONLY honour a need-token whose event.origin === the inbox embed
+// origin AND whose event.source === our own iframe's contentWindow, and we reply
+// with targetOrigin = that exact inbox origin (never "*"). v1 inbox embeds may
+// not send this yet (they soft-expire instead) — the responder is then simply
+// dormant; it lights up automatically once inbox enables in-place refresh.
+const NEED_TOKEN_MSG = "feldart-tasks:need-token";
+const TOKEN_MSG = "feldart-tasks:token";
 
 type EmbedUrlResponse = { url: string; mode?: "view" | "edit" };
 
@@ -38,6 +53,46 @@ async function fetchEmbedUrl(mode: "view" | "edit"): Promise<EmbedUrlResponse> {
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+/** Origin of the embed URL (the inbox app), or null if it can't be parsed. */
+function originOf(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url, window.location.origin).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Pull the `vt` token out of a freshly-minted embed URL. */
+function vtOf(url: string): string | null {
+  try {
+    return new URL(url, window.location.origin).searchParams.get("vt");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The security gate for the token-refresh handshake (M6): is this incoming
+ * message a genuine `need-token` request from OUR embed iframe? Returns true
+ * only when ALL of these hold:
+ *   - the message origin is EXACTLY the inbox embed origin,
+ *   - the message source is OUR iframe's contentWindow (not another frame/popup),
+ *   - the payload type is exactly `feldart-tasks:need-token`.
+ * Pure (no React/DOM mutation) so the boundary can be unit-tested directly.
+ */
+export function isTokenRefreshRequest(
+  ev: Pick<MessageEvent, "origin" | "source" | "data">,
+  embedOrigin: string | null,
+  frameWindow: Window | null | undefined,
+): boolean {
+  if (!embedOrigin) return false;
+  if (ev.origin !== embedOrigin) return false;
+  if (!frameWindow || ev.source !== frameWindow) return false;
+  const msg = ev.data as { type?: unknown } | null;
+  return !!msg && msg.type === NEED_TOKEN_MSG;
 }
 
 export default function SharedTasksPage() {
@@ -66,6 +121,44 @@ export default function SharedTasksPage() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [isEdit, onFocus]);
+
+  // EDIT-mode token-refresh responder (M6). Listens for the inbox embed's
+  // `need-token` request and replies with a freshly-minted edit token, so a long
+  // editing session never reloads the iframe. Strictly origin- + source-gated.
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const mintingRef = useRef(false);
+  const embedOrigin = originOf(data?.url);
+  useEffect(() => {
+    if (!isEdit || !embedOrigin) return;
+
+    async function onMessage(ev: MessageEvent) {
+      const frameWin = iframeRef.current?.contentWindow;
+      // Strict origin + source + type gate (see isTokenRefreshRequest). The
+      // extra null checks are redundant with the gate but narrow the types for
+      // the postMessage reply below.
+      if (!isTokenRefreshRequest(ev, embedOrigin, frameWin) || !frameWin || !embedOrigin)
+        return;
+      // Coalesce a burst of requests into one mint.
+      if (mintingRef.current) return;
+      mintingRef.current = true;
+      try {
+        const fresh = await fetchEmbedUrl("edit");
+        const vt = vtOf(fresh.url);
+        if (vt) {
+          // Reply ONLY to the inbox embed origin — never "*".
+          frameWin.postMessage({ type: TOKEN_MSG, vt }, embedOrigin);
+        }
+      } catch {
+        // Mint failed — stay silent; the embed falls back to its soft-expiry
+        // notice. Nothing to surface in the parent chrome.
+      } finally {
+        mintingRef.current = false;
+      }
+    }
+
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [isEdit, embedOrigin]);
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col gap-3 md:h-[calc(100vh-6rem)]">
@@ -123,7 +216,10 @@ export default function SharedTasksPage() {
         </Card>
       ) : (
         <iframe
+          ref={iframeRef}
           // key on the URL: reloads with the freshly-minted token when it changes.
+          // In EDIT mode the URL is minted once (stable) so the frame never
+          // reloads; the token-refresh handshake keeps the session alive instead.
           key={data!.url}
           src={data!.url}
           title="Shared tasks board"
