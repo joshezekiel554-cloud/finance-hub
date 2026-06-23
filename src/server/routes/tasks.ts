@@ -34,6 +34,7 @@ import { recordNotification } from "../../modules/notifications/index.js";
 import { env } from "../../lib/env.js";
 import {
   mintViewerToken,
+  mintEditToken,
   TasksEmbedSecretMissingError,
 } from "../lib/tasks-embed-token.js";
 import {
@@ -54,6 +55,14 @@ import {
 // the session-gated /tasks layout — https://inbox.feldart.com/embed/tasks?vt=<token>
 // (the vt token is the auth; no session/redirect on this path).
 const EMBED_PATH = "/embed/tasks";
+
+// embed-url ?mode= — "edit" mints the M6 write-scoped token, anything else (incl.
+// absent) yields a read-only view token. Coerced + defaulted so a missing/odd
+// value degrades safely to "view" rather than erroring.
+const embedModeSchema = z
+  .enum(["view", "edit"])
+  .catch("view")
+  .default("view");
 
 // Shape of a task as the inbox `GET /api/svc/tasks` endpoint returns it (LOCKED
 // contract with inbox). `ownerId` is the ASSIGNEE member id (the inbox model
@@ -840,16 +849,23 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
   // above (which is the local Kanban). The board itself is inbox's; finance
   // only mints the scoped viewer token + proxies the assigned-to-me list.
 
-  // GET /api/tasks/embed-url — mint a fresh short-lived viewer token for the
-  // current finance user and return the inbox board iframe URL scoped to them.
+  // GET /api/tasks/embed-url — mint a fresh short-lived token for the current
+  // finance user and return the inbox board iframe URL scoped to them.
+  //   ?mode=edit → mint a 30-min EDIT-scoped token (M6 interactive embed: open
+  //                a task + edit core fields + drag-restatus). Inbox gates all
+  //                writes on scope === "edit".
+  //   default    → mint a 5-min VIEW token (read-only embed).
   app.get("/embed-url", async (req, reply) => {
     const user = await requireAuth(req);
     if (!user.email) {
       return reply.code(409).send({ error: "no_email_on_account" });
     }
+    const mode = embedModeSchema.parse(
+      (req.query as { mode?: unknown } | undefined)?.mode,
+    );
     let token: string;
     try {
-      token = mintViewerToken(user.email);
+      token = mode === "edit" ? mintEditToken(user.email) : mintViewerToken(user.email);
     } catch (err) {
       if (err instanceof TasksEmbedSecretMissingError) {
         log.error("tasks embed secret not configured");
@@ -858,7 +874,7 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
       throw err;
     }
     const url = `${env.INBOX_PUBLIC_URL.replace(/\/+$/, "")}${EMBED_PATH}?vt=${encodeURIComponent(token)}`;
-    return reply.send({ url });
+    return reply.send({ url, mode });
   });
 
   // GET /api/tasks/mine — proxy the current user's assigned tasks from inbox.
