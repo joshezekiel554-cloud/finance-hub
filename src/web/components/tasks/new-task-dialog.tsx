@@ -298,12 +298,9 @@ export function NewTaskDialog({
             onChange={(e) =>
               setRecurrenceKind(e.target.value as RecurrenceKind)
             }
-            helperText={
-              recurringNeedsDue
-                ? "Repeating tasks need a due date."
-                : undefined
+            error={
+              recurringNeedsDue ? "Repeating tasks need a due date." : undefined
             }
-            error={recurringNeedsDue ? " " : undefined}
           >
             <option value="NONE">Never</option>
             <option value="DAILY">Daily</option>

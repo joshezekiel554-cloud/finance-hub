@@ -119,6 +119,18 @@ export const sharedCreateBodySchema = z
       message: "Repeating tasks require a due date",
       path: ["dueAt"],
     },
+  )
+  // CUSTOM recurrence requires interval + unit — hold non-dialog callers (the AI
+  // agent / a direct API call) to the contract, not just the UI. (The dialog
+  // always sends both for CUSTOM.)
+  .refine(
+    (v) =>
+      v.recurrenceKind !== "CUSTOM" ||
+      (typeof v.recurrenceInterval === "number" && v.recurrenceUnit != null),
+    {
+      message: "Custom recurrence requires an interval and a unit",
+      path: ["recurrenceInterval"],
+    },
   );
 export type SharedCreateBody = z.infer<typeof sharedCreateBodySchema>;
 

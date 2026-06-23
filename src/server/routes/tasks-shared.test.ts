@@ -133,6 +133,26 @@ describe("sharedCreateBodySchema", () => {
     expect(r.success).toBe(true);
   });
 
+  it("rejects a CUSTOM recurrence missing interval or unit (refine)", () => {
+    // missing both
+    expect(
+      sharedCreateBodySchema.safeParse({
+        title: "x",
+        recurrenceKind: "CUSTOM",
+        dueAt: "2026-07-01T09:00:00.000Z",
+      }).success,
+    ).toBe(false);
+    // missing unit only
+    expect(
+      sharedCreateBodySchema.safeParse({
+        title: "x",
+        recurrenceKind: "CUSTOM",
+        recurrenceInterval: 2,
+        dueAt: "2026-07-01T09:00:00.000Z",
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects an unknown recurrenceKind / recurrenceUnit", () => {
     expect(
       sharedCreateBodySchema.safeParse({
