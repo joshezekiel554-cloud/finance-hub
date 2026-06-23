@@ -65,6 +65,7 @@ export function NewTaskDialog({
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [ownerId, setOwnerId] = useState<string>(""); // "" = unassigned
+  const [priority, setPriority] = useState<string>("normal");
   const [dueAt, setDueAt] = useState("");
   const [reminderAt, setReminderAt] = useState("");
 
@@ -74,6 +75,7 @@ export function NewTaskDialog({
     setTitle("");
     setBody("");
     setOwnerId("");
+    setPriority("normal");
     setDueAt("");
     setReminderAt("");
     createMutation.reset();
@@ -104,6 +106,7 @@ export function NewTaskDialog({
           title: title.trim(),
           body: body.trim() ? body.trim() : undefined,
           ownerId: ownerId ? ownerId : null,
+          priority,
           financeCustomerId: customer ? customer.id : undefined,
           dueAt: localToIso(dueAt),
           reminderAt: localToIso(reminderAt),
@@ -200,6 +203,17 @@ export function NewTaskDialog({
                 {m.name}
               </option>
             ))}
+          </Select>
+
+          <Select
+            label="Priority"
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+          >
+            <option value="low">Low</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+            <option value="urgent">Urgent</option>
           </Select>
 
           <div className="grid grid-cols-2 gap-3">
