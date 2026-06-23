@@ -54,6 +54,10 @@ export type TaskCardAction =
       // Path the inbox board POSTs to (relative to finance origin). The board
       // adds the bearer token + {actorEmail, actorTeamMemberId} body.
       endpoint: string;
+      // When set, the action is consequential/irreversible — the board MUST show
+      // a confirmation with this prompt before POSTing. Set EXPLICITLY here (do
+      // not rely on a label heuristic — "Write off" etc. wouldn't match one).
+      confirm?: string;
     }
   | {
       label: string;
@@ -118,12 +122,14 @@ async function holdCards(): Promise<TaskCard[]> {
           kind: "api",
           method: "POST",
           endpoint: actionEndpoint("hold", r.orderId, "good-to-send"),
+          confirm: `Release the hold on order ${orderNumber} and tell the warehouse it's good to ship?`,
         },
         {
           label: "Cancel",
           kind: "api",
           method: "POST",
           endpoint: actionEndpoint("hold", r.orderId, "cancel"),
+          confirm: `Cancel order ${orderNumber} in Shopify and void the matching QBO invoice? This can't be undone.`,
         },
         { label: "Chase", kind: "link", url: customerLink(r.customerId) },
       ],
@@ -157,8 +163,10 @@ async function overdueReviewCards(): Promise<TaskCard[]> {
           kind: "api",
           method: "POST",
           endpoint: actionEndpoint("overdue_review", r.orderId, "place-on-hold"),
+          confirm: `Place order ${orderNumber} on hold and notify the warehouse not to ship it?`,
         },
         {
+          // Dismiss just removes the review card (reversible) — no confirm.
           label: "Dismiss",
           kind: "api",
           method: "POST",
@@ -251,8 +259,12 @@ async function aiProposalCards(): Promise<TaskCard[]> {
           kind: "api",
           method: "POST",
           endpoint: actionEndpoint("ai_proposal", r.id, "approve"),
+          // Approve EXECUTES the proposal (e.g. sends an email). Confirm it.
+          // (Irreversible/dangerous proposals are excluded from the feed entirely.)
+          confirm: "Approve this AI proposal? It will be executed (e.g. the email sent).",
         },
         {
+          // Reject just declines the proposal (reversible) — no confirm.
           label: "Reject",
           kind: "api",
           method: "POST",

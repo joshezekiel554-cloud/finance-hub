@@ -78,6 +78,33 @@ describe("getTaskCards — hold", () => {
   });
 });
 
+describe("getTaskCards — irreversible actions carry an explicit confirm", () => {
+  it("hold Cancel + Good-to-send have a confirm string; Chase link does not", async () => {
+    listHoldableHoldOrders.mockResolvedValue([
+      {
+        orderId: "ord-c",
+        orderNumber: "#1",
+        orderDate: null,
+        orderTotal: "1",
+        customerId: "c",
+        customerName: "n",
+        reason: "payment_upfront_unpaid",
+        heldDays: 1,
+      },
+    ]);
+    const c = (await getTaskCards()).find((x) => x.type === "hold")!;
+    const cancel = c.actions.find((a) => a.label === "Cancel")!;
+    const gts = c.actions.find((a) => a.label === "Good to send")!;
+    const chase = c.actions.find((a) => a.label === "Chase")!;
+    // explicit confirm prompts on the consequential api-actions (NOT a leaky
+    // label heuristic) — the board MUST confirm before POSTing these.
+    expect((cancel as { confirm?: string }).confirm).toMatch(/can't be undone/i);
+    expect((gts as { confirm?: string }).confirm).toBeTruthy();
+    // link actions (navigation) never carry confirm
+    expect((chase as { confirm?: string }).confirm).toBeUndefined();
+  });
+});
+
 describe("getTaskCards — overdue_review", () => {
   it("maps a flagged overdue order to Place-on-hold/Dismiss api actions", async () => {
     listFlaggedOverdueOrders.mockResolvedValue([

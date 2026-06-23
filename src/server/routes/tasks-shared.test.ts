@@ -111,6 +111,76 @@ describe("sharedCreateBodySchema", () => {
     });
     expect(r.success).toBe(false);
   });
+
+  it("accepts watcherIds + a recurrence kind", () => {
+    const r = sharedCreateBodySchema.safeParse({
+      title: "x",
+      watcherIds: ["tm-a", "tm-b"],
+      recurrenceKind: "DAILY",
+      dueAt: "2026-07-01T09:00:00.000Z",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts a CUSTOM recurrence with interval + unit", () => {
+    const r = sharedCreateBodySchema.safeParse({
+      title: "x",
+      recurrenceKind: "CUSTOM",
+      recurrenceInterval: 2,
+      recurrenceUnit: "WEEK",
+      dueAt: "2026-07-01T09:00:00.000Z",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects an unknown recurrenceKind / recurrenceUnit", () => {
+    expect(
+      sharedCreateBodySchema.safeParse({
+        title: "x",
+        recurrenceKind: "FORTNIGHTLY",
+      }).success,
+    ).toBe(false);
+    expect(
+      sharedCreateBodySchema.safeParse({
+        title: "x",
+        recurrenceUnit: "YEAR",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a recurring task with no dueAt (refine)", () => {
+    const r = sharedCreateBodySchema.safeParse({
+      title: "x",
+      recurrenceKind: "WEEKLY",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects a recurring task with an explicit null dueAt (refine)", () => {
+    const r = sharedCreateBodySchema.safeParse({
+      title: "x",
+      recurrenceKind: "WEEKLY",
+      dueAt: null,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts a recurring task when dueAt is present", () => {
+    const r = sharedCreateBodySchema.safeParse({
+      title: "x",
+      recurrenceKind: "WEEKLY",
+      dueAt: "2026-07-01T09:00:00.000Z",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("allows recurrenceKind=NONE with no dueAt (one-off, refine passes)", () => {
+    const r = sharedCreateBodySchema.safeParse({
+      title: "x",
+      recurrenceKind: "NONE",
+    });
+    expect(r.success).toBe(true);
+  });
 });
 
 describe("createSharedTaskForUser", () => {
@@ -153,6 +223,37 @@ describe("createSharedTaskForUser", () => {
     // the finance-side field names must NOT leak to inbox
     expect("body" in sent).toBe(false);
     expect("reminderAt" in sent).toBe(false);
+  });
+
+  it("forwards watcherIds + recurrence fields verbatim when set", async () => {
+    await createSharedTaskForUser(
+      { email: "boss@feldart.com" },
+      {
+        title: "Weekly chase",
+        watcherIds: ["tm-a", "tm-b"],
+        recurrenceKind: "CUSTOM",
+        recurrenceInterval: 3,
+        recurrenceUnit: "WEEK",
+        dueAt: "2026-07-01T09:00:00.000Z",
+      },
+    );
+    const sent = JSON.parse(inboxFetch.mock.calls[0]![1].body as string);
+    expect(sent.watcherIds).toEqual(["tm-a", "tm-b"]);
+    expect(sent.recurrenceKind).toBe("CUSTOM");
+    expect(sent.recurrenceInterval).toBe(3);
+    expect(sent.recurrenceUnit).toBe("WEEK");
+  });
+
+  it("omits watcherIds + recurrence fields when unset", async () => {
+    await createSharedTaskForUser(
+      { email: "boss@feldart.com" },
+      { title: "Just a title" },
+    );
+    const sent = JSON.parse(inboxFetch.mock.calls[0]![1].body as string);
+    expect("watcherIds" in sent).toBe(false);
+    expect("recurrenceKind" in sent).toBe(false);
+    expect("recurrenceInterval" in sent).toBe(false);
+    expect("recurrenceUnit" in sent).toBe(false);
   });
 
   it("omits optional fields the caller didn't set", async () => {

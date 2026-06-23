@@ -27,6 +27,16 @@ import { Select } from "../ui/select";
 type Member = { teamMemberId: string; name: string };
 type MembersResponse = { members: Member[] };
 
+// Recurrence enums — mirror the inbox contract verbatim.
+type RecurrenceKind =
+  | "NONE"
+  | "DAILY"
+  | "WEEKDAYS"
+  | "WEEKLY"
+  | "MONTHLY"
+  | "CUSTOM";
+type RecurrenceUnit = "DAY" | "WEEK" | "MONTH";
+
 type CreatedTask = {
   id: string;
   title: string;
@@ -68,6 +78,14 @@ export function NewTaskDialog({
   const [priority, setPriority] = useState<string>("normal");
   const [dueAt, setDueAt] = useState("");
   const [reminderAt, setReminderAt] = useState("");
+  // Watchers EXCLUDE the owner — member ids of teammates quietly subscribed.
+  const [watcherIds, setWatcherIds] = useState<string[]>([]);
+  // Recurrence — inbox enum. "NONE" = one-off. CUSTOM reveals interval + unit.
+  const [recurrenceKind, setRecurrenceKind] =
+    useState<RecurrenceKind>("NONE");
+  const [recurrenceInterval, setRecurrenceInterval] = useState<string>("1");
+  const [recurrenceUnit, setRecurrenceUnit] =
+    useState<RecurrenceUnit>("WEEK");
 
   // Reset the form whenever the dialog opens fresh.
   useEffect(() => {
@@ -78,6 +96,10 @@ export function NewTaskDialog({
     setPriority("normal");
     setDueAt("");
     setReminderAt("");
+    setWatcherIds([]);
+    setRecurrenceKind("NONE");
+    setRecurrenceInterval("1");
+    setRecurrenceUnit("WEEK");
     createMutation.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -110,6 +132,18 @@ export function NewTaskDialog({
           financeCustomerId: customer ? customer.id : undefined,
           dueAt: localToIso(dueAt),
           reminderAt: localToIso(reminderAt),
+          // Omit watchers when none picked. The owner is never a watcher (the
+          // picker already excludes them).
+          ...(watcherIds.length > 0 ? { watcherIds } : {}),
+          // Omit recurrence when one-off; only send interval/unit for CUSTOM.
+          ...(recurrenceKind !== "NONE" ? { recurrenceKind } : {}),
+          ...(recurrenceKind === "CUSTOM"
+            ? {
+                recurrenceInterval:
+                  Number.parseInt(recurrenceInterval, 10) || 1,
+                recurrenceUnit,
+              }
+            : {}),
         }),
       });
       if (!res.ok) {
@@ -128,7 +162,33 @@ export function NewTaskDialog({
   });
 
   const members = membersQuery.data?.members ?? [];
-  const canSubmit = title.trim().length > 0 && !createMutation.isPending;
+  // Watcher candidates exclude whoever is the selected owner.
+  const watcherCandidates = members.filter(
+    (m) => m.teamMemberId !== ownerId,
+  );
+
+  const isRecurring = recurrenceKind !== "NONE";
+  // A repeating task needs an anchor date — enforce in the UI (server enforces
+  // too via the schema refine).
+  const recurringNeedsDue = isRecurring && !dueAt;
+
+  function toggleWatcher(id: string) {
+    setWatcherIds((prev) =>
+      prev.includes(id) ? prev.filter((w) => w !== id) : [...prev, id],
+    );
+  }
+
+  // When the owner changes, drop them from the watcher set so the two never
+  // overlap (watchers EXCLUDE the owner).
+  useEffect(() => {
+    if (!ownerId) return;
+    setWatcherIds((prev) => prev.filter((w) => w !== ownerId));
+  }, [ownerId]);
+
+  const canSubmit =
+    title.trim().length > 0 &&
+    !recurringNeedsDue &&
+    !createMutation.isPending;
 
   // Distinguish "you have no inbox account" from a transient failure.
   const errMsg = createMutation.error?.message;
@@ -153,7 +213,7 @@ export function NewTaskDialog({
         </DialogHeader>
 
         <form
-          className="grid gap-3"
+          className="grid max-h-[70vh] gap-3 overflow-y-auto"
           onSubmit={(e) => {
             e.preventDefault();
             if (canSubmit) createMutation.mutate();
@@ -229,6 +289,89 @@ export function NewTaskDialog({
               value={reminderAt}
               onChange={(e) => setReminderAt(e.target.value)}
             />
+          </div>
+
+          {/* Repeat (recurrence). CUSTOM reveals interval + unit. */}
+          <Select
+            label="Repeat"
+            value={recurrenceKind}
+            onChange={(e) =>
+              setRecurrenceKind(e.target.value as RecurrenceKind)
+            }
+            helperText={
+              recurringNeedsDue
+                ? "Repeating tasks need a due date."
+                : undefined
+            }
+            error={recurringNeedsDue ? " " : undefined}
+          >
+            <option value="NONE">Never</option>
+            <option value="DAILY">Daily</option>
+            <option value="WEEKDAYS">Weekdays</option>
+            <option value="WEEKLY">Weekly</option>
+            <option value="MONTHLY">Monthly</option>
+            <option value="CUSTOM">Custom…</option>
+          </Select>
+
+          {recurrenceKind === "CUSTOM" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={365}
+                label="Every"
+                value={recurrenceInterval}
+                onChange={(e) => setRecurrenceInterval(e.target.value)}
+              />
+              <Select
+                label="Unit"
+                value={recurrenceUnit}
+                onChange={(e) =>
+                  setRecurrenceUnit(e.target.value as RecurrenceUnit)
+                }
+              >
+                <option value="DAY">Day(s)</option>
+                <option value="WEEK">Week(s)</option>
+                <option value="MONTH">Month(s)</option>
+              </Select>
+            </div>
+          ) : null}
+
+          {/* Watchers — multi-select checkbox list. Excludes the owner. */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-primary">
+              Watchers <span className="text-muted">(optional)</span>
+            </span>
+            {watcherCandidates.length === 0 ? (
+              <p className="text-xs text-muted">
+                {membersQuery.isError
+                  ? "Couldn't load teammates."
+                  : ownerId && members.length === 1
+                    ? "No other teammates to add as watchers."
+                    : "No teammates available."}
+              </p>
+            ) : (
+              <div className="max-h-32 overflow-y-auto rounded-md border border-default bg-base p-2">
+                {watcherCandidates.map((m) => {
+                  const checked = watcherIds.includes(m.teamMemberId);
+                  return (
+                    <label
+                      key={m.teamMemberId}
+                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-primary hover:bg-subtle"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleWatcher(m.teamMemberId)}
+                        className="size-4 rounded border-default accent-accent-primary"
+                      />
+                      <span>{m.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {customer ? (

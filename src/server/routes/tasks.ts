@@ -87,16 +87,39 @@ const FINANCE_TO_INBOX_PRIORITY: Record<string, string> = {
   urgent: "URGENT",
 };
 
-export const sharedCreateBodySchema = z.object({
-  // inbox caps title at 300 (locked contract) — validate here so we fail fast.
-  title: z.string().trim().min(1).max(300),
-  body: z.string().max(10_000).nullable().optional(),
-  ownerId: z.string().min(1).max(255).nullable().optional(),
-  financeCustomerId: z.string().min(1).max(64).nullable().optional(),
-  dueAt: z.string().datetime({ offset: true }).nullable().optional(),
-  reminderAt: z.string().datetime({ offset: true }).nullable().optional(),
-  priority: z.enum(TASK_PRIORITIES).optional(),
-});
+export const sharedCreateBodySchema = z
+  .object({
+    // inbox caps title at 300 (locked contract) — validate here so we fail fast.
+    title: z.string().trim().min(1).max(300),
+    body: z.string().max(10_000).nullable().optional(),
+    ownerId: z.string().min(1).max(255).nullable().optional(),
+    financeCustomerId: z.string().min(1).max(64).nullable().optional(),
+    dueAt: z.string().datetime({ offset: true }).nullable().optional(),
+    reminderAt: z.string().datetime({ offset: true }).nullable().optional(),
+    priority: z.enum(TASK_PRIORITIES).optional(),
+    // Watchers (EXCLUDES the owner) — inbox member ids. Forwarded verbatim.
+    watcherIds: z.array(z.string().min(1).max(255)).max(50).optional(),
+    // Recurrence (inbox contract). Field names forwarded verbatim to inbox.
+    recurrenceKind: z
+      .enum(["NONE", "DAILY", "WEEKDAYS", "WEEKLY", "MONTHLY", "CUSTOM"])
+      .optional(),
+    recurrenceInterval: z.number().int().min(1).max(365).nullable().optional(),
+    recurrenceUnit: z.enum(["DAY", "WEEK", "MONTH"]).nullable().optional(),
+  })
+  // A repeating task (recurrenceKind != NONE) REQUIRES a dueAt — the inbox
+  // recurrence engine schedules the next occurrence off the due date, so a
+  // recurring task with no anchor is meaningless. Enforce server-side too (not
+  // just in the dialog) so any caller of this schema is held to the contract.
+  .refine(
+    (v) =>
+      !v.recurrenceKind ||
+      v.recurrenceKind === "NONE" ||
+      (v.dueAt !== undefined && v.dueAt !== null),
+    {
+      message: "Repeating tasks require a due date",
+      path: ["dueAt"],
+    },
+  );
 export type SharedCreateBody = z.infer<typeof sharedCreateBodySchema>;
 
 // What inbox returns from POST /api/svc/tasks (LOCKED contract). `ownerId` is the
@@ -143,6 +166,18 @@ export async function createSharedTaskForUser(
       ...(input.reminderAt !== undefined ? { remindAt: input.reminderAt } : {}),
       ...(input.priority !== undefined
         ? { priority: FINANCE_TO_INBOX_PRIORITY[input.priority] ?? "NORMAL" }
+        : {}),
+      // Watchers + recurrence — field names match the inbox contract verbatim,
+      // forwarded only when the caller set them (same conditional-spread story).
+      ...(input.watcherIds !== undefined ? { watcherIds: input.watcherIds } : {}),
+      ...(input.recurrenceKind !== undefined
+        ? { recurrenceKind: input.recurrenceKind }
+        : {}),
+      ...(input.recurrenceInterval !== undefined
+        ? { recurrenceInterval: input.recurrenceInterval }
+        : {}),
+      ...(input.recurrenceUnit !== undefined
+        ? { recurrenceUnit: input.recurrenceUnit }
         : {}),
     }),
   });
