@@ -82,6 +82,31 @@ export type DispatchResult = { status: number; body: unknown };
 // Extracted so routing can be unit-tested without a Fastify harness. Assumes the
 // (type, action) pair is already ALLOWED and the ai_proposal/approve null-actor
 // guard has run (userId non-null for that case).
+// Human-friendly copy for the action-failure reason codes, so the inbox board
+// (which relays `error` verbatim) shows a sentence, not a raw token. The machine
+// code is kept alongside as `code` for any programmatic branching.
+const REASON_COPY: Record<string, string> = {
+  not_found: "That item no longer exists — it may have already been handled.",
+  not_on_hold: "This order isn't on hold anymore.",
+  already_on_hold: "This order is already on hold.",
+  already_cancelled: "This order is already cancelled.",
+  shopify_cancel_failed:
+    "Couldn't cancel the order in Shopify — please cancel it manually.",
+  wrong_status: "This proposal can't be actioned in its current state.",
+  confirmation_required:
+    "This action needs typed confirmation — do it from the finance app.",
+  no_finance_user:
+    "You need a finance account to approve this — ask an admin to add you.",
+  "unhandled action": "That action isn't available for this card.",
+};
+function errBody(reason: string, extra?: Record<string, unknown>) {
+  return {
+    error: REASON_COPY[reason] ?? "Something went wrong — please try again.",
+    code: reason,
+    ...extra,
+  };
+}
+
 export async function dispatchTaskCardAction(
   type: ActionableType,
   id: string,
@@ -90,7 +115,7 @@ export async function dispatchTaskCardAction(
 ): Promise<DispatchResult> {
   if (type === "hold" && action === "good-to-send") {
     const r = await releaseHold(id, userId);
-    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: { error: r.reason } };
+    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: errBody(r.reason) };
     return { status: 200, body: { ok: true } };
   }
   if (type === "hold" && action === "cancel") {
@@ -98,18 +123,18 @@ export async function dispatchTaskCardAction(
     if (!r.ok) {
       const status =
         r.reason === "not_found" ? 404 : r.reason === "shopify_cancel_failed" ? 502 : 409;
-      return { status, body: { error: r.reason } };
+      return { status, body: errBody(r.reason) };
     }
     return { status: 200, body: r };
   }
   if (type === "overdue_review" && action === "place-on-hold") {
     const r = await placeOnHold(id, userId);
-    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: { error: r.reason } };
+    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: errBody(r.reason) };
     return { status: 200, body: { ok: true } };
   }
   if (type === "overdue_review" && action === "dismiss") {
     const r = await dismissOrderReview(id, userId);
-    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: { error: r.reason } };
+    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: errBody(r.reason) };
     return { status: 200, body: { ok: true } };
   }
   if (type === "ai_proposal" && action === "approve") {
@@ -117,17 +142,17 @@ export async function dispatchTaskCardAction(
     if (!r.ok) {
       return {
         status: r.reason === "not_found" ? 404 : 409,
-        body: { error: r.reason, ...(r.status ? { status: r.status } : {}) },
+        body: errBody(r.reason, r.status ? { status: r.status } : undefined),
       };
     }
     return { status: 200, body: { ok: true } };
   }
   if (type === "ai_proposal" && action === "reject") {
     const r = await rejectProposal(id, userId);
-    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: { error: r.reason } };
+    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: errBody(r.reason) };
     return { status: 200, body: { ok: true } };
   }
-  return { status: 400, body: { error: "unhandled action" } };
+  return { status: 400, body: errBody("unhandled action") };
 }
 
 // Resolve an actor email → finance user id (lowercased exact match), or null.

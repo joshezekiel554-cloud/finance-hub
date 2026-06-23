@@ -98,17 +98,22 @@ describe("dispatchTaskCardAction — error mapping", () => {
     expect(r.status).toBe(409);
   });
 
-  it("shopify_cancel_failed → 502", async () => {
+  it("shopify_cancel_failed → 502 with a HUMAN error + the machine code", async () => {
     cancelHoldOrder.mockResolvedValue({ ok: false, reason: "shopify_cancel_failed" });
     const r = await dispatchTaskCardAction("hold", "x", "cancel", "u");
     expect(r.status).toBe(502);
+    // `error` is now human-readable copy (relayed verbatim by the board); the raw
+    // code lives in `code`.
+    expect((r.body as { error: string }).error).toMatch(/cancel it manually/i);
+    expect((r.body as { code: string }).code).toBe("shopify_cancel_failed");
   });
 
-  it("proposal wrong_status → 409 carries status", async () => {
+  it("proposal wrong_status → 409 carries the code + status", async () => {
     approveProposalAndEnqueue.mockResolvedValue({ ok: false, reason: "wrong_status", status: "executed" });
     const r = await dispatchTaskCardAction("ai_proposal", "p", "approve", "u");
     expect(r.status).toBe(409);
-    expect(r.body).toMatchObject({ error: "wrong_status", status: "executed" });
+    expect(r.body).toMatchObject({ code: "wrong_status", status: "executed" });
+    expect((r.body as { error: string }).error).toBeTruthy();
   });
 });
 
