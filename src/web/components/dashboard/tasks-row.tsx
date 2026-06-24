@@ -74,11 +74,6 @@ export function DashboardTasksRow() {
   const errMsg = (error as Error | undefined)?.message;
   const noInboxAccount = errMsg === "no_inbox_account";
 
-  // Cap the dashboard preview; the full set lives on the board.
-  const PREVIEW_CAP = 6;
-  const shown = tasks.slice(0, PREVIEW_CAP);
-  const overflow = tasks.length - shown.length;
-
   return (
     <Card>
       <CardBody>
@@ -136,9 +131,12 @@ export function DashboardTasksRow() {
               </Button>
             </div>
           ) : (
-            <>
+            // Fixed-height scroll box: ~5-6 tasks (a couple of rows) visible, the
+            // rest reachable by scrolling WITHIN the box — never grows the
+            // dashboard. -mr-1 pr-1 reserves a tidy scrollbar gutter.
+            <div className="-mr-1 max-h-56 overflow-y-auto pr-1">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {shown.map((t) => {
+                {tasks.map((t) => {
                   const due = dueLabel(t.dueAt);
                   return (
                     <Link
@@ -169,15 +167,7 @@ export function DashboardTasksRow() {
                   );
                 })}
               </div>
-              {overflow > 0 ? (
-                <Link
-                  to="/shared-tasks"
-                  className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent-info hover:underline"
-                >
-                  +{overflow} more on the board <ArrowRight className="size-3" />
-                </Link>
-              ) : null}
-            </>
+            </div>
           )}
         </div>
       </CardBody>
