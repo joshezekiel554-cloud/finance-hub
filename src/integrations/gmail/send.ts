@@ -39,6 +39,7 @@ export function buildRawMessage(input: {
   attachments?: EmailAttachment[];
   financeSendType?: FinanceSendType;
   financeCustomerId?: string;
+  senderEmail?: string;
 }): string {
   const {
     from,
@@ -53,6 +54,7 @@ export function buildRawMessage(input: {
     attachments,
     financeSendType,
     financeCustomerId,
+    senderEmail,
   } = input;
   const hasAttachments = (attachments?.length ?? 0) > 0;
 
@@ -90,6 +92,13 @@ export function buildRawMessage(input: {
   // right customer's Emails section even with no address overlap.
   if (financeCustomerId) {
     headerLines.push(`X-Feldart-Finance-Customer-Id: ${financeCustomerId}`);
+  }
+  // The finance user who originated this send (ASCII email — no encoding). Lets
+  // Inbox attribute the sent email to the matching member + apply its reply→
+  // Waiting rule. Only stamped for user-originated sends (compose / draft-reply
+  // / agent-on-behalf); system cron sends omit it.
+  if (senderEmail) {
+    headerLines.push(`X-Feldart-Finance-Sender: ${senderEmail}`);
   }
   if (inReplyTo) {
     // RFC 5322: angle-bracketed Message-ID. We accept either a bare id
@@ -212,6 +221,7 @@ export async function sendEmail(
     inReplyTo,
     financeSendType,
     financeCustomerId,
+    senderEmail,
   } = input;
 
   let from: string;
@@ -253,6 +263,7 @@ export async function sendEmail(
     attachments,
     financeSendType,
     financeCustomerId,
+    senderEmail,
   });
 
   const gmail = await getInternalGmailClient(externalAccountId);
