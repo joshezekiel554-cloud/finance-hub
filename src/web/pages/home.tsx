@@ -12,7 +12,7 @@ import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowRight } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { DashboardTasksRow } from "../components/dashboard/tasks-row";
+import { DashboardBoard } from "../components/dashboard/dashboard-board";
 import { OrdersToReviewWidget } from "../components/dashboard/orders-to-review-widget";
 import { ChaseWidget } from "../components/dashboard/chase-widget";
 import { RmasWidget } from "../components/dashboard/rmas-widget";
@@ -92,9 +92,10 @@ export default function HomePage() {
         </p>
       </div>
 
-      {/* Tasks headline row — full-width, top of the dashboard, with a New-task
-          button. The shared inbox<->finance board is the task system now. */}
-      <DashboardTasksRow />
+      {/* Tasks board — the full shared board (columns) at the top of the
+          dashboard, fixed-height + New-task button. Same embed as the Tasks
+          page; inbox's finance skin themes it. */}
+      <DashboardBoard />
 
       {showInvoicingAlert ? (
         <Card className="border-accent-danger/40 bg-accent-danger/5">
