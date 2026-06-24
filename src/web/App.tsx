@@ -57,20 +57,17 @@ export default function App({ children }: { children: ReactNode }) {
   const sharedTasksEnabled =
     appSettingsQuery.data?.settings.shared_tasks_enabled === "true";
 
-  // The "Shared tasks" nav entry is gated behind shared_tasks_enabled so the
-  // in-progress feature exposes nothing until the operator flips it on. When
-  // on, it sits directly after "Tasks".
+  // Shared-tasks rollout (M5): when `shared_tasks_enabled` is on, the shared
+  // inbox↔finance board REPLACES the retired native /tasks board as the single
+  // "Tasks" nav entry (the native board is being wound down — nothing actively
+  // uses it). When off, the legacy native /tasks stays as "Tasks".
   const navItems = useMemo<NavItem[]>(() => {
     if (!sharedTasksEnabled) return baseNavItems;
-    const items = [...baseNavItems];
-    const tasksIdx = items.findIndex((i) => i.to === "/tasks");
-    const insertAt = tasksIdx >= 0 ? tasksIdx + 1 : items.length;
-    items.splice(insertAt, 0, {
-      to: "/shared-tasks",
-      label: "Shared tasks",
-      icon: ListChecks,
-    });
-    return items;
+    return baseNavItems.map((i) =>
+      i.to === "/tasks"
+        ? { to: "/shared-tasks", label: "Tasks", icon: ListChecks }
+        : i,
+    );
   }, [sharedTasksEnabled]);
 
   return (
