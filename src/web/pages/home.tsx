@@ -12,7 +12,7 @@ import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowRight } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { MyTasksWidget } from "../components/dashboard/my-tasks-widget";
+import { DashboardTasksRow } from "../components/dashboard/tasks-row";
 import { OrdersToReviewWidget } from "../components/dashboard/orders-to-review-widget";
 import { ChaseWidget } from "../components/dashboard/chase-widget";
 import { RmasWidget } from "../components/dashboard/rmas-widget";
@@ -65,20 +65,6 @@ export default function HomePage() {
     refetchOnWindowFocus: false,
   });
 
-  // Shared-tasks master flag — gates the My-tasks dashboard widget. Keyed
-  // identically to the rest of the app's app-settings query so it dedupes.
-  const appSettingsQuery = useQuery<{ settings: Record<string, string> }>({
-    queryKey: ["app-settings"],
-    queryFn: async () => {
-      const res = await fetch("/api/app-settings");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-    staleTime: 5 * 60_000,
-  });
-  const sharedTasksEnabled =
-    appSettingsQuery.data?.settings.shared_tasks_enabled === "true";
-
   const unsentToday = useMemo(() => {
     if (!todayData) return 0;
     const todayLondon = londonDateFor(new Date());
@@ -106,6 +92,10 @@ export default function HomePage() {
         </p>
       </div>
 
+      {/* Tasks headline row — full-width, top of the dashboard, with a New-task
+          button. The shared inbox<->finance board is the task system now. */}
+      <DashboardTasksRow />
+
       {showInvoicingAlert ? (
         <Card className="border-accent-danger/40 bg-accent-danger/5">
           <CardBody>
@@ -132,15 +122,11 @@ export default function HomePage() {
         </Card>
       ) : null}
 
-      {/* Action-queue widgets — 3 on top, 2 on the bottom. The native task
-          board has been retired; "My tasks" now reads the shared inbox board
-          (gated on the shared-tasks rollout flag). */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {sharedTasksEnabled ? <MyTasksWidget /> : null}
+      {/* Action-queue widgets. Tasks moved to the headline row above; the native
+          task board has been retired in favour of the shared inbox board. */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <OrdersToReviewWidget />
         <ChaseWidget />
-      </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <RmasWidget />
         <HoldsWidget />
       </div>
