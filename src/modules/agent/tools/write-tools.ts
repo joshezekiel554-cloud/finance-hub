@@ -110,7 +110,7 @@ export function buildAgentWriteToolDeclarations(): ToolDefinition<never>[] {
     ),
     declare(
       "create_task",
-      "Propose creating a team task — optionally linked to a customer, assigned to a team member by email, with a concrete ISO due date (convert any natural-language date to ISO yourself).",
+      "Propose creating a SHARED team task (appears on the unified inbox+finance board) — optionally linked to a customer, assigned to a team member by email, with a concrete ISO due date (convert any natural-language date to ISO yourself).",
       {
         type: "object",
         properties: {
@@ -125,12 +125,6 @@ export function buildAgentWriteToolDeclarations(): ToolDefinition<never>[] {
         additionalProperties: false,
       },
     ),
-    declare("complete_task", "Propose marking an open task completed.", {
-      type: "object",
-      properties: { taskId: str() },
-      required: ["taskId"],
-      additionalProperties: false,
-    }),
     declare(
       "update_customer_context",
       "Propose appending a durable fact to a customer's AI context (visible/editable by the team; never replaces existing context).",

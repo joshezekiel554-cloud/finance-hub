@@ -21,7 +21,6 @@ import {
   activities,
   emailLog,
   statementSends,
-  tasks,
 } from "../../../db/schema/crm.js";
 import { chaseLog } from "../../../db/schema/audit.js";
 import { rmas } from "../../../db/schema/returns.js";
@@ -563,65 +562,6 @@ export function buildAgentReadTools(): ToolDefinition<never>[] {
           .map(
             (r) =>
               `rma #${r.rmaNumber ?? "(draft)"} type=${r.returnType} status=${r.status} value=${r.totalValue} cm=${r.creditMemoDocNumber ?? "-"} tracking=${r.trackingNumber ?? "-"} created=${iso(r.createdAt)}`,
-          )
-          .join("\n"),
-      );
-    },
-  });
-
-  add({
-    name: "get_tasks",
-    description:
-      "Open tasks, optionally scoped to a customer or assignee email. Max 25, soonest due first.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        customerId: { type: "string" },
-        assigneeEmail: { type: "string" },
-        includeCompleted: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    handler: async (input) => {
-      const args = input as {
-        customerId?: unknown;
-        assigneeEmail?: unknown;
-        includeCompleted?: unknown;
-      };
-      const conds = [] as ReturnType<typeof eq>[];
-      if (args?.customerId)
-        conds.push(eq(tasks.customerId, String(args.customerId)));
-      if (args?.includeCompleted !== true)
-        conds.push(eq(tasks.status, "open"));
-      if (args?.assigneeEmail) {
-        const u = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, String(args.assigneeEmail)))
-          .limit(1);
-        if (!u[0]) return fail(`no team member with email ${args.assigneeEmail}`);
-        conds.push(eq(tasks.assigneeUserId, u[0].id));
-      }
-      const rows = await db
-        .select({
-          id: tasks.id,
-          title: tasks.title,
-          status: tasks.status,
-          priority: tasks.priority,
-          dueAt: tasks.dueAt,
-          customerId: tasks.customerId,
-          assigneeUserId: tasks.assigneeUserId,
-        })
-        .from(tasks)
-        .where(conds.length ? and(...conds) : undefined)
-        .orderBy(sql`${tasks.dueAt} IS NULL, ${tasks.dueAt} ASC`)
-        .limit(25);
-      if (rows.length === 0) return ok("No matching tasks.");
-      return ok(
-        rows
-          .map(
-            (t) =>
-              `task id=${t.id} [${t.priority}] ${t.title} status=${t.status} due=${iso(t.dueAt) ?? "none"} customer=${t.customerId ?? "-"}`,
           )
           .join("\n"),
       );

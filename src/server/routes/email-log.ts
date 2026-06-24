@@ -17,10 +17,9 @@ import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
-import { activities, emailLog, tasks, TASK_PRIORITIES } from "../../db/schema/crm.js";
+import { emailLog, TASK_PRIORITIES } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
-import { events } from "../../lib/events.js";
 import { createLogger } from "../../lib/logger.js";
 import {
   getMessageRecipients,
@@ -29,6 +28,12 @@ import {
 } from "../../integrations/gmail/client.js";
 import { BUSINESS_EMAILS } from "../../integrations/gmail/business-emails.js";
 import { generateDraftReply } from "../../modules/ai-agent/draft-reply.js";
+import { createSharedTaskForUser } from "../../modules/tasks-shared/create.js";
+import { NoInboxAccountError } from "../../modules/tasks-shared/identity.js";
+import {
+  InboxUnreachableError,
+  InboxApiError,
+} from "../../integrations/inbox/client.js";
 
 const log = createLogger({ component: "routes.email-log" });
 
@@ -263,12 +268,13 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // POST /api/email-log/:id/to-task — promote an email into a task.
-  // The new task's relatedActivityId points at the email's activity row
-  // (gmail poller wrote one with refType="email_log", refId=emailId).
-  // Defaults: title = "Re: <subject>", body = first 1000 chars of email
-  // body, customerId from the email, assigneeUserId = current user.
-  // Caller can override any of these in the body. Emits task.created.
+  // POST /api/email-log/:id/to-task — promote an email into a SHARED task on the
+  // unified inbox+finance board (the finance-native Kanban has been retired).
+  // Defaults: title = "Re: <subject>", body = first 1000 chars of email body,
+  // financeCustomerId from the email. Caller can override title/body/dueAt.
+  // Inbox is a sibling service: if it's unreachable / errors we DON'T hard-fail
+  // the request — we log a warning and return taskId:null so the caller's "flag"
+  // gesture still succeeds (it can retry the task later).
   app.post("/:id/to-task", async (req, reply) => {
     const user = await requireAuth(req);
     const id = (req.params as { id: string }).id;
@@ -288,22 +294,6 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
     const email = emailRows[0];
     if (!email) return reply.code(404).send({ error: "email not found" });
 
-    // Find the activity row that was created when this email was ingested
-    // so the task can FK back to it. May be null if the email wasn't
-    // matched to a customer (no activity gets written in that case).
-    const activityRows = await db
-      .select({ id: activities.id })
-      .from(activities)
-      .where(
-        and(
-          eq(activities.refType, "email_log"),
-          eq(activities.refId, id),
-        ),
-      )
-      .limit(1);
-    const relatedActivityId = activityRows[0]?.id ?? null;
-
-    const taskId = nanoid(24);
     const defaultTitle =
       overrides.title ??
       (email.subject ? `Re: ${email.subject}` : "Follow up on email");
@@ -312,50 +302,58 @@ const emailLogRoute: FastifyPluginAsync = async (app) => {
       (email.body ? truncate(email.body, 1000) : null) ??
       null;
 
-    await db.insert(tasks).values({
-      id: taskId,
-      customerId: email.customerId,
-      assigneeUserId: overrides.assigneeUserId ?? user.id,
-      createdByUserId: user.id,
-      title: defaultTitle,
-      body: defaultBody,
-      dueAt: overrides.dueAt ?? null,
-      priority: overrides.priority ?? "normal",
-      status: "open",
-      tags: [],
-      position: "1000",
-      relatedActivityId,
-      aiProposed: false,
-    });
+    let task;
+    try {
+      task = await createSharedTaskForUser(
+        { email: user.email },
+        {
+          title: defaultTitle,
+          body: defaultBody,
+          financeCustomerId: email.customerId ?? undefined,
+          dueAt: overrides.dueAt ? overrides.dueAt.toISOString() : undefined,
+          priority: overrides.priority,
+        },
+      );
+    } catch (err) {
+      // Don't hard-fail the request on a sibling-service hiccup — the operator's
+      // gesture (flagging the email) should still land; the task can be retried.
+      if (
+        err instanceof NoInboxAccountError ||
+        err instanceof InboxUnreachableError ||
+        err instanceof InboxApiError
+      ) {
+        log.warn(
+          { sourceEmailId: id, userId: user.id, err },
+          "to-task: shared task create failed (continuing)",
+        );
+        return reply.send({ taskId: null, warning: "task_create_failed" });
+      }
+      throw err;
+    }
 
-    // Audit — captures the source-of-truth wiring (email → task) so we
+    // Audit — captures the source-of-truth wiring (email → shared task) so we
     // can trace which email a task came from after the fact.
     await db.insert(auditLog).values({
       id: nanoid(24),
       userId: user.id,
       action: "task.create",
       entityType: "task",
-      entityId: taskId,
+      entityId: task.id,
       before: null,
       after: {
-        taskId,
+        taskId: task.id,
+        shared: true,
         sourceEmailId: id,
-        relatedActivityId,
         customerId: email.customerId,
       },
     });
 
-    events.emit("task.created", {
-      taskId,
-      customerId: email.customerId,
-    });
-
     log.info(
-      { taskId, sourceEmailId: id, userId: user.id },
-      "task created from email",
+      { taskId: task.id, sourceEmailId: id, userId: user.id },
+      "shared task created from email",
     );
 
-    return reply.send({ taskId });
+    return reply.send({ taskId: task.id });
   });
 
   // POST /api/email-log/:id/draft-reply { notes? }

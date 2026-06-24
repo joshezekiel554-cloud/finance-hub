@@ -1,7 +1,7 @@
-// New SHARED task dialog (M2). Creates a task in the inbox canonical store via
+// New SHARED task dialog. Creates a task in the inbox canonical store via
 // `POST /api/tasks/shared`; the task lands live on the assignee's inbox board.
-// This is DISTINCT from the finance-native Kanban "New task" (TaskDetailDrawer)
-// — that writes the local tasks table; this writes inbox.
+// This is now the ONLY task-create surface in finance — the finance-native
+// Kanban (and its TaskDetailDrawer) has been retired.
 //
 // Fields: title (required), body, assignee (members picker, default unassigned),
 // due date, reminder date. When opened from a customer page the dialog is given
@@ -52,6 +52,9 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   // When present, the task is linked to this customer and the link is locked.
   customer?: { id: string; name: string };
+  // Optional title to seed the form with (e.g. an RMA follow-up hint). The
+  // operator can still edit it before creating.
+  defaultTitle?: string;
   onCreated?: (task: CreatedTask) => void;
 };
 
@@ -69,6 +72,7 @@ export function NewTaskDialog({
   open,
   onOpenChange,
   customer,
+  defaultTitle,
   onCreated,
 }: Props) {
   const queryClient = useQueryClient();
@@ -90,7 +94,7 @@ export function NewTaskDialog({
   // Reset the form whenever the dialog opens fresh.
   useEffect(() => {
     if (!open) return;
-    setTitle("");
+    setTitle(defaultTitle ?? "");
     setBody("");
     setOwnerId("");
     setPriority("normal");

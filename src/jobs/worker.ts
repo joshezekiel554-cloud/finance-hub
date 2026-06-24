@@ -16,7 +16,6 @@ import { Worker, type Job } from "bullmq";
 import { processChaseDigest } from "./definitions/chase-digest.js";
 import { processGmailPoll } from "./definitions/gmail-poll.js";
 import { processQbSync } from "./definitions/qb-sync.js";
-import { processTaskOverdueScan } from "./definitions/task-overdue-scan.js";
 import { processTagEmail } from "./definitions/tag-email.js";
 import { vocatechBackfillHandler } from "./definitions/vocatech-backfill.js";
 import { vocatechRosterSyncHandler } from "./definitions/vocatech-roster-sync.js";
@@ -32,7 +31,6 @@ import {
   CHASE_QUEUE,
   FORWARD_BCC_QUEUE,
   GMAIL_QUEUE,
-  NOTIFICATIONS_QUEUE,
   SYNC_QUEUE,
   TAG_EMAIL_QUEUE,
   ORDERS_QUEUE,
@@ -56,7 +54,6 @@ const log = createLogger({ component: "worker" });
 const QB_CONCURRENCY = 1;
 const GMAIL_CONCURRENCY = 1;
 const CHASE_CONCURRENCY = 1;
-const NOTIFICATIONS_CONCURRENCY = 1;
 const TAG_EMAIL_CONCURRENCY = 1;
 const VOCATECH_BACKFILL_CONCURRENCY = 1;
 const VOCATECH_ROSTER_CONCURRENCY = 1;
@@ -84,12 +81,6 @@ function buildWorkers(): Worker[] {
     CHASE_QUEUE,
     async (job: Job) => processChaseDigest(job),
     { connection, concurrency: CHASE_CONCURRENCY },
-  );
-
-  const notificationsWorker = new Worker(
-    NOTIFICATIONS_QUEUE,
-    async (job: Job) => processTaskOverdueScan(job),
-    { connection, concurrency: NOTIFICATIONS_CONCURRENCY },
   );
 
   const tagEmailWorker = new Worker(
@@ -144,7 +135,6 @@ function buildWorkers(): Worker[] {
     qbWorker,
     gmailWorker,
     chaseWorker,
-    notificationsWorker,
     tagEmailWorker,
     vocatechBackfillWorker,
     vocatechRosterWorker,
@@ -181,7 +171,6 @@ function buildWorkers(): Worker[] {
     qbWorker,
     gmailWorker,
     chaseWorker,
-    notificationsWorker,
     tagEmailWorker,
     vocatechBackfillWorker,
     vocatechRosterWorker,

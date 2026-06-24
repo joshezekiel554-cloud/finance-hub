@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Users,
   FileText,
   Receipt,
-  CheckSquare,
   ListChecks,
   Sparkles,
   GraduationCap,
@@ -31,7 +29,9 @@ const baseNavItems: NavItem[] = [
   { to: "/invoicing", label: "Today", icon: FileText },
   { to: "/chase", label: "Chase", icon: AlertCircle },
   { to: "/statements", label: "Statements", icon: Receipt },
-  { to: "/tasks", label: "Tasks", icon: CheckSquare },
+  // The native /tasks board is RETIRED — "Tasks" is the shared inbox↔finance
+  // board now, unconditionally (the route + page no longer exist).
+  { to: "/shared-tasks", label: "Tasks", icon: ListChecks },
   { to: "/returns", label: "Returns", icon: RotateCcw },
   { to: "/seasons", label: "Seasons", icon: CalendarRange },
   { to: "/autopilot", label: "Autopilot", icon: Bot },
@@ -43,32 +43,9 @@ const baseNavItems: NavItem[] = [
 export default function App({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // App settings — only consumed here for the shared-tasks master flag.
-  // Keyed identically to the customer page's query so the two dedupe.
-  const appSettingsQuery = useQuery<{ settings: Record<string, string> }>({
-    queryKey: ["app-settings"],
-    queryFn: async () => {
-      const res = await fetch("/api/app-settings");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  const sharedTasksEnabled =
-    appSettingsQuery.data?.settings.shared_tasks_enabled === "true";
-
-  // Shared-tasks rollout (M5): when `shared_tasks_enabled` is on, the shared
-  // inbox↔finance board REPLACES the retired native /tasks board as the single
-  // "Tasks" nav entry (the native board is being wound down — nothing actively
-  // uses it). When off, the legacy native /tasks stays as "Tasks".
-  const navItems = useMemo<NavItem[]>(() => {
-    if (!sharedTasksEnabled) return baseNavItems;
-    return baseNavItems.map((i) =>
-      i.to === "/tasks"
-        ? { to: "/shared-tasks", label: "Tasks", icon: ListChecks }
-        : i,
-    );
-  }, [sharedTasksEnabled]);
+  // Nav is now static — the shared board is the permanent "Tasks" destination
+  // (the native board has been retired, so there's nothing left to flag-gate).
+  const navItems = baseNavItems;
 
   return (
     <AgentProvider>

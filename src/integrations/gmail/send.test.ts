@@ -34,6 +34,54 @@ describe("buildRawMessage finance headers", () => {
     );
     expect(msg).not.toContain("X-Feldart-Finance-Customer-Id");
   });
+
+  it("emits the sender header when senderEmail is provided", () => {
+    const msg = decode(
+      buildRawMessage({
+        ...base,
+        financeSendType: "manual-reply",
+        senderEmail: "hillel@feldart.com",
+      }),
+    );
+    expect(msg).toContain("X-Feldart-Finance-Sender: hillel@feldart.com");
+    expect(msg).toContain("X-Feldart-Finance-Send: manual-reply");
+  });
+
+  it("omits the sender header for a system send (no senderEmail)", () => {
+    const msg = decode(
+      buildRawMessage({ ...base, financeSendType: "chase" }),
+    );
+    expect(msg).not.toContain("X-Feldart-Finance-Sender");
+  });
+});
+
+// The manual-vs-automated classification is the single source of truth for
+// Inbox's hide/show rule (manual = shown, automated = hidden-by-default).
+describe("isManualFinanceSend", () => {
+  it("classifies the manual compose/reply types as manual", async () => {
+    const { isManualFinanceSend } = await import("./types.js");
+    expect(isManualFinanceSend("manual-compose")).toBe(true);
+    expect(isManualFinanceSend("manual-reply")).toBe(true);
+  });
+
+  it("classifies every automated type as NOT manual", async () => {
+    const { isManualFinanceSend } = await import("./types.js");
+    for (const t of [
+      "chase",
+      "statement",
+      "check-in",
+      "dispute-bookkeeper",
+      "rma",
+      "hold-alert",
+      "hold-chase",
+      "hold-cancel",
+      "hold-release",
+      "order-cancelled",
+    ] as const) {
+      expect(isManualFinanceSend(t)).toBe(false);
+    }
+    expect(isManualFinanceSend(undefined)).toBe(false);
+  });
 });
 
 // bridgeContentNewlines runs at the send chokepoint, so it protects EVERY

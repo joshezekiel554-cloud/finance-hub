@@ -11,12 +11,12 @@
 // its own data fetch.
 
 import type { FastifyPluginAsync } from "fastify";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
-import { emailLog, tasks } from "../../db/schema/crm.js";
+import { emailLog } from "../../db/schema/crm.js";
 import { rmas } from "../../db/schema/returns.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { auditLog } from "../../db/schema/audit.js";
@@ -30,33 +30,9 @@ import {
 import { requireAuth } from "../lib/auth.js";
 
 const dashboardRoute: FastifyPluginAsync = async (app) => {
-  // ── My Tasks ───────────────────────────────────────────────────────────
-  app.get("/tasks", async (req, reply) => {
-    const user = await requireAuth(req);
-    const rows = await db
-      .select({
-        id: tasks.id,
-        title: tasks.title,
-        dueAt: tasks.dueAt,
-        status: tasks.status,
-        priority: tasks.priority,
-        customerId: tasks.customerId,
-        customerName: sql<string | null>`(
-          SELECT ${customers.displayName} FROM ${customers}
-          WHERE ${customers.id} = ${tasks.customerId}
-        )`,
-      })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.assigneeUserId, user.id),
-          inArray(tasks.status, ["open", "in_progress", "blocked"]),
-        ),
-      )
-      .orderBy(sql`${tasks.dueAt} IS NULL`, asc(tasks.dueAt))
-      .limit(10);
-    return reply.send({ rows });
-  });
+  // The native "My tasks" widget endpoint has been retired along with the
+  // finance-native Kanban — the dashboard's "My tasks" widget now reads the
+  // shared inbox board via GET /api/tasks/mine instead.
 
   // ── Unactioned B2B Emails Today ────────────────────────────────────────
   app.get("/emails", async (req, reply) => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams, Link, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
@@ -16,7 +16,6 @@ import {
   RotateCcw,
   Plus,
   Trash2,
-  ClipboardList,
   ChevronDown,
   Truck,
   ExternalLink,
@@ -63,13 +62,11 @@ import CustomerAiCard, {
   type CardAction as AiCardAction,
 } from "../components/customer-ai-card";
 import { DisputeActions } from "../components/dispute-actions";
-import {
-  TaskDetailDrawer,
-  type DrawerMode as TaskDrawerMode,
-} from "../components/task-detail-drawer";
-import { TaskList } from "../components/task-list";
-import type { TaskCardData } from "../components/task-card";
 import { NewTaskDialog } from "../components/tasks/new-task-dialog";
+import {
+  TasksEmbed,
+  type TasksEmbedHandle,
+} from "../components/tasks/tasks-embed";
 import InvoiceSendDialog, {
   type InvoiceSendSuccess,
 } from "../components/invoice-send-dialog";
@@ -253,15 +250,16 @@ export default function CustomerDetailPage() {
   // all set this state shape.
   const [composeContext, setComposeContext] =
     useState<ComposeContext | null>(null);
-  // Task drawer state — null when closed, else { mode: "create"|"edit", ...}.
-  // Reused across the header "+ New task" button, the Tasks tab, and
-  // any future entry points (email-row, RMA detail). Always opened
-  // with `customerId` pre-filled in defaults so the resulting task
-  // links back to this customer automatically.
-  const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
-  // Shared-task dialog (M2) — distinct from the native Kanban drawer above.
-  // Creates a task in the inbox canonical store, pre-linked to this customer.
-  const [sharedTaskOpen, setSharedTaskOpen] = useState(false);
+  // New-task dialog (shared board) — creates a task in the inbox canonical
+  // store, pre-linked to this customer. The finance-native Kanban drawer has
+  // been retired; the Tasks tab now embeds the shared board directly. The embed
+  // handle lets the dialog re-mint the board after a create.
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [tasksEmbed, setTasksEmbed] = useState<TasksEmbedHandle | null>(null);
+  const onTasksEmbedReady = useCallback(
+    (handle: TasksEmbedHandle) => setTasksEmbed(handle),
+    [],
+  );
   const queryClient = useQueryClient();
 
   // Auto-dismiss the "statement sent" pill after ~6s. We don't have a
@@ -307,23 +305,6 @@ export default function CustomerDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.draftReplyFor, data?.customer.id]);
 
-  // Current authenticated operator — used by TaskDetailDrawer for
-  // mention resolution + watcher self-attribution. Same query the
-  // /tasks page uses; cached for 5 min so hopping between customer
-  // pages doesn't re-fetch /api/me on every nav.
-  const meQuery = useQuery<{
-    user: { id: string; name: string | null; email: string; image: string | null };
-  }>({
-    queryKey: ["me"],
-    queryFn: async () => {
-      const res = await fetch("/api/me");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  const currentUser = meQuery.data?.user ?? null;
-
   // App settings — only needed for the TJ dispute flow's "Email TJ
   // bookkeeper" prefill (key tj_bookkeeper_email). Cached for 5 min;
   // an empty value still opens compose with no recipient.
@@ -344,33 +325,6 @@ export default function CustomerDetailPage() {
   const inboxIntegrationEnabled =
     appSettingsQuery.data?.settings.inbox_integration_enabled === "true";
 
-  // Customer-scoped task list. Used by:
-  //   - The Tasks tab (renders the list + an Add task button)
-  //   - The KPI strip's "open tasks" count (already in customer GET kpi
-  //     rollup but the tasks tab needs the actual rows)
-  //   - The drawer's listQueryKey for invalidation after mutations
-  const tasksQueryKey = useMemo(
-    () => ["customer-tasks", customerId] as const,
-    [customerId],
-  );
-  const tasksQuery = useQuery<{ rows: TaskCardData[]; hasMore: boolean }>({
-    queryKey: tasksQueryKey,
-    queryFn: async () => {
-      const params = new URLSearchParams({
-        customerId,
-        // Default to "all" assignees here — the tasks tab on a customer
-        // page is about the customer, not "my tasks." Operator can
-        // filter inside the drawer if needed.
-        assignee: "all",
-        sort: "position",
-        dir: "asc",
-        limit: "200",
-      });
-      const res = await fetch(`/api/tasks?${params.toString()}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-  });
 
   // Generic 3-way status mutation. The dialog confirms which target the
   // operator picked; the route writes the right tag set + local mirror.
@@ -601,14 +555,6 @@ export default function CustomerDetailPage() {
                 RMA in flight
               </Badge>
             ) : null}
-            {kpi?.openTaskCount && kpi.openTaskCount > 0 ? (
-              <Badge
-                tone="neutral"
-                title="Open tasks for this customer — see the Tasks tab"
-              >
-                {kpi.openTaskCount} open task{kpi.openTaskCount === 1 ? "" : "s"}
-              </Badge>
-            ) : null}
             {kpi?.lastContactedAt ? (
               <span
                 className="text-xs text-muted"
@@ -745,25 +691,11 @@ export default function CustomerDetailPage() {
             <Button
               variant="primary"
               size="sm"
-              onClick={() =>
-                setTaskDrawer({
-                  mode: "create",
-                  defaults: { customerId },
-                })
-              }
-              title="Create a task linked to this customer"
+              onClick={() => setNewTaskOpen(true)}
+              title="Create a task on the shared board, linked to this customer"
             >
               <Plus className="size-3.5" />
               New task
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setSharedTaskOpen(true)}
-              title="Create a shared task (assign to a teammate on the shared board)"
-            >
-              <ClipboardList className="size-3.5" />
-              Shared task
             </Button>
           </div>
         </div>
@@ -821,26 +753,14 @@ export default function CustomerDetailPage() {
           === [] → also chase all open (defence-in-depth);
           === [...] → chase that subset (set by the Invoices tab
           bulk action). */}
-      {/* Reusable task drawer — same component the /tasks page uses.
-          Mounted unconditionally so create + edit transitions
-          (post-create the parent flips drawer to edit mode) animate
-          smoothly. The drawer self-handles open/close styling; we
-          just supply mode + defaults + currentUser. */}
+      {/* New-task dialog — creates a task on the shared inbox board, pre-linked
+          to this customer. On success we re-mint the embedded board so the new
+          task shows immediately (if the Tasks tab is open). */}
       <NewTaskDialog
-        open={sharedTaskOpen}
-        onOpenChange={setSharedTaskOpen}
+        open={newTaskOpen}
+        onOpenChange={setNewTaskOpen}
         customer={{ id: customer.id, name: customer.displayName }}
-      />
-
-      <TaskDetailDrawer
-        open={taskDrawer !== null}
-        onClose={() => setTaskDrawer(null)}
-        drawer={taskDrawer ?? { mode: "create", defaults: { customerId } }}
-        currentUser={currentUser}
-        listQueryKey={tasksQueryKey}
-        onCreated={(taskId) =>
-          setTaskDrawer({ mode: "edit", taskId })
-        }
+        onCreated={() => tasksEmbed?.refetch()}
       />
 
       {/* Compose modal — opens from: header "Email customer" button,
@@ -1015,9 +935,6 @@ export default function CustomerDetailPage() {
                   customerId={customer.id}
                   customerName={customer.displayName}
                   customerEmail={customer.primaryEmail}
-                  onTaskCreated={(taskId) =>
-                    setTaskDrawer({ mode: "edit", taskId })
-                  }
                   direction={emailDirection}
                   actioned={emailActioned}
                   onDirectionChange={(v) => setFilter("emailDirection", v, { history: "push" })}
@@ -1076,21 +993,13 @@ export default function CustomerDetailPage() {
             )}
             {tab === "orders" && <OrdersPanel customerId={customer.id} />}
             {tab === "tasks" && (
-              <TasksPanel
-                tasks={tasksQuery.data?.rows ?? []}
-                isPending={tasksQuery.isPending}
-                isError={tasksQuery.isError}
-                error={tasksQuery.error}
-                onAdd={() =>
-                  setTaskDrawer({
-                    mode: "create",
-                    defaults: { customerId },
-                  })
-                }
-                onOpen={(taskId) =>
-                  setTaskDrawer({ mode: "edit", taskId })
-                }
-              />
+              <div className="flex h-[calc(100dvh-12rem)] min-h-[640px] flex-col">
+                <TasksEmbed
+                  mode="edit"
+                  customerId={customer.id}
+                  onReady={onTasksEmbedReady}
+                />
+              </div>
             )}
             {tab === "returns" && (
               <ReturnsPanel
@@ -1812,75 +1721,6 @@ function PlaceholderPanel({ label }: { label: string }) {
         {label} panel — coming next.
       </CardBody>
     </Card>
-  );
-}
-
-// Tasks tab on the customer-detail page. Renders the customer's open
-// + closed tasks via the shared <TaskList>. Add button opens the same
-// <TaskDetailDrawer> the parent header button does, with customerId
-// already in defaults so the new task links back automatically. Click
-// any row → drawer flips to edit mode for that task.
-function TasksPanel({
-  tasks,
-  isPending,
-  isError,
-  error,
-  onAdd,
-  onOpen,
-}: {
-  tasks: TaskCardData[];
-  isPending: boolean;
-  isError: boolean;
-  error: unknown;
-  onAdd: () => void;
-  onOpen: (taskId: string) => void;
-}) {
-  if (isPending) {
-    return (
-      <Card>
-        <CardBody className="py-8 text-center text-sm text-muted">
-          Loading tasks…
-        </CardBody>
-      </Card>
-    );
-  }
-  if (isError) {
-    return (
-      <Card>
-        <CardBody className="py-8 text-center text-sm text-accent-danger">
-          {(error as Error)?.message ?? "Failed to load tasks"}
-        </CardBody>
-      </Card>
-    );
-  }
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-secondary">
-          {tasks.length === 0
-            ? "No tasks for this customer yet."
-            : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
-        </div>
-        <Button variant="primary" size="sm" onClick={onAdd}>
-          <Plus className="size-3.5" />
-          Add task
-        </Button>
-      </div>
-      {tasks.length > 0 ? (
-        <TaskList
-          tasks={tasks}
-          onRowClick={onOpen}
-          hideCustomerColumn
-        />
-      ) : (
-        <Card>
-          <CardBody className="flex flex-col items-center gap-2 py-10 text-sm text-muted">
-            <ClipboardList className="size-6 text-muted" />
-            <span>No tasks yet — click "Add task" to create one.</span>
-          </CardBody>
-        </Card>
-      )}
-    </div>
   );
 }
 

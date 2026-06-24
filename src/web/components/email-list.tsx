@@ -60,9 +60,9 @@ export function EmailList({
   customerId: string;
   customerName?: string;
   customerEmail?: string | null;
-  // Called after "Turn into task" creates a task. The customer-detail
-  // page uses this to open its TaskDetailDrawer in edit mode for the
-  // new task so the operator can fill in title/assignee/due/etc.
+  // Called after "Turn into task" creates a SHARED task (on the inbox board).
+  // Optional — most callers no longer need a follow-up now that the task lands
+  // straight on the shared board (no native edit drawer to open).
   onTaskCreated?: (taskId: string) => void;
   // Optional controlled filter props. When provided, the component is
   // controlled by the parent (URL state). When omitted, internal state
@@ -181,18 +181,17 @@ export function EmailList({
         body: JSON.stringify({ title: input.title }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json() as Promise<{ taskId: string }>;
+      // The shared-task create is best-effort server-side: taskId is null when
+      // inbox was unreachable (the email gesture still succeeded).
+      return res.json() as Promise<{ taskId: string | null }>;
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      queryClient.invalidateQueries({
-        queryKey: ["customer-tasks", customerId],
-      });
-      // Hand the task off to the parent so the drawer opens in edit
-      // mode for the operator to fill in title/assignee/due/etc.
-      // Falls through silently when no callback is wired.
-      onTaskCreated?.(result.taskId);
+      // Refresh the dashboard "My tasks" widget so the new shared task shows.
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "my-tasks"] });
+      // Falls through silently when no callback is wired (the task already
+      // lands live on the shared board).
+      if (result.taskId) onTaskCreated?.(result.taskId);
     },
   });
 

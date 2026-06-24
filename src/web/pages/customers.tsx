@@ -22,10 +22,7 @@ import {
   StickyActionBar,
   StickyActionBarSpacer,
 } from "../components/sticky-action-bar";
-import {
-  TaskDetailDrawer,
-  type DrawerMode as TaskDrawerMode,
-} from "../components/task-detail-drawer";
+import { NewTaskDialog } from "../components/tasks/new-task-dialog";
 
 const customersRouteApi = getRouteApi("/customers");
 
@@ -187,24 +184,12 @@ export default function CustomersPage() {
   // clicks add/remove from this set.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // Single TaskDetailDrawer mounted once on this page (Item 1).
-  // null = closed; setting a DrawerMode opens it.
-  const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
-
-  // Current operator — required by TaskDetailDrawer for mention resolution
-  // and watcher self-attribution. Same query/staleTime as customer-detail.
-  const meQuery = useQuery<{
-    user: { id: string; name: string | null; email: string; image: string | null };
-  }>({
-    queryKey: ["me"],
-    queryFn: async () => {
-      const res = await fetch("/api/me");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  const currentUser = meQuery.data?.user ?? null;
+  // Per-row "+ Task" opens the shared NewTaskDialog pre-linked to that customer
+  // (the finance-native Kanban drawer has been retired). null = closed.
+  const [taskCustomer, setTaskCustomer] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -974,9 +959,9 @@ export default function CustomersPage() {
                         title="Add task for this customer"
                         aria-label={`Add task for ${row.displayName}`}
                         onClick={() =>
-                          setTaskDrawer({
-                            mode: "create",
-                            defaults: { customerId: row.id },
+                          setTaskCustomer({
+                            id: row.id,
+                            name: row.displayName,
                           })
                         }
                         className="flex items-center gap-0.5 rounded px-1.5 py-1 text-xs text-muted opacity-0 transition-opacity hover:bg-elevated hover:text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-primary"
@@ -1003,16 +988,13 @@ export default function CustomersPage() {
         </CardBody>
       </Card>
 
-      {/* Single TaskDetailDrawer — opened by the per-row "+ Task" buttons (Item 1) */}
-      <TaskDetailDrawer
-        open={taskDrawer !== null}
-        onClose={() => setTaskDrawer(null)}
-        drawer={taskDrawer ?? { mode: "create" }}
-        currentUser={currentUser}
-        listQueryKey={queryKey}
-        onCreated={() => {
-          queryClient.invalidateQueries({ queryKey: ["customers"] });
+      {/* Shared new-task dialog — opened by the per-row "+ Task" buttons. */}
+      <NewTaskDialog
+        open={taskCustomer !== null}
+        onOpenChange={(next) => {
+          if (!next) setTaskCustomer(null);
         }}
+        customer={taskCustomer ?? undefined}
       />
 
       {/* Mobile bulk-edit footer. Mirrors the desktop sweep bar but

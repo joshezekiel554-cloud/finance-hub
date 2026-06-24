@@ -7,7 +7,8 @@
 //   - SYNC_QUEUE              — QuickBooks pulls (every 30 min, repeatable)
 //   - GMAIL_QUEUE             — Gmail polls (every 15 min, repeatable)
 //   - CHASE_QUEUE             — Daily chase digest (17:00 Europe/London)
-//   - NOTIFICATIONS_QUEUE     — Daily task-overdue scan (08:00 Europe/London)
+//   - NOTIFICATIONS_QUEUE     — (idle) reserved; the task-overdue scan that used
+//                               it was retired with the finance-native Kanban
 //   - TAG_EMAIL_QUEUE         — Tag-driven digest emails (daily/weekly/monthly)
 //   - VOCATECH_BACKFILL_QUEUE — Ad-hoc history backfill (admin-triggered)
 //   - VOCATECH_ROSTER_QUEUE   — Contact roster push (full or nightly delta)
@@ -40,7 +41,6 @@ export const ORDERS_QUEUE = "orders";
 export const QB_SYNC_JOB = "qb-sync";
 export const GMAIL_POLL_JOB = "gmail-poll";
 export const CHASE_DIGEST_JOB = "chase-digest";
-export const TASK_OVERDUE_SCAN_JOB = "task-overdue-scan";
 export const TAG_EMAIL_DAILY_JOB = "tag-email-daily";
 export const TAG_EMAIL_WEEKLY_JOB = "tag-email-weekly";
 export const TAG_EMAIL_MONTHLY_JOB = "tag-email-monthly";

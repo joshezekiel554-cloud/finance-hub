@@ -12,7 +12,6 @@ import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowRight } from "lucide-react";
 import { Card, CardBody } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { TasksWidget } from "../components/dashboard/tasks-widget";
 import { MyTasksWidget } from "../components/dashboard/my-tasks-widget";
 import { OrdersToReviewWidget } from "../components/dashboard/orders-to-review-widget";
 import { ChaseWidget } from "../components/dashboard/chase-widget";
@@ -133,16 +132,17 @@ export default function HomePage() {
         </Card>
       ) : null}
 
-      {/* Action-queue widgets — 3 on top, 2 on the bottom. */}
+      {/* Action-queue widgets — 3 on top, 2 on the bottom. The native task
+          board has been retired; "My tasks" now reads the shared inbox board
+          (gated on the shared-tasks rollout flag). */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <TasksWidget />
+        {sharedTasksEnabled ? <MyTasksWidget /> : null}
         <OrdersToReviewWidget />
         <ChaseWidget />
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <RmasWidget />
         <HoldsWidget />
-        {sharedTasksEnabled ? <MyTasksWidget /> : null}
       </div>
 
       {/* Quick links — most-used pages, one click away. */}
@@ -162,7 +162,7 @@ export default function HomePage() {
             <Link to="/statements">
               <Button variant="secondary" size="sm">Statements log</Button>
             </Link>
-            <Link to="/tasks">
+            <Link to="/shared-tasks">
               <Button variant="secondary" size="sm">Tasks</Button>
             </Link>
           </div>
