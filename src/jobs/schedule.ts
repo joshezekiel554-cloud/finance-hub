@@ -6,7 +6,6 @@
 //
 //   qb-sync                 */30 * * * *     every 30 minutes
 //   gmail-poll              */15 * * * *     every 15 minutes
-//   task-overdue-scan       0 8 * * *        08:00 daily, Europe/London
 //   chase-digest            0 17 * * *       17:00 daily, Europe/London
 //   tag-email-daily         0 9 * * *        09:00 daily, Europe/London
 //   tag-email-weekly        0 9 * * 1        09:00 Monday, Europe/London
@@ -33,7 +32,6 @@ import {
   TAG_EMAIL_DAILY_JOB,
   TAG_EMAIL_MONTHLY_JOB,
   TAG_EMAIL_WEEKLY_JOB,
-  TASK_OVERDUE_SCAN_JOB,
   VOCATECH_BACKFILL_JOB,
   VOCATECH_ROSTER_DELTA_JOB,
 } from "./queues.js";
@@ -99,22 +97,8 @@ export async function registerSchedules(queues: Queues): Promise<RegisteredJob[]
     tz: "Europe/London",
   });
 
-  // Task-overdue scan — 08:00 Europe/London daily. Fires before the
-  // operator's day starts so the bell is populated by the time they
-  // open the app. Dedupe inside the job means stuck tasks don't spam.
-  await queues.notifications.add(
-    TASK_OVERDUE_SCAN_JOB,
-    { trigger: "scheduled" },
-    {
-      jobId: `repeat:${TASK_OVERDUE_SCAN_JOB}`,
-      repeat: { pattern: "0 8 * * *", tz: "Europe/London" },
-    },
-  );
-  registered.push({
-    name: TASK_OVERDUE_SCAN_JOB,
-    cron: "0 8 * * *",
-    tz: "Europe/London",
-  });
+  // (Task-overdue scan retired — the finance-native Kanban is gone; tasks now
+  // live on the shared inbox board, which owns its own due-date reminders.)
 
   // Tag-email daily — 09:00 Europe/London every day.
   await queues.tagEmail.add(

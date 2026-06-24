@@ -14,10 +14,7 @@ import RmaActionPanel from "../components/rma-action-panel";
 import type { RmaStatus, RmaReturnType } from "../components/rma-action-panel";
 import { PhotoUploadZone } from "../components/photo-upload-zone";
 import { ProcessReturnPanel } from "../components/process-return-panel";
-import {
-  TaskDetailDrawer,
-  type DrawerMode as TaskDrawerMode,
-} from "../components/task-detail-drawer";
+import { NewTaskDialog } from "../components/tasks/new-task-dialog";
 
 // ---- Types ------------------------------------------------------------------
 
@@ -110,24 +107,10 @@ const TYPE_TONES: Record<RmaReturnType, BadgeTone> = {
 export default function ReturnDetailPage() {
   const { rmaId } = useParams({ from: "/returns/$rmaId" });
   const queryClient = useQueryClient();
-  // Local task drawer state for the "Create task from this RMA" entry
-  // point. Same TaskDetailDrawer the customer-detail page uses; we
-  // pre-fill customerId + a body hint referring to this RMA's number
-  // so the operator doesn't have to retype context.
-  const [taskDrawer, setTaskDrawer] = useState<TaskDrawerMode | null>(null);
-
-  const meQuery = useQuery<{
-    user: { id: string; name: string | null; email: string; image: string | null };
-  }>({
-    queryKey: ["me"],
-    queryFn: async () => {
-      const res = await fetch("/api/me");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  const currentUser = meQuery.data?.user ?? null;
+  // "Create task from this RMA" → opens the shared NewTaskDialog pre-linked to
+  // this RMA's customer, with the title seeded to the RMA number (the finance-
+  // native Kanban drawer has been retired). null = closed.
+  const [taskOpen, setTaskOpen] = useState(false);
 
   const { data: rma, isPending, isError, error, refetch } = useQuery<RmaDetail>({
     queryKey: ["rma", rmaId],
@@ -251,15 +234,7 @@ export default function ReturnDetailPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() =>
-                        setTaskDrawer({
-                          mode: "create",
-                          defaults: {
-                            customerId: rma.customerId,
-                            title: `Follow up on RMA ${rma.rmaNumber ?? rma.id.slice(0, 8)}`,
-                          },
-                        })
-                      }
+                      onClick={() => setTaskOpen(true)}
                       title="Create a task linked to this customer with the RMA referenced in the title"
                     >
                       <Plus className="size-3.5" />
@@ -476,23 +451,14 @@ export default function ReturnDetailPage() {
         </div>
       </div>
 
-      {/* Task drawer — same component the customer-detail page uses.
-          Opened by the "Create task from this RMA" button above with
-          customerId + title pre-filled. listQueryKey is the customer's
-          tasks list so when the drawer creates a task, the customer-
-          detail Tasks tab refreshes too if the operator switches over. */}
-      <TaskDetailDrawer
-        open={taskDrawer !== null}
-        onClose={() => setTaskDrawer(null)}
-        drawer={
-          taskDrawer ?? {
-            mode: "create",
-            defaults: { customerId: rma.customerId },
-          }
-        }
-        currentUser={currentUser}
-        listQueryKey={["customer-tasks", rma.customerId] as const}
-        onCreated={(taskId) => setTaskDrawer({ mode: "edit", taskId })}
+      {/* Shared new-task dialog — opened by the "Create task from this RMA"
+          button above, pre-linked to this RMA's customer and titled with the
+          RMA number. Lands on the shared inbox board. */}
+      <NewTaskDialog
+        open={taskOpen}
+        onOpenChange={setTaskOpen}
+        customer={{ id: rma.customerId, name: rma.customerId }}
+        defaultTitle={`Follow up on RMA ${rma.rmaNumber ?? rma.id.slice(0, 8)}`}
       />
     </div>
   );

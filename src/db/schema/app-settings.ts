@@ -98,6 +98,9 @@ export const APP_SETTING_KEYS = [
   // outbound X-Feldart-Finance-Send header is NOT gated by this (harmless
   // to emit early; Inbox ignores it until ready).
   "inbox_integration_enabled",
+  // "true"/"" — gates the finance Tasks nav + dashboard My-tasks widget;
+  // default off until the unified-tasks feature launches.
+  "shared_tasks_enabled",
   // DEPRECATED (2026-06-19, order-email-templates feature): the single
   // order-hold internal recipient list, now split into warehouse + team below.
   // Migration 0052 copies this value into order_hold_warehouse_recipients on

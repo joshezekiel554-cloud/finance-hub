@@ -30,6 +30,7 @@ import { createLogger } from "../../lib/logger.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
 import { guardServiceRequest } from "../lib/service-auth.js";
+import { getTaskCards } from "../../modules/tasks-shared/task-cards.js";
 import {
   buildOpenInvoiceConditions,
   loadAppSettings,
@@ -312,6 +313,17 @@ const extRoute: FastifyPluginAsync = async (app) => {
       }
     },
   );
+
+  // 6. Task cards — finance's live operational queues as actionable board cards
+  //    (shared-tasks M3). Read-only feed; the one-click actions POST to the
+  //    sibling ext-actions plugin (same guard). Assembled fresh per request so
+  //    auto-clear is free (resolved item drops from the feed).
+  app.get("/task-cards", { config: extRateLimit }, async (req, reply) => {
+    if (!(await guardServiceRequest(req, reply, env.FINANCE_SERVICE_TOKEN)))
+      return;
+    const cards = await getTaskCards();
+    return { cards };
+  });
 
   // 5. Statement PDF — rendered on demand from Finance's own data. Keyed by the
   //    Finance customer id. origin optional: resolved to the single open book

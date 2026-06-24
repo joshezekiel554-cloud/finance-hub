@@ -339,6 +339,14 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
         threadId,
         inReplyTo,
         attachments: decoded,
+        // Inbox-integration (finance-emails-in-inbox): this is a HUMAN-composed
+        // send, so tag it MANUAL (Inbox shows it by default, unlike the hidden
+        // automations) — a reply if it threads onto an existing message, else a
+        // fresh compose. Stamp the sender so Inbox attributes it to this user +
+        // applies its reply→Waiting rule, and the customer id for linkage.
+        financeSendType: inReplyTo ? "manual-reply" : "manual-compose",
+        senderEmail: user.email ?? undefined,
+        financeCustomerId: customerId ?? undefined,
       });
     } catch (err) {
       log.error(

@@ -5,7 +5,7 @@ import {
   Users,
   FileText,
   Receipt,
-  CheckSquare,
+  ListChecks,
   Sparkles,
   GraduationCap,
   Settings,
@@ -23,13 +23,15 @@ import { MobileNavDrawer, type NavItem } from "./components/mobile-nav-drawer";
 import { AgentProvider, useAgent } from "./agent/agent-store";
 import { AgentPanel } from "./agent/agent-panel";
 
-const navItems: NavItem[] = [
+const baseNavItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/customers", label: "Customers", icon: Users },
   { to: "/invoicing", label: "Today", icon: FileText },
   { to: "/chase", label: "Chase", icon: AlertCircle },
   { to: "/statements", label: "Statements", icon: Receipt },
-  { to: "/tasks", label: "Tasks", icon: CheckSquare },
+  // The native /tasks board is RETIRED — "Tasks" is the shared inbox↔finance
+  // board now, unconditionally (the route + page no longer exist).
+  { to: "/shared-tasks", label: "Tasks", icon: ListChecks },
   { to: "/returns", label: "Returns", icon: RotateCcw },
   { to: "/seasons", label: "Seasons", icon: CalendarRange },
   { to: "/autopilot", label: "Autopilot", icon: Bot },
@@ -40,6 +42,10 @@ const navItems: NavItem[] = [
 
 export default function App({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Nav is now static — the shared board is the permanent "Tasks" destination
+  // (the native board has been retired, so there's nothing left to flag-gate).
+  const navItems = baseNavItems;
 
   return (
     <AgentProvider>

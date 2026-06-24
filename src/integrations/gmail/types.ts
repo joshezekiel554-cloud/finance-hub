@@ -65,7 +65,31 @@ export type FinanceSendType =
   // best-effort from the operator Cancel button after the Shopify cancel + QBO
   // void + state flip succeed. Customer-facing → Inbox routes to Waiting (a
   // customer reply auto-reopens). NOTE for Inbox: new send type to recognise.
-  | "order-cancelled";
+  | "order-cancelled"
+  // MANUAL sends — a human in finance hand-wrote + sent this (NOT an automation).
+  // Unlike every automated type above, Inbox SHOWS these by default (they're a
+  // normal sent email, just composed from the finance app); the automated types
+  // are hidden-by-default behind Inbox's "Show finance emails" per-user toggle.
+  // `manual-compose` = the compose modal; `manual-reply` = the per-email AI
+  // draft-reply the operator sends by hand. Both still carry the sender header
+  // (→ attribution + thread→Waiting). See spec 2026-06-24-finance-emails-in-inbox.
+  | "manual-compose"
+  | "manual-reply";
+
+// The MANUAL send types — Inbox shows these by default (everything else in the
+// enum is automated + hidden-by-default). Kept here as the single source of
+// truth so callers + tests agree on the classification.
+export const MANUAL_FINANCE_SEND_TYPES = [
+  "manual-compose",
+  "manual-reply",
+] as const satisfies readonly FinanceSendType[];
+
+export function isManualFinanceSend(type: FinanceSendType | undefined): boolean {
+  return (
+    type !== undefined &&
+    (MANUAL_FINANCE_SEND_TYPES as readonly string[]).includes(type)
+  );
+}
 
 export type SendEmailInput = {
   // Comma-separated list of addresses; we don't split, Gmail does.
@@ -96,6 +120,11 @@ export type SendEmailInput = {
   // per-customer embed includes threads linked by this id. Same id finance
   // passes to the embed (`?customer=<id>`).
   financeCustomerId?: string;
+  // When set, emits `X-Feldart-Finance-Sender: <email>` — the finance USER who
+  // originated this send. Inbox maps it (lowercased) to the matching member and
+  // (a) attributes the sent email to them + (b) applies its normal "user replied
+  // → thread to Waiting" rule. Omit for system/cron sends with no human actor.
+  senderEmail?: string;
 };
 
 export type SendEmailResult = {

@@ -12,7 +12,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
-import { emailLog, tasks } from "../../db/schema/crm.js";
+import { emailLog } from "../../db/schema/crm.js";
 import { auditLog, chaseLog } from "../../db/schema/audit.js";
 import { notifications } from "../../db/schema/notifications.js";
 import { statementSends } from "../../db/schema/crm.js";
@@ -37,6 +37,13 @@ import {
   disputeResolveUnpaid,
 } from "../crm/dispute-actions.js";
 import { applyHoldStatus } from "../holds/apply.js";
+import { createSharedTaskForUser } from "../tasks-shared/create.js";
+import { NoInboxAccountError } from "../tasks-shared/identity.js";
+import { resolveMemberByEmail } from "../../integrations/inbox/members.js";
+import {
+  InboxUnreachableError,
+  InboxApiError,
+} from "../../integrations/inbox/client.js";
 import { createLogger } from "../../lib/logger.js";
 
 const log = createLogger({ module: "ai-agent.tools" });
@@ -773,55 +780,70 @@ type CreateTaskArgsT = z.infer<typeof CreateTaskArgs>;
 const createTaskTool: Tool<CreateTaskArgsT> = {
   name: "create_task",
   description:
-    "Create a team task, optionally linked to a customer, assigned to a team member (by email) with a due date.",
+    "Create a SHARED team task (appears on the unified inbox+finance board), optionally linked to a customer, assigned to a team member (by email) with a due date.",
   argsSchema: CreateTaskArgs,
   execute: async (args, ctx) => {
     try {
-      let assigneeUserId: string | null = null;
+      // The shared store is keyed on the inbox member, resolved by email — so we
+      // need the ACTING user's email (the agent runs as a real finance user).
+      const actor = await db
+        .select({ email: users.email })
+        .from(users)
+        .where(eq(users.id, ctx.userId))
+        .limit(1);
+      const actingUserEmail = actor[0]?.email;
+      if (!actingUserEmail) {
+        return { ok: false, error: "the agent's user has no email on file" };
+      }
+
+      // Optional assignee → inbox member id (the shared board's `ownerId`).
+      // Clean error when the email doesn't map to an inbox member.
+      let ownerId: string | undefined;
       if (args.assigneeEmail) {
-        const u = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, args.assigneeEmail))
-          .limit(1);
-        if (!u[0]) {
+        const member = await resolveMemberByEmail(args.assigneeEmail);
+        if (!member) {
           return {
             ok: false,
-            error: `no team member with email ${args.assigneeEmail}`,
+            error: `no inbox member with email ${args.assigneeEmail}`,
           };
         }
-        assigneeUserId = u[0].id;
+        ownerId = member.teamMemberId;
       }
-      let dueAt: Date | null = null;
+
+      // The model converts natural language to ISO at draft time; we only accept
+      // a parseable instant and forward it to inbox as ISO.
+      let dueAtIso: string | undefined;
       if (args.dueAtIso) {
         const d = new Date(args.dueAtIso);
         if (Number.isNaN(d.getTime())) {
           return { ok: false, error: `invalid dueAtIso: ${args.dueAtIso}` };
         }
-        dueAt = d;
+        dueAtIso = d.toISOString();
       }
-      const id = nanoid(24);
-      await db.insert(tasks).values({
-        id,
-        title: args.title,
-        body: args.body ?? null,
-        customerId: args.customerId ?? null,
-        assigneeUserId: assigneeUserId ?? ctx.userId,
-        createdByUserId: ctx.userId,
-        dueAt,
-        priority: args.priority ?? "normal",
-        aiProposed: true,
-      });
+
+      const task = await createSharedTaskForUser(
+        { email: actingUserEmail },
+        {
+          title: args.title,
+          body: args.body,
+          financeCustomerId: args.customerId,
+          ownerId,
+          dueAt: dueAtIso,
+          priority: args.priority,
+        },
+      );
+
       await db.insert(auditLog).values({
         id: nanoid(24),
         userId: ctx.userId,
         action: "task.create",
         entityType: "task",
-        entityId: id,
+        entityId: task.id,
         before: null,
         after: {
           title: args.title,
-          dueAt: args.dueAtIso ?? null,
+          dueAt: dueAtIso ?? null,
+          shared: true,
           aiProposalId: ctx.proposalId,
         },
       });
@@ -833,60 +855,22 @@ const createTaskTool: Tool<CreateTaskArgsT> = {
           userId: ctx.userId,
           subject: `Task created: ${args.title}`,
           refType: "task",
-          refId: id,
+          refId: task.id,
           meta: { aiProposalId: ctx.proposalId },
         });
       }
-      return { ok: true, note: `task ${id} created` };
+      return { ok: true, note: `task ${task.id} created` };
     } catch (err) {
-      log.error({ err, proposalId: ctx.proposalId }, "create_task failed");
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  },
-};
-
-const CompleteTaskArgs = z.object({ taskId: z.string().max(64) });
-type CompleteTaskArgsT = z.infer<typeof CompleteTaskArgs>;
-
-const completeTaskTool: Tool<CompleteTaskArgsT> = {
-  name: "complete_task",
-  description: "Mark an open task as completed.",
-  argsSchema: CompleteTaskArgs,
-  execute: async (args, ctx) => {
-    try {
-      const rows = await db
-        .select({ id: tasks.id, status: tasks.status, title: tasks.title })
-        .from(tasks)
-        .where(eq(tasks.id, args.taskId))
-        .limit(1);
-      const t = rows[0];
-      if (!t) return { ok: false, error: "task not found" };
-      if (t.status !== "open") {
-        return { ok: false, error: `task is ${t.status}, not open` };
+      if (err instanceof NoInboxAccountError) {
+        return { ok: false, error: "the agent's user has no inbox account" };
       }
-      await db
-        .update(tasks)
-        .set({
-          status: "completed",
-          completedAt: new Date(),
-          completedByUserId: ctx.userId,
-        })
-        .where(eq(tasks.id, args.taskId));
-      await db.insert(auditLog).values({
-        id: nanoid(24),
-        userId: ctx.userId,
-        action: "task.complete",
-        entityType: "task",
-        entityId: args.taskId,
-        before: { status: t.status },
-        after: { status: "completed", aiProposalId: ctx.proposalId },
-      });
-      return { ok: true, note: `task "${t.title}" completed` };
-    } catch (err) {
-      log.error({ err, proposalId: ctx.proposalId }, "complete_task failed");
+      if (err instanceof InboxUnreachableError) {
+        return { ok: false, error: "tasks service unreachable" };
+      }
+      if (err instanceof InboxApiError) {
+        return { ok: false, error: err.message };
+      }
+      log.error({ err, proposalId: ctx.proposalId }, "create_task failed");
       return {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
@@ -1105,7 +1089,6 @@ const TOOLS: Record<string, Tool> = {
   nudge_warehouse_email: nudgeWarehouseEmailTool as Tool,
   create_admin_notification: createAdminNotificationTool as Tool,
   create_task: createTaskTool as Tool,
-  complete_task: completeTaskTool as Tool,
   update_customer_context: updateCustomerContextTool as Tool,
   record_interaction: recordInteractionTool as Tool,
   set_hold_status: setHoldStatusTool as Tool,

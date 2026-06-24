@@ -15,7 +15,7 @@ import InvoicingTodayPage from "./pages/invoicing-today";
 import InvoicingTodayDetailPage from "./pages/invoicing-today-detail";
 import CustomersPage from "./pages/customers";
 import CustomerDetailPage from "./pages/customer-detail";
-import TasksPage from "./pages/tasks";
+import SharedTasksPage from "./pages/shared-tasks";
 import SettingsPage from "./pages/settings";
 import ChasePage from "./pages/chase";
 import StatementsPage from "./pages/statements";
@@ -34,7 +34,6 @@ import OriginReviewPage from "./pages/origin-review";
 import AgentPage from "./pages/agent";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
-import { tasksSearchSchema } from "./lib/search-schemas/tasks";
 import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today";
 import { chaseSearchSchema } from "./lib/search-schemas/chase";
 import { statementsSearchSchema } from "./lib/search-schemas/statements";
@@ -101,12 +100,10 @@ const customerDetailRoute = createRoute({
   beforeLoad: restoreSearchOnEmpty("/customers/$customerId"),
 });
 
-const tasksRoute = createRoute({
+const sharedTasksRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/tasks",
-  component: TasksPage,
-  validateSearch: tasksSearchSchema,
-  beforeLoad: restoreSearchOnEmpty("/tasks"),
+  path: "/shared-tasks",
+  component: SharedTasksPage,
 });
 
 const settingsRoute = createRoute({
@@ -218,7 +215,7 @@ const routeTree = rootRoute.addChildren([
   invoicingTodayDetailRoute,
   customersRoute,
   customerDetailRoute,
-  tasksRoute,
+  sharedTasksRoute,
   settingsRoute,
   chaseRoute,
   statementsRoute,
