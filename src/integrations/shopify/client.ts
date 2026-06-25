@@ -157,21 +157,61 @@ export class ShopifyClient {
   // Cancel an order (REST POST /orders/{id}/cancel.json). `restock` returns
   // line items to Shopify inventory; `reason` is Shopify's enum
   // (customer|inventory|fraud|declined|other). Throws ShopifyApiError on non-2xx.
+  // Cancel an order. Shopify REMOVED the REST `/orders/{id}/cancel.json`
+  // endpoint (it 404s on API 2026-01) — order cancellation is GraphQL-only now,
+  // via the `orderCancel` mutation. Notes:
+  //   - it's ASYNC (returns a `job`); we treat no-userErrors as accepted.
+  //   - authorized payments are VOIDED regardless of refundMethod; we OMIT
+  //     refundMethod so there's no forced refund (the hold cancels are unpaid
+  //     prepay / overdue orders) — mirrors the old REST behaviour.
+  //   - `reason` is a GraphQL enum (OrderCancelReason); we map the legacy
+  //     lowercase REST reasons onto it.
   async cancelOrder(
     orderId: string,
     opts: { restock?: boolean; reason?: string; notifyCustomer?: boolean } = {},
   ): Promise<void> {
-    const path = `/orders/${orderId}/cancel.json`;
-    const res = await this.request(path, {
-      method: "POST",
-      body: JSON.stringify({
-        restock: opts.restock ?? true,
-        reason: opts.reason ?? "other",
-        email: opts.notifyCustomer ?? false,
-      }),
+    const REASONS: Record<string, string> = {
+      customer: "CUSTOMER",
+      declined: "DECLINED",
+      fraud: "FRAUD",
+      inventory: "INVENTORY",
+      other: "OTHER",
+      staff: "STAFF",
+    };
+    const reason = REASONS[(opts.reason ?? "other").toLowerCase()] ?? "OTHER";
+    const gid = orderId.startsWith("gid://")
+      ? orderId
+      : `gid://shopify/Order/${orderId}`;
+    const mutation = `mutation orderCancel($orderId: ID!, $reason: OrderCancelReason!, $restock: Boolean!, $notifyCustomer: Boolean) {
+  orderCancel(orderId: $orderId, reason: $reason, restock: $restock, notifyCustomer: $notifyCustomer) {
+    job { id }
+    orderCancelUserErrors { field message code }
+    userErrors { field message }
+  }
+}`;
+    type CancelResp = {
+      orderCancel: {
+        job: { id: string } | null;
+        orderCancelUserErrors: {
+          field: string | null;
+          message: string;
+          code: string | null;
+        }[];
+        userErrors: { field: string | null; message: string }[];
+      } | null;
+    };
+    const data = await this.graphql<CancelResp>(mutation, {
+      orderId: gid,
+      reason,
+      restock: opts.restock ?? true,
+      notifyCustomer: opts.notifyCustomer ?? false,
     });
-    if (!res.ok) {
-      throw new ShopifyApiError(res.status, path, await res.text());
+    const errs = [
+      ...(data.orderCancel?.orderCancelUserErrors ?? []),
+      ...(data.orderCancel?.userErrors ?? []),
+    ];
+    if (errs.length > 0) {
+      throw new ShopifyApiError(422, "orderCancel", JSON.stringify(errs));
     }
   }
 
