@@ -372,6 +372,13 @@
       "when": 1781810000000,
       "tag": "0052_curious_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "5",
+      "when": 1782408955627,
+      "tag": "0053_nice_bucky",
+      "breakpoints": true
     }
   ]
 }

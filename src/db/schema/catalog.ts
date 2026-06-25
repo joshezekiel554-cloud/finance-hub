@@ -1,4 +1,5 @@
 import {
+  boolean,
   decimal,
   index,
   int,
@@ -99,8 +100,15 @@ export const orders = mysqlTable(
       .default("none")
       .notNull(),
     // Why it's held: customer_on_hold | payment_upfront_unpaid |
-    // overdue_non_communicating. Captured at the moment it goes on_hold.
+    // overdue_non_communicating | manual. Captured at the moment it goes on_hold.
     holdReason: varchar("hold_reason", { length: 40 }),
+    // Operator's optional free-text reason/note on a MANUAL hold (manualHold).
+    // NULL for auto-detected holds.
+    holdNote: varchar("hold_note", { length: 500 }),
+    // Whether this hold participates in the Day-0/7/10 email ladder. Default TRUE
+    // so auto-detected holds keep laddering unchanged; manual internal-only holds
+    // set this FALSE to suppress the customer-facing chase emails.
+    holdLadderEnabled: boolean("hold_ladder_enabled").notNull().default(true),
     // When it entered on_hold — drives the email-ladder timers + the 7-day flag.
     holdStartedAt: timestamp("hold_started_at"),
     // Release ("good to send" or auto-clear when the reason resolves).

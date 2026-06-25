@@ -13,7 +13,7 @@
 // resolved holds first, so a customer who pays mid-ladder stops getting chased.
 // Day-10 only NOTIFIES; the actual cancel is an operator button (Phase 5).
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { orders } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
@@ -42,11 +42,17 @@ export function reasonClause(reason: LadderReason): string {
   if (reason === "payment_upfront_unpaid") {
     return "pending payment for this order";
   }
+  if (reason === "manual") {
+    return "pending review of your order";
+  }
   return "pending settlement of your overdue account balance";
 }
 export function actionClause(reason: LadderReason): string {
   if (reason === "payment_upfront_unpaid") {
     return "complete payment for the order";
+  }
+  if (reason === "manual") {
+    return "contact us to resolve this";
   }
   return "settle your outstanding balance (or contact us to arrange it)";
 }
@@ -94,7 +100,9 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
     })
     .from(orders)
     .innerJoin(customers, eq(orders.customerId, customers.id))
-    .where(eq(orders.holdState, "on_hold"))
+    // Only ladder-enabled holds — internal-only manual holds
+    // (holdLadderEnabled=false) are excluded from the ENTIRE ladder.
+    .where(and(eq(orders.holdState, "on_hold"), eq(orders.holdLadderEnabled, true)))
     .limit(500);
 
   const result: RunHoldLadderResult = {
