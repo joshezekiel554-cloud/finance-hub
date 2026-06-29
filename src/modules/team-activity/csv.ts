@@ -8,10 +8,16 @@ import { londonDayKey } from "./helpers.js";
 const HEADER = ["date", "time", "source", "type", "title", "detail", "customer"] as const;
 
 function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
+  let v = value;
+  // Neutralize spreadsheet formula injection: a field that begins with a
+  // formula trigger (= + - @, or a leading tab/CR) gets a single-quote prefix so
+  // Excel/Sheets treats it as text. Subject lines and customer names are
+  // user-influenced, so this matters even though the report is admin-only.
+  if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+  if (/[",\r\n]/.test(v)) {
+    return `"${v.replace(/"/g, '""')}"`;
   }
-  return value;
+  return v;
 }
 
 const timeFmt = new Intl.DateTimeFormat("en-GB", {

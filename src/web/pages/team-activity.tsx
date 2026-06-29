@@ -1,7 +1,18 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Download, Mail, Phone, CheckSquare, Ban, FileText } from "lucide-react";
+import {
+  Download,
+  Mail,
+  Phone,
+  CheckSquare,
+  Ban,
+  FileText,
+  MessageSquare,
+  StickyNote,
+  RotateCcw,
+  Lock,
+} from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Select } from "../components/ui/select";
@@ -115,49 +126,86 @@ function computeRange(key: RangeKey, customFrom: string, customTo: string): { fr
 }
 
 // --- Per-type dot/icon styling (design tokens only) -------------------------
-// accent-info=email, accent-success=call, 290-hue=task, accent-warning=action,
-// accent-primary=send, muted=active marker. The 290-hue (task) has no token, so
-// it's an oklch value matching the approved mockup — NOT an ad-hoc hex.
+// The timeline merges BOTH finance event types (email_sent, call, send, action,
+// active_marker) AND inbox event types (email_reply, thread_status,
+// thread_comment, thread_mention, task_created/completed/status/assigned/comment,
+// note, return_created). Both streams are normalized into one of six visual
+// buckets so the dot colors stay the approved mockup's palette:
+//   accent-info=email · accent-success=call · 290-hue=task ·
+//   accent-primary=send · accent-warning=action · muted=active marker.
+// The 290-hue (task) has no token, so it's an oklch value matching the mockup —
+// NOT an ad-hoc hex.
 
 const TASK_HUE = "oklch(62% 0.17 290)";
+
+type Bucket = "email" | "call" | "task" | "send" | "action" | "active";
+
+/** Normalize any finance- or inbox-side event type into a visual/filter bucket. */
+function bucketFor(type: string): Bucket {
+  if (type === "email_sent" || type === "email_reply") return "email";
+  if (type === "call") return "call";
+  if (type.startsWith("task")) return "task";
+  if (type === "send") return "send";
+  if (type === "active_marker") return "active";
+  // thread_status / thread_comment / thread_mention / note / return_created /
+  // finance audit "action" all fall here.
+  return "action";
+}
 
 type DotStyle = { className: string; style?: React.CSSProperties; icon: React.ReactNode };
 
 function dotStyleFor(ev: ActivityEvent): DotStyle {
   const iconCls = "size-3.5 text-white";
-  switch (ev.type) {
-    case "email_sent":
-      return { className: "bg-accent-info", icon: <Mail className={iconCls} /> };
+  // Icon is chosen by the SPECIFIC type (so comments, notes and returns read
+  // right even though they share the "action" bucket color).
+  const icon = ((): React.ReactNode => {
+    const t = ev.type;
+    if (t === "email_sent" || t === "email_reply") return <Mail className={iconCls} />;
+    if (t === "call") return <Phone className={iconCls} />;
+    if (t.startsWith("task")) return <CheckSquare className={iconCls} />;
+    if (t === "send") return <FileText className={iconCls} />;
+    if (t === "thread_comment" || t === "thread_mention")
+      return <MessageSquare className={iconCls} />;
+    if (t === "note") return <StickyNote className={iconCls} />;
+    if (t === "return_created") return <RotateCcw className={iconCls} />;
+    if (t === "active_marker") return <span className="size-2 rounded-full bg-white" />;
+    return <Ban className={iconCls} />; // finance holds/cancel + thread_status
+  })();
+
+  switch (bucketFor(ev.type)) {
+    case "email":
+      return { className: "bg-accent-info", icon };
     case "call":
-      return { className: "bg-accent-success", icon: <Phone className={iconCls} /> };
+      return { className: "bg-accent-success", icon };
     case "task":
-      return { className: "", style: { backgroundColor: TASK_HUE }, icon: <CheckSquare className={iconCls} /> };
+      return { className: "", style: { backgroundColor: TASK_HUE }, icon };
     case "send":
-      return { className: "bg-accent-primary", icon: <FileText className={iconCls} /> };
+      return { className: "bg-accent-primary", icon };
     case "action":
-      return { className: "bg-accent-warning", icon: <Ban className={iconCls} /> };
-    case "active_marker":
+      return { className: "bg-accent-warning", icon };
+    case "active":
     default:
-      return { className: "bg-muted", icon: <span className="size-2 rounded-full bg-white" /> };
+      return { className: "bg-muted", icon };
   }
 }
 
-// Which chip a given event type belongs under.
+// Which chip a given event belongs under.
 type ChipKey = "all" | "emails" | "calls" | "tasks" | "actions";
 
 function chipMatches(chip: ChipKey, ev: ActivityEvent): boolean {
   if (chip === "all") return true;
   // Active markers always show (they're context, not a filterable category).
   if (ev.type === "active_marker") return true;
+  const b = bucketFor(ev.type);
   switch (chip) {
     case "emails":
-      return ev.type === "email_sent";
+      return b === "email";
     case "calls":
-      return ev.type === "call";
+      return b === "call";
     case "tasks":
-      return ev.type === "task";
+      return b === "task";
     case "actions":
-      return ev.type === "action" || ev.type === "send";
+      return b === "action" || b === "send";
   }
 }
 
@@ -180,6 +228,18 @@ const timeFmt = new Intl.DateTimeFormat("en-GB", {
   minute: "2-digit",
   hour12: false,
 });
+
+// Europe/London YYYY-MM-DD for "is this day header today?" — drives the
+// "Today · …" prefix on the current day (matches the mockup).
+const londonDayKeyFmt = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/London",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+function isLondonToday(dayKey: string): boolean {
+  return dayKey === londonDayKeyFmt.format(new Date());
+}
 
 export default function TeamActivityPage() {
   const [rangeKey, setRangeKey] = useState<RangeKey>("this_week");
@@ -237,7 +297,8 @@ export default function TeamActivityPage() {
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-xl font-bold tracking-tight">Team Activity</h1>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-default bg-elevated px-2.5 py-1 text-xs font-semibold text-muted">
-          Admins only
+          <Lock className="size-3" />
+          Admins only · Josh &amp; Shaya
         </span>
       </div>
       <p className="mb-5 text-sm text-muted">
@@ -467,6 +528,7 @@ function Timeline({
       {days.map((day) => (
         <div key={day.day}>
           <div className="sticky top-0 z-10 border-b border-default bg-subtle px-4 py-2 text-xs font-bold uppercase tracking-wide text-secondary">
+            {isLondonToday(day.day) ? "Today · " : ""}
             {day.label} · {formatMinutes(day.activeMinutes)} active
           </div>
           {day.events.map((ev) => (
