@@ -339,3 +339,72 @@ describe("listOrdersSince — pagination", () => {
     expect(page.items).toHaveLength(1);
   });
 });
+
+// cancelOrder moved REST → GraphQL orderCancel (Shopify removed the REST
+// /orders/{id}/cancel.json endpoint — it 404s on 2026-01).
+describe("cancelOrder (GraphQL orderCancel)", () => {
+  function okCancelResponse() {
+    return jsonResponse({
+      data: {
+        orderCancel: {
+          job: { id: "gid://shopify/Job/1" },
+          orderCancelUserErrors: [],
+          userErrors: [],
+        },
+      },
+    });
+  }
+
+  it("posts the orderCancel mutation with a GID, mapped reason + restock to /graphql.json", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init: RequestInit) => okCancelResponse());
+    const client = makeClient(fetchImpl as unknown as typeof fetch);
+    await client.cancelOrder("7610803159325", {
+      restock: false,
+      reason: "other",
+      notifyCustomer: false,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toContain("/graphql.json");
+    const body = JSON.parse(init.body as string);
+    expect(body.query).toContain("orderCancel(");
+    expect(body.variables).toEqual({
+      orderId: "gid://shopify/Order/7610803159325",
+      reason: "OTHER",
+      restock: false,
+      notifyCustomer: false,
+    });
+  });
+
+  it("passes an already-GID id through + defaults reason to OTHER, restock true", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init: RequestInit) => okCancelResponse());
+    const client = makeClient(fetchImpl as unknown as typeof fetch);
+    await client.cancelOrder("gid://shopify/Order/999", {});
+    const body = JSON.parse(
+      fetchImpl.mock.calls[0]![1].body as string,
+    );
+    expect(body.variables.orderId).toBe("gid://shopify/Order/999");
+    expect(body.variables.reason).toBe("OTHER");
+    expect(body.variables.restock).toBe(true);
+  });
+
+  it("throws ShopifyApiError when orderCancel returns userErrors", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        data: {
+          orderCancel: {
+            job: null,
+            orderCancelUserErrors: [
+              { field: null, message: "Already cancelled", code: "INVALID" },
+            ],
+            userErrors: [],
+          },
+        },
+      }),
+    );
+    const client = makeClient(fetchImpl as unknown as typeof fetch);
+    await expect(client.cancelOrder("123", {})).rejects.toBeInstanceOf(
+      ShopifyApiError,
+    );
+  });
+});

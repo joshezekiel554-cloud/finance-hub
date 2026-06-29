@@ -1412,7 +1412,14 @@ function OrderTrackingLink({ row }: { row: OrderRow }) {
   );
 }
 
+// An order is "actively held" only while on_hold — none/released/cancelled
+// rows can be (re-)placed on hold by the operator.
+function orderIsActivelyHeld(row: OrderRow): boolean {
+  return row.holdState === "on_hold";
+}
+
 function OrdersPanel({ customerId }: { customerId: string }) {
+  const queryClient = useQueryClient();
   const { data, isPending, isError, error } = useQuery<{ rows: OrderRow[] }>({
     queryKey: ["customer-orders", customerId],
     queryFn: async () => {
@@ -1422,6 +1429,61 @@ function OrdersPanel({ customerId }: { customerId: string }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
+  });
+
+  // Manual "Place on hold" dialog — the order being held + its form state.
+  const [holdTarget, setHoldTarget] = useState<OrderRow | null>(null);
+  const [holdNote, setHoldNote] = useState("");
+  const [holdLadder, setHoldLadder] = useState(false);
+  const [holdError, setHoldError] = useState<string | null>(null);
+  const [holdSuccess, setHoldSuccess] = useState<string | null>(null);
+
+  // Same inline auto-fading pill convention as the rest of this page (no
+  // ToastProvider is mounted here).
+  useEffect(() => {
+    if (!holdSuccess) return;
+    const t = setTimeout(() => setHoldSuccess(null), 6000);
+    return () => clearTimeout(t);
+  }, [holdSuccess]);
+
+  const openHoldDialog = (row: OrderRow) => {
+    setHoldTarget(row);
+    setHoldNote("");
+    setHoldLadder(false);
+    setHoldError(null);
+  };
+
+  const holdMutation = useMutation<void, Error, void>({
+    mutationFn: async () => {
+      if (!holdTarget) return;
+      const res = await fetch(
+        `/api/orders/${encodeURIComponent(holdTarget.id)}/manual-hold`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            note: holdNote.trim() || undefined,
+            customerLadder: holdLadder,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+    },
+    onMutate: () => setHoldError(null),
+    onSuccess: () => {
+      const label =
+        holdTarget?.orderNumber ?? `#${holdTarget?.shopifyOrderId ?? ""}`;
+      setHoldSuccess(`${label} placed on hold`);
+      setHoldTarget(null);
+      void queryClient.invalidateQueries({
+        queryKey: ["customer-orders", customerId],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+    },
+    onError: (e) => setHoldError(e.message),
   });
 
   if (isPending) {
@@ -1489,6 +1551,7 @@ function OrdersPanel({ customerId }: { customerId: string }) {
                 <th className="px-3 py-2 text-right font-medium">Total</th>
                 <th className="px-3 py-2 font-medium">Payment</th>
                 <th className="px-3 py-2 font-medium">Fulfilment</th>
+                <th className="px-3 py-2 text-right font-medium" />
               </tr>
             </thead>
             <tbody className="divide-y divide-subtle">
@@ -1526,6 +1589,17 @@ function OrdersPanel({ customerId }: { customerId: string }) {
                         </Badge>
                         <OrderTrackingLink row={row} />
                       </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">
+                      {orderIsActivelyHeld(row) ? null : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openHoldDialog(row)}
+                        >
+                          Place on hold
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -1573,11 +1647,95 @@ function OrdersPanel({ customerId }: { customerId: string }) {
                   </Badge>
                 </div>
                 <OrderTrackingLink row={row} />
+                {orderIsActivelyHeld(row) ? null : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => openHoldDialog(row)}
+                  >
+                    Place on hold
+                  </Button>
+                )}
               </CardBody>
             </Card>
           );
         })}
       </div>
+
+      {holdSuccess && (
+        <p className="px-1 text-xs text-accent-success">{holdSuccess}</p>
+      )}
+
+      {/* Manual "Place on hold" dialog — internal-only by default; the operator
+          can opt the order into the customer chase ladder. */}
+      <Dialog
+        open={holdTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setHoldTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Place order on hold</DialogTitle>
+            <DialogDescription>
+              {holdTarget
+                ? `${holdTarget.orderNumber ?? `#${holdTarget.shopifyOrderId}`} — the warehouse is alerted immediately. The customer is NOT emailed unless you opt into the chase ladder below.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="manual-hold-note"
+                className="text-sm font-medium text-primary"
+              >
+                Reason (optional)
+              </label>
+              <textarea
+                id="manual-hold-note"
+                value={holdNote}
+                onChange={(e) => setHoldNote(e.target.value)}
+                maxLength={500}
+                rows={3}
+                placeholder="e.g. awaiting stock check"
+                className="rounded-md border border-default bg-base px-3 py-2 text-sm text-primary placeholder:text-muted focus:border-strong focus:outline-none focus:ring-2 focus:ring-accent-primary/40"
+              />
+            </div>
+            <label className="flex items-start gap-2 text-sm text-secondary">
+              <input
+                type="checkbox"
+                checked={holdLadder}
+                onChange={(e) => setHoldLadder(e.target.checked)}
+                className="mt-0.5 size-4 rounded border-default text-accent-primary focus:ring-accent-primary/40"
+              />
+              <span>
+                Also start the customer chase ladder (Day 0 / 7 / 10 emails to
+                the customer)
+              </span>
+            </label>
+            {holdError && (
+              <p className="text-xs text-accent-danger">{holdError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => setHoldTarget(null)}
+              disabled={holdMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => holdMutation.mutate()}
+              loading={holdMutation.isPending}
+            >
+              Place on hold
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

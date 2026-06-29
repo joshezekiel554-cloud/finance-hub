@@ -200,6 +200,106 @@ export async function placeOnHold(
   return { ok: true };
 }
 
+// Manually place ANY (not-currently-held) order on hold from the Orders tab.
+// INTERNAL-ONLY by default: fires the immediate warehouse hold-alert (so the
+// team sees it) but, unless opts.customerLadder is set, leaves the order OUT of
+// the Day-0/7/10 customer chase ladder (holdLadderEnabled=false → excluded by
+// runHoldLadder). opts.note is the operator's optional short reason.
+// userId: operator string, or null for a board-driven action (see releaseHold).
+export async function manualHold(
+  orderId: string,
+  userId: string | null,
+  opts: { note?: string | null; customerLadder?: boolean },
+): Promise<HoldActionResult> {
+  const rows = await db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      shopifyOrderId: orders.shopifyOrderId,
+      total: orders.total,
+      holdState: orders.holdState,
+      customerId: orders.customerId,
+      customerName: customers.displayName,
+    })
+    .from(orders)
+    .leftJoin(customers, eq(orders.customerId, customers.id))
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  const o = rows[0];
+  if (!o) return { ok: false, reason: "not_found" };
+  if (o.holdState === "on_hold") return { ok: false, reason: "already_on_hold" };
+
+  const orderNumber = o.orderNumber ?? `#${o.shopifyOrderId}`;
+  const note = opts.note?.trim() || null;
+  const customerLadder = opts.customerLadder === true;
+  const now = new Date();
+  const settings = await loadAppSettings();
+  const recipients = loadInternalHoldRecipients(settings);
+
+  let threadId: string | null = null;
+  let messageId: string | null = null;
+  if (!env.SHADOW_MODE && recipients) {
+    // Immediate INTERNAL warehouse hold-alert — reuse the operator-editable
+    // hold_alert template (vars we don't have strip to blank via render).
+    const orderTotal = Number.isFinite(Number(o.total))
+      ? `$${Number(o.total).toFixed(2)}`
+      : "—";
+    const tpl = loadOrderTemplate(settings, "hold_alert");
+    const rendered = renderOrderTemplate(tpl, {
+      order_number: orderNumber,
+      customer_name: o.customerName ?? "(unknown customer)",
+      reason_line: `Reason: ${note || "Manually placed on hold by the accounts team."}`,
+      order_total: orderTotal,
+      hold_status: "manual",
+      customer_url: o.customerId
+        ? `${env.PUBLIC_URL}/customers/${o.customerId}`
+        : "—",
+    });
+    const { sendEmail } = await import("../../integrations/gmail/send.js");
+    try {
+      const r = await sendEmail({
+        to: recipients,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        financeSendType: "hold-alert",
+        financeCustomerId: o.customerId ?? undefined,
+      });
+      threadId = r.threadId || null;
+      messageId = r.messageId || null;
+    } catch (err) {
+      // Best-effort: never block the state change on the email.
+      log.error({ err, orderId, orderNumber }, "manual-hold: warehouse email failed");
+    }
+  }
+
+  await db
+    .update(orders)
+    .set({
+      holdState: "on_hold",
+      holdReason: "manual",
+      holdNote: note,
+      holdLadderEnabled: customerLadder,
+      holdStartedAt: now,
+      holdAlertedAt: now,
+      holdAlertThreadId: threadId,
+      holdAlertMessageId: messageId,
+    })
+    .where(eq(orders.id, orderId));
+  await recordHoldTransition({
+    orderId,
+    userId,
+    action: "order.hold_started",
+    before: { holdState: o.holdState },
+    after: { holdState: "on_hold", holdReason: "manual", via: "manual", customerLadder },
+  });
+  log.info(
+    { orderId, orderNumber, userId, customerLadder },
+    "order placed on hold (manual)",
+  );
+  return { ok: true };
+}
+
 export type CancelResult =
   | { ok: true; shopifyCancelled: boolean; qboVoided: boolean; note: string }
   | { ok: false; reason: string };
