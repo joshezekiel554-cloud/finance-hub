@@ -13,6 +13,7 @@ import {
   RotateCcw,
   CalendarRange,
   Bot,
+  BarChart3,
   LogOut,
   Menu,
 } from "lucide-react";
@@ -22,6 +23,8 @@ import { UserPill } from "./components/user-pill";
 import { MobileNavDrawer, type NavItem } from "./components/mobile-nav-drawer";
 import { AgentProvider, useAgent } from "./agent/agent-store";
 import { AgentPanel } from "./agent/agent-panel";
+import { useHeartbeat } from "./lib/use-heartbeat";
+import { useMe } from "./lib/use-me";
 
 const baseNavItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -40,12 +43,22 @@ const baseNavItems: NavItem[] = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
+// Admin-only nav items, appended for users whose /api/me.isAdmin is true.
+const adminNavItems: NavItem[] = [
+  { to: "/team-activity", label: "Team Activity", icon: BarChart3 },
+];
+
 export default function App({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Nav is now static — the shared board is the permanent "Tasks" destination
-  // (the native board has been retired, so there's nothing left to flag-gate).
-  const navItems = baseNavItems;
+  // App-wide active-time heartbeat (visible + recently-active tabs only).
+  useHeartbeat();
+
+  // Admin-only nav (Team Activity) is appended when /api/me reports admin.
+  // The route itself is independently gated server-side + via beforeLoad, so a
+  // non-admin who deep-links is still bounced — this only hides the link.
+  const { data: me } = useMe();
+  const navItems = me?.isAdmin ? [...baseNavItems, ...adminNavItems] : baseNavItems;
 
   return (
     <AgentProvider>

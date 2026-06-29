@@ -379,6 +379,13 @@
       "when": 1782408955627,
       "tag": "0053_nice_bucky",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "5",
+      "when": 1782744422840,
+      "tag": "0054_rapid_galactus",
+      "breakpoints": true
     }
   ]
 }

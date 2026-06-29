@@ -41,6 +41,7 @@ import agentRoute from "./agent.js";
 import extRoute from "./ext.js";
 import extActionsRoute from "./ext-actions.js";
 import ordersRoute from "./orders.js";
+import teamActivityRoute from "./team-activity.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -105,6 +106,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(agentRoute, { prefix: "/api/agent" });
   await app.register(extRoute, { prefix: "/api/ext" });
   await app.register(extActionsRoute, { prefix: "/api/ext" });
+  // Team Activity report + the app-wide heartbeat sink. Mounted at /api so the
+  // plugin owns both /api/heartbeat and /api/team-activity/*.
+  await app.register(teamActivityRoute, { prefix: "/api" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });
