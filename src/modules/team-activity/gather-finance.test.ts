@@ -36,7 +36,7 @@ vi.mock("../../lib/logger.js", () => ({
 }));
 
 import { gatherFinanceActivity, buildActiveMarkers } from "./gather-finance.js";
-import { emailLog, statementSends } from "../../db/schema/crm.js";
+import { activities, emailLog, statementSends } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { invoiceChases } from "../../db/schema/invoices.js";
@@ -57,6 +57,16 @@ function setRows() {
       threadId: "t-9",
       customerId: "c1",
       customerName: "Acme",
+    },
+  ]);
+  // finance-app email the user composed (activity log, NOT email_log).
+  rowsByTable.set(activities, [
+    {
+      id: "act-em1",
+      occurredAt: new Date("2026-06-29T09:30:00.000Z"),
+      subject: "Chase L1",
+      customerId: "c4",
+      customerName: "Delco",
     },
   ]);
   rowsByTable.set(phoneCommunications, [
@@ -120,7 +130,8 @@ describe("gatherFinanceActivity", () => {
   it("normalizes emails, calls, audit actions; counts them", async () => {
     const res = await gatherFinanceActivity("u1", FROM, TO);
 
-    expect(res.counts.emailsSent).toBe(1);
+    // 1 from email_log (AI-agent path) + 1 from the activity log (manual send).
+    expect(res.counts.emailsSent).toBe(2);
     expect(res.counts.calls).toBe(1);
     expect(res.counts.totalTalkSeconds).toBe(372);
     expect(res.counts.holds).toBe(1);
@@ -130,6 +141,12 @@ describe("gatherFinanceActivity", () => {
     const email = res.events.find((e) => e.id === "email-em1");
     expect(email?.title).toBe('Emailed Acme — "Re: Invoice"');
     expect(email?.type).toBe("email_sent");
+
+    // finance-app manual compose/chase email, sourced from the activity log.
+    const actEmail = res.events.find((e) => e.id === "email-act-act-em1");
+    expect(actEmail?.type).toBe("email_sent");
+    expect(actEmail?.title).toBe('Emailed Delco — "Chase L1"');
+    expect(actEmail?.detail).toBe("outbound · finance hub");
 
     const call = res.events.find((e) => e.id === "call-ph1");
     expect(call?.type).toBe("call");

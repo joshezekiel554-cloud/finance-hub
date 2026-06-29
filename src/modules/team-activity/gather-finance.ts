@@ -17,8 +17,7 @@
 
 import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { emailLog } from "../../db/schema/crm.js";
-import { statementSends } from "../../db/schema/crm.js";
+import { activities, emailLog, statementSends } from "../../db/schema/crm.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { phoneCommunications } from "../../db/schema/vocatech.js";
 import { invoiceChases, invoices } from "../../db/schema/invoices.js";
@@ -79,7 +78,8 @@ export async function gatherFinanceActivity(
   const extMap = parseExtensionUserMap(extRows[0]?.value);
   const userExtensions = extensionsForUser(extMap, userId);
 
-  const [emailRows, callRows, auditRows, minuteRows] = await Promise.all([
+  const [emailRows, callRows, auditRows, minuteRows, activityEmailRows] =
+    await Promise.all([
     // --- outbound emails ----------------------------------------------------
     db
       .select({
@@ -161,6 +161,31 @@ export async function gatherFinanceActivity(
           lt(userActiveMinutes.minuteUtc, toMinute),
         ),
       ),
+
+    // --- finance-app emails the user SENT (manual compose + chase) ----------
+    // Attributed in the ACTIVITY log (kind=email_out, userId), NOT email_log:
+    // the poller writes email_log "outbound" rows with userId=null, so manual
+    // sends never get a user-stamped email_log row. This source is DISJOINT
+    // from the email_log(outbound, userId) query above (which captures AI-agent
+    // sends) — together they = every finance email the user sent, no double-count.
+    db
+      .select({
+        id: activities.id,
+        occurredAt: activities.occurredAt,
+        subject: activities.subject,
+        customerId: activities.customerId,
+        customerName: customers.displayName,
+      })
+      .from(activities)
+      .leftJoin(customers, eq(activities.customerId, customers.id))
+      .where(
+        and(
+          eq(activities.userId, userId),
+          eq(activities.kind, "email_out"),
+          gte(activities.occurredAt, from),
+          lt(activities.occurredAt, to),
+        ),
+      ),
   ]);
 
   const events: ActivityEvent[] = [];
@@ -185,6 +210,24 @@ export async function gatherFinanceActivity(
       type: "email_sent",
       title: `Emailed ${who} — "${subj}"`,
       detail: r.threadId ? `outbound · thread ${r.threadId}` : "outbound",
+      customerId: r.customerId,
+      customerName: r.customerName,
+      link: r.customerId ? { kind: "customer", id: r.customerId } : null,
+    });
+  }
+
+  // --- finance-app emails (activity log: manual compose + chase sends) ------
+  for (const r of activityEmailRows) {
+    counts.emailsSent += 1;
+    const who = r.customerName ?? "customer";
+    const subj = r.subject ?? "(no subject)";
+    events.push({
+      id: `email-act-${r.id}`,
+      at: r.occurredAt.toISOString(),
+      source: "finance",
+      type: "email_sent",
+      title: `Emailed ${who} — "${subj}"`,
+      detail: "outbound · finance hub",
       customerId: r.customerId,
       customerName: r.customerName,
       link: r.customerId ? { kind: "customer", id: r.customerId } : null,
