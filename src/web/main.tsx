@@ -34,7 +34,7 @@ import AiTrainingPage from "./pages/ai-training";
 import OriginReviewPage from "./pages/origin-review";
 import AgentPage from "./pages/agent";
 import TeamActivityPage from "./pages/team-activity";
-import type { Me } from "./lib/use-me";
+import type { MeResponse } from "./lib/use-me";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today";
@@ -220,17 +220,19 @@ const teamActivityRoute = createRoute({
   path: "/team-activity",
   component: TeamActivityPage,
   beforeLoad: async () => {
-    const me = await queryClient.ensureQueryData<Me>({
+    // Cache the WRAPPED { user } shape under ["me"] — the same shape UserPill /
+    // useMe / the other consumers cache. (Caching the unwrapped user here is
+    // what crashed UserPill when this guard ran first.)
+    const data = await queryClient.ensureQueryData<MeResponse>({
       queryKey: ["me"],
       queryFn: async () => {
         const res = await fetch("/api/me");
         if (!res.ok) throw new Error(`GET /api/me failed: ${res.status}`);
-        const data = (await res.json()) as { user: Me };
-        return data.user;
+        return (await res.json()) as MeResponse;
       },
       staleTime: 5 * 60_000,
     });
-    if (!me?.isAdmin) {
+    if (!data?.user?.isAdmin) {
       throw redirect({ to: "/" });
     }
   },

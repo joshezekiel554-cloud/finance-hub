@@ -5,6 +5,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "../lib/cn";
 
+// The ["me"] query is cached in its WRAPPED shape ({ user: {...} }) — every
+// consumer (this pill, useFilterPersistence, the invoice-reminder dialog, and
+// useMe via a `select`) reads that same wrapped value. Don't cache an unwrapped
+// shape under this key or it collides.
 type MeResponse = {
   user: {
     id: string;
@@ -35,7 +39,7 @@ export function UserPill() {
     refetchOnWindowFocus: false,
   });
 
-  if (isPending || !data) {
+  if (isPending || !data?.user) {
     return (
       <div className="flex items-center gap-2 rounded-full border border-default bg-subtle px-2.5 py-1 text-xs text-muted">
         <span className="size-6 animate-pulse rounded-full bg-base" />
