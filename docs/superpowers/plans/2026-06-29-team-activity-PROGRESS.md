@@ -10,14 +10,22 @@ Mockup: `.superpowers/team-activity-mockup.html` (operator approved on radio).
 - Tasks: Option B — inbox adds forward-only task-activity log → "Tasks completed" (+ "created" from history).
 - Extension 102 → Hillel (calls attributed via app_settings `phone_extension_user_map`).
 
-## Build status
-- [x] Spec + mockup approved by operator (2026-06-29 ~15:40)
-- [x] Inbox endpoint contract handed to inbox team (GET /api/svc/member-activity)
-- [~] FINANCE side — building in worktree via subagent `ta-builder` (DB user_active_minutes + migration, POST /api/heartbeat + app-wide hook, src/modules/team-activity aggregation+merge, routes incl CSV, /team-activity page + nav, tests). NOT yet reviewed/merged/deployed.
-- [ ] INBOX side — inbox team building: member-activity endpoint + minute-granularity heartbeat + forward-only task-activity log.
-- [ ] Opus 4.8 review of finance diff
-- [ ] Merge + deploy (GH Actions) + seed `phone_extension_user_map` {102: Hillel userId 4cd54aa2-e8d9-49ca-bb71-b5457ec57fd7}
-- [ ] Operator live smoke
+## Build status — SHIPPED 2026-06-29 (operator live-smoke pending)
+- [x] Spec + mockup approved by operator (~15:40)
+- [x] Inbox endpoint contract handed over; INBOX side DEPLOYED + verified live (member-activity endpoint, minute-heartbeat, forward-only TaskActivity log). Inbox main `8c3e1f7`+ (ActiveMinute/TaskActivity migrations).
+- [x] FINANCE build (worktree subagent `ta-builder`): DB user_active_minutes + migration 0054, POST /api/heartbeat + app-wide hook, src/modules/team-activity aggregation+merge, routes incl CSV, /team-activity page + nav, tests.
+- [x] Review (did it myself on Opus 4.8 — the 2 spawned Opus reviewers hung). Found+fixed: inbox event-type categorization (commit `1f51159`), CSV formula-injection, lock-badge + Today-prefix mockup polish.
+- [x] Merged to main `d87b087` (migration 0054). Pushed.
+- [x] DEPLOYED — GH Actions hit the Hostinger SSH flake (VPS unreachable 2222+22), so deployed MANUALLY over `ssh finance-vps` (local `npm run build` → tar dist → `set -a; . ./.env.production` → `npm run db:migrate` → `pm2 reload finance-hub`). /health 200, route 401-guarded.
+- [x] Seeded prod `phone_extension_user_map` = {"102":"4cd54aa2-e8d9-49ca-bb71-b5457ec57fd7"} (Hillel).
+- [x] POST-DEPLOY FIXES (manual redeploys, GH flake ongoing):
+  - `e667f1d` — `["me"]` query cache-shape collision: UserPill/useFilterPersistence/invoice-reminder cache the WRAPPED {user}; the new useMe + route guard cached UNWRAPPED under the same key → crash on /team-activity (guard-first) + hidden nav link (pill-first). Fix: all consumers cache wrapped; useMe uses `select`. VERIFIED via a focused render harness (UserPill renders + isAdmin=true, no crash).
+  - `f9143cb` — finance-hub MANUAL composes weren't counted: the poller writes email_log outbound with userId=NULL; per-user attribution is in `activities` (kind email_out, userId). Added that source (disjoint from email_log AI-agent path → no double-count). 32 tests green.
+- [ ] OPERATOR LIVE SMOKE — pending. Operator must HARD-refresh (Ctrl+Shift+R) to clear the old cached bundle, then: link shows under Settings, page loads clean, pick Josh (inbox-rich) + Hillel (finance-heavy), email counts include hand-composed finance-hub emails.
+
+## Cleanup TODO
+- Remove the merged worktree `worktree-feat+team-activity` + branch once confirmed.
+- The 2 hung reviewer agents (ta-review-sec/ta-review-design) — abandoned.
 
 ## Notes
 - Hillel finance userId = `4cd54aa2-e8d9-49ca-bb71-b5457ec57fd7` (hschijves@gmail.com).
