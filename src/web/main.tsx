@@ -6,6 +6,7 @@ import {
   RouterProvider,
   createRootRoute,
   createRoute,
+  redirect,
   Outlet,
   ScrollRestoration,
 } from "@tanstack/react-router";
@@ -32,6 +33,8 @@ import AutopilotPage from "./pages/autopilot";
 import AiTrainingPage from "./pages/ai-training";
 import OriginReviewPage from "./pages/origin-review";
 import AgentPage from "./pages/agent";
+import TeamActivityPage from "./pages/team-activity";
+import type { Me } from "./lib/use-me";
 import { customersSearchSchema } from "./lib/search-schemas/customers";
 import { returnsSearchSchema } from "./lib/search-schemas/returns";
 import { invoicingTodaySearchSchema } from "./lib/search-schemas/invoicing-today";
@@ -209,6 +212,30 @@ const agentRoute = createRoute({
   component: AgentPage,
 });
 
+// Admin-only. beforeLoad checks /api/me (served from the query cache when warm,
+// fetched once otherwise) and redirects non-admins to "/". The API routes are
+// independently admin-gated, so this is defense-in-depth, not the only gate.
+const teamActivityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/team-activity",
+  component: TeamActivityPage,
+  beforeLoad: async () => {
+    const me = await queryClient.ensureQueryData<Me>({
+      queryKey: ["me"],
+      queryFn: async () => {
+        const res = await fetch("/api/me");
+        if (!res.ok) throw new Error(`GET /api/me failed: ${res.status}`);
+        const data = (await res.json()) as { user: Me };
+        return data.user;
+      },
+      staleTime: 5 * 60_000,
+    });
+    if (!me?.isAdmin) {
+      throw redirect({ to: "/" });
+    }
+  },
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   invoicingTodayRoute,
@@ -232,6 +259,7 @@ const routeTree = rootRoute.addChildren([
   aiTrainingRoute,
   originReviewRoute,
   agentRoute,
+  teamActivityRoute,
 ]);
 
 const router = createRouter({ routeTree });

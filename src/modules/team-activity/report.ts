@@ -1,0 +1,139 @@
+// Top-level Team Activity report assembly: finance gather + inbox merge.
+//
+// Fetches the inbox member-activity endpoint, maps its events into the shared
+// `ActivityEvent` shape (source:"inbox"), unions the active-minute sets
+// (deduping minutes the user was active in both apps), merges + sorts the
+// timeline, and groups by Europe/London calendar day. Degrades gracefully when
+// inbox is unreachable: finance-only data + `inboxUnavailable: true`.
+
+import { createLogger } from "../../lib/logger.js";
+import { inboxFetch } from "../../integrations/inbox/client.js";
+import { resolveMemberByEmail } from "../../integrations/inbox/members.js";
+import { gatherFinanceActivity } from "./gather-finance.js";
+import {
+  activeMinutesPerDay,
+  groupEventsByDay,
+  unionActiveMinutes,
+} from "./helpers.js";
+import type {
+  ActivityEvent,
+  InboxMemberActivity,
+  ReportCounts,
+  TeamActivityReport,
+} from "./types.js";
+
+const log = createLogger({ component: "team-activity.report" });
+
+export type ReportSubject = {
+  userId: string;
+  name: string | null;
+  email: string | null;
+};
+
+/** Map an inbox-side event onto the shared ActivityEvent shape. */
+export function mapInboxEvent(ev: InboxMemberActivity["events"][number]): ActivityEvent {
+  return {
+    id: `inbox-${ev.id}`,
+    at: ev.at,
+    source: "inbox",
+    type: ev.type,
+    title: ev.title,
+    detail: ev.detail ?? null,
+    customerId: ev.customerFinanceId ?? null,
+    customerName: ev.customerName ?? null,
+    link: ev.link ?? null,
+  };
+}
+
+/**
+ * Fetch the inbox member-activity payload for a resolved inbox member. Returns
+ * null (and logs) on any failure so the caller can degrade to finance-only.
+ */
+async function fetchInboxActivity(
+  inboxMemberId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<InboxMemberActivity | null> {
+  const qs = new URLSearchParams({
+    memberId: inboxMemberId,
+    from: fromIso,
+    to: toIso,
+  });
+  try {
+    return await inboxFetch<InboxMemberActivity>(`/api/svc/member-activity?${qs.toString()}`);
+  } catch (err) {
+    log.warn({ err, inboxMemberId }, "inbox member-activity fetch failed; degrading");
+    return null;
+  }
+}
+
+/**
+ * Build the full merged Team Activity report for one finance user over
+ * [fromIso, toIso). `from` inclusive, `to` exclusive.
+ */
+export async function buildTeamActivityReport(
+  subject: ReportSubject,
+  fromIso: string,
+  toIso: string,
+): Promise<TeamActivityReport> {
+  // Resolve the inbox member by email (matches email + googleEmail). A user
+  // with no inbox counterpart simply gets finance-only data.
+  let inboxMemberId: string | null = null;
+  try {
+    const member = subject.email
+      ? await resolveMemberByEmail(subject.email)
+      : null;
+    inboxMemberId = member?.teamMemberId ?? null;
+  } catch (err) {
+    log.warn({ err, userId: subject.userId }, "inbox member resolve failed");
+  }
+
+  const finance = await gatherFinanceActivity(subject.userId, fromIso, toIso);
+
+  let inbox: InboxMemberActivity | null = null;
+  let inboxUnavailable = false;
+  if (inboxMemberId) {
+    inbox = await fetchInboxActivity(inboxMemberId, fromIso, toIso);
+    // Distinguish "no inbox identity" (not unavailable, just nothing to fetch)
+    // from "had an identity but the fetch failed" (degraded).
+    if (inbox === null) inboxUnavailable = true;
+  }
+
+  const inboxEvents = (inbox?.events ?? []).map(mapInboxEvent);
+  const allEvents = [...finance.events, ...inboxEvents];
+
+  const inboxMinutes = inbox?.activeMinuteStampsUtc ?? [];
+  const combinedMinutes = unionActiveMinutes(
+    finance.activeMinuteStampsUtc,
+    inboxMinutes,
+  );
+  const perDayMinutes = activeMinutesPerDay(combinedMinutes);
+
+  const days = groupEventsByDay(allEvents, perDayMinutes);
+
+  const counts: ReportCounts = {
+    ...finance.counts,
+    inboxEmailsSent: inbox?.counts.emailsSent ?? 0,
+    tasksCompleted: inbox?.counts.tasksCompleted ?? 0,
+    tasksCreated: inbox?.counts.tasksCreated ?? 0,
+  };
+
+  return {
+    subject: {
+      userId: subject.userId,
+      name: subject.name,
+      email: subject.email,
+      inboxMemberId,
+    },
+    range: { from: fromIso, to: toIso },
+    counts,
+    activeTime: {
+      totalMinutes: combinedMinutes.length,
+      financeMinutes: new Set(finance.activeMinuteStampsUtc).size,
+      inboxMinutes: new Set(inboxMinutes).size,
+      perDayMinutes,
+    },
+    days,
+    inboxUnavailable,
+  };
+}
