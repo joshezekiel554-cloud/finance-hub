@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Team Activity — mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-base:oklch(99% 0.003 250);
+    --bg-subtle:oklch(97.5% 0.005 250);
+    --bg-elevated:oklch(94% 0.008 250);
+    --border:oklch(91% 0.008 250);
+    --border-strong:oklch(82% 0.012 250);
+    --text:oklch(20% 0.015 250);
+    --text-2:oklch(40% 0.015 250);
+    --muted:oklch(58% 0.012 250);
+    --accent:oklch(58% 0.18 260);
+    --success:oklch(60% 0.16 150);
+    --warning:oklch(74% 0.16 75);
+    --danger:oklch(60% 0.21 25);
+    --info:oklch(64% 0.14 220);
+    --radius:8px;
+    --shadow-sm:0 1px 2px 0 rgb(0 0 0 / .04);
+    --shadow-md:0 2px 6px -1px rgb(0 0 0 / .06),0 1px 3px -1px rgb(0 0 0 / .04);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Inter",system-ui,sans-serif;background:var(--bg-subtle);color:var(--text);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .app{display:flex;min-height:100vh}
+
+  /* sidebar */
+  .side{width:210px;background:var(--bg-base);border-right:1px solid var(--border);padding:16px 12px;flex-shrink:0}
+  .brand{display:flex;align-items:center;gap:9px;padding:6px 8px 16px;font-weight:700;font-size:15px;letter-spacing:-.01em}
+  .brand .logo{width:24px;height:24px;border-radius:6px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700}
+  .nav{display:flex;flex-direction:column;gap:1px}
+  .nav a{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:6px;color:var(--text-2);text-decoration:none;font-weight:500;font-size:13.5px}
+  .nav a .ic{width:15px;text-align:center;opacity:.7;font-size:13px}
+  .nav a.active{background:color-mix(in oklch,var(--accent) 12%,transparent);color:var(--accent);font-weight:600}
+  .nav a.active .ic{opacity:1}
+  .nav .sep{height:1px;background:var(--border);margin:8px 6px}
+
+  /* main */
+  .main{flex:1;padding:24px 30px;max-width:1180px}
+  .pagehead{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+  .pagehead h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  .lockbadge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--muted);background:var(--bg-elevated);border:1px solid var(--border);padding:4px 10px;border-radius:999px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+
+  /* controls */
+  .controls{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+  .picker{display:flex;align-items:center;gap:9px;background:var(--bg-base);border:1px solid var(--border-strong);border-radius:8px;padding:7px 12px;font-weight:600;box-shadow:var(--shadow-sm);cursor:pointer}
+  .picker .av{width:24px;height:24px;border-radius:999px;background:oklch(70% 0.13 300);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .picker .chev{color:var(--muted);font-size:11px;margin-left:2px}
+  .seg{display:flex;background:var(--bg-base);border:1px solid var(--border);border-radius:8px;padding:3px;gap:2px}
+  .seg button{border:0;background:transparent;padding:6px 12px;border-radius:6px;font:inherit;font-size:13px;font-weight:500;color:var(--text-2);cursor:pointer}
+  .seg button.on{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
+  .spacer{flex:1}
+  .btn{display:inline-flex;align-items:center;gap:7px;background:var(--bg-base);border:1px solid var(--border-strong);border-radius:8px;padding:8px 14px;font:inherit;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;box-shadow:var(--shadow-sm)}
+
+  /* stat tiles */
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:22px}
+  .tile{background:var(--bg-base);border:1px solid var(--border);border-radius:10px;padding:14px 15px;box-shadow:var(--shadow-sm)}
+  .tile .lbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;display:flex;align-items:center;gap:6px}
+  .tile .dot{width:7px;height:7px;border-radius:999px}
+  .tile .val{font-size:26px;font-weight:700;letter-spacing:-.02em;margin-top:8px}
+  .tile .meta{font-size:12px;color:var(--text-2);margin-top:3px}
+
+  /* filter chips */
+  .chips{display:flex;gap:8px;margin-bottom:14px}
+  .chip{border:1px solid var(--border-strong);background:var(--bg-base);color:var(--text-2);border-radius:999px;padding:5px 13px;font-size:12.5px;font-weight:600;cursor:pointer}
+  .chip.on{background:var(--text);color:var(--bg-base);border-color:var(--text)}
+
+  /* timeline */
+  .card{background:var(--bg-base);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-md);overflow:hidden}
+  .daygroup{padding:6px 0}
+  .dayhead{position:sticky;top:0;background:var(--bg-subtle);border-bottom:1px solid var(--border);padding:9px 18px;font-size:12px;font-weight:700;color:var(--text-2);letter-spacing:.02em;text-transform:uppercase}
+  .row{display:flex;align-items:flex-start;gap:14px;padding:11px 18px;border-bottom:1px solid var(--border)}
+  .row:hover{background:var(--bg-subtle)}
+  .row:last-child{border-bottom:0}
+  .time{width:58px;flex-shrink:0;font-size:12.5px;color:var(--muted);font-weight:600;padding-top:2px;font-variant-numeric:tabular-nums}
+  .icn{width:28px;height:28px;border-radius:999px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff}
+  .body{flex:1;padding-top:2px}
+  .body .t{font-weight:500}
+  .body .t b{font-weight:700}
+  .body .det{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .body .lnk{color:var(--accent);font-weight:600;text-decoration:none}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:5px;margin-left:8px;vertical-align:1px}
+  .i-email{background:var(--info)}
+  .i-call{background:var(--success)}
+  .i-task{background:oklch(62% 0.17 290)}
+  .i-action{background:var(--warning)}
+  .i-login{background:var(--muted)}
+  .i-send{background:var(--accent)}
+  .src{font-size:11px;font-weight:700;color:var(--muted);background:var(--bg-elevated);padding:1px 6px;border-radius:5px;margin-left:6px}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="logo">F</span> Feldart Finance</div>
+    <nav class="nav">
+      <a href="#"><span class="ic">▭</span> Dashboard</a>
+      <a href="#"><span class="ic">◷</span> Today</a>
+      <a href="#"><span class="ic">☰</span> Customers</a>
+      <a href="#"><span class="ic">✉</span> Chase</a>
+      <a href="#"><span class="ic">✦</span> Autopilot</a>
+      <a href="#"><span class="ic">▤</span> Statements</a>
+      <a href="#"><span class="ic">↩</span> Returns</a>
+      <a href="#"><span class="ic">✓</span> Tasks</a>
+      <div class="sep"></div>
+      <a href="#" class="active"><span class="ic">📊</span> Team Activity</a>
+      <a href="#"><span class="ic">⚙</span> Settings</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div class="pagehead">
+      <h1>Team Activity</h1>
+      <span class="lockbadge">🔒 Admins only · Josh &amp; Shaya</span>
+    </div>
+    <div class="sub">Everything a teammate has done — emails, calls, tasks, finance actions and active time — across finance &amp; inbox.</div>
+
+    <div class="controls">
+      <div class="picker"><span class="av">HS</span> Hillel Schijveschuurder <span class="chev">▼</span></div>
+      <div class="seg">
+        <button>Today</button>
+        <button class="on">This week</button>
+        <button>Last 7 days</button>
+        <button>This month</button>
+        <button>Custom</button>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn">⭳ Export CSV</button>
+    </div>
+
+    <div class="stats">
+      <div class="tile">
+        <div class="lbl"><span class="dot" style="background:var(--accent)"></span> Active time</div>
+        <div class="val">31h 40m</div>
+        <div class="meta">24h 10m finance · 7h 30m inbox</div>
+      </div>
+      <div class="tile">
+        <div class="lbl"><span class="dot" style="background:var(--info)"></span> Emails sent</div>
+        <div class="val">128</div>
+        <div class="meta">112 replies · 16 finance sends</div>
+      </div>
+      <div class="tile">
+        <div class="lbl"><span class="dot" style="background:var(--success)"></span> Calls</div>
+        <div class="val">41</div>
+        <div class="meta">6h 18m talk-time · ext 102</div>
+      </div>
+      <div class="tile">
+        <div class="lbl"><span class="dot" style="background:oklch(62% 0.17 290)"></span> Tasks done</div>
+        <div class="val">23</div>
+        <div class="meta">37 touched · 14 still open</div>
+      </div>
+      <div class="tile">
+        <div class="lbl"><span class="dot" style="background:var(--warning)"></span> Finance actions</div>
+        <div class="val">19</div>
+        <div class="meta">holds · statements · invoices</div>
+      </div>
+    </div>
+
+    <div class="chips">
+      <span class="chip on">All</span>
+      <span class="chip">Emails</span>
+      <span class="chip">Calls</span>
+      <span class="chip">Tasks</span>
+      <span class="chip">Actions</span>
+      <span class="chip">Active time</span>
+    </div>
+
+    <div class="card">
+      <div class="daygroup">
+        <div class="dayhead">Today · Mon 29 Jun &nbsp;·&nbsp; 6h 02m active</div>
+
+        <div class="row">
+          <div class="time">09:02</div>
+          <div class="icn i-login">◐</div>
+          <div class="body"><div class="t">Started working — first activity of the day</div>
+            <div class="det">finance hub <span class="src">first seen</span></div></div>
+        </div>
+        <div class="row">
+          <div class="time">09:14</div>
+          <div class="icn i-email">✉</div>
+          <div class="body"><div class="t">Replied to <a class="lnk" href="#">Smiths Hardware</a> — "Re: Invoice #1043 overdue"<span class="src">inbox</span></div>
+            <div class="det">outbound reply · thread #8821</div></div>
+        </div>
+        <div class="row">
+          <div class="time">09:31</div>
+          <div class="icn i-call">☎</div>
+          <div class="body"><div class="t">Outbound call to <a class="lnk" href="#">Jones Catering Ltd</a><span class="tag i-call" style="color:#fff">6m 12s</span></div>
+            <div class="det">ext 102 → +44 7700 900xxx · <a class="lnk" href="#">transcript</a> · recording</div></div>
+        </div>
+        <div class="row">
+          <div class="time">10:05</div>
+          <div class="icn i-task">✓</div>
+          <div class="body"><div class="t">Completed task <b>"Chase Acme — 60-day overdue"</b><span class="src">tasks</span></div>
+            <div class="det">assigned by Josh · in "Chasing" column</div></div>
+        </div>
+        <div class="row">
+          <div class="time">10:40</div>
+          <div class="icn i-action">⛔</div>
+          <div class="body"><div class="t">Placed <b>hold</b> on order <a class="lnk" href="#">#18672</a> · Acme Foods</div>
+            <div class="det">reason: payment upfront unpaid · hold-alert sent</div></div>
+        </div>
+        <div class="row">
+          <div class="time">11:20</div>
+          <div class="icn i-send">▤</div>
+          <div class="body"><div class="t">Sent <b>statement</b> to <a class="lnk" href="#">Berko Wholesale</a><span class="src">finance</span></div>
+            <div class="det">open-items · statement #2049 · £4,210.00</div></div>
+        </div>
+        <div class="row">
+          <div class="time">11:58</div>
+          <div class="icn i-task">＠</div>
+          <div class="body"><div class="t">@mentioned <b>Shaya</b> on task "VAT query — Lefkow"<span class="src">tasks</span></div>
+            <div class="det">"can you confirm the reverse-charge before I reply?"</div></div>
+        </div>
+        <div class="row">
+          <div class="time">15:40</div>
+          <div class="icn i-login">◑</div>
+          <div class="body"><div class="t">Last activity so far today</div>
+            <div class="det">finance hub <span class="src">last seen</span></div></div>
+        </div>
+      </div>
+
+      <div class="daygroup">
+        <div class="dayhead">Fri 26 Jun &nbsp;·&nbsp; 7h 18m active</div>
+        <div class="row">
+          <div class="time">16:22</div>
+          <div class="icn i-email">✉</div>
+          <div class="body"><div class="t">Replied to <a class="lnk" href="#">Platina Küchen AG</a> — "Re: delivery date"<span class="src">inbox</span></div>
+            <div class="det">outbound reply · thread #8794</div></div>
+        </div>
+        <div class="row">
+          <div class="time">14:05</div>
+          <div class="icn i-call">☎</div>
+          <div class="body"><div class="t">Inbound call from <a class="lnk" href="#">Igal Meirov</a><span class="tag i-call" style="color:#fff">11m 47s</span></div>
+            <div class="det">ext 102 · <a class="lnk" href="#">transcript</a></div></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>
