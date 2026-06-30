@@ -93,13 +93,13 @@ export default function HomePage() {
         </p>
       </div>
 
-      {/* Tasks board — the full shared board (columns) at the top of the
-          dashboard, fixed-height + New-task button. Same embed as the Tasks
-          page; inbox's finance skin themes it. */}
-      <DashboardBoard />
-
-      {/* Time clock — self-hides unless the viewer is on the clock allow-list. */}
+      {/* Time clock — self-hides unless the viewer is on the clock allow-list.
+          Sits at the very top of the dashboard, before the tasks board. */}
       <TimeClockCard />
+
+      {/* Tasks board — the full shared board (columns), fixed-height + New-task
+          button. Same embed as the Tasks page; inbox's finance skin themes it. */}
+      <DashboardBoard />
 
       {showInvoicingAlert ? (
         <Card className="border-accent-danger/40 bg-accent-danger/5">
