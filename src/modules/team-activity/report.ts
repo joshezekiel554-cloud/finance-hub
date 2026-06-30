@@ -12,8 +12,11 @@ import { resolveMemberByEmail } from "../../integrations/inbox/members.js";
 import { gatherFinanceActivity } from "./gather-finance.js";
 import {
   activeMinutesPerDay,
+  eventsToSignals,
   groupEventsByDay,
-  unionActiveMinutes,
+  londonDayKeyForMinute,
+  minutesToSignals,
+  sessionizedMinutes,
 } from "./helpers.js";
 import type {
   ActivityEvent,
@@ -103,13 +106,35 @@ export async function buildTeamActivityReport(
   const allEvents = [...finance.events, ...inboxEvents];
 
   const inboxMinutes = inbox?.activeMinuteStampsUtc ?? [];
-  const combinedMinutes = unionActiveMinutes(
-    finance.activeMinuteStampsUtc,
-    inboxMinutes,
-  );
+
+  // Active time = sessionized continuous work. Signals = presence pings (each a
+  // 60s interval) + every timestamped event (calls occupy their full duration),
+  // across both apps. Sessions bridge gaps ≤15 min and are floored at ~3 min so
+  // a momentary one-off still counts. Per-app figures are each sessionized on
+  // their own (they may overlap, so the combined total ≤ their sum).
+  const financeSignals = [
+    ...minutesToSignals(finance.activeMinuteStampsUtc),
+    ...eventsToSignals(finance.events),
+  ];
+  const inboxSignals = [
+    ...minutesToSignals(inboxMinutes),
+    ...eventsToSignals(inboxEvents),
+  ];
+  const combinedMinutes = sessionizedMinutes([...financeSignals, ...inboxSignals]);
+  const financeMinutes = sessionizedMinutes(financeSignals);
+  const inboxActiveMinutes = sessionizedMinutes(inboxSignals);
   const perDayMinutes = activeMinutesPerDay(combinedMinutes);
 
-  const days = groupEventsByDay(allEvents, perDayMinutes);
+  // A day is EXACT if it had any presence ping; days that only have event-
+  // derived activity (i.e. before the heartbeat existed) are estimates.
+  const heartbeatDays = new Set(
+    [...finance.activeMinuteStampsUtc, ...inboxMinutes].map(londonDayKeyForMinute),
+  );
+  const estimatedDays = Object.keys(perDayMinutes).filter(
+    (d) => !heartbeatDays.has(d),
+  );
+
+  const days = groupEventsByDay(allEvents, perDayMinutes, new Set(estimatedDays));
 
   const counts: ReportCounts = {
     ...finance.counts,
@@ -129,9 +154,10 @@ export async function buildTeamActivityReport(
     counts,
     activeTime: {
       totalMinutes: combinedMinutes.length,
-      financeMinutes: new Set(finance.activeMinuteStampsUtc).size,
-      inboxMinutes: new Set(inboxMinutes).size,
+      financeMinutes: financeMinutes.length,
+      inboxMinutes: inboxActiveMinutes.length,
       perDayMinutes,
+      estimatedDays,
     },
     days,
     inboxUnavailable,

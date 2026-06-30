@@ -5,10 +5,13 @@ import {
   auditEventType,
   extensionsForUser,
   formatTalkTime,
+  eventsToSignals,
   groupEventsByDay,
   londonDayKey,
   londonDayKeyForMinute,
+  minutesToSignals,
   parseExtensionUserMap,
+  sessionizedMinutes,
   unionActiveMinutes,
 } from "./helpers.js";
 import type { ActivityEvent } from "./types.js";
@@ -82,6 +85,36 @@ describe("unionActiveMinutes (dedupe across both apps)", () => {
   it("handles empty inputs", () => {
     expect(unionActiveMinutes([], [])).toEqual([]);
     expect(unionActiveMinutes([1, 1, 2], [])).toEqual([1, 2]);
+  });
+});
+
+describe("sessionizedMinutes (continuous-work sessions)", () => {
+  const M = Math.floor(Date.parse("2026-06-29T09:00:00.000Z") / 60_000);
+  const iso = (min: number) => new Date(min * 60_000).toISOString();
+
+  it("bridges a gap ≤15 min into one continuous session", () => {
+    // pings 10 min apart → the 10-min gap is bridged → 11 contiguous minutes.
+    expect(sessionizedMinutes(minutesToSignals([M, M + 10]))).toHaveLength(11);
+  });
+
+  it("breaks a gap >15 min into separate sessions (each min-credit 3 min)", () => {
+    // 20 min apart → two sessions, each floored to the 3-min minimum.
+    expect(sessionizedMinutes(minutesToSignals([M, M + 20]))).toHaveLength(6);
+  });
+
+  it("gives a lone instant signal the ~3-min minimum credit", () => {
+    expect(sessionizedMinutes(eventsToSignals([{ at: iso(M) }]))).toHaveLength(3);
+  });
+
+  it("counts a call's full duration as active work", () => {
+    // a 10-minute call (no other signals) = ~10 active minutes.
+    expect(
+      sessionizedMinutes(eventsToSignals([{ at: iso(M), durationSec: 600 }])),
+    ).toHaveLength(10);
+  });
+
+  it("returns nothing for no signals", () => {
+    expect(sessionizedMinutes([])).toEqual([]);
   });
 });
 

@@ -36,6 +36,7 @@ type TimelineDay = {
   day: string;
   label: string;
   activeMinutes: number;
+  estimated: boolean;
   events: ActivityEvent[];
 };
 
@@ -60,6 +61,7 @@ type TeamActivityReport = {
     financeMinutes: number;
     inboxMinutes: number;
     perDayMinutes: Record<string, number>;
+    estimatedDays: string[];
   };
   days: TimelineDay[];
   inboxUnavailable: boolean;
@@ -424,7 +426,10 @@ function StatTiles({ report, loading }: { report?: TeamActivityReport; loading: 
         dotClass="bg-accent-primary"
         label="Active time"
         value={formatMinutes(at.totalMinutes)}
-        meta={`${formatMinutes(at.financeMinutes)} finance · ${formatMinutes(at.inboxMinutes)} inbox`}
+        meta={
+          `${formatMinutes(at.financeMinutes)} finance · ${formatMinutes(at.inboxMinutes)} inbox` +
+          (at.estimatedDays.length > 0 ? " · incl. est. days" : "")
+        }
       />
       <Tile
         dotClass="bg-accent-info"
@@ -529,7 +534,13 @@ function Timeline({
         <div key={day.day}>
           <div className="sticky top-0 z-10 border-b border-default bg-subtle px-4 py-2 text-xs font-bold uppercase tracking-wide text-secondary">
             {isLondonToday(day.day) ? "Today · " : ""}
-            {day.label} · {formatMinutes(day.activeMinutes)} active
+            {day.label} · {day.estimated ? "~" : ""}
+            {formatMinutes(day.activeMinutes)} active
+            {day.estimated && (
+              <span className="ml-1.5 font-normal italic normal-case text-muted">
+                (est.)
+              </span>
+            )}
           </div>
           {day.events.map((ev) => (
             <TimelineRow key={ev.id} ev={ev} />

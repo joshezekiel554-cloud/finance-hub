@@ -16,12 +16,13 @@ const REPORT: TeamActivityReport = {
     tasksCompleted: 0,
     tasksCreated: 0,
   },
-  activeTime: { totalMinutes: 0, financeMinutes: 0, inboxMinutes: 0, perDayMinutes: {} },
+  activeTime: { totalMinutes: 0, financeMinutes: 0, inboxMinutes: 0, perDayMinutes: {}, estimatedDays: [] },
   days: [
     {
       day: "2026-06-29",
       label: "Mon 29 Jun",
       activeMinutes: 0,
+      estimated: false,
       events: [
         {
           id: "e1",

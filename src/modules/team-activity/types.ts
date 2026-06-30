@@ -29,6 +29,9 @@ export type ActivityEvent = {
   customerId?: string | null; // finance customer id
   customerName?: string | null;
   link?: { kind: string; id: string } | null;
+  /** Seconds the event itself occupied — set for calls (count full talk-time as
+   * active work). Instant events (emails, actions, tasks) omit it / 0. */
+  durationSec?: number | null;
 };
 
 /** Summary counts for the stat tiles (finance side). */
@@ -89,6 +92,10 @@ export type ActiveTimeSummary = {
   inboxMinutes: number;
   /** Per-calendar-day (Europe/London) active minute totals, keyed YYYY-MM-DD. */
   perDayMinutes: Record<string, number>;
+  /** Days (YYYY-MM-DD London) whose active time is an ESTIMATE — they predate
+   * the heartbeat go-live so only event timestamps exist (undercounts quiet
+   * stretches). Exact days have ≥1 presence ping. */
+  estimatedDays: string[];
 };
 
 export type ReportCounts = FinanceCounts & {
@@ -103,6 +110,8 @@ export type TimelineDay = {
   /** Human label, e.g. "Mon 29 Jun". */
   label: string;
   activeMinutes: number;
+  /** True when this day's active time is an estimate (pre-heartbeat day). */
+  estimated: boolean;
   events: ActivityEvent[];
 };
 

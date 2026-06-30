@@ -80,7 +80,7 @@ describe("buildTeamActivityReport", () => {
     gatherMock.mockResolvedValue(FINANCE);
   });
 
-  it("merges inbox events + unions active minutes (deduping the overlap)", async () => {
+  it("merges inbox events + sessionizes active time across both apps", async () => {
     resolveMemberMock.mockResolvedValue({ teamMemberId: "tm-7" });
     const inbox: InboxMemberActivity = {
       events: [
@@ -109,10 +109,15 @@ describe("buildTeamActivityReport", () => {
 
     expect(report.inboxUnavailable).toBe(false);
     expect(report.subject.inboxMemberId).toBe("tm-7");
-    // finance {09:00,09:01} ∪ inbox {09:01,11:00} = 3 distinct minutes.
-    expect(report.activeTime.totalMinutes).toBe(3);
-    expect(report.activeTime.financeMinutes).toBe(2);
-    expect(report.activeTime.inboxMinutes).toBe(2);
+    // Sessionized: combined has two clusters >15min apart — the 09:00–09:02
+    // cluster (finance+inbox pings) and the 11:00 cluster — each floored to the
+    // 3-min minimum → 6 min total. Finance alone = the one 09:00 cluster (3 min);
+    // inbox alone = two clusters (09:01 + 11:00) → 6 min.
+    expect(report.activeTime.totalMinutes).toBe(6);
+    expect(report.activeTime.financeMinutes).toBe(3);
+    expect(report.activeTime.inboxMinutes).toBe(6);
+    // 2026-06-29 has presence pings → exact, not estimated.
+    expect(report.activeTime.estimatedDays).toEqual([]);
     // counts fold in inbox tasks + inbox emails.
     expect(report.counts.emailsSent).toBe(1);
     expect(report.counts.inboxEmailsSent).toBe(4);
@@ -135,8 +140,8 @@ describe("buildTeamActivityReport", () => {
     );
 
     expect(report.inboxUnavailable).toBe(true);
-    // Finance-only data still present.
-    expect(report.activeTime.totalMinutes).toBe(2);
+    // Finance-only: the single 09:00–09:02 cluster, floored to 3 min.
+    expect(report.activeTime.totalMinutes).toBe(3);
     expect(report.counts.inboxEmailsSent).toBe(0);
     expect(report.counts.tasksCompleted).toBe(0);
     expect(report.days.flatMap((d) => d.events.map((e) => e.id))).toContain("email-1");
@@ -154,6 +159,6 @@ describe("buildTeamActivityReport", () => {
     expect(report.subject.inboxMemberId).toBeNull();
     expect(report.inboxUnavailable).toBe(false);
     expect(inboxFetchMock).not.toHaveBeenCalled();
-    expect(report.activeTime.totalMinutes).toBe(2);
+    expect(report.activeTime.totalMinutes).toBe(3);
   });
 });

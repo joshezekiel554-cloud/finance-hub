@@ -100,6 +100,70 @@ export function unionActiveMinutes(a: number[], b: number[]): number[] {
   return [...set].sort((x, y) => x - y);
 }
 
+// --- Session-based active time ----------------------------------------------
+// "Active time" = continuous work sessions, not a raw active-minute count. A
+// session starts at the first signal and stays open while the NEXT signal is
+// within SESSION_GAP_SEC; a larger gap closes it. Each session is floored at
+// SESSION_MIN_CREDIT_SEC so a momentary one-off (single click, then nothing)
+// still registers. Signals = presence pings (one per active minute, each a 60s
+// interval) + every timestamped event (instant, EXCEPT calls which occupy their
+// full talk-time) — unioned across BOTH apps before sessionizing.
+
+export const SESSION_GAP_SEC = 15 * 60;
+export const SESSION_MIN_CREDIT_SEC = 3 * 60;
+
+export type ActivitySignal = { start: number; end: number }; // epoch seconds
+
+/** Presence-ping minutes → 60-second signals. */
+export function minutesToSignals(minutesUtc: number[]): ActivitySignal[] {
+  return minutesUtc.map((m) => ({ start: m * 60, end: m * 60 + 60 }));
+}
+
+/** Timeline events → signals (calls occupy their full duration, rest are points). */
+export function eventsToSignals(
+  events: { at: string; durationSec?: number | null }[],
+): ActivitySignal[] {
+  return events.map((ev) => {
+    const start = Math.floor(new Date(ev.at).getTime() / 1000);
+    return { start, end: start + Math.max(0, ev.durationSec ?? 0) };
+  });
+}
+
+/**
+ * Sessionize signals (bridge gaps ≤ gapSec, floor each session at minCreditSec)
+ * and return the sorted distinct epoch-MINUTES the sessions cover. Returning a
+ * minute set keeps the rest of the pipeline (per-day rollup, day headers)
+ * unchanged — but the set now includes bridged gaps + call durations + the
+ * min-credit, i.e. real continuous-work time rather than only clicked minutes.
+ */
+export function sessionizedMinutes(
+  signals: ActivitySignal[],
+  gapSec: number = SESSION_GAP_SEC,
+  minCreditSec: number = SESSION_MIN_CREDIT_SEC,
+): number[] {
+  if (signals.length === 0) return [];
+  const sorted = [...signals].sort((a, b) => a.start - b.start);
+  const minutes = new Set<number>();
+  let s = sorted[0]!.start;
+  let e = Math.max(sorted[0]!.end, sorted[0]!.start);
+  const flush = () => {
+    const end = Math.max(e, s + minCreditSec);
+    for (let m = Math.floor(s / 60); m < Math.ceil(end / 60); m++) minutes.add(m);
+  };
+  for (let i = 1; i < sorted.length; i++) {
+    const iv = sorted[i]!;
+    if (iv.start <= e + gapSec) {
+      e = Math.max(e, iv.end);
+    } else {
+      flush();
+      s = iv.start;
+      e = Math.max(iv.end, iv.start);
+    }
+  }
+  flush();
+  return [...minutes].sort((a, b) => a - b);
+}
+
 // --- Europe/London day grouping ---------------------------------------------
 
 // Cached formatters keyed by intent. Intl is relatively expensive to construct;
@@ -159,6 +223,7 @@ export function activeMinutesPerDay(minutes: number[]): Record<string, number> {
 export function groupEventsByDay(
   events: ActivityEvent[],
   perDayActiveMinutes: Record<string, number>,
+  estimatedDays: ReadonlySet<string> = new Set(),
 ): TimelineDay[] {
   const byDay = new Map<string, ActivityEvent[]>();
   for (const ev of events) {
@@ -184,6 +249,7 @@ export function groupEventsByDay(
       day,
       label,
       activeMinutes: perDayActiveMinutes[day] ?? 0,
+      estimated: estimatedDays.has(day),
       events: evs,
     };
   });

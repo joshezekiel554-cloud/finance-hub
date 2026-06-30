@@ -254,6 +254,8 @@ export async function gatherFinanceActivity(
       customerId: r.customerId,
       customerName: r.customerName,
       link: r.customerId ? { kind: "customer", id: r.customerId } : null,
+      // The call occupies its full talk-time for active-time sessionization.
+      durationSec: r.durationSeconds ?? 0,
     });
   }
 
