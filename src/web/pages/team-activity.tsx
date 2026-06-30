@@ -63,6 +63,11 @@ type TeamActivityReport = {
     perDayMinutes: Record<string, number>;
     estimatedDays: string[];
   };
+  clocked: {
+    clockedMinutes: number;
+    perDayMinutes: Record<string, number>;
+    openStale: boolean;
+  };
   days: TimelineDay[];
   inboxUnavailable: boolean;
 };
@@ -282,6 +287,19 @@ export default function TeamActivityPage() {
   });
 
   const report = reportQuery.data;
+
+  // Count clock-in rows on the timeline → "N sessions" meta on the Clocked tile.
+  const clockSessionCount = useMemo(() => {
+    if (!report) return 0;
+    let n = 0;
+    for (const d of report.days) {
+      for (const ev of d.events) {
+        if (ev.id.startsWith("clock-in-")) n++;
+      }
+    }
+    return n;
+  }, [report]);
+
   const subjectName =
     report?.subject.name ??
     members.find((m) => m.userId === activeUserId)?.name ??
@@ -377,7 +395,7 @@ export default function TeamActivityPage() {
       )}
 
       {/* Stat tiles */}
-      <StatTiles report={report} loading={reportQuery.isLoading} />
+      <StatTiles report={report} loading={reportQuery.isLoading} clockSessions={clockSessionCount} />
 
       {/* Filter chips */}
       <div className="mb-3.5 flex flex-wrap gap-2">
@@ -406,7 +424,15 @@ export default function TeamActivityPage() {
 
 // --- Stat tiles -------------------------------------------------------------
 
-function StatTiles({ report, loading }: { report?: TeamActivityReport; loading: boolean }) {
+function StatTiles({
+  report,
+  loading,
+  clockSessions,
+}: {
+  report?: TeamActivityReport;
+  loading: boolean;
+  clockSessions: number;
+}) {
   if (loading || !report) {
     return (
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -419,6 +445,9 @@ function StatTiles({ report, loading }: { report?: TeamActivityReport; loading: 
 
   const c = report.counts;
   const at = report.activeTime;
+  // Show the Clocked tile only when the subject has clock data (declared
+  // timesheet minutes or an open/stale session). Distinct from active time.
+  const showClocked = report.clocked.clockedMinutes > 0 || report.clocked.openStale;
   return (
     <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
       <Tile
@@ -455,6 +484,17 @@ function StatTiles({ report, loading }: { report?: TeamActivityReport; loading: 
         value={String(c.holds + c.statements + c.invoices)}
         meta="holds · statements · invoices"
       />
+      {showClocked && (
+        <Tile
+          dotClass="bg-accent-warning"
+          label="Clocked hours"
+          value={formatMinutes(report.clocked.clockedMinutes)}
+          meta={
+            `${clockSessions} ${clockSessions === 1 ? "session" : "sessions"}` +
+            (report.clocked.openStale ? " · ⚠ still clocked in" : "")
+          }
+        />
+      )}
     </div>
   );
 }

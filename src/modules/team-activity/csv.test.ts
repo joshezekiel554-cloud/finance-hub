@@ -17,6 +17,7 @@ const REPORT: TeamActivityReport = {
     tasksCreated: 0,
   },
   activeTime: { totalMinutes: 0, financeMinutes: 0, inboxMinutes: 0, perDayMinutes: {}, estimatedDays: [] },
+  clocked: { clockedMinutes: 0, perDayMinutes: {}, openStale: false },
   days: [
     {
       day: "2026-06-29",

@@ -124,6 +124,7 @@ const SETTINGS: AppSettingsMap = {
   order_overdue_alert_recipients: "",
   order_overdue_threshold_gbp: "1000",
   order_overdue_no_contact_days: "14",
+  time_clock_user_ids: "",
 };
 
 describe("renderStatementPdf", () => {
@@ -240,6 +241,7 @@ describe("renderStatementPdf", () => {
         order_overdue_alert_recipients: "",
         order_overdue_threshold_gbp: "1000",
         order_overdue_no_contact_days: "14",
+        time_clock_user_ids: "",
       },
       statementNumber: 1,
       generatedAt: FROZEN,

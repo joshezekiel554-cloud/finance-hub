@@ -139,5 +139,9 @@ export const APP_SETTING_KEYS = [
   "order_overdue_alert_recipients",
   "order_overdue_threshold_gbp",
   "order_overdue_no_contact_days",
+  // Time Clock allow-list — JSON array of userIds for whom the clock-in/out
+  // timesheet is enabled (the dashboard card + the in/out routes are gated to
+  // this list). Seed ["<hillel-user-id>"]. Missing/blank = feature off for all.
+  "time_clock_user_ids",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

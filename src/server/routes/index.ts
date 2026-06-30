@@ -42,6 +42,7 @@ import extRoute from "./ext.js";
 import extActionsRoute from "./ext-actions.js";
 import ordersRoute from "./orders.js";
 import teamActivityRoute from "./team-activity.js";
+import timeClockRoute from "./time-clock.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -109,6 +110,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // Team Activity report + the app-wide heartbeat sink. Mounted at /api so the
   // plugin owns both /api/heartbeat and /api/team-activity/*.
   await app.register(teamActivityRoute, { prefix: "/api" });
+  // Time Clock (clock-in/out timesheet — Hillel allow-list). Owns
+  // /api/time-clock/{in,out,status}.
+  await app.register(timeClockRoute, { prefix: "/api" });
 
   // Per-module API routes mount here as their owning agents land:
   //   await app.register(customersRoutes, { prefix: "/api/customers" });
