@@ -5,12 +5,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const gatherMock = vi.hoisted(() => vi.fn());
 const inboxFetchMock = vi.hoisted(() => vi.fn());
 const resolveMemberMock = vi.hoisted(() => vi.fn());
+const clockedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./gather-finance.js", () => ({
   gatherFinanceActivity: gatherMock,
   // buildActiveMarkers is re-exported through gather-finance; provide a stub so
   // report.ts's import graph resolves (report.ts doesn't call it directly).
   buildActiveMarkers: vi.fn(() => []),
+}));
+// Time Clock service is DB-backed; stub it so the merge runs without a database.
+vi.mock("../time-clock/service.js", () => ({
+  getClockedActivity: clockedMock,
 }));
 vi.mock("../../integrations/inbox/client.js", () => ({
   inboxFetch: inboxFetchMock,
@@ -77,7 +82,14 @@ describe("buildTeamActivityReport", () => {
     gatherMock.mockReset();
     inboxFetchMock.mockReset();
     resolveMemberMock.mockReset();
+    clockedMock.mockReset();
     gatherMock.mockResolvedValue(FINANCE);
+    clockedMock.mockResolvedValue({
+      clockedMinutes: 0,
+      perDayMinutes: {},
+      openSessionStale: false,
+      events: [],
+    });
   });
 
   it("merges inbox events + sessionizes active time across both apps", async () => {
@@ -160,5 +172,40 @@ describe("buildTeamActivityReport", () => {
     expect(report.inboxUnavailable).toBe(false);
     expect(inboxFetchMock).not.toHaveBeenCalled();
     expect(report.activeTime.totalMinutes).toBe(3);
+  });
+
+  it("folds clocked timesheet into the report + timeline, separate from active time", async () => {
+    resolveMemberMock.mockResolvedValue(null);
+    clockedMock.mockResolvedValue({
+      clockedMinutes: 480,
+      perDayMinutes: { "2026-06-29": 480 },
+      openSessionStale: true,
+      events: [
+        {
+          id: "clock-in-s1",
+          at: "2026-06-29T08:00:00.000Z",
+          source: "finance",
+          type: "action",
+          title: "Clocked in",
+          detail: "started 09:00",
+          link: null,
+        },
+      ],
+    });
+
+    const report = await buildTeamActivityReport(
+      { userId: "u1", name: "Hillel", email: "hillel@feldart.com" },
+      FROM,
+      TO,
+    );
+
+    // Clocked summary present + separate from activeTime (which stays 3 min).
+    expect(report.clocked.clockedMinutes).toBe(480);
+    expect(report.clocked.openStale).toBe(true);
+    expect(report.clocked.perDayMinutes).toEqual({ "2026-06-29": 480 });
+    expect(report.activeTime.totalMinutes).toBe(3);
+    // The clock-in row joins the timeline.
+    expect(report.days.flatMap((d) => d.events.map((e) => e.id))).toContain("clock-in-s1");
+    expect(clockedMock).toHaveBeenCalledWith("u1", FROM, TO);
   });
 });

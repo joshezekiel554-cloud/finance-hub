@@ -87,6 +87,9 @@ export type AppSettingsMap = {
   order_overdue_alert_recipients: string;
   order_overdue_threshold_gbp: string;
   order_overdue_no_contact_days: string;
+  // Time Clock allow-list (JSON array of userIds) — surfaced so loadAppSettings
+  // can index by any canonical key without a type error.
+  time_clock_user_ids: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -150,6 +153,9 @@ const DEFAULTS: AppSettingsMap = {
   order_overdue_alert_recipients: "info@feldart.com,info@feldart.co.uk",
   order_overdue_threshold_gbp: "1000",
   order_overdue_no_contact_days: "14",
+  // Time Clock allow-list (JSON array of userIds). Empty default = feature off
+  // until the operator seeds it (Hillel's id) via /settings.
+  time_clock_user_ids: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is

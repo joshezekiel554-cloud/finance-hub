@@ -115,11 +115,26 @@ export type TimelineDay = {
   events: ActivityEvent[];
 };
 
+/** Declared timesheet (Time Clock) summary — kept SEPARATE from activeTime.
+ * `activeTime` is app-observed; `clocked` is the user's manual clock-in/out. The
+ * field is always present; for a subject with no clock data clockedMinutes is 0
+ * and the page hides the tile. */
+export type ClockedSummary = {
+  /** Total clocked minutes in range (completed + open-elapsed, clamped). */
+  clockedMinutes: number;
+  /** Per-Europe/London-day clocked minutes, keyed YYYY-MM-DD. */
+  perDayMinutes: Record<string, number>;
+  /** True when an open clock session overlapping the range is stale. */
+  openStale: boolean;
+};
+
 export type TeamActivityReport = {
   subject: { userId: string; name: string | null; email: string | null; inboxMemberId: string | null };
   range: { from: string; to: string };
   counts: ReportCounts;
   activeTime: ActiveTimeSummary;
+  /** Declared clock-in/out timesheet for the subject (Time Clock feature). */
+  clocked: ClockedSummary;
   days: TimelineDay[];
   /** True when inbox data could not be fetched — UI shows a soft note. */
   inboxUnavailable: boolean;

@@ -17,6 +17,7 @@ import { OrdersToReviewWidget } from "../components/dashboard/orders-to-review-w
 import { ChaseWidget } from "../components/dashboard/chase-widget";
 import { RmasWidget } from "../components/dashboard/rmas-widget";
 import { HoldsWidget } from "../components/dashboard/holds-widget";
+import { TimeClockCard } from "../components/dashboard/time-clock-card";
 
 const INVOICING_CUTOFF_HOUR_LONDON = 11;
 
@@ -96,6 +97,9 @@ export default function HomePage() {
           dashboard, fixed-height + New-task button. Same embed as the Tasks
           page; inbox's finance skin themes it. */}
       <DashboardBoard />
+
+      {/* Time clock — self-hides unless the viewer is on the clock allow-list. */}
+      <TimeClockCard />
 
       {showInvoicingAlert ? (
         <Card className="border-accent-danger/40 bg-accent-danger/5">

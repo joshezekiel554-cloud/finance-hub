@@ -9,6 +9,7 @@
 import { createLogger } from "../../lib/logger.js";
 import { inboxFetch } from "../../integrations/inbox/client.js";
 import { resolveMemberByEmail } from "../../integrations/inbox/members.js";
+import { getClockedActivity } from "../time-clock/service.js";
 import { gatherFinanceActivity } from "./gather-finance.js";
 import {
   activeMinutesPerDay,
@@ -93,6 +94,10 @@ export async function buildTeamActivityReport(
 
   const finance = await gatherFinanceActivity(subject.userId, fromIso, toIso);
 
+  // Clocked timesheet (Time Clock). SEPARATE from active-time sessionization —
+  // its events join the timeline but its minutes never feed the signal sets.
+  const clocked = await getClockedActivity(subject.userId, fromIso, toIso);
+
   let inbox: InboxMemberActivity | null = null;
   let inboxUnavailable = false;
   if (inboxMemberId) {
@@ -103,7 +108,9 @@ export async function buildTeamActivityReport(
   }
 
   const inboxEvents = (inbox?.events ?? []).map(mapInboxEvent);
-  const allEvents = [...finance.events, ...inboxEvents];
+  // Clock rows render on the timeline as amber "action" dots; they do NOT enter
+  // the active-time signal sets below.
+  const allEvents = [...finance.events, ...inboxEvents, ...clocked.events];
 
   const inboxMinutes = inbox?.activeMinuteStampsUtc ?? [];
 
@@ -158,6 +165,11 @@ export async function buildTeamActivityReport(
       inboxMinutes: inboxActiveMinutes.length,
       perDayMinutes,
       estimatedDays,
+    },
+    clocked: {
+      clockedMinutes: clocked.clockedMinutes,
+      perDayMinutes: clocked.perDayMinutes,
+      openStale: clocked.openSessionStale,
     },
     days,
     inboxUnavailable,
