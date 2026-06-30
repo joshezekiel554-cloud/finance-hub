@@ -23,9 +23,21 @@ Mockup: `.superpowers/team-activity-mockup.html` (operator approved on radio).
   - `f9143cb` — finance-hub MANUAL composes weren't counted: the poller writes email_log outbound with userId=NULL; per-user attribution is in `activities` (kind email_out, userId). Added that source (disjoint from email_log AI-agent path → no double-count). 32 tests green.
 - [ ] OPERATOR LIVE SMOKE — pending. Operator must HARD-refresh (Ctrl+Shift+R) to clear the old cached bundle, then: link shows under Settings, page loads clean, pick Josh (inbox-rich) + Hillel (finance-heavy), email counts include hand-composed finance-hub emails.
 
+## Review outcomes (both Opus reviewers DID return — not hung, just slow)
+- **Security/correctness: SHIP** — no Critical/High. Confirmed: admin gate on all 3 routes (Hillel 403) + heartbeat correctly auth-only; active-minute UNION dedupes (no both-tabs double-count); statement dedupe works; invoice-chases never audited so no double-count; inbox merge degrades gracefully; SQL parameterized; heartbeat non-spoofable. My 2 fixes (inbox categorization, CSV injection) covered the only real gaps.
+- **Design fidelity:** token usage clean (no ad-hoc hex), empty/loading states good, dot colors 1:1 with mockup. Confirmed the page correctly OMITS the active-time chip (mockup HTML is stale there).
+
+## Polish backlog (OPTIONAL — operator reviewed + accepted the live render; ask before doing)
+- Picker = bare <Select> vs mockup's avatar pill → **operator chose "dropdown please" — SETTLED, not a defect.**
+- Finance ACTION rows (holds/statements from audit_log) aren't click-through to the customer (audit entityType=order/statement, not customer → customerId null → no link). Real minor UX gap; would need to resolve order→customer. Most worth doing of the lot.
+- Timeline time column: code `text-right w-12`; mockup left-aligned ~58px.
+- Call rows: duration shown in the title text ("· 6:12"); mockup also has an inline duration pill.
+- Hero tile ring + larger value = INTENTIONAL (agreed Active-time-hero refinement); mockup's equal tiles are the older design — keep the hero.
+- Hero meta "Xh finance · Yh inbox" can sum past the union total when both apps were open same minute (label only; the headline total is the correct union).
+
 ## Cleanup TODO
-- Remove the merged worktree `worktree-feat+team-activity` + branch once confirmed.
-- The 2 hung reviewer agents (ta-review-sec/ta-review-design) — abandoned.
+- [x] Removed merged worktree branch `worktree-feat+team-activity` (orphaned dir under gitignored .claude/ remains, harmless).
+- The 2 reviewer agents returned SHIP/design findings (above) — done.
 
 ## Notes
 - Hillel finance userId = `4cd54aa2-e8d9-49ca-bb71-b5457ec57fd7` (hschijves@gmail.com).
