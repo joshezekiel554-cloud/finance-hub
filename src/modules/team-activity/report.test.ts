@@ -174,6 +174,35 @@ describe("buildTeamActivityReport", () => {
     expect(report.activeTime.totalMinutes).toBe(3);
   });
 
+  it("uses a supplied inboxMemberId directly (inbox-only subject) without an email resolve", async () => {
+    const inbox: InboxMemberActivity = {
+      events: [],
+      counts: { emailsSent: 5, tasksCompleted: 1, tasksCreated: 2 },
+      activeMinuteStampsUtc: [],
+    };
+    inboxFetchMock.mockResolvedValue(inbox);
+
+    const report = await buildTeamActivityReport(
+      {
+        userId: "inbox:cmpm-samual",
+        name: "Samual",
+        email: "samualkai@googlemail.com",
+        inboxMemberId: "cmpm-samual",
+      },
+      FROM,
+      TO,
+    );
+
+    // Email resolve is skipped entirely — the memberId was handed in.
+    expect(resolveMemberMock).not.toHaveBeenCalled();
+    expect(report.subject.inboxMemberId).toBe("cmpm-samual");
+    // The inbox slice was fetched with the supplied memberId.
+    const calledUrl = String(inboxFetchMock.mock.calls[0]?.[0] ?? "");
+    expect(calledUrl).toContain("memberId=cmpm-samual");
+    expect(report.counts.inboxEmailsSent).toBe(5);
+    expect(report.inboxUnavailable).toBe(false);
+  });
+
   it("folds clocked timesheet into the report + timeline, separate from active time", async () => {
     resolveMemberMock.mockResolvedValue(null);
     clockedMock.mockResolvedValue({

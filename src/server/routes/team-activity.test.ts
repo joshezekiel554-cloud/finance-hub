@@ -56,8 +56,21 @@ vi.mock("../../db/index.js", () => {
   };
 });
 
+const inboxMembers = vi.hoisted(() => ({
+  value: [] as Array<{
+    teamMemberId: string;
+    name: string;
+    email: string;
+    googleEmail: string;
+    role: string;
+    active: boolean;
+  }>,
+}));
 vi.mock("../../integrations/inbox/members.js", () => ({
-  listMembers: vi.fn(async () => []),
+  listMembers: vi.fn(async () => inboxMembers.value),
+  resolveMemberById: vi.fn(async (id: string) =>
+    inboxMembers.value.find((m) => m.teamMemberId === id) ?? null,
+  ),
 }));
 
 const buildReportMock = vi.hoisted(() => vi.fn());
@@ -129,6 +142,7 @@ beforeEach(async () => {
   adminEmails.value = ["josh@feldart.com"];
   heartbeatInserts.value = [];
   userRows.value = [];
+  inboxMembers.value = [];
   buildReportMock.mockReset();
   buildReportMock.mockResolvedValue(SAMPLE_REPORT);
   app = await buildApp();
@@ -229,5 +243,79 @@ describe("validation", () => {
     currentUser.value = { id: "u-josh", email: "josh@feldart.com" };
     const res = await app.inject({ method: "GET", url: "/api/team-activity?userId=u-josh" });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe("inbox-only subjects", () => {
+  const SAMUAL = {
+    teamMemberId: "cmpmmqwaw000lxjkn0jv34zgg",
+    name: "Samual",
+    email: "samualkai@googlemail.com",
+    googleEmail: "",
+    role: "MEMBER",
+    active: true,
+  };
+
+  it("appends inbox-only members to the picker with an inbox: userId", async () => {
+    currentUser.value = { id: "u-josh", email: "josh@feldart.com" };
+    userRows.value = [{ userId: "u-josh", name: "Josh", email: "josh@feldart.com" }];
+    inboxMembers.value = [SAMUAL];
+
+    const res = await app.inject({ method: "GET", url: "/api/team-activity/members" });
+    expect(res.statusCode).toBe(200);
+    const members = res.json().members as Array<{
+      userId: string;
+      name: string | null;
+      inboxMemberId: string | null;
+    }>;
+    const sam = members.find((m) => m.userId === `inbox:${SAMUAL.teamMemberId}`);
+    expect(sam).toBeDefined();
+    expect(sam!.name).toBe("Samual");
+    expect(sam!.inboxMemberId).toBe(SAMUAL.teamMemberId);
+  });
+
+  it("does NOT duplicate an inbox member already matched to a finance user", async () => {
+    currentUser.value = { id: "u-josh", email: "josh@feldart.com" };
+    userRows.value = [{ userId: "u-josh", name: "Josh", email: "josh@feldart.com" }];
+    // Same email as the finance user Josh → already matched, must not re-appear.
+    inboxMembers.value = [
+      { ...SAMUAL, teamMemberId: "m-josh", email: "josh@feldart.com", name: "Josh (inbox)" },
+    ];
+
+    const res = await app.inject({ method: "GET", url: "/api/team-activity/members" });
+    const members = res.json().members as Array<{ userId: string }>;
+    expect(members.filter((m) => m.userId.startsWith("inbox:"))).toHaveLength(0);
+    expect(members).toHaveLength(1);
+  });
+
+  it("resolves an inbox: subject on the report route and passes the memberId through", async () => {
+    currentUser.value = { id: "u-josh", email: "josh@feldart.com" };
+    inboxMembers.value = [SAMUAL];
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/team-activity?userId=inbox:${SAMUAL.teamMemberId}&from=${FROM}&to=${TO}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(buildReportMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: `inbox:${SAMUAL.teamMemberId}`,
+        name: "Samual",
+        email: "samualkai@googlemail.com",
+        inboxMemberId: SAMUAL.teamMemberId,
+      }),
+      FROM,
+      TO,
+    );
+  });
+
+  it("404s an inbox: subject whose member no longer exists", async () => {
+    currentUser.value = { id: "u-josh", email: "josh@feldart.com" };
+    inboxMembers.value = []; // no such member
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/team-activity?userId=inbox:ghost&from=${FROM}&to=${TO}`,
+    });
+    expect(res.statusCode).toBe(404);
   });
 });

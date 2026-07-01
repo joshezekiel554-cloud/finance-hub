@@ -18,11 +18,16 @@ import { users } from "../../db/schema/auth.js";
 import { userActiveMinutes } from "../../db/schema/user-active-minutes.js";
 import { isAdmin, requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
-import { listMembers } from "../../integrations/inbox/members.js";
+import { listMembers, resolveMemberById } from "../../integrations/inbox/members.js";
 import { buildTeamActivityReport } from "../../modules/team-activity/report.js";
 import { csvFilename, reportToCsv } from "../../modules/team-activity/csv.js";
 
 const log = createLogger({ component: "routes.team-activity" });
+
+// Inbox-only teammates (no finance `users` row) are addressable as report
+// subjects under this synthetic userId. loadSubject unpacks it back to the
+// inbox memberId; their finance-side gather is simply empty.
+const INBOX_SUBJECT_PREFIX = "inbox:";
 
 // Accept ISO datetimes for from/to. The frontend always sends explicit
 // boundaries (start-of-day → end-of-range) so the route stays timezone-dumb;
@@ -70,14 +75,32 @@ const teamActivityRoute: FastifyPluginAsync = async (app) => {
       if (m.googleEmail) byEmail.set(m.googleEmail.toLowerCase(), m.teamMemberId);
     }
 
-    const out = rows
-      .map((r) => ({
-        userId: r.userId,
-        name: r.name,
-        email: r.email,
-        inboxMemberId: r.email ? byEmail.get(r.email.toLowerCase()) ?? null : null,
-      }))
-      .sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
+    const out = rows.map((r) => ({
+      userId: r.userId,
+      name: r.name,
+      email: r.email,
+      inboxMemberId: r.email ? byEmail.get(r.email.toLowerCase()) ?? null : null,
+    }));
+
+    // Append inbox-only teammates: inbox members with no matching finance user.
+    // They become selectable subjects (finance-side gather is empty; their
+    // inbox slice flows in via the memberId carried in the synthetic userId).
+    const matchedMemberIds = new Set(
+      out.map((m) => m.inboxMemberId).filter((id): id is string => Boolean(id)),
+    );
+    for (const m of members) {
+      if (matchedMemberIds.has(m.teamMemberId)) continue;
+      out.push({
+        userId: `${INBOX_SUBJECT_PREFIX}${m.teamMemberId}`,
+        name: m.name || null,
+        email: m.email || null,
+        inboxMemberId: m.teamMemberId,
+      });
+    }
+
+    out.sort((a, b) =>
+      (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""),
+    );
 
     return reply.send({ members: out });
   });
@@ -131,9 +154,35 @@ const teamActivityRoute: FastifyPluginAsync = async (app) => {
   });
 };
 
-async function loadSubject(
-  userId: string,
-): Promise<{ userId: string; name: string | null; email: string | null } | null> {
+type SubjectRow = {
+  userId: string;
+  name: string | null;
+  email: string | null;
+  inboxMemberId?: string | null;
+};
+
+async function loadSubject(userId: string): Promise<SubjectRow | null> {
+  // Inbox-only subject: unpack the memberId and build the subject from the
+  // inbox roster. No finance `users` row exists for them.
+  if (userId.startsWith(INBOX_SUBJECT_PREFIX)) {
+    const memberId = userId.slice(INBOX_SUBJECT_PREFIX.length);
+    if (!memberId) return null;
+    let member: Awaited<ReturnType<typeof resolveMemberById>> = null;
+    try {
+      member = await resolveMemberById(memberId);
+    } catch (err) {
+      log.warn({ err, memberId }, "inbox member resolve failed for subject");
+      return null;
+    }
+    if (!member) return null;
+    return {
+      userId,
+      name: member.name || null,
+      email: member.email || null,
+      inboxMemberId: member.teamMemberId,
+    };
+  }
+
   const rows = await db
     .select({ userId: users.id, name: users.name, email: users.email })
     .from(users)

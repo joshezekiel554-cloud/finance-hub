@@ -32,6 +32,10 @@ export type ReportSubject = {
   userId: string;
   name: string | null;
   email: string | null;
+  /** When set, the inbox member is already known (e.g. an inbox-only subject
+   * whose userId is `inbox:<memberId>`) — skip the email→member resolve and use
+   * this id directly. */
+  inboxMemberId?: string | null;
 };
 
 /** Map an inbox-side event onto the shared ActivityEvent shape. */
@@ -80,16 +84,19 @@ export async function buildTeamActivityReport(
   fromIso: string,
   toIso: string,
 ): Promise<TeamActivityReport> {
-  // Resolve the inbox member by email (matches email + googleEmail). A user
-  // with no inbox counterpart simply gets finance-only data.
-  let inboxMemberId: string | null = null;
-  try {
-    const member = subject.email
-      ? await resolveMemberByEmail(subject.email)
-      : null;
-    inboxMemberId = member?.teamMemberId ?? null;
-  } catch (err) {
-    log.warn({ err, userId: subject.userId }, "inbox member resolve failed");
+  // Resolve the inbox member. An inbox-only subject already carries its
+  // memberId (use it directly); otherwise resolve by email (matches email +
+  // googleEmail). A finance user with no inbox counterpart gets finance-only data.
+  let inboxMemberId: string | null = subject.inboxMemberId ?? null;
+  if (!inboxMemberId) {
+    try {
+      const member = subject.email
+        ? await resolveMemberByEmail(subject.email)
+        : null;
+      inboxMemberId = member?.teamMemberId ?? null;
+    } catch (err) {
+      log.warn({ err, userId: subject.userId }, "inbox member resolve failed");
+    }
   }
 
   const finance = await gatherFinanceActivity(subject.userId, fromIso, toIso);
