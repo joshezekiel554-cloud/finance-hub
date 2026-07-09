@@ -2393,6 +2393,16 @@ function ChannelEmailsCard({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["customer", customerId] });
+      // The send dialogs cache resolved recipients under their own query
+      // keys (staleTime > 0), so a recipient edit wouldn't otherwise show
+      // until the cache expired. Invalidate both preview caches so the
+      // next send reflects the edit immediately.
+      queryClient.invalidateQueries({
+        queryKey: ["statement-preview", customerId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["chase-preview", customerId],
+      });
     },
   });
 

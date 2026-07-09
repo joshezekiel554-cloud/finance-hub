@@ -1091,26 +1091,40 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       };
     });
 
-    // Recipients mirror the construction in modules/statements/send.ts
-    // so the preview shows what the send will actually do.
-    const primaryLower = customer.primaryEmail.toLowerCase();
-    const cc: string[] = [];
-    const seen = new Set<string>();
-    for (const e of customer.billingEmails ?? []) {
-      if (!e) continue;
-      const trimmed = e.trim();
-      if (!trimmed) continue;
-      const lower = trimmed.toLowerCase();
-      if (lower === primaryLower) continue;
-      if (seen.has(lower)) continue;
-      seen.add(lower);
-      cc.push(trimmed);
-    }
+    // Recipients resolved through the SAME per-channel resolver the send
+    // uses (resolveRecipients "statement"), so the preview shows exactly
+    // what the send will do. This previously derived To from primary_email
+    // and CC from billing_emails — the legacy model — which silently
+    // drifted from the send after it migrated to the statement_to/cc/bcc
+    // arrays, so the dialog showed the wrong recipients whenever the
+    // operator customised the statement recipient list.
+    const resolved = await resolveRecipients("statement", {
+      primaryEmail: customer.primaryEmail,
+      billingEmails: customer.billingEmails,
+      invoiceToEmails: customer.invoiceToEmails,
+      invoiceCcEmails: customer.invoiceCcEmails,
+      invoiceBccEmails: customer.invoiceBccEmails,
+      statementToEmails: customer.statementToEmails,
+      statementCcEmails: customer.statementCcEmails,
+      statementBccEmails: customer.statementBccEmails,
+      tags: customer.tags,
+    });
+    // TO: the resolved statement_to_emails, falling back to primary_email
+    // only when unset — mirrors send.ts exactly.
+    const previewTo =
+      resolved.to.length > 0
+        ? resolved.to.join(", ")
+        : customer.primaryEmail;
 
-    // BCC sourced from app_settings — empty string disables the
-    // header on the actual send, so the preview reflects that too.
+    // BCC = the global statement_bcc_email setting + any tag-driven
+    // bcc_statement rules — mirrors send.ts (the legacy preview omitted
+    // the tag-driven BCCs).
     const settings = await loadAppSettings();
     const configuredBcc = settings.statement_bcc_email?.trim() ?? "";
+    const previewBcc = [
+      ...(configuredBcc ? [configuredBcc] : []),
+      ...resolved.bcc,
+    ];
 
     // Render the statement template so the dialog can pre-fill its
     // subject + body editors. The send route accepts overrides; if
@@ -1156,9 +1170,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       totalOpenBalance: round2(totalOpenBalance),
       totalOverdueBalance: round2(totalOverdueBalance),
       recipients: {
-        to: customer.primaryEmail,
-        cc,
-        bcc: configuredBcc.length > 0 ? configuredBcc : null,
+        to: previewTo,
+        cc: resolved.cc,
+        bcc: previewBcc.length > 0 ? previewBcc.join(", ") : null,
       },
       template: {
         subject: renderedSubject,
