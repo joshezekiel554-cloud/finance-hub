@@ -1,0 +1,2480 @@
+{
+  "generatedFrom": "account_9018408_data_1783950021",
+  "scope": "esti+shaya+shmuel, done-excluded (operator 2026-07-13)",
+  "users": [
+    {
+      "key": "shaya",
+      "mondayName": "Shaya Grunfeld",
+      "email": "info@feldartcollection.co.uk"
+    },
+    {
+      "key": "esti",
+      "mondayName": "Esti Grunfeld",
+      "email": "customprints@feldartcollection.co.uk"
+    },
+    {
+      "key": "samual",
+      "mondayName": "Samual Kessel",
+      "email": "samualkai@gmail.com"
+    },
+    {
+      "key": "josh",
+      "mondayName": "Joshua Ezekiel",
+      "email": "admin@feldartcollection.co.uk"
+    }
+  ],
+  "boards": [
+    {
+      "key": "1311601108:main",
+      "mondayBoardId": "1311601108",
+      "ownerKey": "esti",
+      "title": "Esti",
+      "isMain": true,
+      "columns": [],
+      "tasks": [
+        {
+          "mondayItemId": "7540745770",
+          "title": "Things to check before file goes out",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2024-10-01T14:52:21",
+              "body": "holes correct size\n\nis there room for personalisation\n\nfeldart logo on\n\ninstruction sheet same as large pdf\n\ncorrect colour standoffs?\n\nclear/frost/white acrylic",
+              "assetPaths": [],
+              "postId": "3500191980",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2024-11-10T21:19:15",
+              "body": "add 2mm to fairy items that have uv printing",
+              "assetPaths": [],
+              "postId": "3609758892",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "7593118477",
+          "title": "placing an order",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2024-10-08T21:04:00",
+              "body": "make sure all prices work\n\nask other factories for second quote if necessary\n\ngive prices over to israel\n\nfinalise all design\n\nfinalise quantities\n\nsee if old items need reordering",
+              "assetPaths": [],
+              "postId": "3520142528",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "8492975807",
+          "title": "custom size acyrlic prints",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2025-02-16T21:49:16",
+              "body": "https://www.supersizeprint.co.uk/basket.aspx",
+              "assetPaths": [],
+              "postId": "3865444878",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "9695223199",
+          "title": "DEDUCT SAMPLE FEES BEFORE FINAL PAYMENT",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "18316981164",
+          "title": "FROST ACRYLIC INFO",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2025-10-31T10:43:44",
+              "body": "from fairy:\n\nPP422 frosted both sides so stronger white\n\nP422 frosted one side so lighter",
+              "assetPaths": [
+                "assets\\2523535484_whatsapp-image-2025-10-31-at-10-43-11.jpeg",
+                "assets\\2523535485_whatsapp-image-2025-10-31-at-10-43-09.jpeg"
+              ],
+              "postId": "4629526375",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "18386859737",
+          "title": "STANDOFFS SIZES",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2025-11-20T21:28:24",
+              "body": "regular standoffs are 12mm wide and back part 15mm front part 5mm\n\n27mm tabletop standoffs are 20mm wide and 6mm back part and 6mm front part plus 1mm each side for a plastic ring\n\n2x tabletop standoffs are 74mm and 6mm wide each.\n\nBesamin bottle -28x109x28mm\n\nswivel is 1cm deep\n\ngold spoons 13.5cm long, handle is 7mm wide, 3cm circle, 1.5cm deep\n\nwall clock back piece 56x56x16.2mm\n\ngold knobs for handles - 25mm long then 8mm handle plus 3mm for screw",
+              "assetPaths": [],
+              "postId": "4689201146",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2025-11-21T10:31:52",
+              "body": "for the tabletop 5cm standoff, the overall length is 54cm when it's closed fairy",
+              "assetPaths": [],
+              "postId": "4690392608",
+              "parentPostId": "4689201146"
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2025-11-21T11:36:10",
+              "body": "@Esti Grunfeld 74mm long is Lisa 5cm tsbletop",
+              "assetPaths": [],
+              "postId": "4690484330",
+              "parentPostId": "4689201146"
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2025-11-21T11:51:08",
+              "body": "@Esti Grunfeld Lisa 5cm tabletop are 6mm wide",
+              "assetPaths": [],
+              "postId": "4690504736",
+              "parentPostId": "4689201146"
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12034254365",
+          "title": "new order",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-05-17T23:03:36",
+              "body": "jayden - pi correct, files on drive, need to pay deposit\n\njohn - PI CORRECT, files on drive, PAID DEPOSIT\n\nLisa - pi correct, files on drive, PAID DEPOSIT\n\nFairy - pi correct, files on drive, pay depsoit.",
+              "assetPaths": [],
+              "postId": "5200254143",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12111557399",
+          "title": "april order accessories",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-05-26T22:51:34",
+              "body": "cloves - 200x25g, 5kg to lisa, and also 150 tubes filled\n\ntubes - 150 tubes\n\nspoons - anly - 400x5=2000, 398x3=1194 (3194 gold)\n\nMatches - 200x40 (7.5cm) bundles of white to lisa, 120x45 (9.6cm) bundles of white to fairy, 100x40 (9.6cm) white tip to lisa\n\nHenry - 1800 units plus plastic pieces\n\nLoaf Pan - 175 - 9x13\", 110-round pans\n\nTourel - 320 to fairy, 3680 to lisa plain white towels, 4000 in total\n\nOliver - 220 wig heads\n\nLawrence - 220 handles\n\n\n\nremind lisa about striking paper",
+              "assetPaths": [],
+              "postId": "5228593394",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12240487738",
+          "title": "May Accessories",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-10T13:01:45",
+              "body": "Ella - bencher leathers\n\nJack - ribbed stuff\n\nRenee - Resin\n\n\n\n2415 pole handles\n\n8110 ball handles\n\n4640 handle screws",
+              "assetPaths": [],
+              "postId": "5275362478",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12289200768",
+          "title": "do own lifestyle",
+          "mondayGroup": "Group Title",
+          "mondayStatus": "Working on it",
+          "status": "IN_PROGRESS",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-16T12:46:30",
+              "body": "Our self:\n\nAYESS01 done\n\nBHBLESKR01 done\n\nCHCD01 done\n\nCHSMB01 - done\n\nCJCD01 done\n\nCLRMB01 - done\n\nCLMB01 - done\n\nCJMB01 - done\n\nCLCD01 done\n\nCLTC01G - done\n\nCLTES01 - done\n\nCLTGA01 - - done\n\nHCCHG01 - done\n\nHCLFMHG01 - done\n\nIELGA01\n\nLBBHGD01 done\n\nLBKSHGN01 - done\n\nLBNBC01 - done\n\nLBKHS01\n\nLBKJL01\n\nMLLSW01\n\nWig Heads - etched - done\n\nwig heads tinted - done\n\nWPMB01 - done",
+              "assetPaths": [],
+              "postId": "5290989589",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12346817371",
+          "title": "resin year round items",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-23T12:59:30",
+              "body": "cake log retangle\n\ncake round\n\nvases\n\nwig heads\n\nsalad bowl with stand\n\nnapkin holder\n\nbencher holder\n\npan holder",
+              "assetPaths": [],
+              "postId": "5311760426",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12489007516",
+          "title": "shaya personalsiation",
+          "mondayGroup": "Group Title",
+          "mondayStatus": "waiting for other party",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "12495188715",
+          "title": "3 tiered kaerarh",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-07-09T22:59:42",
+              "body": "8 boring squares, match the top,\n\n3 tall rectangles on each door\n\ncopy the kpl03g,\n\nadd words to a very wide and then 2 smaller on either side",
+              "assetPaths": [],
+              "postId": "5362633757",
+              "parentPostId": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "1311601935:main",
+      "mondayBoardId": "1311601935",
+      "ownerKey": "shaya",
+      "title": "Shaya",
+      "isMain": true,
+      "columns": [
+        {
+          "id": "payment_status",
+          "label": "Payment Status",
+          "type": "dropdown",
+          "options": [
+            {
+              "id": "paid",
+              "label": "Paid",
+              "color": "blue"
+            }
+          ]
+        }
+      ],
+      "tasks": [
+        {
+          "mondayItemId": "3890449380",
+          "title": "T&Cs updates no return sale items",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "4776757330",
+          "title": "30% off custom plaques descri[tiom",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "7235092812",
+          "title": "find cheap company for uv dtf 3d perma stickers",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "7304667138",
+          "title": "call fairdeal",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "8019185253",
+          "title": "Please refund zipporagalpert@aol.com £4.25 on paypal",
+          "mondayGroup": "Group Title",
+          "mondayStatus": "Priority",
+          "status": "TODO",
+          "priority": "high",
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "8381979769",
+          "title": "Gift magicians",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "8572272424",
+          "title": "post about cabin on linkedin ic sent to esti",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "8615919962",
+          "title": "NINJA TRANSFERS",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2025-03-04T13:24:20",
+              "body": "smallest sticker size costs 10.99.\n\nCheck attatchment for shipping prices.",
+              "assetPaths": [
+                "assets\\1993495072_whatsapp-image-2025-03-04-at-13-23-08.jpeg"
+              ],
+              "postId": "3911888637",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "8718160903",
+          "title": "Charge AY for Kinyan shipping",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "9179676340",
+          "title": "Mir dinner LinkedIn post",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "9244752098",
+          "title": "Call vitality to see if Chaya is added",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "9303933414",
+          "title": "maxsip pure ipad",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "9297784135",
+          "title": "List on niche Jewish marketplaces (e.g., Judaica Webstore, Jewish Gift Place)",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "9700671600",
+          "title": "discuss with josh google drive pics with usa stores",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "9841333663",
+          "title": "sort out petal acrylics",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "10061241492",
+          "title": "Shmily don’t charge",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2025-09-17T13:56:30",
+              "body": "AY KINYAN SWITZERLAND\nBRANDEIS SWITZERLAND\nPAL Israel - 267.68",
+              "assetPaths": [],
+              "postId": "4498044401",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "10061419951",
+          "title": "Parcel power dont charge",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2025-09-16T16:07:42",
+              "body": "11 boxes morheim edgeware\nRivka Graham x 1 box",
+              "assetPaths": [],
+              "postId": "4494538293",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "18325348874",
+          "title": "Sale items USA new - stores",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2025-11-01T20:41:26",
+              "body": "Hafrashas Challah artwork\nWall hanging Hadlakas Neiros Card\nHadlakas Neiros Artwork Card\n\nArtwork Hadlaks Neiros tray\n\nArtwork Kiddush card\nGold Leaf",
+              "assetPaths": [],
+              "postId": "4632544787",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "18325474732",
+          "title": "Meeting with artscroll to push",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "10723459165",
+          "title": "Call Rach",
+          "mondayGroup": "Group Title",
+          "mondayStatus": "waiting for other party",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "10723470417",
+          "title": "Call veretsky",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "10810475365",
+          "title": "Clearance tab on website",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "10942150858",
+          "title": "Call precious",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "10967225631",
+          "title": "write linkedin post about amazon usa",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "11063214293",
+          "title": "Quickbooks/Leibel info",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-01-21T18:47:13",
+              "body": "QUICKBOOKS CONTACT NUMBER; 800 446 8848 OPTION 2 or 800-877-3279\n\nQUICKBOOKS CASE NUMBER; 151 497 90941 or 1515 4580 709\n\nVERIFICATION;\nCompany ID; 9341 4529 0919 4160\nPhone Number; 718 569 7045\n\nSSN; 126824047\n\nDOB; 03/22/1994 - 32 years old on next birthday\n\nBENZION TWERSKI\n\nPrimary email: info@feldart.com",
+              "assetPaths": [],
+              "postId": "4853077949",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11541136704",
+          "title": "convert to to uk the usa shop invoices from pesach",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "11651368258",
+          "title": "Refoel owes £100 for penalty",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "11797750197",
+          "title": "apply for business AMEX",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "12194709140",
+          "title": "11844 - Dovid Feldman",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "12217584866",
+          "title": "Pay amex bill  (Jun 8, 2026)",
+          "mondayGroup": "Group Title",
+          "mondayStatus": "Priority",
+          "status": "TODO",
+          "priority": "high",
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "12312336112",
+          "title": "sold at summer 26 faire 10 crumb sweepers",
+          "mondayGroup": "Group Title",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "12476242333",
+          "title": "Pay amex bill  (Jul 8, 2026)",
+          "mondayGroup": "Group Title",
+          "mondayStatus": "Priority",
+          "status": "TODO",
+          "priority": "high",
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        }
+      ]
+    },
+    {
+      "key": "1311601935:invoices",
+      "mondayBoardId": "1311601935",
+      "ownerKey": "shaya",
+      "title": "Invoices",
+      "isMain": false,
+      "columns": [
+        {
+          "id": "payment_status",
+          "label": "Payment Status",
+          "type": "dropdown",
+          "options": [
+            {
+              "id": "paid",
+              "label": "Paid",
+              "color": "blue"
+            }
+          ]
+        }
+      ],
+      "tasks": [
+        {
+          "mondayItemId": "8069904745",
+          "title": "Joel Hershkowitz Satmar trays, plus deliver, stickers",
+          "mondayGroup": "Invoices",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-01-05T17:20:45",
+              "body": "asked him on Jan 5th. Checking",
+              "assetPaths": [],
+              "postId": "4799376919",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "8617700089",
+          "title": "8828 Bodner",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "8958082947",
+          "title": "Sholom cohen",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "10910146413",
+          "title": "Ohr Chodosh",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-01-05T16:43:49",
+              "body": "Birchas Habayis\nChofetz chaim pics",
+              "assetPaths": [],
+              "postId": "4799032799",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "10910204566",
+          "title": "Posen Candles 10601",
+          "mondayGroup": "Invoices",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "10910198899",
+          "title": "Graham swivel dip dishes 10616",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "10910297680",
+          "title": "Shloime Mozes 10603",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "10910896605",
+          "title": "Lobenstein - solo supplies",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "10967181167",
+          "title": "Joseph 10639",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-01-11T00:20:18",
+              "body": "Havdalah cards 24 x £12\ncookie jar 1 x £26\ncake holder 1 x £33",
+              "assetPaths": [],
+              "postId": "4819298029",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-01-21T19:27:40",
+              "body": "Australian guy",
+              "assetPaths": [],
+              "postId": "4853241690",
+              "parentPostId": "4819298029"
+            }
+          ]
+        },
+        {
+          "mondayItemId": "10969908474",
+          "title": "Kiddush cards tiferes",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "11114347542",
+          "title": "Chana Invocies x2",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "11317033698",
+          "title": "neuman order 40 x £14.00 order 10799",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-04-20T16:04:53",
+              "body": "Invoiced to Orach Chaim;\n\nBesamim Holders x40\n\n£14.00 each\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5116646351",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-21T14:53:05",
+              "body": "Orach Chaim.pdf",
+              "assetPaths": [
+                "assets\\2915683012_orach-chaim.pdf"
+              ],
+              "postId": "5120189444",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11319466140",
+          "title": "10804 £40 EACH",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "11484282042",
+          "title": "11069 x £41 each",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "11569597334",
+          "title": "Benny leitner misaskim",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-04-20T16:14:23",
+              "body": "MIsaskim; admin@misaskim.co.uk\n\n53 Motzei Matzah pack @ £26.00 each\n53 logos @ £5 each\n\n\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5116693760",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-21T14:55:00",
+              "body": "Misaskim.pdf",
+              "assetPaths": [
+                "assets\\2915688224_misaskim.pdf"
+              ],
+              "postId": "5120196238",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11569637880",
+          "title": "Yechiel Stepskys Chaveirim",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-04-20T16:17:50",
+              "body": "Chaveirim; manchesterchaverim@gmail.com\nBencher Set; 26 @£50 each \n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5116817339",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-21T14:56:37",
+              "body": "Chaverim.pdf",
+              "assetPaths": [
+                "assets\\2915693027_chaverim.pdf"
+              ],
+              "postId": "5120202078",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11572888172",
+          "title": "dolties matzah trays x15",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-04-20T16:20:15",
+              "body": "Holy Law; admim@holylaw.org.uk & Doltiesj@gmail.com\n15 Matzah Trays @£25 each\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5116860210",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-21T15:16:29",
+              "body": "Holy Law.pdf",
+              "assetPaths": [
+                "assets\\2915750782_holy-law.pdf"
+              ],
+              "postId": "5120283107",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11585241535",
+          "title": "11162 - sherer",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "11593239708",
+          "title": "Brandeis haggada stands x35",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-03-30T14:22:58",
+              "body": "delivery london £4 per drop\nMAnchester £3 per drop",
+              "assetPaths": [],
+              "postId": "5054988188",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-16T00:01:19",
+              "body": "Brandeis;\n£25 x35\ndelivery;\nmcr; 14 x £3 each\nlondon; 8 x £4 each",
+              "assetPaths": [],
+              "postId": "5106114832",
+              "parentPostId": "5054988188"
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11596399638",
+          "title": "mozes logo  add on £120 11215",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": "11597997103",
+          "title": "11350 plus 11388 benjamin",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-15T23:34:13",
+              "body": "Etz Chaim;\n35 Towel Boxes £38.00 each\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5106020030",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11598924049",
+          "title": "Mars",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-15T23:37:27",
+              "body": "Mars;\n260 Towel Boxes @ £38.00 each\nPaid already £5000 please Show on invoice\n\nShaya Bank details;",
+              "assetPaths": [],
+              "postId": "5106025054",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11613292322",
+          "title": "11102 we sent extra re invoice",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "waiting for other party",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "11609097493",
+          "title": "Hershy kind",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-15T23:29:36",
+              "body": "Kosher Savers\n18 sofcover zemiros sets x £69.70\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5106012468",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11613991012",
+          "title": "11428",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-15T23:26:36",
+              "body": "Invoice to\n\nHoly Law\nWashing cup and towel set; £20 10pcs\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5106006626",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11629641564",
+          "title": "10901",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "waiting for other party",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "11630154219",
+          "title": "sheva neuman order check whastap plus £3.50 delivery",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-03-30T19:50:08",
+              "body": "Plus £3.50 delivery",
+              "assetPaths": [],
+              "postId": "5056763220",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-15T23:21:29",
+              "body": "Lev Chaim\nPesach Washing cup and towel set; £20 x11\nDelivery; £3 x11\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5105997716",
+              "parentPostId": "5056763220"
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11718382406",
+          "title": "Yitzi invoice for challah board",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-04-15T23:38:39",
+              "body": "Challah Board Set; 1x £150",
+              "assetPaths": [],
+              "postId": "5106026882",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11857618598",
+          "title": "fraidy monheit pesach/purim gifts",
+          "mondayGroup": "Invoices",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": []
+        },
+        {
+          "mondayItemId": "11880633593",
+          "title": "Misaskim x4 motzei matzah packs",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-04-29T16:49:04",
+              "body": "4x Motzei matzah pack\n£31 each\n\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5147645843",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-05-10T11:51:27",
+              "body": "Misaskim 2.pdf",
+              "assetPaths": [
+                "assets\\2959168368_misaskim-2.pdf"
+              ],
+              "postId": "5179291572",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11961360449",
+          "title": "11692",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-08T15:06:39",
+              "body": "Kinyan - Avromi Segal\nAvromisegal@gmail.com\n\n\nHafrashas Challah covers With Logo £28.80 each\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5176515428",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-05-10T11:53:50",
+              "body": "Kinyan Avromi Segal.pdf",
+              "assetPaths": [
+                "assets\\2959169018_kinyan-avromi-segal.pdf"
+              ],
+              "postId": "5179292167",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11961431481",
+          "title": "11701",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-08T15:10:50",
+              "body": "Zichron UK\nAdina@zichronuk.org\n\n18 Artscroll Havdalah Trays £14 each\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5176531381",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-05-10T11:55:27",
+              "body": "Zichron Uk.pdf",
+              "assetPaths": [
+                "assets\\2959169320_zichron-uk.pdf"
+              ],
+              "postId": "5179292604",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "11961459246",
+          "title": "11727",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-08T15:13:49",
+              "body": "White Peak Holdings ltd\n\n;\nref as; Corporate Gifts\nyehuda@white-peak.co.uk\n\n\n\nHafrashas Challah cover x37 £20 each\nSwinging Mayim Achronim x1 £32\nFamily Havdalah Gift Box Set - Crystal Flame x1 £70\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5176543161",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-05-10T11:59:04",
+              "body": "White Peak Holdings.pdf",
+              "assetPaths": [
+                "assets\\2959170870_white-peak-holdings.pdf"
+              ],
+              "postId": "5179297828",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12041848612",
+          "title": "11776 -  smith",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-18T17:46:20",
+              "body": "£430",
+              "assetPaths": [],
+              "postId": "5203227468",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12054262086",
+          "title": "Kinyan Pesach Gifts",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "esti",
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-19T18:49:47",
+              "body": "r shwartz - 11\nR shaya klien - 17\nR Yossi Greenblatt - 16\nShaya Chissick - 16\ntzvi marmonstein - 18\nPinny Kahn - 26\nR Yechiel Emmanuel - 13\navrumi segal - 11\nE M Littlestone - 8\nR Liberman - 10",
+              "assetPaths": [],
+              "postId": "5208169894",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-19T18:50:32",
+              "body": "£22.50 each\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5208172558",
+              "parentPostId": "5208169894"
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-06-11T16:43:51",
+              "body": "@Esti Grunfeld really important this",
+              "assetPaths": [],
+              "postId": "5280381755",
+              "parentPostId": "5208169894"
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-05-19T22:52:31",
+              "body": "I honestly dont know whts flying here @Shaya Grunfeld",
+              "assetPaths": [],
+              "postId": "5209428533",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-20T12:00:03",
+              "body": "Each needs a separate invoice for HAggadah stands. Top left hand corer shopuld say name of Rosh Chaburah for example; Yossi Greenblatt Chaburah etc. Product cost is £22.50 each\n\nYou don't need to add anyhting else, no email required etc",
+              "assetPaths": [],
+              "postId": "5210722225",
+              "parentPostId": "5209428533"
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-11T22:59:12",
+              "body": "R Schwartz.pdfR Lieberman.pdfR Pini Kahan.pdfR EM Littlestone.pdfR Avrumi Sega;.pdfR Shaya Chissick.pdfR Yechiel Emanuel.pdfR Shaya Klyne.pdfR Yossi Greenblatt.pdfR Tzvi Marmorstein.pdf",
+              "assetPaths": [
+                "assets\\3038244333_r-lieberman.pdf",
+                "assets\\3038244335_r-schwartz.pdf",
+                "assets\\3038244336_r-pini-kahan.pdf",
+                "assets\\3038244337_r-em-littlestone.pdf",
+                "assets\\3038244340_r-avrumi-sega.pdf",
+                "assets\\3038244388_r-shaya-chissick.pdf",
+                "assets\\3038244392_r-yechiel-emanuel.pdf",
+                "assets\\3038244396_r-yossi-greenblatt.pdf",
+                "assets\\3038244397_r-shaya-klyne.pdf",
+                "assets\\3038244411_r-tzvi-marmorstein.pdf"
+              ],
+              "postId": "5281739569",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-11T22:59:47",
+              "body": "done @Shaya Grunfeld",
+              "assetPaths": [],
+              "postId": "5281740621",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12054929948",
+          "title": "112461 - Dolties",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-19T19:14:52",
+              "body": "Holy Law\njonny613@hotmail.com\n\n2x Matzah Plates £25 each\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5208363855",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-11T23:04:25",
+              "body": "Holy Law 2.pdf",
+              "assetPaths": [
+                "assets\\3038253709_holy-law-2.pdf"
+              ],
+              "postId": "5281751396",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12245822665",
+          "title": "Dovid feldman Towles",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-06-15T15:40:30",
+              "body": "dfeldman763@gmail.com\n\nKollel Kinyan Hashas\n89 Towels £7 each\n\nZohar Bank Details;\nZohar Kosher Limited\nAccount number: 98141139\nSort code: 04-00-75",
+              "assetPaths": [],
+              "postId": "5287781615",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-15T18:12:29",
+              "body": "Kollel Kinyan Hashas.pdf",
+              "assetPaths": [
+                "assets\\3043434776_kollel-kinyan-hashas.pdf"
+              ],
+              "postId": "5288468230",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12257959432",
+          "title": "Manchester Judaica",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-11T22:48:38",
+              "body": "120 HNCC01G PERSONALISED £9.90 A PIECE",
+              "assetPaths": [],
+              "postId": "5281717441",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "12260823574",
+          "title": "Edibles order Gross",
+          "mondayGroup": "Invoices",
+          "mondayStatus": "Invoice sent",
+          "status": "WAITING",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "payment_status": "paid"
+          },
+          "comments": [
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-06-15T15:42:24",
+              "body": "Corporate Chocolate Gift\n\n3 Part - 40pcs at £17.50 each\n4 part - 20 pcs £20 each",
+              "assetPaths": [],
+              "postId": "5287789950",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Esti Grunfeld",
+              "authorEmail": "customprints@feldartcollection.co.uk",
+              "createdAt": "2026-06-15T18:14:38",
+              "body": "Gross.pdf",
+              "assetPaths": [
+                "assets\\3043440404_gross.pdf"
+              ],
+              "postId": "5288476757",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "8396980753",
+          "title": "#8424",
+          "mondayGroup": "Website Invoices to refund",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Avi Liebermann",
+              "authorEmail": "sales@feldartcollection.co.uk",
+              "createdAt": "2025-02-04T14:00:33",
+              "body": "Refund x4 candles",
+              "assetPaths": [],
+              "postId": "3831372271",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": "8465815746",
+          "title": "8727",
+          "mondayGroup": "Website Invoices to refund",
+          "mondayStatus": null,
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "shaya"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {},
+          "comments": [
+            {
+              "authorName": "Avi Liebermann",
+              "authorEmail": "sales@feldartcollection.co.uk",
+              "createdAt": "2025-02-12T18:00:49",
+              "body": "refund DD02s out of stock",
+              "assetPaths": [],
+              "postId": "3856152542",
+              "parentPostId": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "18409849807:main",
+      "mondayBoardId": "18409849807",
+      "ownerKey": "samual",
+      "title": "Samual",
+      "isMain": true,
+      "columns": [
+        {
+          "id": "category",
+          "label": "Category",
+          "type": "dropdown",
+          "options": [
+            {
+              "id": "training",
+              "label": "training",
+              "color": "blue"
+            },
+            {
+              "id": "logistics",
+              "label": "Logistics",
+              "color": "green"
+            },
+            {
+              "id": "improvement",
+              "label": "Improvement",
+              "color": "amber"
+            },
+            {
+              "id": "information",
+              "label": "Information",
+              "color": "purple"
+            },
+            {
+              "id": "logistics_information",
+              "label": "Logistics, Information",
+              "color": "rose"
+            },
+            {
+              "id": "marketing",
+              "label": "marketing",
+              "color": "cyan"
+            }
+          ]
+        },
+        {
+          "id": "priority",
+          "label": "Priority",
+          "type": "dropdown",
+          "options": [
+            {
+              "id": "low",
+              "label": "Low",
+              "color": "blue"
+            },
+            {
+              "id": "medium",
+              "label": "Medium",
+              "color": "green"
+            },
+            {
+              "id": "high",
+              "label": "High",
+              "color": "amber"
+            }
+          ]
+        },
+        {
+          "id": "effort_hours",
+          "label": "Effort (hours)",
+          "type": "text"
+        }
+      ],
+      "tasks": [
+        {
+          "mondayItemId": null,
+          "title": "Familiarise myself with search engine optimization (SEO) concepts",
+          "mondayGroup": "Active",
+          "mondayStatus": "In Progress",
+          "status": "IN_PROGRESS",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "training",
+            "priority": "low"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": null,
+          "title": "find suitable software and use it to create catalog",
+          "mondayGroup": "Active",
+          "mondayStatus": "In Progress",
+          "status": "IN_PROGRESS",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "logistics",
+            "priority": "medium"
+          },
+          "comments": [
+            {
+              "authorName": "Samual Kessel",
+              "authorEmail": "samualkai@gmail.com",
+              "createdAt": "2026-05-07T15:07:06",
+              "body": "scribus is a free software that acts similarly to indesign. If I use claude.ai then I should be able to replicate the old catalogue but with added new items.",
+              "assetPaths": [],
+              "postId": "5172876393",
+              "parentPostId": null
+            }
+          ]
+        },
+        {
+          "mondayItemId": null,
+          "title": "go through each product and set unseen products' inventory to  '0'",
+          "mondayGroup": "Active",
+          "mondayStatus": "In Progress",
+          "status": "IN_PROGRESS",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "improvement",
+            "priority": "medium"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": null,
+          "title": "install feldart phone app",
+          "mondayGroup": "Active",
+          "mondayStatus": "Not Started",
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "information",
+            "priority": "low"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": null,
+          "title": "Inventory Qs - box upstairs",
+          "mondayGroup": "Active",
+          "mondayStatus": "Not Started",
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "logistics_information",
+            "priority": "low"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": null,
+          "title": "items that has zeo in stock to discontinue - spk to shaya",
+          "mondayGroup": "Active",
+          "mondayStatus": "Not Started",
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "logistics",
+            "priority": "medium"
+          },
+          "comments": []
+        },
+        {
+          "mondayItemId": null,
+          "title": "Get login from Shaya- add photos to google maps",
+          "mondayGroup": "Active",
+          "mondayStatus": "Not Started",
+          "status": "TODO",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "logistics",
+            "priority": "low"
+          },
+          "comments": []
+        }
+      ]
+    },
+    {
+      "key": "18409849807:linkedin",
+      "mondayBoardId": "18409849807",
+      "ownerKey": "samual",
+      "title": "LinkedIn",
+      "isMain": false,
+      "columns": [
+        {
+          "id": "category",
+          "label": "Category",
+          "type": "dropdown",
+          "options": [
+            {
+              "id": "training",
+              "label": "training",
+              "color": "blue"
+            },
+            {
+              "id": "logistics",
+              "label": "Logistics",
+              "color": "green"
+            },
+            {
+              "id": "improvement",
+              "label": "Improvement",
+              "color": "amber"
+            },
+            {
+              "id": "information",
+              "label": "Information",
+              "color": "purple"
+            },
+            {
+              "id": "logistics_information",
+              "label": "Logistics, Information",
+              "color": "rose"
+            },
+            {
+              "id": "marketing",
+              "label": "marketing",
+              "color": "cyan"
+            }
+          ]
+        },
+        {
+          "id": "priority",
+          "label": "Priority",
+          "type": "dropdown",
+          "options": [
+            {
+              "id": "low",
+              "label": "Low",
+              "color": "blue"
+            },
+            {
+              "id": "medium",
+              "label": "Medium",
+              "color": "green"
+            },
+            {
+              "id": "high",
+              "label": "High",
+              "color": "amber"
+            }
+          ]
+        },
+        {
+          "id": "effort_hours",
+          "label": "Effort (hours)",
+          "type": "text"
+        }
+      ],
+      "tasks": [
+        {
+          "mondayItemId": null,
+          "title": "Rebrand",
+          "mondayGroup": "Linkedin",
+          "mondayStatus": "In Progress",
+          "status": "IN_PROGRESS",
+          "priority": null,
+          "dueDate": null,
+          "assigneeKeys": [
+            "samual"
+          ],
+          "unmatchedAssignees": [],
+          "columnValues": {
+            "category": "marketing",
+            "priority": "high"
+          },
+          "comments": [
+            {
+              "authorName": "Samual Kessel",
+              "authorEmail": "samualkai@gmail.com",
+              "createdAt": "2026-04-28T12:30:37",
+              "body": "There is a moment. Just before a gift is opened. A moment largely forgotten by our competitors. The first impression you have when you are the privileged recipient of a Feldart gift is this: refined pastel hues, crisp, clean lines, and the weight of it in your hands, which promises quality. luxury. craftsmanship. It is a box marked with our new logo, a matrix of 12 stones. These 12 stones are the 12 gems of the Choshen, the high priest’s breastplate. These 12 Stones, once carried together over the heart, now represent Feldart and our tagline: Gifts from the heart. The people in your life deserve an unboxing experience like no other. Feldart: Judaica gifts chosen with care, presented with intention, and felt long after the wrapping is gone.",
+              "assetPaths": [],
+              "postId": "5142088588",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Samual Kessel",
+              "authorEmail": "samualkai@gmail.com",
+              "createdAt": "2026-04-28T19:15:44",
+              "body": "Imagine the moment: You have just received a parcel from FeldArt. Your first impression is the weight of it. It feels solid, rigid, expensive. You flick open the lid, the magnets engage, and the lid swings back with a satisfying ‘click’. You are impressed by the soft pastel hues: undulating seas of paint mix with a nebula of muted tones. Your eyes are drawn to a matrix of 12 black dots: our Choshen.",
+              "assetPaths": [],
+              "postId": "5143942203",
+              "parentPostId": "5142088588"
+            },
+            {
+              "authorName": "Samual Kessel",
+              "authorEmail": "samualkai@gmail.com",
+              "createdAt": "2026-04-29T00:08:07",
+              "body": "Imagine the moment: You just received a parcel from Feldart. Your first impression is this: This feels heavy. Solid. The edges are crisp and square. You look over the box in your hands. The colours are beautiful. You imagine the pastel swirls as the tails of a distant nebula: Space dust bleeding from a comet in the solar winds of fickle alloys vaporising in the rays of a faraway sun. You follow the widths of the case you are holding and eye 12 black dots. Your right hand feels under the magnetic cover to flip the lid back Your eyes follow your hand and stop at the height of the opened lid, then they fall to the centre of the panel. The 12 black dots on the outside have now been brought close to be revealed as sparkling gems. These are our Choshen: 12 stones, one for each tribe, which were once carried together over the heart of the Kohen Gadol. (Something here to help flow) Gift-giving is about bringing people together, and Feldart takes this to a higher level.\n\n(okay now what level is that? can i squeeze in some chassidus?)",
+              "assetPaths": [],
+              "postId": "5144977976",
+              "parentPostId": "5142088588"
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-04-29T18:35:44",
+              "body": "@Samual Kessel It is fantastic, very well written, but it has not got a flow that would captivate the audience. it needs to be very basic language, flow nicely, with a bit of humour and storytelling",
+              "assetPaths": [],
+              "postId": "5148241957",
+              "parentPostId": "5142088588"
+            },
+            {
+              "authorName": "Samual Kessel",
+              "authorEmail": "samualkai@gmail.com",
+              "createdAt": "2026-05-07T15:40:58",
+              "body": "Here at Feldart, we have been\nworking on something new. A total redesign of our packaging. We want to be your\nfirst thought when it comes to luxury Judaica gift-giving.\n\nImagine you just received a\nparcel from Feldart. Your first impression is this: This feels heavy. Solid.\nThe edges are crisp and square. Soft pastel swirls dance across the box faces.\nOn the side of your case, you eye 12 black dots. Your right-hand flips back the\nmagnetic cover. The 12 black dots on the outside are now front and centre,\nbrought close and revealed as sparkling gems. These are our Choshen. 12 stones,\none for each tribe, which were once carried together over the heart of the\nKohen Gadol. And that’s the embodiment of our philosophy: uniting the tribes through\ngift-giving. For ‘Gifts from the heart’, give with Feldart.",
+              "assetPaths": [],
+              "postId": "5173102523",
+              "parentPostId": null
+            },
+            {
+              "authorName": "Samual Kessel",
+              "authorEmail": "samualkai@gmail.com",
+              "createdAt": "2026-05-07T15:41:31",
+              "body": "the ending is a bit abrupt\n\nI think it needs another couple of lines",
+              "assetPaths": [],
+              "postId": "5173104804",
+              "parentPostId": "5173102523"
+            },
+            {
+              "authorName": "Samual Kessel",
+              "authorEmail": "samualkai@gmail.com",
+              "createdAt": "2026-05-11T13:20:20",
+              "body": "I put it through claude and asked to use Shaya's linkedin posts as style reference. Here's the result, tell me if it seems too AI:\n\nI picked it up.\n\nTurned it over in my hands.\n\nFelt the weight. The crisp edges. The soft pastel swirls across the box faces.\n\nThen I noticed the 12 dots on the side.\n\nI flipped back the magnetic cover.\n\nAnd there they were — up close, revealed. Sparkling gems. Our Choshen. 12 stones, one for each tribe of Israel, once carried over the heart of the Kohen Gadol himself.\n\nThat's not packaging. That's a statement.\n\nAt Feldart, we've been working on something new. A total redesign. Because when someone receives a gift from us, we want that moment — the lift, the reveal, the this feels different — to begin before they even open the box.\n\nLuxury Judaica gift-giving deserves a first impression worthy of it.\n\nWe want to be your first thought when it matters most.\n\nGifts from the heart. Give with Feldart.",
+              "assetPaths": [],
+              "postId": "5180696234",
+              "parentPostId": "5173102523"
+            },
+            {
+              "authorName": "Shaya Grunfeld",
+              "authorEmail": "info@feldartcollection.co.uk",
+              "createdAt": "2026-05-12T19:12:28",
+              "body": "way too AI. Sorry!",
+              "assetPaths": [],
+              "postId": "5186501332",
+              "parentPostId": "5173102523"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
