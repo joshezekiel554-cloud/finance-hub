@@ -56,7 +56,7 @@ import {
   renderTemplate,
 } from "../../modules/email-compose/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
-import { buildOpenInvoiceConditions } from "../../modules/statements/send.js";
+import { buildStatementScopeConditions } from "../../modules/statements/send.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 import {
@@ -972,13 +972,14 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     await requireAuth(req);
     const id = (req.params as { id: string }).id;
     // Book scope — required, mirrors the send route so the preview shows
-    // exactly the invoices the send would include (origin-split-2 W1).
+    // exactly the invoices the send would include. "both" = the combined
+    // two-box statement (all open invoices across books).
     const queryParse = z
       .object({
-        origin: z.enum(["feldart", "tj"], {
+        origin: z.enum(["feldart", "tj", "both"], {
           errorMap: () => ({
             message:
-              "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+              "origin is required and must be 'feldart', 'tj' or 'both'",
           }),
         }),
       })
@@ -1018,9 +1019,10 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         balance: invoices.balance,
       })
       .from(invoices)
-      // Shared condition with the send path (buildOpenInvoiceConditions)
-      // so preview and send can never disagree about scope.
-      .where(buildOpenInvoiceConditions(id, origin))
+      // Shared condition with the send path (buildStatementScopeConditions)
+      // so preview and send can never disagree about scope — including
+      // the "both" scope, which spans the two books.
+      .where(buildStatementScopeConditions(id, origin))
       .orderBy(asc(invoices.issueDate))
       .limit(STATEMENT_PREVIEW_INVOICE_CAP + 1);
 
@@ -1145,7 +1147,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       const fullInvoices = await db
         .select()
         .from(invoices)
-        .where(buildOpenInvoiceConditions(id, origin))
+        .where(buildStatementScopeConditions(id, origin))
         .limit(STATEMENT_PREVIEW_INVOICE_CAP);
       const baseVars = buildTemplateVars({
         customer: {

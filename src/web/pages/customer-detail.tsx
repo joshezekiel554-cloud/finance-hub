@@ -221,11 +221,11 @@ export default function CustomerDetailPage() {
   const rmaType = search.rmaType;
   const [holdDialogOpen, setHoldDialogOpen] = useState(false);
   // Statement dialog state — null when closed, else the book scope the
-  // triggering surface owns (Feldart panel → 'feldart', TJ batch lives
-  // on /chase). Origin rides the send POST so the statement only
-  // covers that book's invoices.
+  // triggering surface owns (Feldart panel → 'feldart', TJ panel's
+  // combined button → 'both', TJ batch lives on /chase). Origin rides
+  // the send POST; 'both' renders the two-box combined statement.
   const [statementDialog, setStatementDialog] = useState<{
-    origin: "feldart" | "tj";
+    origin: "feldart" | "tj" | "both";
   } | null>(null);
   const [statementSuccess, setStatementSuccess] =
     useState<StatementSendSuccess | null>(null);
@@ -3012,7 +3012,8 @@ function InvoicesPanel({
   // Panel header actions — parent owns the chase/statement dialogs and
   // threads the book through to them.
   onChase: (origin: "feldart" | "tj") => void;
-  onStatement: (origin: "feldart" | "tj") => void;
+  // 'both' = the combined two-box statement (TJ panel's combined button).
+  onStatement: (origin: "feldart" | "tj" | "both") => void;
   // Operator clicked "Send chase email" with N invoices selected.
   // The parent owns the dialog state; we just hand it the ids of
   // the selected invoice rows (credit memos filtered out — chase is
@@ -3564,6 +3565,20 @@ function InvoicesPanel({
                 >
                   <Send className="size-3.5" />
                   TJ chase
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onStatement("both")}
+                  disabled={!(tjBalance > 0 && feldartBalance > 0)}
+                  title={
+                    tjBalance > 0 && feldartBalance > 0
+                      ? "Send ONE statement covering both books — Feldart box and Torah Judaica box on the same PDF, with combined totals"
+                      : "Combined statement needs an open balance in both books"
+                  }
+                >
+                  <FileText className="size-3.5" />
+                  Statement (both)
                 </Button>
                 {oldestVerifying ? (
                   <Button

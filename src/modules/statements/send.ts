@@ -30,7 +30,7 @@
 //     empty so legacy templates don't blow up.
 
 import axios, { type AxiosError } from "axios";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
@@ -43,6 +43,7 @@ import {
 } from "../../db/schema/crm.js";
 import { users } from "../../db/schema/auth.js";
 import { customers } from "../../db/schema/customers.js";
+import { creditMemos as creditMemosTable } from "../../db/schema/credit-memos.js";
 import { invoices, type Invoice } from "../../db/schema/invoices.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
@@ -58,6 +59,7 @@ import {
 import { appendSignatures } from "../email-compose/signatures.js";
 import {
   renderStatementPdf,
+  type StatementBookInput,
   type StatementCreditMemoInput,
   type StatementInvoiceInput,
 } from "./pdf.js";
@@ -75,12 +77,27 @@ const QBO_PROD = "https://quickbooks.api.intuit.com";
 // cap as the legacy per-invoice attach flow.
 const MAX_INVOICES_PER_SEND = 50;
 
+// Statement scope. "feldart" / "tj" render the classic single-book
+// statement; "both" renders one document with a Feldart box and a
+// Torah Judaica box plus a combined overall totals block (operator
+// request 2026-07-14 — supersedes the origin-split-2 W1 removal of the
+// old blended statement, which mixed the books into one table; this
+// version keeps them strictly separated on the page).
+export type StatementOrigin = "feldart" | "tj" | "both";
+
+// Section labels printed above each book's table on a combined
+// statement. Also used by the pdf-preview route.
+export const BOOK_LABELS: Record<"feldart" | "tj", string> = {
+  feldart: "FELDART",
+  tj: "TORAH JUDAICA",
+};
+
 export type ManagerInput = {
   customerId: string;
   userId: string;
-  // Required per-book scope. Every statement covers exactly one book —
-  // the blended both-books statement was removed in origin-split-2 W1.
-  origin: "feldart" | "tj";
+  // Required book scope — one book, or "both" for the two-box combined
+  // statement.
+  origin: StatementOrigin;
   // Optional operator overrides from the send dialog. When any of
   // these are set, they replace the template-rendered defaults
   // verbatim. Undefined fields fall through to the previous
@@ -376,6 +393,105 @@ export function buildOpenInvoiceConditions(
   );
 }
 
+// Invoice scope for a statement of ANY origin, including "both" (no
+// origin filter — the per-book split happens downstream). Preview
+// routes use this so their counts/totals agree with the send.
+export function buildStatementScopeConditions(
+  customerId: string,
+  origin: StatementOrigin,
+) {
+  if (origin === "both") {
+    return and(
+      eq(invoices.customerId, customerId),
+      gt(invoices.balance, "0"),
+    );
+  }
+  return buildOpenInvoiceConditions(customerId, origin);
+}
+
+// The individual books a statement scope covers, in render order —
+// Feldart box first, TJ box second on a combined statement.
+export function booksForOrigin(
+  origin: StatementOrigin,
+): ("feldart" | "tj")[] {
+  return origin === "both" ? ["feldart", "tj"] : [origin];
+}
+
+// Load a customer's open invoices for each book in scope, issue-date
+// ordered within the book. Shared by send + attach + the pdf-preview
+// route so every surface slices the books identically.
+export async function loadOpenInvoicesByBook(
+  customerId: string,
+  origin: StatementOrigin,
+): Promise<Map<"feldart" | "tj", Invoice[]>> {
+  const out = new Map<"feldart" | "tj", Invoice[]>();
+  for (const book of booksForOrigin(origin)) {
+    const rows = await db
+      .select()
+      .from(invoices)
+      .where(buildOpenInvoiceConditions(customerId, book))
+      .orderBy(asc(invoices.issueDate));
+    out.set(book, rows);
+  }
+  return out;
+}
+
+// Split unapplied QBO credit memos by book via the synced
+// credit_memos.origin column (qb_credit_memo_id ↔ QBO Id). Memos the
+// sync hasn't classified yet fall back to feldart — same default the
+// sync applies. NOTE: this also means single-book statements now only
+// show THAT book's credits; previously a TJ statement would list
+// Feldart credits too (latent origin-split gap, flagged to operator
+// 2026-07-14).
+export async function scopeCreditMemosByBook(
+  rows: StatementCreditMemoInput[],
+): Promise<Map<"feldart" | "tj", StatementCreditMemoInput[]>> {
+  const out = new Map<"feldart" | "tj", StatementCreditMemoInput[]>([
+    ["feldart", []],
+    ["tj", []],
+  ]);
+  if (rows.length === 0) return out;
+  const originByQbId = new Map<string, "feldart" | "tj">();
+  const dbRows = await db
+    .select({
+      qbCreditMemoId: creditMemosTable.qbCreditMemoId,
+      origin: creditMemosTable.origin,
+    })
+    .from(creditMemosTable)
+    .where(
+      inArray(
+        creditMemosTable.qbCreditMemoId,
+        rows.map((r) => r.qbId),
+      ),
+    );
+  for (const r of dbRows) originByQbId.set(r.qbCreditMemoId, r.origin);
+  for (const row of rows) {
+    out.get(originByQbId.get(row.qbId) ?? "feldart")!.push(row);
+  }
+  return out;
+}
+
+// Assemble the per-book PDF sections for a "both" statement. Returns
+// undefined for single-book scopes (the renderer then produces the
+// classic layout). Books with nothing to show are dropped — a customer
+// picked as "both" whose TJ book cleared since renders a clean
+// single-box statement rather than an empty TJ table.
+export function buildBookSections(
+  origin: StatementOrigin,
+  invoicesByBook: Map<"feldart" | "tj", Invoice[]>,
+  creditsByBook: Map<"feldart" | "tj", StatementCreditMemoInput[]>,
+  hydrate: (inv: Invoice) => StatementInvoiceInput,
+): StatementBookInput[] | undefined {
+  if (origin !== "both") return undefined;
+  return booksForOrigin(origin)
+    .map((book) => ({
+      label: BOOK_LABELS[book],
+      openInvoices: (invoicesByBook.get(book) ?? []).map(hydrate),
+      creditMemos: creditsByBook.get(book) ?? [],
+    }))
+    .filter((b) => b.openInvoices.length > 0 || b.creditMemos.length > 0);
+}
+
 // Public entry point. Loads everything, fires QBO + Gmail, persists the
 // statement_sends row + activity + audit log, returns the result. All
 // failure modes throw a SendStatementError; the route layer catches
@@ -388,7 +504,7 @@ export function buildOpenInvoiceConditions(
 // SendStatementError with the same codes on failure.
 export async function buildStatementPdfAttachment(
   customerId: string,
-  origin: "feldart" | "tj" = "feldart",
+  origin: StatementOrigin = "feldart",
 ): Promise<{ buffer: Buffer; filename: string; statementNumber: number }> {
   const now = new Date();
   const customerRows = await db
@@ -410,11 +526,10 @@ export async function buildStatementPdfAttachment(
     );
   }
 
-  const openInvoices = await db
-    .select()
-    .from(invoices)
-    .where(buildOpenInvoiceConditions(customerId, origin))
-    .orderBy(asc(invoices.issueDate));
+  const invoicesByBook = await loadOpenInvoicesByBook(customerId, origin);
+  const openInvoices = booksForOrigin(origin).flatMap(
+    (b) => invoicesByBook.get(b) ?? [],
+  );
   if (openInvoices.length === 0) {
     throw new SendStatementError("no_open_invoices", "no open invoices to attach");
   }
@@ -442,21 +557,26 @@ export async function buildStatementPdfAttachment(
       err instanceof Error ? err.message : "QBO lookup failed",
     );
   }
+  const creditsByBook = await scopeCreditMemosByBook(creditMemos);
+  const scopedCreditMemos = booksForOrigin(origin).flatMap(
+    (b) => creditsByBook.get(b) ?? [],
+  );
 
   const statementNumber = await allocateNextStatementNumber();
-  const statementInvoices: StatementInvoiceInput[] = openInvoices.map(
-    (inv) => ({
-      ...inv,
-      invoiceLink: invoiceLinks.get(inv.qbInvoiceId) ?? null,
-    }),
-  );
+  const hydrate = (inv: Invoice): StatementInvoiceInput => ({
+    ...inv,
+    invoiceLink: invoiceLinks.get(inv.qbInvoiceId) ?? null,
+  });
+  const statementInvoices = openInvoices.map(hydrate);
+  const books = buildBookSections(origin, invoicesByBook, creditsByBook, hydrate);
   const buffer = await renderStatementPdf({
     customer,
     openInvoices: statementInvoices,
-    creditMemos,
+    creditMemos: scopedCreditMemos,
     settings,
     statementNumber,
     generatedAt: now,
+    books,
   });
   // Same filename shape as a directly-sent statement.
   const safeName = customer.displayName.replace(/[^a-z0-9 _-]/gi, "").trim();
@@ -549,11 +669,13 @@ export async function sendStatement(
     );
   }
 
-  const openInvoices = await db
-    .select()
-    .from(invoices)
-    .where(buildOpenInvoiceConditions(customerId, input.origin))
-    .orderBy(asc(invoices.issueDate));
+  const invoicesByBook = await loadOpenInvoicesByBook(
+    customerId,
+    input.origin,
+  );
+  const openInvoices = booksForOrigin(input.origin).flatMap(
+    (b) => invoicesByBook.get(b) ?? [],
+  );
 
   if (openInvoices.length === 0) {
     throw new SendStatementError(
@@ -622,13 +744,23 @@ export async function sendStatement(
     );
   }
 
-  // Hydrate the open invoices with their QBO Pay-now URLs (where
-  // available) for the PDF renderer.
-  const statementInvoices: StatementInvoiceInput[] = openInvoices.map(
-    (inv) => ({
-      ...inv,
-      invoiceLink: invoiceLinks.get(inv.qbInvoiceId) ?? null,
-    }),
+  // Scope the QBO credit memos to the requested book(s) via the synced
+  // origin classification, then hydrate the open invoices with their
+  // QBO Pay-now URLs (where available) for the PDF renderer.
+  const creditsByBook = await scopeCreditMemosByBook(creditMemos);
+  const scopedCreditMemos = booksForOrigin(input.origin).flatMap(
+    (b) => creditsByBook.get(b) ?? [],
+  );
+  const hydrate = (inv: Invoice): StatementInvoiceInput => ({
+    ...inv,
+    invoiceLink: invoiceLinks.get(inv.qbInvoiceId) ?? null,
+  });
+  const statementInvoices = openInvoices.map(hydrate);
+  const books = buildBookSections(
+    input.origin,
+    invoicesByBook,
+    creditsByBook,
+    hydrate,
   );
 
   // Build the email subject + body. The template's {{statement_table}}
@@ -677,10 +809,11 @@ export async function sendStatement(
     pdfBuffer = await renderStatementPdf({
       customer,
       openInvoices: statementInvoices,
-      creditMemos,
+      creditMemos: scopedCreditMemos,
       settings,
       statementNumber,
       generatedAt: now,
+      books,
     });
   } catch (err) {
     log.error(
@@ -808,7 +941,7 @@ export async function sendStatement(
     statementNumber,
     qboResponse: {
       invoiceLinkCount: invoiceLinks.size,
-      creditMemoCount: creditMemos.length,
+      creditMemoCount: scopedCreditMemos.length,
       pdfBytes: pdfBuffer.byteLength,
       messageId: sendResult.messageId,
       threadId: sendResult.threadId,
@@ -837,7 +970,7 @@ export async function sendStatement(
       openInvoiceCount: openInvoices.length,
       totalOpenBalance: formatMoney(totalOpenBalance),
       totalOverdueBalance: formatMoney(totalOverdueBalance),
-      creditMemoCount: creditMemos.length,
+      creditMemoCount: scopedCreditMemos.length,
       attachmentName: filename,
       attachmentBytes: pdfBuffer.byteLength,
     },
@@ -864,7 +997,7 @@ export async function sendStatement(
       openInvoiceCount: openInvoices.length,
       totalOpenBalance,
       totalOverdueBalance,
-      creditMemoCount: creditMemos.length,
+      creditMemoCount: scopedCreditMemos.length,
       attachmentName: filename,
     },
   });

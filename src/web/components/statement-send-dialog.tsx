@@ -102,10 +102,11 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   customerId: string;
   customerName: string;
-  // Book scope — required (origin-split-2 W1 T5). Threaded into the
-  // preview GET, the PDF preview, and the send POST so all three cover
-  // exactly the same single-book invoice set.
-  origin: "feldart" | "tj";
+  // Book scope — required. Threaded into the preview GET, the PDF
+  // preview, and the send POST so all three cover exactly the same
+  // invoice set. 'both' = the combined two-box statement (Feldart +
+  // Torah Judaica on one PDF with overall totals).
+  origin: "feldart" | "tj" | "both";
   onSent?: (result: StatementSendSuccess) => void;
 };
 
@@ -282,7 +283,14 @@ export default function StatementSendDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Send statement to {customerName}</DialogTitle>
+          <DialogTitle>
+            Send statement to {customerName}
+            {origin === "both"
+              ? " — both books"
+              : origin === "tj"
+                ? " — Torah Judaica"
+                : ""}
+          </DialogTitle>
           <DialogDescription>
             A single Statement.pdf is generated and attached to the
             email. Each open invoice in the statement has a Pay-now

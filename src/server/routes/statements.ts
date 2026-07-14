@@ -33,12 +33,12 @@ const paramsSchema = z.object({
 // rebuilding the whole pipeline server-side.
 // Exported for schema-level route tests (no Fastify harness in repo).
 export const sendBodySchema = z.object({
-  // Which book the statement covers. Required — blended (both-books)
-  // statements were removed in origin-split-2 Wave 1.
-  origin: z.enum(["feldart", "tj"], {
+  // Which book the statement covers. Required. "both" renders the
+  // combined two-box statement (Feldart box + Torah Judaica box +
+  // overall totals) — reinstated by operator request 2026-07-14.
+  origin: z.enum(["feldart", "tj", "both"], {
     errorMap: () => ({
-      message:
-        "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+      message: "origin is required and must be 'feldart', 'tj' or 'both'",
     }),
   }),
   subject: z.string().min(1).max(998).optional(),

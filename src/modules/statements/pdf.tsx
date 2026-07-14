@@ -65,6 +65,15 @@ export type StatementCreditMemoInput = {
   description?: string | null;
 };
 
+// One book's worth of statement content when rendering a multi-book
+// (combined) statement. `label` is the section heading printed above
+// that book's table (e.g. "FELDART", "TORAH JUDAICA").
+export type StatementBookInput = {
+  label: string;
+  openInvoices: StatementInvoiceInput[];
+  creditMemos: StatementCreditMemoInput[];
+};
+
 export type RenderStatementPdfInput = {
   customer: Customer;
   openInvoices: StatementInvoiceInput[];
@@ -74,6 +83,15 @@ export type RenderStatementPdfInput = {
   // Optional generation timestamp — exposed so callers (and tests) can
   // freeze "today". Defaults to a fresh Date when not supplied.
   generatedAt?: Date;
+  // Multi-book mode (operator: "Feldart box + Torah Judaica box on one
+  // statement"). When present with 2+ entries, each book renders as its
+  // own labelled table + per-book summary, followed by a combined
+  // overall totals block; the header TOTAL DUE becomes the combined
+  // figure. When absent (or a single entry), output is identical to
+  // the classic single-book statement. openInvoices/creditMemos at the
+  // top level are ignored when `books` is provided — callers pass the
+  // per-book split instead.
+  books?: StatementBookInput[];
 };
 
 // Type-safe label-value summary row helper input. Used by the footer
@@ -213,6 +231,27 @@ const styles = StyleSheet.create({
   },
   metaPairValue: {
     fontSize: 10,
+    fontFamily: "Helvetica-Bold",
+  },
+  // Per-book section label for multi-book statements ("FELDART" /
+  // "TORAH JUDAICA"). Sits flush above the book's table header.
+  sectionLabel: {
+    fontSize: 11,
+    fontFamily: "Helvetica-Bold",
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  bookSection: {
+    marginBottom: 14,
+  },
+  // Overall (combined) totals — the emphasized bottom line of a
+  // multi-book statement.
+  overallDueLabel: {
+    fontSize: 11,
+    fontFamily: "Helvetica-Bold",
+  },
+  overallDueValue: {
+    fontSize: 11,
     fontFamily: "Helvetica-Bold",
   },
   // Table.
@@ -549,9 +588,17 @@ function StatementHeaderRight({
   );
 }
 
-function TableHeader(): React.ReactElement {
+// `repeatOnPages` keeps the classic single-book behavior (header row
+// repeats on every page via react-pdf `fixed`). Multi-book statements
+// pass false — with two tables on the page, a `fixed` header from one
+// book would ghost onto pages belonging to the other.
+function TableHeader({
+  repeatOnPages = true,
+}: {
+  repeatOnPages?: boolean;
+}): React.ReactElement {
   return (
-    <View style={styles.tableHeader} fixed>
+    <View style={styles.tableHeader} fixed={repeatOnPages}>
       <Text style={[styles.cellHeader, { width: COL_WIDTHS.invoiceDate }]}>
         INVOICE DATE
       </Text>
@@ -741,6 +788,48 @@ function buildTableRows(
   return rows;
 }
 
+// Per-book computed content: table rows + the three aggregates every
+// summary block needs. `label` is null in classic single-book mode.
+type BookComputed = {
+  label: string | null;
+  rows: TableRow[];
+  open: number;
+  overdue: number;
+  credits: number;
+};
+
+function computeBook(
+  label: string | null,
+  bookInvoices: StatementInvoiceInput[],
+  bookCreditMemos: StatementCreditMemoInput[],
+  todayUtcMs: number,
+): BookComputed {
+  const open = bookInvoices.reduce(
+    (acc, inv) => acc + parseAmount(inv.balance),
+    0,
+  );
+  const overdue = bookInvoices.reduce((acc, inv) => {
+    const b = parseAmount(inv.balance);
+    return isOverdue(inv.dueDate, b, todayUtcMs) ? acc + b : acc;
+  }, 0);
+  const credits = bookCreditMemos.reduce(
+    (acc, cm) => acc + parseAmount(cm.balance),
+    0,
+  );
+  return {
+    label,
+    rows: buildTableRows(bookInvoices, bookCreditMemos, todayUtcMs),
+    open,
+    overdue,
+    credits,
+  };
+}
+
+type StatementDocumentProps = Omit<
+  Required<RenderStatementPdfInput>,
+  "books"
+> & { books?: StatementBookInput[] };
+
 function StatementDocument({
   customer,
   openInvoices,
@@ -748,7 +837,8 @@ function StatementDocument({
   settings,
   statementNumber,
   generatedAt,
-}: Required<RenderStatementPdfInput>): React.ReactElement {
+  books,
+}: StatementDocumentProps): React.ReactElement {
   const today = new Date(
     Date.UTC(
       generatedAt.getUTCFullYear(),
@@ -758,42 +848,87 @@ function StatementDocument({
   );
   const todayUtcMs = today.getTime();
 
-  // Aggregates.
-  const totalOpenBalance = openInvoices.reduce(
-    (acc, inv) => acc + parseAmount(inv.balance),
-    0,
-  );
-  const totalOverdueBalance = openInvoices.reduce((acc, inv) => {
-    const b = parseAmount(inv.balance);
-    return isOverdue(inv.dueDate, b, todayUtcMs) ? acc + b : acc;
-  }, 0);
-  const totalCreditMemos = creditMemos.reduce(
-    (acc, cm) => acc + parseAmount(cm.balance),
-    0,
-  );
+  // Normalize to a list of books. Classic single-book input becomes one
+  // unlabelled book so the render below has exactly one code path; a
+  // single-entry `books` array also renders label-less (a lone label
+  // would read as noise).
+  const multiBook = Boolean(books && books.length > 1);
+  const bookList: BookComputed[] =
+    books && books.length > 0
+      ? books.map((b) =>
+          computeBook(
+            multiBook ? b.label : null,
+            b.openInvoices,
+            b.creditMemos,
+            todayUtcMs,
+          ),
+        )
+      : [computeBook(null, openInvoices, creditMemos, todayUtcMs)];
+
+  // Overall aggregates — for single-book these equal the book's own
+  // figures, so the header TOTAL DUE keeps its existing meaning.
+  const totalOpenBalance = bookList.reduce((a, b) => a + b.open, 0);
+  const totalOverdueBalance = bookList.reduce((a, b) => a + b.overdue, 0);
+  const totalCreditMemos = bookList.reduce((a, b) => a + b.credits, 0);
   const netOverdue = Math.max(0, totalOverdueBalance - totalCreditMemos);
   const totalDue = Math.max(0, totalOpenBalance - totalCreditMemos);
 
-  const tableRows = buildTableRows(openInvoices, creditMemos, todayUtcMs);
   const logo = readLogo(settings.company_logo_path);
 
-  const summary: SummaryRow[] = [
+  // Per-book summary rows. Single-book keeps the exact classic block
+  // (including the Payment terms row); multi-book suffixes each label
+  // with the book name and defers Payment terms to the overall block.
+  const summaryRowsFor = (b: BookComputed): SummaryRow[] => {
+    const suffix = b.label ? ` — ${b.label}` : "";
+    const bookNetOverdue = Math.max(0, b.overdue - b.credits);
+    const rows: SummaryRow[] = [
+      {
+        label: `Open balance${suffix}`,
+        value: formatMoney(b.open),
+      },
+      {
+        label: `Total overdue${suffix}`,
+        value: formatMoney(b.overdue),
+        valueColor: b.overdue > 0 ? COLOR_OVERDUE : undefined,
+      },
+      {
+        label: `Available credits${suffix}`,
+        value: formatMoney(-b.credits),
+        valueColor: b.credits === 0 ? COLOR_LABEL : undefined,
+      },
+      {
+        label: `Net overdue (after credits)${suffix}`,
+        value: formatMoney(bookNetOverdue),
+        valueColor: bookNetOverdue > 0 ? COLOR_OVERDUE : undefined,
+      },
+    ];
+    if (!multiBook) {
+      rows.push({
+        label: "Payment terms",
+        value: customer.paymentTerms ?? "—",
+      });
+    }
+    return rows;
+  };
+
+  // Overall combined block — multi-book only.
+  const overallRows: SummaryRow[] = [
     {
-      label: "Open balance",
+      label: "Overall open balance",
       value: formatMoney(totalOpenBalance),
     },
     {
-      label: "Total overdue",
+      label: "Overall total overdue",
       value: formatMoney(totalOverdueBalance),
       valueColor: totalOverdueBalance > 0 ? COLOR_OVERDUE : undefined,
     },
     {
-      label: "Available credits",
+      label: "Overall credits available",
       value: formatMoney(-totalCreditMemos),
       valueColor: totalCreditMemos === 0 ? COLOR_LABEL : undefined,
     },
     {
-      label: "Net overdue (after credits)",
+      label: "Overall net overdue (after credits)",
       value: formatMoney(netOverdue),
       valueColor: netOverdue > 0 ? COLOR_OVERDUE : undefined,
     },
@@ -828,9 +963,46 @@ function StatementDocument({
           />
         </View>
 
-        <TableHeader />
-        <TableBody rows={tableRows} />
-        <FooterSummary rows={summary} />
+        {bookList.map((b, i) => (
+          <View
+            key={`book-${i}`}
+            style={multiBook ? styles.bookSection : {}}
+          >
+            {b.label ? (
+              <Text style={styles.sectionLabel}>{b.label}</Text>
+            ) : null}
+            <TableHeader repeatOnPages={!multiBook} />
+            <TableBody rows={b.rows} />
+            <FooterSummary rows={summaryRowsFor(b)} />
+          </View>
+        ))}
+
+        {multiBook ? (
+          <View style={styles.summaryWrap} wrap={false}>
+            {overallRows.map((r, i) => (
+              <View key={`ov-${i}`} style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>{r.label}</Text>
+                <Text
+                  style={[
+                    styles.summaryValue,
+                    r.valueColor ? { color: r.valueColor } : {},
+                  ]}
+                >
+                  {r.value}
+                </Text>
+              </View>
+            ))}
+            <View style={styles.summaryRow}>
+              <Text style={styles.overallDueLabel}>
+                TOTAL DUE (ALL ACCOUNTS)
+              </Text>
+              <Text style={styles.overallDueValue}>
+                {formatMoney(totalDue)}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         <PaymentMethodsBlock settings={settings} />
 
         <Text
@@ -861,6 +1033,7 @@ export async function renderStatementPdf(
       settings={input.settings}
       statementNumber={input.statementNumber}
       generatedAt={generatedAt}
+      books={input.books}
     />,
   );
   return buffer;

@@ -2,8 +2,15 @@ export {
   sendStatement,
   SendStatementError,
   buildOpenInvoiceConditions,
+  buildStatementScopeConditions,
+  booksForOrigin,
+  buildBookSections,
+  scopeCreditMemosByBook,
+  loadOpenInvoicesByBook,
+  BOOK_LABELS,
   type ManagerInput,
   type SendStatementResult,
+  type StatementOrigin,
 } from "./send.js";
 export {
   renderStatementTable,
@@ -14,6 +21,7 @@ export {
 export {
   renderStatementPdf,
   type RenderStatementPdfInput,
+  type StatementBookInput,
   type StatementInvoiceInput,
   type StatementCreditMemoInput,
 } from "./pdf.js";

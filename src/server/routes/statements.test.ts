@@ -4,8 +4,10 @@ import { batchBodySchema } from "./chase.js";
 
 // Schema-level route tests (no Fastify harness in repo — the handlers
 // 400 on safeParse failure, so the schema IS the rejection contract).
-// origin became required on every statement path in origin-split-2 W1 T5;
-// these pin the rejection of the removed blended path.
+// origin became required on every statement path in origin-split-2 W1 T5.
+// 'both' (the combined two-box statement) was reinstated by operator
+// request 2026-07-14 — it renders the books as separate sections, not
+// the old blended single table.
 
 describe("statement send body schema (POST /:id/statement-send)", () => {
   it("rejects a body with no origin", () => {
@@ -18,19 +20,20 @@ describe("statement send body schema (POST /:id/statement-send)", () => {
     }
   });
 
-  it("rejects origin 'both' (blended path removed)", () => {
-    const r = sendBodySchema.safeParse({ origin: "both" });
+  it("rejects an unknown origin value", () => {
+    const r = sendBodySchema.safeParse({ origin: "blended" });
     expect(r.success).toBe(false);
     if (!r.success) {
       expect(r.error.flatten().fieldErrors.origin?.[0]).toMatch(
-        /blended statements are no longer supported/,
+        /origin is required/,
       );
     }
   });
 
-  it("accepts 'feldart' and 'tj'", () => {
+  it("accepts 'feldart', 'tj' and 'both'", () => {
     expect(sendBodySchema.safeParse({ origin: "feldart" }).success).toBe(true);
     expect(sendBodySchema.safeParse({ origin: "tj" }).success).toBe(true);
+    expect(sendBodySchema.safeParse({ origin: "both" }).success).toBe(true);
   });
 
   it("still accepts operator overrides alongside origin", () => {

@@ -20,20 +20,22 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import axios, { type AxiosError } from "axios";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
-import { invoices } from "../../db/schema/invoices.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
 import { requireAuth } from "../lib/auth.js";
 import {
-  buildOpenInvoiceConditions,
+  booksForOrigin,
+  buildBookSections,
   loadAppSettings,
+  loadOpenInvoicesByBook,
   renderStatementPdf,
+  scopeCreditMemosByBook,
   type StatementCreditMemoInput,
   type StatementInvoiceInput,
 } from "../../modules/statements/index.js";
@@ -62,14 +64,14 @@ const statementPdfPreviewRoute: FastifyPluginAsync = async (app) => {
         .send({ error: "invalid params", details: parse.error.flatten() });
     }
     const { id: customerId } = parse.data;
-    // Book scope — required, same contract as the send + preview routes
-    // (origin-split-2 W1): the PDF only renders one book's invoices.
+    // Book scope — required, same contract as the send + preview routes.
+    // "both" renders the combined two-box statement.
     const queryParse = z
       .object({
-        origin: z.enum(["feldart", "tj"], {
+        origin: z.enum(["feldart", "tj", "both"], {
           errorMap: () => ({
             message:
-              "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+              "origin is required and must be 'feldart', 'tj' or 'both'",
           }),
         }),
       })
@@ -93,18 +95,22 @@ const statementPdfPreviewRoute: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: "customer not found" });
     }
 
-    // Load open invoices (cap +1 so we can detect truncation; the PDF
-    // itself only ever shows up to PREVIEW_INVOICE_CAP rows).
-    const openInvoiceRows = await db
-      .select()
-      .from(invoices)
-      // Shared condition with the send path (buildOpenInvoiceConditions)
-      // so the previewed PDF can never disagree with the sent one.
-      .where(buildOpenInvoiceConditions(customerId, origin))
-      .orderBy(asc(invoices.issueDate))
-      .limit(PREVIEW_INVOICE_CAP + 1);
-
-    const previewInvoices = openInvoiceRows.slice(0, PREVIEW_INVOICE_CAP);
+    // Load open invoices per book (shared loader with the send path so
+    // the previewed PDF can never disagree with the sent one), then cap
+    // the combined list. The per-book map is re-filtered to the capped
+    // set so a truncated "both" preview stays internally consistent.
+    const invoicesByBook = await loadOpenInvoicesByBook(customerId, origin);
+    const combined = booksForOrigin(origin).flatMap(
+      (b) => invoicesByBook.get(b) ?? [],
+    );
+    const previewInvoices = combined.slice(0, PREVIEW_INVOICE_CAP);
+    const includedIds = new Set(previewInvoices.map((r) => r.id));
+    for (const [book, rows] of invoicesByBook) {
+      invoicesByBook.set(
+        book,
+        rows.filter((r) => includedIds.has(r.id)),
+      );
+    }
 
     // Load app settings.
     const settings = await loadAppSettings();
@@ -145,11 +151,24 @@ const statementPdfPreviewRoute: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const statementInvoices: StatementInvoiceInput[] = previewInvoices.map(
-      (inv) => ({
-        ...inv,
-        invoiceLink: invoiceLinks.get(inv.qbInvoiceId) ?? null,
-      }),
+    // Scope credits to the requested book(s) — same classification the
+    // send path applies, so the preview matches what would go out.
+    const creditsByBook = await scopeCreditMemosByBook(creditMemos);
+    const scopedCreditMemos = booksForOrigin(origin).flatMap(
+      (b) => creditsByBook.get(b) ?? [],
+    );
+
+    const hydrate = (inv: (typeof previewInvoices)[number]) => ({
+      ...inv,
+      invoiceLink: invoiceLinks.get(inv.qbInvoiceId) ?? null,
+    });
+    const statementInvoices: StatementInvoiceInput[] =
+      previewInvoices.map(hydrate);
+    const books = buildBookSections(
+      origin,
+      invoicesByBook,
+      creditsByBook,
+      hydrate,
     );
 
     let pdfBuffer: Buffer;
@@ -157,9 +176,10 @@ const statementPdfPreviewRoute: FastifyPluginAsync = async (app) => {
       pdfBuffer = await renderStatementPdf({
         customer,
         openInvoices: statementInvoices,
-        creditMemos,
+        creditMemos: scopedCreditMemos,
         settings,
         statementNumber,
+        books,
       });
     } catch (err) {
       log.error({ err, customerId }, "statement PDF render failed");

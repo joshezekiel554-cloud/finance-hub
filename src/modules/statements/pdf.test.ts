@@ -274,4 +274,73 @@ describe("renderStatementPdf", () => {
     // Multi-page document — should be well over 5 KB.
     expect(buf.byteLength).toBeGreaterThan(5000);
   });
+
+  it("renders a combined two-book statement (books input)", async () => {
+    const feldartInvoices = [
+      makeInvoice({ qbInvoiceId: "q-f1", docNumber: "18307" }),
+      makeInvoice({
+        qbInvoiceId: "q-f2",
+        docNumber: "18308",
+        balance: "1000.00",
+        total: "1000.00",
+      }),
+    ];
+    const tjInvoices = [
+      makeInvoice({
+        qbInvoiceId: "q-t1",
+        docNumber: "22116",
+        origin: "tj",
+        balance: "67.13",
+        total: "67.13",
+        dueDate: new Date("2024-02-07T00:00:00.000Z"),
+      }),
+    ];
+    const buf = await renderStatementPdf({
+      customer: makeCustomer(),
+      openInvoices: [...feldartInvoices, ...tjInvoices],
+      creditMemos: [],
+      settings: SETTINGS,
+      statementNumber: 300,
+      generatedAt: FROZEN,
+      books: [
+        {
+          label: "FELDART",
+          openInvoices: feldartInvoices,
+          creditMemos: [
+            {
+              qbId: "cm-f1",
+              docNumber: "17995CR",
+              txnDate: "2026-04-10",
+              balance: 100,
+              description: "Damage Credit",
+            },
+          ],
+        },
+        { label: "TORAH JUDAICA", openInvoices: tjInvoices, creditMemos: [] },
+      ],
+    });
+    expect(buf.slice(0, 4).toString("utf-8")).toBe("%PDF");
+    expect(buf.byteLength).toBeGreaterThan(1000);
+  });
+
+  it("renders a single-entry books array like a classic statement", async () => {
+    // One book in the array → no section label, no overall block; must
+    // not throw and must still produce a document.
+    const buf = await renderStatementPdf({
+      customer: makeCustomer(),
+      openInvoices: [],
+      creditMemos: [],
+      settings: SETTINGS,
+      statementNumber: 301,
+      generatedAt: FROZEN,
+      books: [
+        {
+          label: "FELDART",
+          openInvoices: [makeInvoice()],
+          creditMemos: [],
+        },
+      ],
+    });
+    expect(buf.slice(0, 4).toString("utf-8")).toBe("%PDF");
+  });
 });
