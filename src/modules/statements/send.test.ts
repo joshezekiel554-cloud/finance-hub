@@ -149,10 +149,11 @@ describe("buildBookSections", () => {
       hydrate,
     );
     expect(books).toHaveLength(2);
-    expect(books![0]!.label).toBe("FELDART");
+    expect(books![0]!.label).toBe("Feldart");
     expect(books![0]!.openInvoices).toHaveLength(2);
     expect(books![0]!.creditMemos).toHaveLength(1);
-    expect(books![1]!.label).toBe("TORAH JUDAICA");
+    expect(books![1]!.label).toBe("Torah Judaica (passed to Feldart for collection)");
+    expect(books![1]!.summaryLabel).toBe("Torah Judaica");
     expect(books![1]!.openInvoices).toHaveLength(1);
   });
 
@@ -175,7 +176,7 @@ describe("buildBookSections", () => {
       hydrate,
     );
     expect(books).toHaveLength(1);
-    expect(books![0]!.label).toBe("FELDART");
+    expect(books![0]!.label).toBe("Feldart");
   });
 
   it("keeps a book that only has credits (credit-only TJ still shows)", () => {
@@ -197,7 +198,7 @@ describe("buildBookSections", () => {
       hydrate,
     );
     expect(books).toHaveLength(2);
-    expect(books![1]!.label).toBe("TORAH JUDAICA");
+    expect(books![1]!.label).toBe("Torah Judaica (passed to Feldart for collection)");
     expect(books![1]!.openInvoices).toHaveLength(0);
     expect(books![1]!.creditMemos).toHaveLength(1);
   });

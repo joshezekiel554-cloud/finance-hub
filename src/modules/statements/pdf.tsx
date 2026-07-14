@@ -67,9 +67,13 @@ export type StatementCreditMemoInput = {
 
 // One book's worth of statement content when rendering a multi-book
 // (combined) statement. `label` is the section heading printed above
-// that book's table (e.g. "FELDART", "TORAH JUDAICA").
+// that book's table (e.g. "Torah Judaica (passed to Feldart for
+// collection)"); `summaryLabel` is the short name suffixed onto the
+// book's summary rows ("Open balance — Torah Judaica") so they don't
+// wrap when the heading is long. Falls back to `label` when omitted.
 export type StatementBookInput = {
   label: string;
+  summaryLabel?: string;
   openInvoices: StatementInvoiceInput[];
   creditMemos: StatementCreditMemoInput[];
 };
@@ -792,6 +796,7 @@ function buildTableRows(
 // summary block needs. `label` is null in classic single-book mode.
 type BookComputed = {
   label: string | null;
+  summaryLabel: string | null;
   rows: TableRow[];
   open: number;
   overdue: number;
@@ -800,6 +805,7 @@ type BookComputed = {
 
 function computeBook(
   label: string | null,
+  summaryLabel: string | null,
   bookInvoices: StatementInvoiceInput[],
   bookCreditMemos: StatementCreditMemoInput[],
   todayUtcMs: number,
@@ -818,6 +824,7 @@ function computeBook(
   );
   return {
     label,
+    summaryLabel,
     rows: buildTableRows(bookInvoices, bookCreditMemos, todayUtcMs),
     open,
     overdue,
@@ -858,12 +865,13 @@ function StatementDocument({
       ? books.map((b) =>
           computeBook(
             multiBook ? b.label : null,
+            multiBook ? (b.summaryLabel ?? b.label) : null,
             b.openInvoices,
             b.creditMemos,
             todayUtcMs,
           ),
         )
-      : [computeBook(null, openInvoices, creditMemos, todayUtcMs)];
+      : [computeBook(null, null, openInvoices, creditMemos, todayUtcMs)];
 
   // Overall aggregates — for single-book these equal the book's own
   // figures, so the header TOTAL DUE keeps its existing meaning.
@@ -879,7 +887,7 @@ function StatementDocument({
   // (including the Payment terms row); multi-book suffixes each label
   // with the book name and defers Payment terms to the overall block.
   const summaryRowsFor = (b: BookComputed): SummaryRow[] => {
-    const suffix = b.label ? ` — ${b.label}` : "";
+    const suffix = b.summaryLabel ? ` — ${b.summaryLabel}` : "";
     const bookNetOverdue = Math.max(0, b.overdue - b.credits);
     const rows: SummaryRow[] = [
       {

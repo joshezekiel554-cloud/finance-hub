@@ -85,11 +85,17 @@ const MAX_INVOICES_PER_SEND = 50;
 // version keeps them strictly separated on the page).
 export type StatementOrigin = "feldart" | "tj" | "both";
 
-// Section labels printed above each book's table on a combined
-// statement. Also used by the pdf-preview route.
+// Section headings printed above each book's table on a combined
+// statement (TJ wording per operator 2026-07-14), plus the short names
+// suffixed onto each book's summary rows. Also used by the pdf-preview
+// route.
 export const BOOK_LABELS: Record<"feldart" | "tj", string> = {
-  feldart: "FELDART",
-  tj: "TORAH JUDAICA",
+  feldart: "Feldart",
+  tj: "Torah Judaica (passed to Feldart for collection)",
+};
+export const BOOK_SUMMARY_LABELS: Record<"feldart" | "tj", string> = {
+  feldart: "Feldart",
+  tj: "Torah Judaica",
 };
 
 export type ManagerInput = {
@@ -486,6 +492,7 @@ export function buildBookSections(
   return booksForOrigin(origin)
     .map((book) => ({
       label: BOOK_LABELS[book],
+      summaryLabel: BOOK_SUMMARY_LABELS[book],
       openInvoices: (invoicesByBook.get(book) ?? []).map(hydrate),
       creditMemos: creditsByBook.get(book) ?? [],
     }))

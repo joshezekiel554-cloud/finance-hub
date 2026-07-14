@@ -8,6 +8,7 @@ export {
   scopeCreditMemosByBook,
   loadOpenInvoicesByBook,
   BOOK_LABELS,
+  BOOK_SUMMARY_LABELS,
   type ManagerInput,
   type SendStatementResult,
   type StatementOrigin,
