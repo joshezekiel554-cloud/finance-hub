@@ -7,6 +7,7 @@ export {
   buildBookSections,
   scopeCreditMemosByBook,
   loadOpenInvoicesByBook,
+  resolveEffectiveOrigin,
   BOOK_LABELS,
   BOOK_SUMMARY_LABELS,
   type ManagerInput,

@@ -415,6 +415,26 @@ export function buildStatementScopeConditions(
   return buildOpenInvoiceConditions(customerId, origin);
 }
 
+// Auto-upgrade rule (operator 2026-07-14): a FELDART-scoped statement
+// for a customer who also holds an open TJ balance upgrades to the
+// combined "both" statement, so the customer always sees their whole
+// position on one document. Explicit TJ sends stay TJ-only; "both"
+// passes through. Callers that already know the answer (the dialog
+// passes the upgraded origin so its preview matches) still go through
+// this on send as the enforcement chokepoint.
+export async function resolveEffectiveOrigin(
+  customerId: string,
+  requested: StatementOrigin,
+): Promise<StatementOrigin> {
+  if (requested !== "feldart") return requested;
+  const tjRows = await db
+    .select({ id: invoices.id })
+    .from(invoices)
+    .where(buildOpenInvoiceConditions(customerId, "tj"))
+    .limit(1);
+  return tjRows.length > 0 ? "both" : "feldart";
+}
+
 // The individual books a statement scope covers, in render order —
 // Feldart box first, TJ box second on a combined statement.
 export function booksForOrigin(
@@ -511,7 +531,7 @@ export function buildBookSections(
 // SendStatementError with the same codes on failure.
 export async function buildStatementPdfAttachment(
   customerId: string,
-  origin: StatementOrigin = "feldart",
+  requestedOrigin: StatementOrigin = "feldart",
 ): Promise<{ buffer: Buffer; filename: string; statementNumber: number }> {
   const now = new Date();
   const customerRows = await db
@@ -532,6 +552,10 @@ export async function buildStatementPdfAttachment(
       `customer ${customerId} is not linked to a QBO customer; sync first`,
     );
   }
+
+  // Same auto-upgrade rule as sendStatement — an agent-attached feldart
+  // statement for a customer with an open TJ balance goes out combined.
+  const origin = await resolveEffectiveOrigin(customerId, requestedOrigin);
 
   const invoicesByBook = await loadOpenInvoicesByBook(customerId, origin);
   const openInvoices = booksForOrigin(origin).flatMap(
@@ -676,11 +700,12 @@ export async function sendStatement(
     );
   }
 
-  const invoicesByBook = await loadOpenInvoicesByBook(
-    customerId,
-    input.origin,
-  );
-  const openInvoices = booksForOrigin(input.origin).flatMap(
+  // Effective scope — a feldart request auto-upgrades to "both" when
+  // the customer holds an open TJ balance (operator rule 2026-07-14).
+  const origin = await resolveEffectiveOrigin(customerId, input.origin);
+
+  const invoicesByBook = await loadOpenInvoicesByBook(customerId, origin);
+  const openInvoices = booksForOrigin(origin).flatMap(
     (b) => invoicesByBook.get(b) ?? [],
   );
 
@@ -755,7 +780,7 @@ export async function sendStatement(
   // origin classification, then hydrate the open invoices with their
   // QBO Pay-now URLs (where available) for the PDF renderer.
   const creditsByBook = await scopeCreditMemosByBook(creditMemos);
-  const scopedCreditMemos = booksForOrigin(input.origin).flatMap(
+  const scopedCreditMemos = booksForOrigin(origin).flatMap(
     (b) => creditsByBook.get(b) ?? [],
   );
   const hydrate = (inv: Invoice): StatementInvoiceInput => ({
@@ -764,7 +789,7 @@ export async function sendStatement(
   });
   const statementInvoices = openInvoices.map(hydrate);
   const books = buildBookSections(
-    input.origin,
+    origin,
     invoicesByBook,
     creditsByBook,
     hydrate,
@@ -965,7 +990,8 @@ export async function sendStatement(
     before: null,
     after: {
       customerId,
-      origin: input.origin,
+      origin,
+      requestedOrigin: input.origin,
       to,
       cc: cc ?? null,
       bcc,
@@ -993,7 +1019,8 @@ export async function sendStatement(
     refType: "statement_send",
     refId: statementSendId,
     meta: {
-      origin: input.origin,
+      origin,
+      requestedOrigin: input.origin,
       to,
       cc: cc ?? null,
       bcc,
@@ -1014,7 +1041,8 @@ export async function sendStatement(
       statementSendId,
       statementNumber,
       customerId,
-      origin: input.origin,
+      origin,
+      requestedOrigin: input.origin,
       userId,
       to,
       cc: cc ?? null,

@@ -3503,11 +3503,19 @@ function InvoicesPanel({
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => onStatement("feldart")}
+                // Auto-upgrade (operator rule 2026-07-14): a customer
+                // holding an open TJ balance gets the combined two-box
+                // statement, so the dialog preview matches what the
+                // server would send anyway (it enforces the same rule).
+                onClick={() =>
+                  onStatement(tjBalance > 0 ? "both" : "feldart")
+                }
                 disabled={!(feldartBalance > 0)}
                 title={
                   feldartBalance > 0
-                    ? "Send a statement of open Feldart invoices to this customer"
+                    ? tjBalance > 0
+                      ? "Send a statement — this customer also holds a TJ balance, so it goes out as the combined both-books statement"
+                      : "Send a statement of open Feldart invoices to this customer"
                     : "No open Feldart balance — nothing to send"
                 }
               >
