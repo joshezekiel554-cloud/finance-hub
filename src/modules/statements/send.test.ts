@@ -5,7 +5,9 @@ import {
   buildBookSections,
   buildOpenInvoiceConditions,
   buildStatementScopeConditions,
+  withStatementOpenBalance,
 } from "./send.js";
+import { buildTemplateVars } from "../email-compose/index.js";
 import type { Invoice } from "../../db/schema/invoices.js";
 import type {
   StatementCreditMemoInput,
@@ -201,5 +203,52 @@ describe("buildBookSections", () => {
     expect(books![1]!.label).toBe("Torah Judaica (passed to Feldart for collection)");
     expect(books![1]!.openInvoices).toHaveLength(0);
     expect(books![1]!.creditMemos).toHaveLength(1);
+  });
+});
+
+describe("withStatementOpenBalance", () => {
+  // The statement email must quote the same total as the PDF it carries:
+  // the sum of the in-scope open invoices. customer.balance is the QBO
+  // customer-level figure, which nets off unapplied credits, so the two
+  // can disagree (operator report: invoices summed $3,487.00 but the
+  // email said $3,464.00 after a $23.00 unapplied credit).
+  const customer = {
+    displayName: "Malchut Judaica - Monsey",
+    primaryEmail: "monsey@malchutfinejudaica.com",
+    balance: "3464.00", // QBO nets the $23 credit off
+    overdueBalance: "1719.00",
+    unappliedCreditBalance: "23.00",
+  };
+  const invoices = [
+    { balance: "749.00" },
+    { balance: "250.00" },
+    { balance: "287.00" },
+    { balance: "433.00" },
+    { balance: "269.50" },
+    { balance: "329.50" },
+    { balance: "1169.00" },
+  ] as never[];
+
+  it("overrides open_balance with the invoice sum, leaving overdue vars alone", () => {
+    const base = buildTemplateVars({
+      customer,
+      openInvoices: [],
+      user: { name: null },
+    });
+    const vars = withStatementOpenBalance(base, invoices);
+    expect(vars.open_balance).toBe("$3,487.00");
+    // Overdue stays the credit-netted figure the operator confirmed correct.
+    expect(vars.overdue_balance).toBe(base.overdue_balance);
+    expect(vars.overdue_credit_note).toBe(base.overdue_credit_note);
+  });
+
+  it("is a no-op difference when QBO and the invoice sum already agree", () => {
+    const base = buildTemplateVars({
+      customer: { ...customer, balance: "3487.00" },
+      openInvoices: [],
+      user: { name: null },
+    });
+    const vars = withStatementOpenBalance(base, invoices);
+    expect(vars.open_balance).toBe(base.open_balance);
   });
 });

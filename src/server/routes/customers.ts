@@ -56,7 +56,10 @@ import {
   renderTemplate,
 } from "../../modules/email-compose/index.js";
 import { loadAppSettings } from "../../modules/statements/settings.js";
-import { buildStatementScopeConditions } from "../../modules/statements/send.js";
+import {
+  buildStatementScopeConditions,
+  withStatementOpenBalance,
+} from "../../modules/statements/send.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 import {
@@ -1149,17 +1152,20 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         .from(invoices)
         .where(buildStatementScopeConditions(id, origin))
         .limit(STATEMENT_PREVIEW_INVOICE_CAP);
-      const baseVars = buildTemplateVars({
-        customer: {
-          displayName: customer.displayName,
-          primaryEmail: customer.primaryEmail,
-          balance: customer.balance,
-          overdueBalance: customer.overdueBalance,
-          unappliedCreditBalance: customer.unappliedCreditBalance,
-        },
-        openInvoices: fullInvoices,
-        user: { name: null },
-      });
+      const baseVars = withStatementOpenBalance(
+        buildTemplateVars({
+          customer: {
+            displayName: customer.displayName,
+            primaryEmail: customer.primaryEmail,
+            balance: customer.balance,
+            overdueBalance: customer.overdueBalance,
+            unappliedCreditBalance: customer.unappliedCreditBalance,
+          },
+          openInvoices: fullInvoices,
+          user: { name: null },
+        }),
+        fullInvoices,
+      );
       renderedSubject = renderTemplate(tpl.subject, baseVars);
       renderedBody = renderTemplate(tpl.body, {
         ...baseVars,

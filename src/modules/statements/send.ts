@@ -382,6 +382,22 @@ function calcOverdue(opens: Invoice[], now: Date): number {
   return Math.round(total * 100) / 100;
 }
 
+// The statement email must quote the SAME total as the PDF it carries: the
+// sum of the in-scope open invoices. buildTemplateVars' open_balance is the
+// QBO customer-level balance, which nets off unapplied credits (and spans
+// both books), so it can disagree with the attached statement — the credit
+// story already lives in overdue_balance/overdue_credit_note, which stay
+// untouched. Shared by the send path and the dialog-prefill preview.
+export function withStatementOpenBalance<
+  V extends { open_balance: string },
+>(vars: V, openInvoices: Array<{ balance: string | null }>): V {
+  const total = openInvoices.reduce(
+    (acc, r) => acc + parseAmount(r.balance),
+    0,
+  );
+  return { ...vars, open_balance: formatMoney(Math.round(total * 100) / 100) };
+}
+
 // Build the WHERE conditions that select a customer's open invoices for
 // a statement: customer match + positive balance + origin book. Origin is
 // required — there is no blended (all-books) statement query. Shared by
@@ -798,18 +814,21 @@ export async function sendStatement(
   // Build the email subject + body. The template's {{statement_table}}
   // placeholder is now resolved to an empty string — the table lives
   // inside the attached PDF, the email body is short prose only.
-  const baseVars = buildTemplateVars({
-    customer: {
-      displayName: customer.displayName,
-      primaryEmail: customer.primaryEmail,
-      balance: customer.balance,
-      overdueBalance: customer.overdueBalance,
-      unappliedCreditBalance: customer.unappliedCreditBalance,
-    },
+  const baseVars = withStatementOpenBalance(
+    buildTemplateVars({
+      customer: {
+        displayName: customer.displayName,
+        primaryEmail: customer.primaryEmail,
+        balance: customer.balance,
+        overdueBalance: customer.overdueBalance,
+        unappliedCreditBalance: customer.unappliedCreditBalance,
+      },
+      openInvoices,
+      user: { name: userName },
+      now,
+    }),
     openInvoices,
-    user: { name: userName },
-    now,
-  });
+  );
   // Defaults from the template; operator overrides win when provided.
   const renderedSubject =
     input.overrides?.subject ??
