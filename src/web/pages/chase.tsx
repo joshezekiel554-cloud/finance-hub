@@ -37,7 +37,14 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { getRouteApi } from "@tanstack/react-router";
-import { Mail, Pause, Send, AlertCircle, CheckCircle2 } from "lucide-react";
+import {
+  Mail,
+  Pause,
+  Send,
+  AlertCircle,
+  CheckCircle2,
+  Download,
+} from "lucide-react";
 import ChaseEmailSendDialog, {
   type ChaseSendSuccess,
 } from "../components/chase-email-send-dialog";
@@ -153,6 +160,49 @@ export default function ChasePage() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // "Download statements" — builds the selected customers' statement PDFs
+  // server-side and saves one zip. No confirm dialog: nothing is emailed,
+  // so a stray click costs nothing.
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const downloadStatements = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const res = await fetch("/api/chase/download-statements", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customerIds: Array.from(selectedIds),
+          origin: "feldart",
+        }),
+      });
+      if (!res.ok) {
+        // 422 = nothing buildable for the selection; surface the reason.
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") ?? "";
+      const name = /filename="([^"]+)"/.exec(cd)?.[1] ?? "Statements.zip";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setDownloadError(
+        err instanceof Error ? err.message : "download failed",
+      );
+    } finally {
+      setDownloading(false);
+    }
+  };
   // Per-customer outcome map indexed by customerId. Populated when a
   // batch (or a per-row send) completes; rendered inline as a status
   // pill on the row. Cleared via the "Done" button on the result
@@ -456,6 +506,20 @@ export default function ChasePage() {
                 {allSelected ? "Clear selection" : "Select all"}
               </Button>
               <Button
+                variant="secondary"
+                size="sm"
+                onClick={downloadStatements}
+                disabled={
+                  selectedIds.size === 0 ||
+                  batchMutation.isPending ||
+                  downloading
+                }
+                loading={downloading}
+              >
+                <Download className="size-3.5" />
+                {downloading ? "Building…" : "Download statements"}
+              </Button>
+              <Button
                 variant="primary"
                 size="sm"
                 onClick={() => setConfirmOpen(true)}
@@ -468,6 +532,12 @@ export default function ChasePage() {
             </>
           }
         />
+        {downloadError ? (
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-red-600">
+            <AlertCircle className="size-3.5" />
+            Download failed: {downloadError}
+          </p>
+        ) : null}
         <table className="w-full text-sm">
             <thead className="bg-subtle text-left text-xs uppercase tracking-wide text-muted [&_th]:sticky [&_th]:top-14 [&_th]:z-10 [&_th]:border-b [&_th]:border-default [&_th]:bg-subtle md:[&_th]:top-0">
               <tr>

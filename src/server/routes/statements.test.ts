@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sendBodySchema } from "./statements.js";
-import { batchBodySchema } from "./chase.js";
+import { batchBodySchema, downloadBodySchema } from "./chase.js";
 
 // Schema-level route tests (no Fastify harness in repo — the handlers
 // 400 on safeParse failure, so the schema IS the rejection contract).
@@ -73,5 +73,28 @@ describe("chase batch statement body schema (POST /batch-statement)", () => {
     expect(
       batchBodySchema.safeParse({ customerIds: ids, origin: "tj" }).success,
     ).toBe(true);
+  });
+});
+
+describe("chase download-statements body schema (POST /download-statements)", () => {
+  const ids = ["cust_1", "cust_2"];
+
+  it("mirrors the batch-send shape: origin required, 'both' rejected", () => {
+    expect(downloadBodySchema.safeParse({ customerIds: ids }).success).toBe(false);
+    expect(
+      downloadBodySchema.safeParse({ customerIds: ids, origin: "both" }).success,
+    ).toBe(false);
+    expect(
+      downloadBodySchema.safeParse({ customerIds: ids, origin: "feldart" }).success,
+    ).toBe(true);
+    expect(
+      downloadBodySchema.safeParse({ customerIds: ids, origin: "tj" }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an empty selection", () => {
+    expect(
+      downloadBodySchema.safeParse({ customerIds: [], origin: "feldart" }).success,
+    ).toBe(false);
   });
 });

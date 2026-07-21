@@ -40,10 +40,12 @@ import { rmas } from "../../db/schema/returns.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
+import JSZip from "jszip";
 import {
   sendStatement,
   SendStatementError,
 } from "../../modules/statements/index.js";
+import { buildStatementPdfAttachment } from "../../modules/statements/send.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
 import {
   buildTemplateVars,
@@ -108,6 +110,22 @@ export const batchBodySchema = z.object({
   // Which book to send statements for. Required — each statement covers
   // exactly one book; 'both' (the old blended default) is rejected
   // (origin-split-2 Wave 1).
+  origin: z.enum(["feldart", "tj"], {
+    errorMap: () => ({
+      message:
+        "origin is required and must be 'feldart' or 'tj' — blended statements are no longer supported",
+    }),
+  }),
+});
+
+// Same shape as the batch SEND body — a download is the same fan-out with
+// the Gmail leg removed, so the two schemas deliberately stay in lockstep.
+// Exported for schema-level route tests (no Fastify harness in repo).
+export const downloadBodySchema = z.object({
+  customerIds: z
+    .array(z.string().min(1).max(24))
+    .min(1)
+    .max(BATCH_MAX_CUSTOMERS),
   origin: z.enum(["feldart", "tj"], {
     errorMap: () => ({
       message:
@@ -506,6 +524,144 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
     );
 
     return reply.send({ results });
+  });
+
+  // POST /api/chase/download-statements — build the SAME statement PDFs a
+  // batch send would attach (identical assembly incl. the TJ-balance
+  // auto-upgrade to combined) and return them as one zip download. Nothing
+  // is emailed and no statement_sends history rows are minted — statement
+  // numbers ARE allocated (they're part of the rendered PDF), which is why
+  // the batch gets an audit row. Per-customer failures don't fail the
+  // batch; anything not included is listed in _not_included.txt inside
+  // the zip so a partial download is never mistaken for a complete one.
+  app.post("/download-statements", async (req, reply) => {
+    const user = await requireAuth(req);
+    const parse = downloadBodySchema.safeParse(req.body);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: parse.error.flatten() });
+    }
+    const { customerIds, origin } = parse.data;
+    const uniqueIds = Array.from(new Set(customerIds));
+    const batchId = nanoid(24);
+
+    log.info(
+      { userId: user.id, count: uniqueIds.length, origin, batchId },
+      "batch statement download starting",
+    );
+
+    type DownloadResult =
+      | {
+          customerId: string;
+          status: "built";
+          buffer: Buffer;
+          filename: string;
+          statementNumber: number;
+        }
+      | { customerId: string; status: "skipped" | "failed"; error: string };
+
+    const results: DownloadResult[] = await mapWithLimit(
+      uniqueIds,
+      BATCH_CONCURRENCY,
+      async (customerId): Promise<DownloadResult> => {
+        try {
+          const built = await buildStatementPdfAttachment(customerId, origin);
+          return { customerId, status: "built", ...built };
+        } catch (err) {
+          const code =
+            err instanceof SendStatementError ? err.code : "build_failed";
+          const message =
+            err instanceof Error ? err.message : "statement build failed";
+          log.warn(
+            { customerId, userId: user.id, code, batchId },
+            "batch download: per-customer rejected",
+          );
+          return {
+            customerId,
+            status: SKIP_CODES.has(code) ? "skipped" : "failed",
+            error: `${code}: ${message}`,
+          };
+        }
+      },
+    );
+
+    const built = results.filter(
+      (r): r is Extract<DownloadResult, { status: "built" }> =>
+        r.status === "built",
+    );
+    const notBuilt = results.filter(
+      (r): r is Extract<DownloadResult, { status: "skipped" | "failed" }> =>
+        r.status !== "built",
+    );
+
+    if (built.length === 0) {
+      return reply.code(422).send({
+        error: "no statements could be built for the selection",
+        results: notBuilt.map((r) => ({
+          customerId: r.customerId,
+          status: r.status,
+          error: r.error,
+        })),
+      });
+    }
+
+    const zip = new JSZip();
+    for (const b of built) {
+      // Filenames already embed the unique statement number, so no
+      // collision handling is needed.
+      zip.file(b.filename, b.buffer);
+    }
+    if (notBuilt.length > 0) {
+      const lines = notBuilt.map(
+        (r) => `${r.customerId}  ${r.status}  ${r.error}`,
+      );
+      zip.file(
+        "_not_included.txt",
+        `${notBuilt.length} of ${uniqueIds.length} selected customers are NOT in this zip:\n\n${lines.join("\n")}\n`,
+      );
+    }
+    const zipBuffer = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+    });
+
+    await db.insert(auditLog).values({
+      id: nanoid(24),
+      userId: user.id,
+      action: "chase.batch_statement_download",
+      entityType: "chase_batch",
+      entityId: batchId,
+      before: null,
+      after: {
+        origin,
+        requestedCount: uniqueIds.length,
+        includedCount: built.length,
+        skippedCount: results.filter((r) => r.status === "skipped").length,
+        failedCount: results.filter((r) => r.status === "failed").length,
+        statementNumbers: built.map((b) => b.statementNumber),
+        zipBytes: zipBuffer.byteLength,
+      },
+    });
+
+    log.info(
+      {
+        userId: user.id,
+        batchId,
+        requestedCount: uniqueIds.length,
+        included: built.length,
+        zipBytes: zipBuffer.byteLength,
+      },
+      "batch statement download done",
+    );
+
+    const date = new Date().toISOString().slice(0, 10);
+    reply.header("content-type", "application/zip");
+    reply.header(
+      "content-disposition",
+      `attachment; filename="Statements_${origin}_${date}.zip"`,
+    );
+    return reply.send(zipBuffer);
   });
 
   // GET /api/chase/tj-winddown — the whole Torah Judaica wind-down picture
