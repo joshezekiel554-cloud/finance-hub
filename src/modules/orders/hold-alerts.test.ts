@@ -58,8 +58,23 @@ describe("holdReasonStillApplies (auto-clear)", () => {
     ).toBe(false);
   });
 
-  it("releases on an unknown / null reason", () => {
-    expect(holdReasonStillApplies({ ...base, reason: null })).toBe(false);
+  it("manual holds are never auto-released — only the operator clears them", () => {
+    expect(holdReasonStillApplies({ ...base, reason: "manual" })).toBe(true);
+    // Even with the customer fully in the clear and the order paid.
+    expect(
+      holdReasonStillApplies({
+        ...base,
+        reason: "manual",
+        holdStatus: "active",
+        financialStatus: "paid",
+        overdueBalance: "0",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the hold on an unknown / null reason (fail-safe: never silently ship)", () => {
+    expect(holdReasonStillApplies({ ...base, reason: null })).toBe(true);
+    expect(holdReasonStillApplies({ ...base, reason: "some_future_reason" })).toBe(true);
   });
 });
 

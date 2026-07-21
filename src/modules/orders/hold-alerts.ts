@@ -89,6 +89,11 @@ export function classifyOrderHoldAlert(args: {
 // Does the stored hold reason STILL apply given the customer/order's current
 // state? Used by the auto-clear pass — when it no longer applies, the order is
 // auto-released. overdueThresholdGbp is only consulted for the overdue reason.
+//
+// Only the three AUTO-ENTERED reasons can ever answer false: they encode a
+// condition the sync can re-check. "manual" (operator-placed from the Orders
+// tab) and any unknown/null reason answer true — a hold the system can't
+// explain must wait for an operator release, never silently ship.
 export function holdReasonStillApplies(args: {
   reason: string | null;
   holdStatus: string | null;
@@ -107,7 +112,7 @@ export function holdReasonStillApplies(args: {
     case "overdue_non_communicating":
       return Number(args.overdueBalance ?? 0) >= args.overdueThresholdGbp;
     default:
-      return false;
+      return true;
   }
 }
 
