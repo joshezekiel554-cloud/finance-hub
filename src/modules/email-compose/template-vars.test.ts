@@ -295,8 +295,17 @@ describe("buildTemplateVars", () => {
       oldestUnpaid: makeInvoice({ docNumber: null, dueDate: null }),
     });
     expect(vars.primary_email).toBe("");
-    expect(vars.user_name).toBe("");
+    expect(vars.user_name).toBe("The Feldart Accounts Team");
     expect(vars.oldest_unpaid_invoice).toBe("");
+  });
+
+  it("falls back to the team sign-off for blank/whitespace user names", () => {
+    const vars = buildTemplateVars({
+      customer: makeCustomer({}),
+      openInvoices: [],
+      user: makeUser({ name: "   " }),
+    });
+    expect(vars.user_name).toBe("The Feldart Accounts Team");
   });
 
   it("renders end-to-end through renderTemplate using buildTemplateVars output", () => {

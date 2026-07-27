@@ -1161,7 +1161,7 @@ async function allocateNextStatementNumber(): Promise<number> {
 
 // Pull `name` from the auth user so the email signature reflects the
 // operator who hit Send. Returns null when missing — buildTemplateVars
-// accepts that and renders an empty {{user_name}}.
+// substitutes a neutral team sign-off for {{user_name}}.
 async function loadUserName(userId: string): Promise<string | null> {
   const rows = await db
     .select({ name: users.name })

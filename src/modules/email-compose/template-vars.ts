@@ -34,6 +34,11 @@ export type TemplateVars = {
 
 const COMPANY_NAME = "Feldart";
 
+// Sign-off used when the sending user has no display name set. Never
+// fall back to the raw account name / email local-part — a bare
+// "joshezekiel554" once went out on a live chase email.
+const FALLBACK_SIGNOFF_NAME = "The Feldart Accounts Team";
+
 const DAY_MS = 1000 * 60 * 60 * 24;
 
 // Tolerates surrounding whitespace inside the braces, e.g. {{ key }} matches.
@@ -158,7 +163,7 @@ export function buildTemplateVars(input: BuildTemplateVarsInput): TemplateVars {
     days_overdue: String(days),
     oldest_unpaid_invoice: oldest?.docNumber ?? "",
     oldest_unpaid_amount: formatMoney(oldest?.balance ?? 0),
-    user_name: user.name ?? "",
+    user_name: user.name?.trim() || FALLBACK_SIGNOFF_NAME,
     company_name: COMPANY_NAME,
     thread_subject: "",
   };

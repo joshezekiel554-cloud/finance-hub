@@ -890,7 +890,10 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
       .from(users)
       .where(eq(users.id, user.id))
       .limit(1);
-    const userName = userRows[0]?.name ?? user.email ?? "";
+    // No email fallback here: buildTemplateVars substitutes a neutral
+    // team sign-off when the name is missing, which beats signing a
+    // chase with a raw email local-part.
+    const userName = userRows[0]?.name ?? null;
 
     const vars = buildTemplateVars({
       customer,
