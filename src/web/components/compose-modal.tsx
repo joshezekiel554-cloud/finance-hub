@@ -36,6 +36,17 @@ import {
 } from "../../modules/email-compose/index.js";
 import { EditorField } from "./editor-field";
 import { SignaturePicker } from "./signature-picker";
+import {
+  docRowFilename,
+  docRowKey,
+  docRowLabel,
+  mapWithConcurrency,
+  partitionBatch,
+  remainingAttachmentSlots,
+  MAX_ATTACHMENTS,
+  type CustomerDocRow,
+  type DocFetchResult,
+} from "./compose-doc-picker.js";
 
 type GmailAlias = {
   sendAsEmail: string;
@@ -600,6 +611,9 @@ export default function ComposeModal({ open, onOpenChange, context, onSent }: Pr
             <AttachmentsField
               attachments={attachments}
               onChange={setAttachments}
+              onAppend={(files) =>
+                setAttachments((prev) => [...prev, ...files])
+              }
               customerId={context?.customerId}
             />
           </div>
@@ -682,10 +696,15 @@ function FieldRow({
 function AttachmentsField({
   attachments,
   onChange,
+  onAppend,
   customerId,
 }: {
   attachments: File[];
   onChange: (next: File[]) => void;
+  // Appends via a functional state update. The doc picker fetches several
+  // PDFs concurrently, so appending off a stale `attachments` snapshot
+  // would drop all but the last file.
+  onAppend: (files: File[]) => void;
   customerId?: string;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -761,7 +780,8 @@ function AttachmentsField({
           <CustomerDocPicker
             customerId={customerId}
             attachedFilenames={new Set(attachments.map((f) => f.name))}
-            onPick={(file) => onChange([...attachments, file])}
+            attachedCount={attachments.length}
+            onPick={(files) => onAppend(files)}
           />
         ) : null}
       </div>
@@ -775,28 +795,27 @@ function AttachmentsField({
 // tab) plus a "Generate statement PDF (open items)" virtual entry
 // that re-renders a fresh statement on demand.
 //
+// Rows are multi-select: tick as many invoices/credit memos as needed,
+// then one "Attach N documents" click fetches them all (3 at a time so a
+// 20-doc batch doesn't stampede the QBO PDF endpoint) and appends them in
+// a single state update. Partial failures are reported per document and
+// the successes still attach.
+//
 // Picking fetches the PDF as a Blob, wraps it in a File so the
 // downstream base64-encode + send pipeline doesn't fork by source.
 // Already-attached filenames render as disabled to prevent
 // double-attaching the same doc — the operator can still use the
 // chip's × button to remove it.
-type CustomerDocRow = {
-  docType: "invoice" | "credit_memo";
-  qbId: string;
-  docNumber: string | null;
-  issueDate: string | null;
-  total: string;
-  balance: string;
-};
-
 function CustomerDocPicker({
   customerId,
   attachedFilenames,
+  attachedCount,
   onPick,
 }: {
   customerId: string;
   attachedFilenames: Set<string>;
-  onPick: (file: File) => void;
+  attachedCount: number;
+  onPick: (files: File[]) => void;
 }) {
   const docsQuery = useQuery<{
     invoices: CustomerDocRow[];
@@ -813,6 +832,15 @@ function CustomerDocPicker({
 
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
+  // Ticked rows, keyed by `${docType}:${qbId}`. Cleared for whatever
+  // attaches successfully; failed rows stay ticked so a retry is one click.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [batchProgress, setBatchProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   // Which book the generated statement covers (origin-split-2 W2 T6 —
   // closes the W1 gap where compose could only attach Feldart statements).
   const [statementOrigin, setStatementOrigin] = useState<"feldart" | "tj">(
@@ -834,26 +862,58 @@ function CustomerDocPicker({
     });
   }
 
-  async function pickInvoiceOrCm(row: CustomerDocRow): Promise<void> {
-    const baseName =
-      row.docType === "credit_memo"
-        ? `CreditMemo-${row.docNumber ?? row.qbId}`
-        : `Invoice-${row.docNumber ?? row.qbId}`;
-    const filename = `${baseName}.pdf`;
-    if (attachedFilenames.has(filename)) return;
-    const key = `${row.docType}:${row.qbId}`;
-    setBusyKey(key);
+  async function fetchDocAsFile(row: CustomerDocRow): Promise<File> {
+    const url = `/api/qb-pdf/${
+      row.docType === "credit_memo" ? "creditmemo" : "invoice"
+    }/${encodeURIComponent(row.qbId)}`;
+    return fetchAsFile(url, docRowFilename(row));
+  }
+
+  // Attach every ticked row in one go. Successes are appended in a single
+  // update (via the parent's functional append) so nothing is lost to a
+  // stale snapshot; failures are named so the operator knows which docs
+  // didn't make it.
+  async function attachSelected(selectableRows: CustomerDocRow[]): Promise<void> {
+    const queued = selectableRows.filter((row) =>
+      selectedKeys.has(docRowKey(row)),
+    );
+    if (queued.length === 0) return;
+    setBusyKey("batch");
     setPickError(null);
+    setBatchProgress({ done: 0, total: queued.length });
     try {
-      const url = `/api/qb-pdf/${row.docType === "credit_memo" ? "creditmemo" : "invoice"}/${encodeURIComponent(row.qbId)}`;
-      const file = await fetchAsFile(url, filename);
-      onPick(file);
-    } catch (err) {
-      setPickError(
-        err instanceof Error ? err.message : "Failed to fetch PDF",
-      );
+      const settled = await mapWithConcurrency<
+        CustomerDocRow,
+        DocFetchResult<File>
+      >(queued, 3, async (row) => {
+        try {
+          const file = await fetchDocAsFile(row);
+          return { row, file, error: null };
+        } catch (err) {
+          return {
+            row,
+            file: null,
+            error: err instanceof Error ? err.message : "fetch failed",
+          };
+        } finally {
+          setBatchProgress((prev) =>
+            prev ? { ...prev, done: prev.done + 1 } : prev,
+          );
+        }
+      });
+
+      const outcome = partitionBatch(settled);
+      if (outcome.files.length > 0) onPick(outcome.files);
+      // Keep failures ticked so retry is one click; drop what landed.
+      setSelectedKeys((prev) => {
+        const next = new Set(prev);
+        for (const key of outcome.attachedKeys) next.delete(key);
+        return next;
+      });
+      if (outcome.errorMessage) setPickError(outcome.errorMessage);
     } finally {
       setBusyKey(null);
+      setBatchProgress(null);
     }
   }
 
@@ -871,7 +931,7 @@ function CustomerDocPicker({
     try {
       const url = `/api/customers/${encodeURIComponent(customerId)}/statement-pdf-preview?origin=${statementOrigin}`;
       const file = await fetchAsFile(url, filename);
-      onPick(file);
+      onPick([file]);
     } catch (err) {
       setPickError(
         err instanceof Error
@@ -888,21 +948,62 @@ function CustomerDocPicker({
   // cap the picker at the 25 most recent so an old account with
   // hundreds of invoices doesn't fill the dialog.
   const visibleRows = rows.slice(0, 25);
+  // Rows that can still be ticked (anything not already on the email).
+  const selectableRows = visibleRows.filter(
+    (row) => !attachedFilenames.has(docRowFilename(row)),
+  );
+  const selectedCount = selectableRows.filter((row) =>
+    selectedKeys.has(docRowKey(row)),
+  ).length;
+  const busy = busyKey !== null;
+  // /api/send rejects more than 20 attachments, so the picker won't let the
+  // operator tick past what's left after the files already on the draft.
+  const slotsLeft = remainingAttachmentSlots(attachedCount);
+  const selectableCap = Math.min(selectableRows.length, slotsLeft);
+  const allSelected =
+    selectableCap > 0 && selectedCount >= selectableCap;
+  const atCap = selectedCount >= slotsLeft;
+
+  function toggleRow(row: CustomerDocRow): void {
+    const key = docRowKey(row);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else if (next.size < slotsLeft) next.add(key);
+      return next;
+    });
+  }
+
+  function toggleAll(): void {
+    setSelectedKeys(
+      allSelected
+        ? new Set()
+        : new Set(selectableRows.slice(0, selectableCap).map(docRowKey)),
+    );
+  }
 
   return (
     <div className="rounded-md border border-default bg-subtle p-2">
-      <div className="mb-1.5 flex items-center justify-between">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="text-[11px] uppercase tracking-wide text-muted">
           {docsQuery.isPending
             ? "Loading customer docs…"
             : `Customer docs (${rows.length})`}
         </span>
-        {pickError ? (
-          <span className="text-[11px] text-accent-danger">
-            {pickError}
-          </span>
+        {selectableRows.length > 0 ? (
+          <button
+            type="button"
+            onClick={toggleAll}
+            disabled={busy || (selectableCap === 0 && !allSelected)}
+            className="shrink-0 text-[11px] text-accent-primary hover:underline disabled:opacity-50"
+          >
+            {allSelected ? "Clear all" : `Select all ${selectableCap}`}
+          </button>
         ) : null}
       </div>
+      {pickError ? (
+        <div className="mb-1 text-[11px] text-accent-danger">{pickError}</div>
+      ) : null}
       {/* Statement PDF — always offered (re-renders open items on demand).
           The segmented Feldart/TJ control picks WHICH BOOK the statement
           covers; each statement covers exactly one book (origin-split-2). */}
@@ -952,37 +1053,36 @@ function CustomerDocPicker({
       ) : null}
       <div className="max-h-48 space-y-0.5 overflow-y-auto">
         {visibleRows.map((row) => {
-          const key = `${row.docType}:${row.qbId}`;
-          const filename =
-            row.docType === "credit_memo"
-              ? `CreditMemo-${row.docNumber ?? row.qbId}.pdf`
-              : `Invoice-${row.docNumber ?? row.qbId}.pdf`;
-          const alreadyAttached = attachedFilenames.has(filename);
+          const key = docRowKey(row);
+          const alreadyAttached = attachedFilenames.has(docRowFilename(row));
+          const checked = !alreadyAttached && selectedKeys.has(key);
           return (
-            <button
+            <label
               key={key}
-              type="button"
-              onClick={() => pickInvoiceOrCm(row)}
-              disabled={busyKey !== null || alreadyAttached}
-              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-elevated disabled:opacity-50"
+              className={cn(
+                "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs",
+                alreadyAttached || busy
+                  ? "opacity-50"
+                  : "cursor-pointer hover:bg-elevated",
+              )}
             >
-              <span className="truncate">
-                <span className="font-medium">
-                  {row.docType === "credit_memo" ? "CM" : "Inv"}{" "}
-                  {row.docNumber ?? row.qbId}
-                </span>
+              <input
+                type="checkbox"
+                className="size-3.5 shrink-0 accent-current"
+                checked={checked}
+                disabled={alreadyAttached || busy || (atCap && !checked)}
+                onChange={() => toggleRow(row)}
+              />
+              <span className="min-w-0 flex-1 truncate">
+                <span className="font-medium">{docRowLabel(row)}</span>
                 <span className="ml-2 text-muted">
                   {row.issueDate ?? "—"} · ${Number(row.total).toFixed(2)}
                 </span>
               </span>
               <span className="ml-2 shrink-0 text-[10px] text-muted">
-                {alreadyAttached
-                  ? "attached"
-                  : busyKey === key
-                    ? "fetching…"
-                    : "PDF"}
+                {alreadyAttached ? "attached" : "PDF"}
               </span>
-            </button>
+            </label>
           );
         })}
         {!docsQuery.isPending && visibleRows.length === 0 ? (
@@ -991,6 +1091,33 @@ function CustomerDocPicker({
           </div>
         ) : null}
       </div>
+      {selectableRows.length > 0 ? (
+        <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-default pt-1.5">
+          <span className="text-[11px] text-muted">
+            {batchProgress
+              ? `Fetching ${batchProgress.done}/${batchProgress.total}…`
+              : slotsLeft === 0
+                ? `Attachment limit reached (${MAX_ATTACHMENTS})`
+                : selectedCount === 0
+                  ? "Tick documents to attach"
+                  : `${selectedCount} selected${
+                      atCap ? ` · ${MAX_ATTACHMENTS} max per email` : ""
+                    }`}
+          </span>
+          <button
+            type="button"
+            onClick={() => void attachSelected(selectableRows)}
+            disabled={busy || selectedCount === 0}
+            className="shrink-0 rounded-md border border-default bg-base px-2 py-1 text-xs font-medium text-secondary hover:bg-elevated disabled:opacity-50"
+          >
+            {busyKey === "batch"
+              ? "Attaching…"
+              : `Attach${selectedCount > 0 ? ` ${selectedCount}` : ""} ${
+                  selectedCount === 1 ? "document" : "documents"
+                }`}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
