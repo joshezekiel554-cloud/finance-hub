@@ -58,6 +58,26 @@ export function renderTemplate(
   });
 }
 
+/**
+ * Placeholders a render left behind because nothing supplied them — they ship
+ * to the customer as literal "{{total_value}}" text.
+ *
+ * Leaving them visible is deliberate (see PLACEHOLDER_RE), but visible in the
+ * rendered body is only useful if something actually looks. Preview routes
+ * return this list so the operator is warned before an email goes out with a
+ * placeholder where a total should be.
+ */
+export function findUnresolvedPlaceholders(...rendered: string[]): string[] {
+  const found = new Set<string>();
+  for (const text of rendered) {
+    for (const match of text.matchAll(PLACEHOLDER_RE)) {
+      const key = match[1];
+      if (key) found.add(key);
+    }
+  }
+  return [...found];
+}
+
 export function formatMoney(
   amount: string | number | null | undefined,
 ): string {

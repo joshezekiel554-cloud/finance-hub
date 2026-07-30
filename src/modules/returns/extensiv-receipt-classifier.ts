@@ -74,17 +74,37 @@ const LEADING_SEASON_RE = new RegExp(`^\\s*(?:${SEASON_TOKEN}\\s*\\d{0,4}|\\d{4}
 // optional so a Ref of just "returns" (rare/empty case) collapses to "".
 const TRAILING_RETURNS_RE = /(?:^|\s+)returns?\s*$/i;
 
+// Current ref format (operator-specified 2026-07-30, see extensiv-export.ts):
+//   "{Store name} Returns - {Seasonal|Non Seasonal|Damage} - {MM-DD-YY}"
+// Anchored end-to-end so a store whose own name contains " - " can't be
+// truncated by a greedy split.
+const CURRENT_REF_RE =
+  /^(.+?)\s+returns\s+-\s+(?:seasonal|non seasonal|damage)\s+-\s+\d{2}-\d{2}-\d{2}$/i;
+
 // Extract a best-effort customer name from a parsed Ref string.
-// Examples:
+// Examples (current format):
+//   "Merkaz Monsey Returns - Seasonal - 07-30-26" → "Merkaz Monsey"
+// Examples (legacy format — still in the wild on RMAs sent before the change,
+// and Extensiv echoes back whatever ref it was given, so both must work):
 //   "Acme Company Spring2026 returns" → "Acme Company"
 //   "Test Customer Spring2026 returns" → "Test Customer"
 //   "Best Boutique Summer 2025 returns" → "Best Boutique"
 //   "Pesach2026 Acme Company returns" → "Acme Company"
 //
 // Conservative: returns undefined for empty results so the matcher stays
-// safe rather than fuzzy-matching on noise.
+// safe rather than fuzzy-matching on noise. Getting this wrong is not
+// cosmetic — the leftovers become match tokens in rma-matcher tier 3, so
+// leaving "returns"/"seasonal"/the date in would hand every receipt a
+// customer-name hit against any store with those words in its name.
 export function inferCustomerNameFromRef(ref: string | undefined): string | undefined {
   if (!ref) return undefined;
+
+  const current = CURRENT_REF_RE.exec(ref.trim());
+  if (current) {
+    const store = current[1]?.trim() ?? "";
+    return store.length > 0 ? store : undefined;
+  }
+
   let remainder = ref.trim();
   // 1. Strip trailing "returns" / "return"
   remainder = remainder.replace(TRAILING_RETURNS_RE, "").trim();

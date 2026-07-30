@@ -97,7 +97,19 @@ vi.mock("./eligibility-pdf.js", () => ({ generateEligibilityPdf: generateEligibi
 const buildExtensivExportFileMock = vi.hoisted(() =>
   vi.fn().mockReturnValue({ filename: "acme_pesach-2026_returns.txt", content: "col0\t\t\tcol3\tSKU-A\t1\t\t\t\t\t\t\t\t\t" }),
 );
-vi.mock("./extensiv-export.js", () => ({ buildExtensivExportFile: buildExtensivExportFileMock }));
+// buildExtensivRef is NOT mocked away to a stub: rma-service stores its
+// output as the ref receipts are matched back on, so the test should see the
+// real string.
+const buildExtensivRefMock = vi.hoisted(() =>
+  vi.fn(
+    (input: { customerName: string }) =>
+      `${input.customerName} Returns - Seasonal - 07-30-26`,
+  ),
+);
+vi.mock("./extensiv-export.js", () => ({
+  buildExtensivExportFile: buildExtensivExportFileMock,
+  buildExtensivRef: buildExtensivRefMock,
+}));
 
 // Mock Drive client (dynamic import in rma-service.ts)
 const renameFolderMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));

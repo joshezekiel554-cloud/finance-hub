@@ -41,6 +41,7 @@ import { listAliases } from "../../integrations/gmail/aliases.js";
 import { recordActivity } from "../../modules/crm/index.js";
 import { autoActionPriorInbounds } from "../../modules/crm/auto-action-emails.js";
 import { appendSignatures } from "../../modules/email-compose/signatures.js";
+import { findUnresolvedPlaceholders } from "../../modules/email-compose/index.js";
 
 const log = createLogger({ component: "routes.email-send" });
 
@@ -75,7 +76,9 @@ const attachmentSchema = z.object({
     .max(MAX_ATTACHMENT_BASE64_BYTES, "attachment exceeds per-file size limit"),
 });
 
-const sendBodySchema = z.object({
+// Exported for tests: the placeholder guard's opt-out must stay off unless a
+// caller explicitly asks for it, or the guard quietly stops guarding.
+export const sendBodySchema = z.object({
   to: z.string().min(1).max(2000),
   cc: z.string().max(2000).optional(),
   bcc: z.string().max(2000).optional(),
@@ -108,6 +111,10 @@ const sendBodySchema = z.object({
         });
       }
     }),
+  // Escape hatch for the unrendered-placeholder guard in the handler: a
+  // genuine email that really does contain "{{...}}" text (rare — quoting a
+  // template back to a colleague). Never set by the customer-facing dialogs.
+  allowUnrenderedPlaceholders: z.boolean().optional().default(false),
   // Optional overrides for the activity row this send produces. When
   // provided, the activity's refType/refId point at the related doc
   // (e.g. an invoice or credit memo) instead of the default
@@ -263,6 +270,7 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
       threadId,
       customerId,
       attachments,
+      allowUnrenderedPlaceholders,
       refType: refTypeOverride,
       refId: refIdOverride,
       userSignatureId,
@@ -287,6 +295,21 @@ const emailSendRoute: FastifyPluginAsync = async (app) => {
     }, disputeInvoiceId);
     if (disputeGuard.kind === "invalid") {
       return reply.code(400).send({ error: disputeGuard.message });
+    }
+
+    // Never mail an unrendered template token. Five approval emails reached
+    // customers reading "Total: {{total_value}}" because a template asked for
+    // a variable nothing supplied, and nothing downstream looked. This is the
+    // last gate before Gmail, so it covers every path — dialogs, compose,
+    // chase, agent — not just the one that broke.
+    const unrendered = findUnresolvedPlaceholders(subject, body);
+    if (unrendered.length > 0 && !allowUnrenderedPlaceholders) {
+      return reply.code(400).send({
+        error: `Email still contains unfilled template placeholders: ${unrendered
+          .map((p) => `{{${p}}}`)
+          .join(", ")}. Fill them in or remove them before sending.`,
+        unresolvedPlaceholders: unrendered,
+      });
     }
 
     // Two body shapes converge here:

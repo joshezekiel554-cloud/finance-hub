@@ -22,7 +22,10 @@ import { validateTransition } from "./rma-state.js";
 import { buildAndPushCreditMemo } from "./credit-memo-builder.js";
 import { runEligibility } from "./eligibility.js";
 import { generateEligibilityPdf } from "./eligibility-pdf.js";
-import { buildExtensivExportFile } from "./extensiv-export.js";
+import {
+  buildExtensivExportFile,
+  buildExtensivRef,
+} from "./extensiv-export.js";
 
 // ---------------------------------------------------------------------------
 // createRma
@@ -561,13 +564,31 @@ export async function generateWarehouseExport(
     seasonName = seasonRows[0]?.name ?? "";
   }
 
-  // Build extensiv ref: "{customerName} {seasonName} returns"
-  const extensivRef = [customerName, seasonName, "returns"]
-    .filter(Boolean)
-    .join(" ");
+  // Column A of the export file, and the value inbound Extensiv receipts are
+  // matched back on by exact equality (rma-matcher tier 2) — so it is built
+  // by the same function the file builder uses, off the same timestamp.
+  //
+  // An already-issued ref is never rewritten. Cancelling the warehouse export
+  // and regenerating it would otherwise stamp today's date onto an RMA whose
+  // file is already sitting at the warehouse under the old ref, and the
+  // receipt coming back would quietly stop matching with nothing in the app
+  // to show why.
+  const generatedAt = new Date();
+  const extensivRef =
+    current.extensivRef && current.extensivRef.trim()
+      ? current.extensivRef.trim()
+      : buildExtensivRef({
+          customerName,
+          returnType: current.returnType,
+          generatedAt,
+        });
 
   const exportFile = buildExtensivExportFile({
-    rma: { rmaNumber: current.rmaNumber ?? null, extensivRef },
+    rma: {
+      rmaNumber: current.rmaNumber ?? null,
+      extensivRef,
+      returnType: current.returnType,
+    },
     customer: {
       name: customerName,
       qbCustomerId: current.qbCustomerId ?? "",
@@ -578,13 +599,13 @@ export async function generateWarehouseExport(
       name: item.name,
       quantity: item.quantity,
     })),
+    generatedAt,
   });
 
-  const now = new Date();
   await db.update(rmas).set({
     status: "awaiting_warehouse_number",
     extensivRef,
-    extensivExportGeneratedAt: now,
+    extensivExportGeneratedAt: generatedAt,
   }).where(eq(rmas.id, rmaId));
 
   await recordActivity(

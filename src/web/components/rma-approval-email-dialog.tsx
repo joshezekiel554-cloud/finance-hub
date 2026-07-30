@@ -27,6 +27,9 @@ type PreviewResponse = {
   body: string;
   recipients: { to: string; cc: string; bcc: string };
   bccReasons: Array<{ tag: string; address: string }>;
+  // Template placeholders nothing supplied — these reach the customer
+  // as literal "{{...}}" text unless the operator fixes the template.
+  unresolvedPlaceholders?: string[];
 };
 
 export type RmaApprovalEmailDialogProps = {
@@ -241,6 +244,23 @@ export default function RmaApprovalEmailDialog({
                   className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
                 />
               </label>
+              {/* A placeholder nothing filled in would reach the customer as raw
+                  "{{...}}" text — this is how approval emails shipped a literal
+                  {{total_value}} where the total should be. */}
+              {(previewQuery.data?.unresolvedPlaceholders?.length ?? 0) > 0 && (
+                <div className="flex items-start gap-2 rounded-md border border-accent-danger/30 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger">
+                  <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    This email still contains{" "}
+                    {previewQuery.data?.unresolvedPlaceholders
+                      ?.map((p) => `{{${p}}}`)
+                      .join(", ")}{" "}
+                    — the customer would see that text. Fix the wording here, or
+                    remove the placeholder from the template in Settings.
+                  </span>
+                </div>
+              )}
+
             </>
           )}
 

@@ -53,6 +53,9 @@ type PreviewResponse = {
   body: string;
   recipients: { to: string; cc: string; bcc: string };
   bccReasons: Array<{ tag: string; address: string }>;
+  // Template placeholders nothing supplied — these reach the customer
+  // as literal "{{...}}" text unless the operator fixes the template.
+  unresolvedPlaceholders?: string[];
 };
 
 type SourceInvoiceTaxStatus = {
@@ -154,7 +157,14 @@ export default function RmaCreditMemoDialog({
       setRestockingFee("0.00");
       setApplyTax(false);
       setApplyTaxTouched(false);
-      setEdited(false);
+      setEdited({
+        subject: false,
+        body: false,
+        to: false,
+        cc: false,
+        bcc: false,
+      });
+      setSyncedPreviewBody(null);
     }
   }, [open]);
 
@@ -238,18 +248,56 @@ export default function RmaCreditMemoDialog({
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
   const [bcc, setBcc] = useState("");
-  const [edited, setEdited] = useState(false);
+  // Which fields the operator has typed in. Tracked per-field rather than as
+  // one flag: a flag meant that editing the TO line froze the BODY too, so
+  // every later change to received qty / deductions / tax updated the totals
+  // on screen while the email kept quoting the old figure — the email went
+  // out with a total that didn't match the credit memo.
+  const [edited, setEdited] = useState<{
+    subject: boolean;
+    body: boolean;
+    to: boolean;
+    cc: boolean;
+    bcc: boolean;
+  }>({ subject: false, body: false, to: false, cc: false, bcc: false });
+  const markEdited = (field: keyof typeof edited): void =>
+    setEdited((prev) => ({ ...prev, [field]: true }));
+
+  // The preview body the current subject/body was last synced from. When the
+  // operator has hand-edited the body and the figures then change, this is
+  // what tells us the email is quoting stale numbers.
+  const [syncedPreviewBody, setSyncedPreviewBody] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
-    if (edited) return;
     const d = previewQuery.data;
     if (!d) return;
-    setSubject(d.subject);
-    setBody(d.body);
-    setTo(d.recipients.to);
-    setCc(d.recipients.cc);
-    setBcc(d.recipients.bcc);
+    if (!edited.subject) setSubject(d.subject);
+    if (!edited.body) {
+      setBody(d.body);
+      setSyncedPreviewBody(d.body);
+    }
+    if (!edited.to) setTo(d.recipients.to);
+    if (!edited.cc) setCc(d.recipients.cc);
+    if (!edited.bcc) setBcc(d.recipients.bcc);
   }, [previewQuery.data, edited]);
+
+  // Hand-edited body + figures have moved on since it was edited. We never
+  // overwrite what the operator typed; we tell them, and offer the refresh.
+  const bodyIsStale =
+    edited.body &&
+    !!previewQuery.data &&
+    syncedPreviewBody !== null &&
+    previewQuery.data.body !== syncedPreviewBody;
+
+  function refreshBodyFromPreview(): void {
+    const d = previewQuery.data;
+    if (!d) return;
+    setBody(d.body);
+    setSyncedPreviewBody(d.body);
+    setEdited((prev) => ({ ...prev, body: false }));
+  }
 
   // --- Send mutation ---
   const sendMutation = useMutation<unknown, Error, void>({
@@ -637,18 +685,18 @@ export default function RmaCreditMemoDialog({
                   <RecipientField
                     label="TO"
                     value={to}
-                    onChange={(v) => { setTo(v); setEdited(true); }}
+                    onChange={(v) => { setTo(v); markEdited("to"); }}
                     required
                   />
                   <RecipientField
                     label="CC"
                     value={cc}
-                    onChange={(v) => { setCc(v); setEdited(true); }}
+                    onChange={(v) => { setCc(v); markEdited("cc"); }}
                   />
                   <RecipientField
                     label="BCC"
                     value={bcc}
-                    onChange={(v) => { setBcc(v); setEdited(true); }}
+                    onChange={(v) => { setBcc(v); markEdited("bcc"); }}
                   />
 
                   {previewQuery.data && previewQuery.data.bccReasons.length > 0 && (
@@ -675,7 +723,7 @@ export default function RmaCreditMemoDialog({
                     <input
                       type="text"
                       value={subject}
-                      onChange={(e) => { setSubject(e.target.value); setEdited(true); }}
+                      onChange={(e) => { setSubject(e.target.value); markEdited("subject"); }}
                       className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
                     />
                   </label>
@@ -686,11 +734,50 @@ export default function RmaCreditMemoDialog({
                     </span>
                     <textarea
                       value={body}
-                      onChange={(e) => { setBody(e.target.value); setEdited(true); }}
+                      onChange={(e) => { setBody(e.target.value); markEdited("body"); }}
                       rows={10}
                       className="w-full rounded-md border border-default bg-base px-2 py-1 text-sm"
                     />
                   </label>
+
+                  
+                  {/* A placeholder nothing filled in would reach the customer as raw
+                      "{{...}}" text — this is how approval emails shipped a literal
+                      {{total_value}} where the total should be. */}
+                  {(previewQuery.data?.unresolvedPlaceholders?.length ?? 0) > 0 && (
+                    <div className="flex items-start gap-2 rounded-md border border-accent-danger/30 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger">
+                      <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                      <span>
+                        This email still contains{" "}
+                        {previewQuery.data?.unresolvedPlaceholders
+                          ?.map((p) => `{{${p}}}`)
+                          .join(", ")}{" "}
+                        — the customer would see that text. Fix the wording here, or
+                        remove the placeholder from the template in Settings.
+                      </span>
+                    </div>
+                  )}
+{/* The operator edited the body, then changed a quantity,
+                      deduction or the tax box. We won't overwrite their
+                      wording, but the email would otherwise go out quoting
+                      the old total. */}
+                  {bodyIsStale && (
+                    <div className="flex items-start gap-2 rounded-md border border-accent-warning/40 bg-accent-warning/10 px-3 py-2 text-sm text-accent-warning">
+                      <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                      <span className="flex-1">
+                        The figures changed since you edited this email — it
+                        still shows the old total. Your edits are untouched
+                        until you refresh.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={refreshBodyFromPreview}
+                        className="shrink-0 rounded-md border border-accent-warning/40 px-2 py-1 text-xs font-semibold"
+                      >
+                        Refresh body
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </section>

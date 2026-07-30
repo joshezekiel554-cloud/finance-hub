@@ -57,7 +57,10 @@ import { customers } from "../../db/schema/customers.js";
 import { emailTemplates } from "../../db/schema/email-templates.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { db } from "../../db/index.js";
-import { renderTemplate } from "../../modules/email-compose/index.js";
+import {
+  renderTemplate,
+  findUnresolvedPlaceholders,
+} from "../../modules/email-compose/index.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
 import { recordActivity } from "../../modules/crm/activity-ingester.js";
 import { requireAuth, isAdmin } from "../lib/auth.js";
@@ -1394,6 +1397,9 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         items_list: itemsList || "  (no items recorded)",
         resolution_body: resolutionBody,
         approval_opening: approvalOpening,
+        // The live template quotes {{total_value}}. It was never supplied, so
+        // approval emails went out to customers reading "Total: {{total_value}}".
+        total_value: `$${(parseFloat(rma.totalValue ?? "0") || 0).toFixed(2)}`,
         company_name: "Feldart",
         user_name: "",
       };
@@ -1423,6 +1429,9 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           bcc: resolved.bcc.join(", "),
         },
         bccReasons: resolved.bccReasons ?? [],
+        // Anything the template asks for that we don't supply would otherwise
+        // reach the customer as literal "{{...}}" text.
+        unresolvedPlaceholders: findUnresolvedPlaceholders(subject, body),
       };
     },
   );
@@ -1738,7 +1747,11 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       }
 
       const exportFile = buildExtensivExportFile({
-        rma: { rmaNumber: rma.rmaNumber ?? null, extensivRef: rma.extensivRef ?? null },
+        rma: {
+          rmaNumber: rma.rmaNumber ?? null,
+          extensivRef: rma.extensivRef ?? null,
+          returnType: rma.returnType,
+        },
         customer: { name: customer.displayName, qbCustomerId: rma.qbCustomerId ?? "" },
         season: { name: seasonName },
         items: rma.items.map((item) => ({
@@ -2136,7 +2149,11 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
             .array(
               z.object({
                 itemId: z.string().min(1),
-                receivedQuantity: z.string().min(1),
+                // Empty is legitimate: the operator has cleared the qty box
+                // and is mid-type. It must NOT fail the parse — a rejected
+                // body used to drop EVERY override silently, so the previewed
+                // total quietly reverted to full quantities.
+                receivedQuantity: z.string(),
               }),
             )
             .optional(),
@@ -2148,7 +2165,18 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
         })
         .safeParse(req.body);
 
-      const overrides = bodyParse.success ? bodyParse.data : {};
+      // Previously this fell back to {} on a parse failure, which meant a
+      // single bad field silently discarded every quantity/deduction the
+      // operator had entered and previewed a total that didn't match the
+      // credit memo. Fail loudly instead.
+      if (!bodyParse.success) {
+        reply.code(400);
+        return {
+          error: "Invalid preview body",
+          details: bodyParse.error.flatten(),
+        };
+      }
+      const overrides = bodyParse.data;
 
       const rma = await getRmaById(req.params.id);
       if (!rma) {
@@ -2257,6 +2285,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
 
       const subject = renderTemplate(template.subject, vars);
       const body = renderTemplate(template.body, vars);
+      const unresolvedPlaceholders = findUnresolvedPlaceholders(subject, body);
 
       // Credit memos go to invoice recipients (not chase) — invoice billing is the customer-facing relationship for these.
       const resolved = await resolveRecipients("invoice", {
@@ -2280,6 +2309,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
           bcc: resolved.bcc.join(", "),
         },
         bccReasons: resolved.bccReasons ?? [],
+        unresolvedPlaceholders,
       };
     },
   );

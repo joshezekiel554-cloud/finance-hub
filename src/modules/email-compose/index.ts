@@ -1,5 +1,6 @@
 export {
   buildTemplateVars,
+  findUnresolvedPlaceholders,
   formatMoney,
   renderTemplate,
   type BuildTemplateVarsInput,

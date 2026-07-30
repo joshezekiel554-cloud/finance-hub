@@ -16,11 +16,23 @@
 // only item rows. One row per return item. Columns are separated by \t,
 // rows by \n.
 //
-// Filename convention (this module, not desktop app): safe for all OSes,
-// both customer and season names are slugged to lowercase alphanumeric + hyphen.
+// Filename convention (this module, not desktop app), operator-specified
+// 2026-07-30:
+//
+//   "{Store name} Returns - {Seasonal|Non Seasonal|Damage} - {MM-DD-YY}.txt"
+//
+// The store name keeps its real capitalisation and spacing (it is what the
+// warehouse reads); only characters a filesystem rejects are stripped. The
+// date is the US format the warehouse expects, taken on the operator's own
+// day rather than the server's, so a file generated late in the UK evening
+// doesn't land on the previous date.
 
 export type ExtensivExportInput = {
-  rma: { rmaNumber: string | null; extensivRef: string | null };
+  rma: {
+    rmaNumber: string | null;
+    extensivRef: string | null;
+    returnType?: RmaReturnTypeLike;
+  };
   customer: {
     name: string;
     qbCustomerId: string;
@@ -33,7 +45,15 @@ export type ExtensivExportInput = {
   };
   season: { name: string };
   items: Array<{ sku: string; name: string; quantity: string }>;
+  /** When the file was generated. Defaults to now; injectable for tests. */
+  generatedAt?: Date;
+  /** IANA zone the filename date is read in. Defaults to the team's own day. */
+  timeZone?: string;
 };
+
+// Mirrors RMA_RETURN_TYPES in db/schema/returns.ts. Kept structural rather
+// than imported so this builder stays a pure, schema-free module.
+export type RmaReturnTypeLike = "damage" | "seasonal" | "non_seasonal";
 
 export type ExtensivExportFile = {
   filename: string;
@@ -46,12 +66,57 @@ export type ExtensivExportFile = {
 
 const NUM_COLUMNS = 15;
 
-/** Slugify a string: lowercase, replace non-alphanumeric runs with "-", trim. */
-function slugify(s: string): string {
+const DEFAULT_FILENAME_TIME_ZONE = "Europe/London";
+
+/**
+ * Strip only what a filesystem rejects — Windows bans \ / : * ? " < > | and
+ * control characters — then collapse whitespace. Capitalisation and spacing
+ * survive, because the warehouse reads the store name off the filename.
+ */
+export function sanitizeFilenamePart(s: string): string {
   return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\\/:*?"<>|\x00-\x1F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** "Seasonal" / "Non Seasonal" / "Damage" for the filename. */
+export function returnTypeLabel(type: RmaReturnTypeLike | undefined): string {
+  if (type === "non_seasonal") return "Non Seasonal";
+  if (type === "damage") return "Damage";
+  return "Seasonal";
+}
+
+/**
+ * US-format date for the filename: MM-DD-YY. Read in `timeZone` so the date
+ * matches the day the operator is actually having, not the server's UTC day.
+ */
+export function formatUsFilenameDate(
+  d: Date,
+  timeZone: string = DEFAULT_FILENAME_TIME_ZONE,
+): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (type: string): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("month")}-${get("day")}-${get("year")}`;
+}
+
+/**
+ * "{Store name} Returns - {Seasonal|Non Seasonal|Damage} - {MM-DD-YY}.txt"
+ */
+export function buildExtensivFilename(input: {
+  customerName: string;
+  returnType: RmaReturnTypeLike | undefined;
+  generatedAt: Date;
+  timeZone?: string;
+}): string {
+  return `${buildExtensivRef(input)}.txt`;
 }
 
 /**
@@ -69,14 +134,31 @@ function sanitize(v: string): string {
 }
 
 /**
- * Build the Extensiv ref string: "{customer} {season} returns"
- * Matches _make_ref() in excel_generator.py.
+ * Build the Extensiv ref string (column A), operator-specified 2026-07-30:
+ *
+ *   "{Store name} Returns - {Seasonal|Non Seasonal|Damage} - {MM-DD-YY}"
+ *
+ * Same string as the filename, minus the extension — the warehouse reads the
+ * two together. Superseded the old "{customer} {season} returns" form
+ * (_make_ref() in the desktop app's excel_generator.py).
+ *
+ * IMPORTANT: rma-service.ts stores this on the RMA when the export is first
+ * generated, and inbound Extensiv receipts are matched back by exact string
+ * equality on that stored value. Both writers must therefore produce the
+ * identical string, which is why they share this one function — and why the
+ * date is passed in rather than read from the clock here, so a re-download
+ * can reproduce a ref byte-for-byte.
  */
-function buildRef(customerName: string, seasonName: string): string {
-  const parts = [customerName];
-  if (seasonName) parts.push(seasonName);
-  parts.push("returns");
-  return parts.join(" ");
+export function buildExtensivRef(input: {
+  customerName: string;
+  returnType: RmaReturnTypeLike | undefined;
+  generatedAt: Date;
+  timeZone?: string;
+}): string {
+  const store = sanitizeFilenamePart(input.customerName) || "Customer";
+  const label = returnTypeLabel(input.returnType);
+  const date = formatUsFilenameDate(input.generatedAt, input.timeZone);
+  return `${store} Returns - ${label} - ${date}`;
 }
 
 /**
@@ -108,13 +190,21 @@ function buildRow(ref: string, notes: string, sku: string, quantity: string): st
 export function buildExtensivExportFile(
   input: ExtensivExportInput,
 ): ExtensivExportFile {
-  const { rma, customer, season, items } = input;
+  const { rma, customer, items } = input;
+  const generatedAt = input.generatedAt ?? new Date();
 
-  // Ref is either the stored extensivRef (if already set) or freshly built.
+  // The STORED ref wins whenever it exists. Re-downloading an RMA that went
+  // to the warehouse under the old "{customer} {season} returns" form must
+  // still emit that ref, or the receipt Extensiv echoes back stops matching.
   const ref =
     rma.extensivRef && rma.extensivRef.trim()
       ? rma.extensivRef.trim()
-      : buildRef(customer.name, season.name);
+      : buildExtensivRef({
+          customerName: customer.name,
+          returnType: rma.returnType,
+          generatedAt,
+          timeZone: input.timeZone,
+        });
 
   // Notes: customer name (mirrors generate_multi_rma_file in desktop app)
   const notes = `Customer: ${customer.name}`;
@@ -124,10 +214,12 @@ export function buildExtensivExportFile(
     buildRow(ref, notes, item.sku, item.quantity),
   );
 
-  // Filename: {customer_slug}_{season_slug}_returns.txt
-  const customerSlug = slugify(customer.name);
-  const seasonSlug = slugify(season.name);
-  const filename = `${customerSlug}_${seasonSlug}_returns.txt`;
+  const filename = buildExtensivFilename({
+    customerName: customer.name,
+    returnType: rma.returnType,
+    generatedAt,
+    timeZone: input.timeZone,
+  });
 
   return {
     filename,

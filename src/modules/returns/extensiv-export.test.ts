@@ -61,9 +61,11 @@ describe("buildExtensivExportFile", () => {
 
   // --- Correct column positions ---
   it("places ref in col 0, sku in col 4, quantity in col 5", () => {
-    const { content } = buildExtensivExportFile(makeInput());
+    const { content } = buildExtensivExportFile(
+      makeInput({ generatedAt: new Date("2026-07-30T12:00:00Z") }),
+    );
     const cols = content.split("\t");
-    expect(cols[0]).toBe("Acme Corp Pesach 2026 returns"); // ref
+    expect(cols[0]).toBe("Acme Corp Returns - Seasonal - 07-30-26"); // ref
     expect(cols[1]).toBe(""); // empty
     expect(cols[2]).toBe(""); // empty
     expect(cols[3]).toContain("Acme Corp"); // notes contain customer name
@@ -86,34 +88,119 @@ describe("buildExtensivExportFile", () => {
     expect(cols[0]).toBe("Custom Ref Override");
   });
 
-  // --- Ref built as "{customer} {season} returns" when extensivRef is null ---
-  it("builds ref as 'customer season returns' when extensivRef is null", () => {
-    const { content } = buildExtensivExportFile(makeInput());
+  // --- Ref matches the filename when extensivRef is null ---
+  it("builds the ref in the same format as the filename", () => {
+    const { content, filename } = buildExtensivExportFile(
+      makeInput({
+        rma: { rmaNumber: "R", extensivRef: null, returnType: "non_seasonal" },
+        customer: { name: "Merkaz Monsey", qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-07-30T12:00:00Z"),
+      }),
+    );
     const cols = content.split("\t");
-    expect(cols[0]).toBe("Acme Corp Pesach 2026 returns");
+    expect(cols[0]).toBe("Merkaz Monsey Returns - Non Seasonal - 07-30-26");
+    // Column A and the filename are read together by the warehouse — they
+    // must never drift apart.
+    expect(filename).toBe(`${cols[0]}.txt`);
   });
 
-  // --- Filename slugging ---
-  it("slugifies customer and season names for the filename", () => {
-    const { filename } = buildExtensivExportFile(
+  it("keeps a legacy stored ref on re-download rather than restyling it", () => {
+    // An RMA already sitting in the warehouse under the old ref must keep it:
+    // Extensiv echoes back the ref it was given, and receipts are matched by
+    // exact equality against the stored value.
+    const { content } = buildExtensivExportFile(
       makeInput({
-        customer: { name: "Acme Corp", qbCustomerId: "QB-123" },
-        season: { name: "Pesach 2026" },
+        rma: {
+          rmaNumber: "R",
+          extensivRef: "Acme Corp Pesach 2026 returns",
+          returnType: "seasonal",
+        },
+        generatedAt: new Date("2026-07-30T12:00:00Z"),
       }),
     );
-    expect(filename).toBe("acme-corp_pesach-2026_returns.txt");
+    expect(content.split("\t")[0]).toBe("Acme Corp Pesach 2026 returns");
   });
 
-  it("handles special chars and spaces in names for filename", () => {
+  // --- Filename: "{Store} Returns - {Type} - MM-DD-YY.txt" (operator spec) ---
+  it("names the file store + type + US date", () => {
     const { filename } = buildExtensivExportFile(
       makeInput({
+        rma: {
+          rmaNumber: "RMA-1",
+          extensivRef: null,
+          returnType: "seasonal",
+        },
+        customer: { name: "Merkaz Monsey", qbCustomerId: "QB-123" },
+        generatedAt: new Date("2026-07-30T12:00:00Z"),
+      }),
+    );
+    expect(filename).toBe("Merkaz Monsey Returns - Seasonal - 07-30-26.txt");
+  });
+
+  it("labels non-seasonal and damage returns distinctly", () => {
+    const nonSeasonal = buildExtensivExportFile(
+      makeInput({
+        rma: { rmaNumber: "R", extensivRef: null, returnType: "non_seasonal" },
+        customer: { name: "Eichlers", qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-01-05T09:00:00Z"),
+      }),
+    ).filename;
+    expect(nonSeasonal).toBe("Eichlers Returns - Non Seasonal - 01-05-26.txt");
+
+    const damage = buildExtensivExportFile(
+      makeInput({
+        rma: { rmaNumber: "R", extensivRef: null, returnType: "damage" },
+        customer: { name: "Eichlers", qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-01-05T09:00:00Z"),
+      }),
+    ).filename;
+    expect(damage).toBe("Eichlers Returns - Damage - 01-05-26.txt");
+  });
+
+  it("keeps the store's own capitalisation and spacing", () => {
+    const { filename } = buildExtensivExportFile(
+      makeInput({
+        rma: { rmaNumber: "R", extensivRef: null, returnType: "seasonal" },
         customer: { name: "Feldart & Sons, LLC.", qbCustomerId: "QB-1" },
-        season: { name: "Rosh Hashana 5787" },
+        generatedAt: new Date("2026-11-02T12:00:00Z"),
       }),
     );
-    // Special chars become hyphens, consecutive hyphens collapsed
-    expect(filename).toMatch(/^[a-z0-9-]+_[a-z0-9-]+_returns\.txt$/);
-    expect(filename).toBe("feldart-sons-llc_rosh-hashana-5787_returns.txt");
+    expect(filename).toBe(
+      "Feldart & Sons, LLC. Returns - Seasonal - 11-02-26.txt",
+    );
+  });
+
+  it("strips characters a filesystem rejects from the store name", () => {
+    const { filename } = buildExtensivExportFile(
+      makeInput({
+        rma: { rmaNumber: "R", extensivRef: null, returnType: "seasonal" },
+        customer: { name: 'Acme / Beta: "Gold"?', qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-11-02T12:00:00Z"),
+      }),
+    );
+    expect(filename).toBe("Acme Beta Gold Returns - Seasonal - 11-02-26.txt");
+    expect(filename).not.toMatch(/[\\/:*?"<>|]/);
+  });
+
+  it("reads the date on the team's day, not the server's UTC day", () => {
+    // 23:30 in London on 30 Jul is still 30 Jul, even though a naive UTC
+    // read at BST would be fine — the reverse case is the one that bites:
+    // 00:30 BST on 31 Jul is 23:30 UTC on the 30th.
+    const { filename } = buildExtensivExportFile(
+      makeInput({
+        rma: { rmaNumber: "R", extensivRef: null, returnType: "seasonal" },
+        customer: { name: "Acme", qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-07-30T23:30:00Z"),
+      }),
+    );
+    expect(filename).toBe("Acme Returns - Seasonal - 07-31-26.txt");
+  });
+
+  it("falls back to Seasonal when the return type is missing", () => {
+    const { filename } = buildExtensivExportFile(
+      makeInput({ generatedAt: new Date("2026-03-09T12:00:00Z") }),
+    );
+    expect(filename).toBe("Acme Corp Returns - Seasonal - 03-09-26.txt");
   });
 
   // --- Multi-item: each row has correct SKU + qty ---
@@ -141,13 +228,14 @@ describe("buildExtensivExportFile", () => {
     const { content } = buildExtensivExportFile(
       makeInput({
         customer: { name: "Acme\nCorp", qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-07-30T12:00:00Z"),
       }),
     );
     const rows = content.split("\n");
     expect(rows).toHaveLength(1); // <-- if newline weren't stripped this would be 2
     const cols = rows[0]!.split("\t");
     expect(cols).toHaveLength(15);
-    expect(cols[0]).toBe("Acme Corp Pesach 2026 returns");
+    expect(cols[0]).toBe("Acme Corp Returns - Seasonal - 07-30-26");
     expect(cols[3]).toBe("Customer: Acme Corp");
   });
 
@@ -155,6 +243,7 @@ describe("buildExtensivExportFile", () => {
     const { content } = buildExtensivExportFile(
       makeInput({
         customer: { name: "Acme\tInc", qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-07-30T12:00:00Z"),
         items: [{ sku: "SKU\tA", name: "Item", quantity: "1\t" }],
       }),
     );
@@ -162,7 +251,7 @@ describe("buildExtensivExportFile", () => {
     expect(rows).toHaveLength(1);
     const cols = rows[0]!.split("\t");
     expect(cols).toHaveLength(15);
-    expect(cols[0]).toBe("Acme Inc Pesach 2026 returns");
+    expect(cols[0]).toBe("Acme Inc Returns - Seasonal - 07-30-26");
     expect(cols[3]).toBe("Customer: Acme Inc");
     expect(cols[4]).toBe("SKU A");
     expect(cols[5]).toBe("1");
@@ -172,6 +261,7 @@ describe("buildExtensivExportFile", () => {
     const { content } = buildExtensivExportFile(
       makeInput({
         customer: { name: "Acme\r\nCorp", qbCustomerId: "QB-1" },
+        generatedAt: new Date("2026-07-30T12:00:00Z"),
       }),
     );
     const rows = content.split("\n");

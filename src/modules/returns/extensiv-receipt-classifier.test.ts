@@ -311,6 +311,28 @@ describe("classifyExtensivEmail", () => {
   // inferCustomerNameFromRef — table-driven unit tests of the helper.
   // ---------------------------------------------------------------------
   describe("inferCustomerNameFromRef helper", () => {
+    // Current ref format: "{Store} Returns - {Type} - MM-DD-YY".
+    // Leaving the type or date in the extracted name is not cosmetic — the
+    // leftovers become match tokens in rma-matcher tier 3.
+    it.each<[string, string | undefined]>([
+      ["Merkaz Monsey Returns - Seasonal - 07-30-26", "Merkaz Monsey"],
+      ["Eichlers Returns - Non Seasonal - 01-05-26", "Eichlers"],
+      ["Eichlers Returns - Damage - 01-05-26", "Eichlers"],
+      // Store name containing its own hyphen-space must survive intact.
+      ["Judaica - Corner Returns - Seasonal - 07-30-26", "Judaica - Corner"],
+      // Lowercased by whatever echoed it back.
+      ["acme corp returns - seasonal - 07-30-26", "acme corp"],
+    ])("current format: inferCustomerNameFromRef(%j) === %j", (input, expected) => {
+      expect(inferCustomerNameFromRef(input)).toBe(expected);
+    });
+
+    it("does not leave the type or date in the extracted name", () => {
+      const name = inferCustomerNameFromRef(
+        "Merkaz Monsey Returns - Seasonal - 07-30-26",
+      );
+      expect(name).not.toMatch(/seasonal|returns|\d{2}-\d{2}-\d{2}/i);
+    });
+
     it.each<[string | undefined, string | undefined]>([
       ["Acme Company Spring2026 returns", "Acme Company"],
       ["Test Customer Spring2026 returns", "Test Customer"],
@@ -322,7 +344,7 @@ describe("classifyExtensivEmail", () => {
       ["", undefined],
       [undefined, undefined],
       ["   returns   ", undefined], // only suffix → empty → undefined
-    ])("inferCustomerNameFromRef(%j) === %j", (input, expected) => {
+    ])("legacy format: inferCustomerNameFromRef(%j) === %j", (input, expected) => {
       expect(inferCustomerNameFromRef(input)).toBe(expected);
     });
   });
