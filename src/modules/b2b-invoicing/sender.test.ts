@@ -196,6 +196,8 @@ describe("buildPayload — Line transformations", () => {
         qty: 3,
         unitPrice: 12.5,
         priceSource: "shopify_b2b",
+        itemId: "42",
+        itemName: "Extra Widget",
       },
     ]);
     expect(payload.Line).toHaveLength(2);
@@ -206,6 +208,30 @@ describe("buildPayload — Line transformations", () => {
     expect(added.SalesItemLineDetail?.UnitPrice).toBe(12.5);
     expect(added.Amount).toBe(37.5);
     expect(added.SalesItemLineDetail?.TaxCodeRef).toEqual({ value: "NON" });
+    // The line MUST carry the real product. QBO silently binds an
+    // ItemRef-less SalesItemLineDetail to the default "Services" item, which
+    // is how added lines reached customers as a service charge.
+    expect(added.SalesItemLineDetail?.ItemRef).toEqual({
+      value: "42",
+      name: "Extra Widget",
+    });
+  });
+
+  it("carries the itemId even when no item name was resolved", () => {
+    const payload = buildPayload(makeInvoice(), [
+      SET_METADATA,
+      {
+        type: "add",
+        sku: "EXTRA-SKU",
+        qty: 1,
+        unitPrice: 5,
+        priceSource: "shopify_b2b",
+        itemId: "77",
+      },
+    ]);
+    expect(payload.Line.at(-1)!.SalesItemLineDetail?.ItemRef).toEqual({
+      value: "77",
+    });
   });
 
   it("blocks add actions with null unitPrice", () => {
@@ -218,9 +244,25 @@ describe("buildPayload — Line transformations", () => {
           qty: 1,
           unitPrice: null,
           priceSource: "fallback",
+          itemId: "42",
         },
       ]),
     ).toThrow(/unitPrice/);
+  });
+
+  it("blocks add actions with no QBO item rather than posting a service line", () => {
+    expect(() =>
+      buildPayload(makeInvoice(), [
+        SET_METADATA,
+        {
+          type: "add",
+          sku: "AYOGT01",
+          qty: 2,
+          unitPrice: 14,
+          priceSource: "shopify_b2b",
+        },
+      ]),
+    ).toThrow(/itemId/);
   });
 
   it("drops auto-generated SubTotalLineDetail rows from output", () => {

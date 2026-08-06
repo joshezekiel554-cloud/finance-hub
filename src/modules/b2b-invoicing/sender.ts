@@ -230,6 +230,16 @@ export function buildPayload(
         `buildPayload: add action for SKU ${action.sku} has no unitPrice; UI must resolve fallback price before send`,
       );
     }
+    // An add without an itemId used to be sent anyway, as a line with no
+    // ItemRef. QBO accepts that and silently binds it to the company file's
+    // default sales item — "Services" — so the customer's invoice showed a
+    // service instead of the product they were shipped. Fail closed: the
+    // caller resolves the SKU to a real QBO item first.
+    if (!action.itemId) {
+      throw new Error(
+        `buildPayload: add action for SKU ${action.sku} has no itemId; resolve the QBO item before send or QBO will post it as a service line`,
+      );
+    }
     updatedLines.push(
       buildAddLine(action.sku, action.qty, action.unitPrice, action.itemId, action.itemName),
     );
@@ -438,25 +448,24 @@ export async function sendInvoiceUpdate(
 
 // Build a fresh SalesItemLineDetail row for an add action. SKU goes into
 // Description (matching the 3rd-party sync's convention on existing lines).
-// When the caller picked the line via the QB Item search picker, ItemRef
-// is populated so the merchant gets a fully-linked invoice without a
-// post-send fixup. Without an itemId, QBO's sparse update still accepts
-// the line but it'll show as un-linked until the merchant edits.
+// ItemRef is mandatory: a SalesItemLineDetail without one is not rejected by
+// QBO, it is silently bound to the default sales item ("Services"), which is
+// how added lines ended up on customer invoices as a service rather than the
+// product. Callers resolve the SKU to a QBO item first (buildPayload throws
+// otherwise).
 function buildAddLine(
   sku: string,
   qty: number,
   unitPrice: number,
-  itemId?: string,
+  itemId: string,
   itemName?: string,
 ): QboInvoiceLine {
   const detail: NonNullable<QboInvoiceLine["SalesItemLineDetail"]> = {
     Qty: qty,
     UnitPrice: unitPrice,
     TaxCodeRef: { ...NON_TAXABLE_REF },
+    ItemRef: itemName ? { value: itemId, name: itemName } : { value: itemId },
   };
-  if (itemId) {
-    detail.ItemRef = itemName ? { value: itemId, name: itemName } : { value: itemId };
-  }
   return {
     Description: sku,
     Amount: round2(unitPrice * qty),

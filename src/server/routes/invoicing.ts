@@ -1004,6 +1004,50 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    // Resolve a QBO item for every added line that doesn't already carry one.
+    //
+    // Lines the reconciler adds (shipped-but-not-invoiced SKUs) arrive with a
+    // price but no itemId — only the "+ Add line" picker sets one. A
+    // SalesItemLineDetail with no ItemRef is not rejected by QBO; it silently
+    // binds to the default sales item, so those lines landed on customer
+    // invoices as "Services" instead of the product. Look the SKU up here, and
+    // refuse the send if it can't be found rather than posting a service line.
+    const addActions = (actions as ReconcileAction[]).filter(
+      (a): a is Extract<ReconcileAction, { type: "add" }> => a.type === "add",
+    );
+    const unresolvedSkus: string[] = [];
+    for (const action of addActions) {
+      if (action.itemId) continue;
+      try {
+        const item = await qbClient.getQboItemBySku(action.sku);
+        if (item) {
+          action.itemId = item.Id;
+          action.itemName = item.Name;
+          log.info(
+            { invoiceId, sku: action.sku, itemId: item.Id },
+            "resolved qbo item for added line",
+          );
+        } else {
+          unresolvedSkus.push(action.sku);
+        }
+      } catch (err) {
+        log.error(
+          { err, invoiceId, sku: action.sku },
+          "qbo item lookup failed for added line",
+        );
+        unresolvedSkus.push(action.sku);
+      }
+    }
+    if (unresolvedSkus.length > 0) {
+      return reply.code(400).send({
+        error:
+          `No QuickBooks item matches ${unresolvedSkus.join(", ")}. ` +
+          `Sending anyway would post ${unresolvedSkus.length === 1 ? "that line" : "those lines"} as a service charge, so it's blocked. ` +
+          `Add the item in QuickBooks (or use "+ Add line" to pick the right item and remove the unmatched one), then send.`,
+        unresolvedSkus,
+      });
+    }
+
     // Look up DueDays for the chosen term so the sender can recompute
     // DueDate. Without this QBO leaves the old DueDate in place when
     // SalesTermRef changes (sparse update doesn't cascade). Best-effort:
