@@ -109,6 +109,16 @@ export const orders = mysqlTable(
     // so auto-detected holds keep laddering unchanged; manual internal-only holds
     // set this FALSE to suppress the customer-facing chase emails.
     holdLadderEnabled: boolean("hold_ladder_enabled").notNull().default(true),
+    // Operator-set "they've promised to pay on <date>, stop chasing until
+    // then". While this is in the future the order is skipped by the ENTIRE
+    // ladder, then resumes by itself — unlike holdLadderEnabled, which stays
+    // off until someone remembers to turn it back on. The hold itself is
+    // untouched: a paused order still can't ship, and still auto-releases
+    // when the underlying reason resolves.
+    holdLadderPausedUntil: timestamp("hold_ladder_paused_until"),
+    // Why it was paused (e.g. "paying Wednesday") — shown on the order and
+    // recorded in the audit trail.
+    holdLadderPauseNote: varchar("hold_ladder_pause_note", { length: 300 }),
     // When it entered on_hold — drives the email-ladder timers + the 7-day flag.
     holdStartedAt: timestamp("hold_started_at"),
     // Release ("good to send" or auto-clear when the reason resolves).

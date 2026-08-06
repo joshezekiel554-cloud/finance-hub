@@ -67,11 +67,26 @@ function daysSince(d: Date | null): number {
   return Math.floor((Date.now() - new Date(d).getTime()) / 86_400_000);
 }
 
+/**
+ * True while an operator-set pause is still in the future. Exported for the
+ * UI/route so "is this order being chased right now?" has exactly one answer.
+ */
+export function isLadderPaused(
+  pausedUntil: Date | string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!pausedUntil) return false;
+  const until = new Date(pausedUntil).getTime();
+  if (!Number.isFinite(until)) return false;
+  return until > now.getTime();
+}
+
 export type RunHoldLadderResult = {
   onHold: number;
   notices: number;
   warnings: number;
   cancelNotices: number;
+  paused: number;
 };
 
 export async function runHoldLadder(): Promise<RunHoldLadderResult> {
@@ -86,6 +101,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
       holdNoticeAt: orders.holdNoticeAt,
       holdWarnedAt: orders.holdWarnedAt,
       holdCancelNotifiedAt: orders.holdCancelNotifiedAt,
+      holdLadderPausedUntil: orders.holdLadderPausedUntil,
       customerId: orders.customerId,
       customerName: customers.displayName,
       primaryEmail: customers.primaryEmail,
@@ -110,6 +126,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
     notices: 0,
     warnings: 0,
     cancelNotices: 0,
+    paused: 0,
   };
   if (rows.length === 0) return result;
 
@@ -130,6 +147,17 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
 
   for (const r of rows) {
     const orderNumber = r.orderNumber ?? `#${r.shopifyOrderId}`;
+    // "They've promised to pay on Wednesday" — skip every stage until the
+    // pause expires, then carry on from wherever the ladder had got to. The
+    // stage markers are untouched, so nothing re-sends when it resumes.
+    if (isLadderPaused(r.holdLadderPausedUntil)) {
+      log.info(
+        { orderId: r.id, orderNumber, pausedUntil: r.holdLadderPausedUntil },
+        "hold ladder: paused for this order — skipping",
+      );
+      result.paused += 1;
+      continue;
+    }
     const ageDays = daysSince(r.holdStartedAt);
     const vars: Record<string, string> = {
       order_number: orderNumber,

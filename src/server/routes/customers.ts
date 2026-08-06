@@ -1439,6 +1439,8 @@ const customersRoute: FastifyPluginAsync = async (app) => {
         shopifyOrderId: orders.shopifyOrderId,
         holdReason: orders.holdReason,
         holdStartedAt: orders.holdStartedAt,
+        holdLadderPausedUntil: orders.holdLadderPausedUntil,
+        holdLadderPauseNote: orders.holdLadderPauseNote,
         total: orders.total,
       })
       .from(orders)
@@ -1448,6 +1450,7 @@ const customersRoute: FastifyPluginAsync = async (app) => {
     const heldOrders = heldOrderRows.map((r) => ({
       ...r,
       holdStartedAt: normalizeDateValue(r.holdStartedAt),
+      holdLadderPausedUntil: normalizeDateValue(r.holdLadderPausedUntil),
     }));
 
     return reply.send({

@@ -300,6 +300,67 @@ export async function manualHold(
   return { ok: true };
 }
 
+// Pause (or resume) the chase ladder on a held order — "they've promised to
+// pay Wednesday, stop chasing until then".
+//
+// Deliberately NOT holdLadderEnabled: that flag stays off until a human
+// remembers to switch it back, which is how an order quietly stops being
+// chased forever. A dated pause expires by itself and the ladder picks up
+// where it left off (stage markers are untouched, so nothing re-sends).
+//
+// The hold itself is not touched: a paused order still can't ship, and still
+// auto-releases when its reason resolves.
+export async function pauseHoldLadder(
+  orderId: string,
+  userId: string | null,
+  opts: { until: Date | null; note?: string | null },
+): Promise<HoldActionResult> {
+  const rows = await db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      shopifyOrderId: orders.shopifyOrderId,
+      holdState: orders.holdState,
+      holdLadderPausedUntil: orders.holdLadderPausedUntil,
+    })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  const o = rows[0];
+  if (!o) return { ok: false, reason: "not_found" };
+  if (o.holdState !== "on_hold") return { ok: false, reason: "not_on_hold" };
+  if (opts.until && opts.until.getTime() <= Date.now()) {
+    return { ok: false, reason: "pause_date_in_past" };
+  }
+
+  const note = opts.note?.trim() || null;
+  await db
+    .update(orders)
+    .set({
+      holdLadderPausedUntil: opts.until,
+      holdLadderPauseNote: opts.until ? note : null,
+    })
+    .where(eq(orders.id, orderId));
+
+  await recordHoldTransition({
+    orderId,
+    userId,
+    action: opts.until ? "order.hold_ladder_paused" : "order.hold_ladder_resumed",
+    before: { holdLadderPausedUntil: o.holdLadderPausedUntil ?? null },
+    after: { holdLadderPausedUntil: opts.until ?? null, note },
+  });
+  log.info(
+    {
+      orderId,
+      orderNumber: o.orderNumber ?? `#${o.shopifyOrderId}`,
+      userId,
+      pausedUntil: opts.until,
+    },
+    opts.until ? "hold ladder paused for order" : "hold ladder resumed for order",
+  );
+  return { ok: true };
+}
+
 export type CancelResult =
   | { ok: true; shopifyCancelled: boolean; qboVoided: boolean; note: string }
   | { ok: false; reason: string };

@@ -149,6 +149,10 @@ type HeldOrder = {
   holdReason: string | null;
   holdStartedAt: string | null;
   total: string | null;
+  // Operator-set "they've promised to pay on <date>" — chase emails skip this
+  // order until then, and the hold itself is unaffected.
+  holdLadderPausedUntil?: string | null;
+  holdLadderPauseNote?: string | null;
 };
 
 type DetailResponse = {
@@ -1775,11 +1779,25 @@ function HoldOrdersBanner({
       queryKey: ["customer-orders", customerId],
     });
   };
+  // Which order's "pause chasing" date picker is open, and the date in it.
+  const [pausingOrderId, setPausingOrderId] = useState<string | null>(null);
+  const [pauseDate, setPauseDate] = useState("");
+
   const orderAction = useMutation({
-    mutationFn: async (args: { orderId: string; path: string }) => {
+    mutationFn: async (args: {
+      orderId: string;
+      path: string;
+      body?: unknown;
+    }) => {
       const res = await fetch(
         `/api/orders/${encodeURIComponent(args.orderId)}/${args.path}`,
-        { method: "POST" },
+        args.body === undefined
+          ? { method: "POST" }
+          : {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(args.body),
+            },
       );
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -1792,6 +1810,8 @@ function HoldOrdersBanner({
     },
     onSuccess: () => {
       setConfirmCancel(null);
+      setPausingOrderId(null);
+      setPauseDate("");
       invalidate();
     },
     onError: (e) => setError((e as Error).message),
@@ -1821,6 +1841,12 @@ function HoldOrdersBanner({
                 {holdReasonLabel(o.holdReason)}
                 {o.holdStartedAt ? ` · held ${daysAgoLabel(o.holdStartedAt)}` : ""}
               </span>
+              {isPaused(o.holdLadderPausedUntil) && (
+                <span className="ml-2 rounded-full bg-accent-warning/15 px-2 py-0.5 text-[11px] font-medium text-accent-warning">
+                  chasing paused until {formatPauseDate(o.holdLadderPausedUntil)}
+                  {o.holdLadderPauseNote ? ` · ${o.holdLadderPauseNote}` : ""}
+                </span>
+              )}
             </span>
             <span className="flex flex-wrap items-center gap-1.5">
               <Button
@@ -1832,6 +1858,68 @@ function HoldOrdersBanner({
               >
                 Good to send
               </Button>
+              {/* "They've promised to pay Wednesday" — stop the Day-0/7/10
+                  chase emails until then. The hold stays on, so the order
+                  still can't ship, and the pause expires by itself. */}
+              {isPaused(o.holdLadderPausedUntil) ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    orderAction.mutate({
+                      orderId: o.id,
+                      path: "pause-ladder",
+                      body: { until: null },
+                    })
+                  }
+                  disabled={busy === o.id}
+                  className="rounded-md border border-default px-2 py-1 text-xs text-secondary hover:bg-elevated"
+                >
+                  Resume chasing
+                </button>
+              ) : pausingOrderId === o.id ? (
+                <>
+                  <input
+                    type="date"
+                    value={pauseDate}
+                    min={new Date().toISOString().slice(0, 10)}
+                    onChange={(e) => setPauseDate(e.target.value)}
+                    className="rounded-md border border-default bg-base px-2 py-1 text-xs"
+                  />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy === o.id || !pauseDate}
+                    onClick={() =>
+                      orderAction.mutate({
+                        orderId: o.id,
+                        path: "pause-ladder",
+                        body: { until: pauseDate },
+                      })
+                    }
+                  >
+                    Pause until
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPausingOrderId(null);
+                      setPauseDate("");
+                    }}
+                    className="px-1 text-xs text-muted hover:text-primary"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setPausingOrderId(o.id)}
+                  className="rounded-md border border-default px-2 py-1 text-xs text-secondary hover:bg-elevated"
+                  title="Stop chase emails until a date they've promised to pay"
+                >
+                  Pause chasing
+                </button>
+              )}
               {confirmCancel === o.id ? (
                 <>
                   <Button
@@ -1867,6 +1955,25 @@ function HoldOrdersBanner({
       {error && <p className="mt-2 text-xs text-accent-danger">{error}</p>}
     </div>
   );
+}
+
+// A pause only counts while its date is still ahead of us — an expired one
+// reads as "not paused" everywhere, matching what the ladder itself does.
+function isPaused(until: string | null | undefined): boolean {
+  if (!until) return false;
+  const t = new Date(until).getTime();
+  return Number.isFinite(t) && t > Date.now();
+}
+
+function formatPauseDate(until: string | null | undefined): string {
+  if (!until) return "";
+  const d = new Date(until);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 }
 
 function PlaceholderPanel({ label }: { label: string }) {
