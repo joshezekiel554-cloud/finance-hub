@@ -25,6 +25,35 @@ export type InboxMember = {
 
 type MembersResponse = { members: InboxMember[] };
 
+// Inbox roles that mean "Feldart staff". Anything else — today GUEST, the
+// external designer added 2026-08-06 — is an outside collaborator who happens to
+// live on the same roster. Finance surfaces (assignee picker, Team Activity
+// subjects) must enumerate staff only: a finance task title carries a customer
+// name and balance, and assigning one cross-lists it onto the assignee's board.
+const STAFF_ROLES = new Set(["ADMIN", "MEMBER"]);
+
+/**
+ * True only for a recognised staff role. Fails CLOSED: an unknown or missing
+ * role is NOT staff, so a role added in inbox drops out of finance's pickers
+ * (visible, harmless) rather than silently gaining a finance-side surface.
+ */
+export function isStaffMemberRole(role: string | null | undefined): boolean {
+  return STAFF_ROLES.has((role ?? "").toUpperCase());
+}
+
+/** The roster trimmed to staff — the correct source for anything finance-side. */
+export async function listStaffMembers(force = false): Promise<InboxMember[]> {
+  const members = await listMembers(force);
+  const staff = members.filter((m) => isStaffMemberRole(m.role));
+  if (staff.length !== members.length) {
+    log.debug(
+      { total: members.length, staff: staff.length },
+      "non-staff inbox members excluded from finance surface",
+    );
+  }
+  return staff;
+}
+
 // 5-minute TTL: the roster changes rarely (admin adds a member in inbox) but we
 // don't want to hit the service on every task action / assignee-picker open.
 const CACHE_TTL_MS = 5 * 60 * 1000;

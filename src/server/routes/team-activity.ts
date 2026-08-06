@@ -18,7 +18,7 @@ import { users } from "../../db/schema/auth.js";
 import { userActiveMinutes } from "../../db/schema/user-active-minutes.js";
 import { isAdmin, requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
-import { listMembers, resolveMemberById } from "../../integrations/inbox/members.js";
+import { listStaffMembers, resolveMemberById } from "../../integrations/inbox/members.js";
 import { buildTeamActivityReport } from "../../modules/team-activity/report.js";
 import { csvFilename, reportToCsv } from "../../modules/team-activity/csv.js";
 
@@ -63,9 +63,12 @@ const teamActivityRoute: FastifyPluginAsync = async (app) => {
 
     // Best-effort inbox member resolution for the picker. Inbox-unreachable
     // just yields null inboxMemberId — the picker still works.
-    let members: Awaited<ReturnType<typeof listMembers>> = [];
+    // Staff only: an external collaborator (GUEST) is not a Feldart teammate,
+    // and their active-minutes would read as a permanent zero anyway — the
+    // heartbeat endpoint that feeds them is denied to guests.
+    let members: Awaited<ReturnType<typeof listStaffMembers>> = [];
     try {
-      members = await listMembers();
+      members = await listStaffMembers();
     } catch (err) {
       log.warn({ err }, "inbox members unavailable for picker");
     }

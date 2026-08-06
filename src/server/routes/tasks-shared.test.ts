@@ -25,10 +25,11 @@ vi.mock("../../integrations/inbox/client.js", async () => {
   return { ...actual, inboxFetch };
 });
 
-// listMembers is unused by the helper but imported by the route module; stub it
-// so the module loads without touching the network.
+// The roster helpers are unused by the helper under test but imported by the
+// route module; stub them so it loads without touching the network.
 vi.mock("../../integrations/inbox/members.js", () => ({
   listMembers: vi.fn(async () => []),
+  listStaffMembers: vi.fn(async () => []),
 }));
 
 import {

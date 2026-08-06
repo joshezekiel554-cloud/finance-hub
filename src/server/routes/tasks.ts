@@ -20,7 +20,7 @@ import {
   requireMemberForUser,
   NoInboxAccountError,
 } from "../../modules/tasks-shared/identity.js";
-import { listMembers } from "../../integrations/inbox/members.js";
+import { listStaffMembers } from "../../integrations/inbox/members.js";
 import {
   inboxFetch,
   InboxUnreachableError,
@@ -182,7 +182,7 @@ const tasksRoute: FastifyPluginAsync = async (app) => {
   app.get("/members", async (req, reply) => {
     await requireAuth(req);
     try {
-      const all = await listMembers();
+      const all = await listStaffMembers();
       const members = all
         .filter((m) => m.active)
         .map((m) => ({ teamMemberId: m.teamMemberId, name: m.name }));

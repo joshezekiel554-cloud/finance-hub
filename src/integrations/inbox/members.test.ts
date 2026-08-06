@@ -17,6 +17,8 @@ vi.mock("../../lib/logger.js", () => ({
 
 import {
   listMembers,
+  listStaffMembers,
+  isStaffMemberRole,
   resolveMemberByEmail,
   resolveMemberById,
   clearMembersCache,
@@ -86,6 +88,62 @@ describe("members cache", () => {
   it("tolerates a missing members array", async () => {
     inboxFetchMock.mockResolvedValueOnce({});
     await expect(listMembers()).resolves.toEqual([]);
+  });
+});
+
+// The inbox roster carries external collaborators (GUEST) alongside staff. A
+// finance task title carries a customer name and balance, and assigning one
+// cross-lists it onto the assignee's board — so a guest must never reach a
+// finance picker. Prod roles are the raw Prisma enum (verified 2026-08-06:
+// ADMIN|MEMBER|GUEST, uppercase); the older fixtures here use lowercase, so the
+// check is deliberately case-insensitive and both shapes are pinned below.
+describe("isStaffMemberRole", () => {
+  it("accepts staff roles in either case", () => {
+    for (const role of ["ADMIN", "MEMBER", "admin", "member"]) {
+      expect(isStaffMemberRole(role)).toBe(true);
+    }
+  });
+
+  it("rejects GUEST", () => {
+    expect(isStaffMemberRole("GUEST")).toBe(false);
+    expect(isStaffMemberRole("guest")).toBe(false);
+  });
+
+  it("fails closed on an absent or unrecognised role", () => {
+    for (const role of [null, undefined, "", "CONTRACTOR", "viewer"]) {
+      expect(isStaffMemberRole(role)).toBe(false);
+    }
+  });
+});
+
+describe("listStaffMembers", () => {
+  beforeEach(() => {
+    clearMembersCache();
+    inboxFetchMock.mockReset();
+  });
+
+  it("drops a GUEST from the roster and keeps staff", async () => {
+    inboxFetchMock.mockResolvedValue({
+      members: [
+        ...RAW.members,
+        {
+          teamMemberId: "tm-guest",
+          name: "Alexander",
+          email: "abocenuk@gmail.com",
+          googleEmail: "abocenuk@gmail.com",
+          role: "GUEST",
+          active: true,
+        },
+      ],
+    });
+    const staff = await listStaffMembers();
+    expect(staff.map((m) => m.teamMemberId)).toEqual(["tm-1", "tm-2"]);
+  });
+
+  it("keeps every member when the roster is all staff", async () => {
+    inboxFetchMock.mockResolvedValue(RAW);
+    const staff = await listStaffMembers();
+    expect(staff).toHaveLength(RAW.members.length);
   });
 });
 

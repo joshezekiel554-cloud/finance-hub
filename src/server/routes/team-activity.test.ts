@@ -68,6 +68,12 @@ const inboxMembers = vi.hoisted(() => ({
 }));
 vi.mock("../../integrations/inbox/members.js", () => ({
   listMembers: vi.fn(async () => inboxMembers.value),
+  // Mirror the real staff filter rather than stubbing it away — the picker
+  // calls this one, and "does a GUEST show up as a teammate" is the behaviour
+  // worth pinning here.
+  listStaffMembers: vi.fn(async () =>
+    inboxMembers.value.filter((m) => ["ADMIN", "MEMBER"].includes(m.role.toUpperCase())),
+  ),
   resolveMemberById: vi.fn(async (id: string) =>
     inboxMembers.value.find((m) => m.teamMemberId === id) ?? null,
   ),
@@ -272,6 +278,32 @@ describe("inbox-only subjects", () => {
     expect(sam).toBeDefined();
     expect(sam!.name).toBe("Samual");
     expect(sam!.inboxMemberId).toBe(SAMUAL.teamMemberId);
+  });
+
+  // An external collaborator lives on the same inbox roster as staff, but is
+  // not a Feldart teammate — and their active-minutes would read as a permanent
+  // zero regardless, because the heartbeat that feeds them is denied to guests.
+  it("does NOT offer a GUEST as a Team Activity subject", async () => {
+    currentUser.value = { id: "u-josh", email: "josh@feldart.com" };
+    userRows.value = [{ userId: "u-josh", name: "Josh", email: "josh@feldart.com" }];
+    inboxMembers.value = [
+      SAMUAL,
+      {
+        teamMemberId: "tm-guest",
+        name: "Alexander",
+        email: "abocenuk@gmail.com",
+        googleEmail: "abocenuk@gmail.com",
+        role: "GUEST",
+        active: true,
+      },
+    ];
+
+    const res = await app.inject({ method: "GET", url: "/api/team-activity/members" });
+    const members = res.json().members as Array<{ userId: string; email: string | null }>;
+    expect(members.some((m) => m.userId === "inbox:tm-guest")).toBe(false);
+    expect(members.some((m) => m.email === "abocenuk@gmail.com")).toBe(false);
+    // The staff teammate alongside them still comes through.
+    expect(members.some((m) => m.userId === `inbox:${SAMUAL.teamMemberId}`)).toBe(true);
   });
 
   it("does NOT duplicate an inbox member already matched to a finance user", async () => {
