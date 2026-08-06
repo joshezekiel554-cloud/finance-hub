@@ -20,6 +20,10 @@ export type InboxMember = {
   // was empty, login == email). May arrive as "" or null — normalize to "".
   googleEmail: string;
   role: string;
+  // Computed by inbox from the same `isStaffRole` its proxy gates on (added
+  // 2026-08-06). Optional so an older inbox deploy still parses — when absent
+  // we fall back to reading `role` ourselves.
+  staff?: boolean;
   active: boolean;
 };
 
@@ -41,10 +45,20 @@ export function isStaffMemberRole(role: string | null | undefined): boolean {
   return STAFF_ROLES.has((role ?? "").toUpperCase());
 }
 
+/**
+ * True when this member is Feldart staff. Prefers inbox's own `staff` flag —
+ * it is computed by the same `isStaffRole` the inbox proxy gates on, so we
+ * don't re-derive their role semantics — and falls back to reading the role
+ * when an older inbox deploy omits the field.
+ */
+export function isStaffMember(member: Pick<InboxMember, "role" | "staff">): boolean {
+  return member.staff ?? isStaffMemberRole(member.role);
+}
+
 /** The roster trimmed to staff — the correct source for anything finance-side. */
 export async function listStaffMembers(force = false): Promise<InboxMember[]> {
   const members = await listMembers(force);
-  const staff = members.filter((m) => isStaffMemberRole(m.role));
+  const staff = members.filter(isStaffMember);
   if (staff.length !== members.length) {
     log.debug(
       { total: members.length, staff: staff.length },
@@ -78,6 +92,9 @@ function normalize(raw: InboxMember): InboxMember {
     // Tolerate "" | null | undefined from the wire.
     googleEmail: (raw.googleEmail ?? "").trim(),
     role: raw.role,
+    // Left undefined (not coerced to false) when absent, so isStaffMember can
+    // tell "inbox says not staff" from "this deploy doesn't send the field".
+    staff: typeof raw.staff === "boolean" ? raw.staff : undefined,
     active: Boolean(raw.active),
   };
 }

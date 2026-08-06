@@ -9,6 +9,7 @@
 
 import {
   listMembers,
+  isStaffMember,
   type InboxMember,
 } from "../../integrations/inbox/members.js";
 
@@ -28,6 +29,24 @@ export class NoInboxAccountError extends Error {
     );
     this.name = "NoInboxAccountError";
     this.email = email;
+  }
+}
+
+/**
+ * Thrown when a finance user resolves to an inbox member who is NOT staff — an
+ * external collaborator (GUEST). Today nothing but convention keeps such an
+ * address out of finance's ALLOWED_EMAILS; this makes it a check, so the
+ * "signed into finance → therefore acts as an inbox member" hop can't be walked
+ * by an outside collaborator even if the allow-list is edited by mistake.
+ *
+ * Deliberately extends NoInboxAccountError so every existing `instanceof` catch
+ * denies it correctly (fail-closed) rather than letting it escape as a 500.
+ */
+export class NonStaffMemberError extends NoInboxAccountError {
+  constructor(email: string) {
+    super(email);
+    this.message = `${email} is an external collaborator account — finance task actions are staff-only.`;
+    this.name = "NonStaffMemberError";
   }
 }
 
@@ -93,11 +112,16 @@ export async function findMemberForActorEmail(
 /**
  * Resolve a finance user to its inbox member, throwing NoInboxAccountError when
  * there is no match. Finance call sites use this to gate task create/assign.
+ *
+ * The roster it resolves against is deliberately UNFILTERED — identity mapping
+ * needs every member, since a guest owns tasks and the id→person join would
+ * break otherwise. The staff check belongs here, at the gate, not in the join.
  */
 export async function requireMemberForUser(
   user: FinanceUserLike,
 ): Promise<InboxMember> {
   const member = await financeUserToMember(user);
   if (!member) throw new NoInboxAccountError(user.email);
+  if (!isStaffMember(member)) throw new NonStaffMemberError(user.email);
   return member;
 }
