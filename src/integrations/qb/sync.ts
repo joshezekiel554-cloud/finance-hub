@@ -388,6 +388,76 @@ async function recomputeOverdueBalances(): Promise<void> {
   `);
 }
 
+// Pure decision function for the invoice update path: given the local row
+// and the QBO-derived desired state, return the UPDATE set to apply, or null
+// when nothing QBO-authoritative drifted. customerId is a compared-and-
+// written field — a QB-side customer merge repoints CustomerRef on every
+// moved invoice and the local row must follow (Malchut Monroe regression,
+// 2026-08-20). sent_at / sent_via stay out: those are locally owned.
+type InvoiceUpdateBefore = Pick<
+  Invoice,
+  | "customerId"
+  | "docNumber"
+  | "issueDate"
+  | "dueDate"
+  | "total"
+  | "balance"
+  | "status"
+  | "customerMemo"
+  | "syncToken"
+  | "originSource"
+>;
+type InvoiceUpdateDesired = Pick<
+  NewInvoice,
+  | "customerId"
+  | "docNumber"
+  | "issueDate"
+  | "dueDate"
+  | "total"
+  | "balance"
+  | "status"
+  | "customerMemo"
+  | "syncToken"
+  | "origin"
+> & { lastSyncedAt: Date };
+
+export function planInvoiceUpdate(
+  before: InvoiceUpdateBefore,
+  desired: InvoiceUpdateDesired,
+): Partial<NewInvoice> | null {
+  const drift =
+    before.customerId !== desired.customerId ||
+    before.docNumber !== desired.docNumber ||
+    isoDateOrNull(before.issueDate) !== isoDateOrNull(desired.issueDate) ||
+    isoDateOrNull(before.dueDate) !== isoDateOrNull(desired.dueDate) ||
+    before.total !== desired.total ||
+    before.balance !== desired.balance ||
+    before.status !== desired.status ||
+    before.customerMemo !== desired.customerMemo ||
+    before.syncToken !== desired.syncToken;
+  if (!drift) return null;
+
+  const set: Partial<NewInvoice> = {
+    customerId: desired.customerId,
+    docNumber: desired.docNumber,
+    issueDate: desired.issueDate,
+    dueDate: desired.dueDate,
+    total: desired.total,
+    balance: desired.balance,
+    status: desired.status,
+    customerMemo: desired.customerMemo,
+    syncToken: desired.syncToken,
+    lastSyncedAt: desired.lastSyncedAt,
+  };
+  // Re-derive origin from the (possibly changed) docNumber, but never
+  // override a manual classification. origin_source itself is never written
+  // by sync.
+  if (before.originSource !== "manual") {
+    set.origin = desired.origin;
+  }
+  return set;
+}
+
 async function upsertInvoice(
   qboInvoice: QboInvoice,
   customerIdMap: Map<string, string>,
@@ -492,17 +562,16 @@ async function upsertInvoice(
   }
 
   const before = existing[0];
-  const drift =
-    before.docNumber !== desired.docNumber ||
-    isoDateOrNull(before.issueDate) !== isoDateOrNull(desired.issueDate) ||
-    isoDateOrNull(before.dueDate) !== isoDateOrNull(desired.dueDate) ||
-    before.total !== desired.total ||
-    before.balance !== desired.balance ||
-    before.status !== desired.status ||
-    before.customerMemo !== desired.customerMemo ||
-    before.syncToken !== desired.syncToken;
+  // Crucially the plan never touches sent_at / sentVia — those are local
+  // fields the app owns. The team-lead brief calls this out explicitly. The
+  // race is in the create path above (concurrent inserts); UPDATE-by-id is
+  // already race-safe since the row's been seen.
+  const updateSet = planInvoiceUpdate(before, {
+    ...desired,
+    lastSyncedAt: desired.lastSyncedAt ?? new Date(),
+  });
 
-  if (!drift) {
+  if (!updateSet) {
     await db
       .update(invoices)
       .set({ lastSyncedAt: desired.lastSyncedAt })
@@ -510,25 +579,6 @@ async function upsertInvoice(
     return "noop";
   }
 
-  // Crucially do NOT touch sent_at / sentVia — those are local fields the app
-  // owns. The team-lead brief calls this out explicitly. The race is in the
-  // create path above (concurrent inserts); UPDATE-by-id is already race-safe
-  // since the row's been seen.
-  const updateSet: Partial<NewInvoice> = {
-    docNumber: desired.docNumber,
-    issueDate: desired.issueDate,
-    dueDate: desired.dueDate,
-    total: desired.total,
-    balance: desired.balance,
-    status: desired.status,
-    syncToken: desired.syncToken,
-    lastSyncedAt: desired.lastSyncedAt,
-  };
-  // Re-derive origin from the (possibly changed) docNumber, but never override a
-  // manual classification. origin_source itself is never written by sync.
-  if (before.originSource !== "manual") {
-    updateSet.origin = desired.origin;
-  }
   await db.update(invoices).set(updateSet).where(eq(invoices.id, before.id));
 
   await syncInvoiceLines(before.id, qboInvoice.Line ?? []);
