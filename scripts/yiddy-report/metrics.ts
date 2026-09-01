@@ -219,3 +219,18 @@ export function topProducts(
     .slice(0, cap)
     .map(([sku, v]) => ({ sku, name: v.name, value: v.value }));
 }
+
+// Spend inside a genDate-relative day window [fromDaysAgo, toDaysAgo).
+export function spendInDayWindow(
+  docs: GatheredDoc[],
+  genDate: string,
+  fromDaysAgo: number,
+  toDaysAgo: number,
+): number {
+  let total = 0;
+  for (const d of docs) {
+    const age = daysBetween(d.date, genDate);
+    if (age >= fromDaysAgo && age < toDaysAgo) total += d.total;
+  }
+  return total;
+}

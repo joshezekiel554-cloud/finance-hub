@@ -244,3 +244,12 @@ describe("purchase analysis", () => {
     ]);
   });
 });
+
+describe("spendInDayWindow", () => {
+  test("sums docs with genDate-relative day offsets [from, to)", async () => {
+    const { spendInDayWindow } = await import("./metrics");
+    const docs = [doc("2026-08-15", 100), doc("2026-05-15", 40), doc("2026-01-01", 7)];
+    expect(spendInDayWindow(docs, "2026-09-01", 0, 90)).toBe(100); // last 90 days
+    expect(spendInDayWindow(docs, "2026-09-01", 90, 180)).toBe(40); // prior 90
+  });
+});

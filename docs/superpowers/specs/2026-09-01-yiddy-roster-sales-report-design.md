@@ -39,10 +39,13 @@ any browser. Josh reviews it, then sends Yiddy the file.
   paid. Voided sales receipts (TotalAmt 0) are excluded.
 - **Window:** trailing 12 months, month-by-month, plus the prior 12
   months for year-on-year comparison. Lifetime first-order date shown.
-- **New product:** a `products` row created within the last 6 months
-  AND after the initial catalog-sync epoch (rows seeded by the first
-  sync all share one created date and are excluded — determined at
-  generation time by finding that epoch date).
+- **New product:** sourced from QBO Items (the local `products` table
+  turned out to be empty on prod — Shopify product sync never populated
+  it). Active items only; `MetaData.CreateTime` is the launch date;
+  Sku/Name share the invoice-line keyspace. "New" = created within the
+  last 6 months, excluding the initial-sync epoch day AND any bulk
+  import day (a day holding ≥5% of the catalog, min 5 items — those are
+  administrative imports, not launches).
 
 ## Report structure
 
