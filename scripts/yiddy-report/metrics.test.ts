@@ -8,6 +8,11 @@ import {
   medianGapDays,
   trendBadge,
   seasonFlag,
+  catalogEpoch,
+  newProducts,
+  purchasedSkus,
+  popularGaps,
+  topProducts,
 } from "./metrics";
 import type { GatheredDoc } from "./types";
 
@@ -147,5 +152,79 @@ describe("seasonFlag", () => {
   });
   test("not flagged when last year had no season orders", () => {
     expect(seasonFlag([doc("2025-02-01", 50)], "2026-09-01").flagged).toBe(false);
+  });
+});
+
+const prod = (sku: string, createdAt: string) => ({
+  sku,
+  name: sku,
+  b2bPrice: null,
+  createdAt,
+});
+
+describe("catalogEpoch + newProducts", () => {
+  const products = [
+    // 3 of 5 rows share the initial-sync burst day (>= 30%)
+    prod("A", "2025-01-15"),
+    prod("B", "2025-01-15"),
+    prod("C", "2025-01-15"),
+    prod("D", "2026-05-01"),
+    prod("E", "2026-08-01"),
+  ];
+  test("epoch = earliest day holding >= 30% of rows", () => {
+    expect(catalogEpoch(products)).toBe("2025-01-15");
+  });
+  test("new = after epoch AND within 6 months of genDate", () => {
+    const n = newProducts(products, "2026-09-01");
+    expect(n.map((p) => p.sku)).toEqual(["D", "E"]); // 2026-03-01 cutoff
+  });
+  test("empty catalog → null epoch, no new products", () => {
+    expect(catalogEpoch([])).toBeNull();
+    expect(newProducts([], "2026-09-01")).toEqual([]);
+  });
+});
+
+describe("purchase analysis", () => {
+  const docsFor = (skus: string[]): GatheredDoc[] => [
+    {
+      ...doc("2026-06-01", 100),
+      lines: skus.map((s) => ({ sku: s, name: s, qty: 1, lineTotal: 50 })),
+    },
+  ];
+  test("purchasedSkus collects line skus, skipping nulls", () => {
+    const d = docsFor(["A", "B"]);
+    d[0].lines.push({ sku: null, name: "freight", qty: 1, lineTotal: 5 });
+    expect(purchasedSkus(d)).toEqual(new Set(["A", "B"]));
+  });
+  test("popularGaps ranks by breadth across stores, excludes own skus, caps at 10", () => {
+    const stores = new Map<string, Set<string>>([
+      ["s1", new Set(["A", "B"])],
+      ["s2", new Set(["A"])],
+      ["s3", new Set(["A", "B", "C"])],
+    ]);
+    const names = new Map([
+      ["A", "Prod A"],
+      ["B", "Prod B"],
+      ["C", "Prod C"],
+    ]);
+    const gaps = popularGaps("s2", stores, names);
+    expect(gaps[0]).toEqual({ sku: "B", name: "Prod B", storesBuying: 2 });
+    expect(gaps.map((g) => g.sku)).not.toContain("A"); // s2 already buys A
+  });
+  test("topProducts sums line value per sku, top 5 desc", () => {
+    const d: GatheredDoc[] = [
+      {
+        ...doc("2026-06-01", 0),
+        lines: [
+          { sku: "A", name: "Prod A", qty: 1, lineTotal: 30 },
+          { sku: "B", name: "Prod B", qty: 1, lineTotal: 70 },
+          { sku: "A", name: "Prod A", qty: 2, lineTotal: 60 },
+        ],
+      },
+    ];
+    expect(topProducts(d)).toEqual([
+      { sku: "A", name: "Prod A", value: 90 },
+      { sku: "B", name: "Prod B", value: 70 },
+    ]);
   });
 });

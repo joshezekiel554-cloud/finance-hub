@@ -105,3 +105,91 @@ export function windowTotals(
   }
   return { spend, orders };
 }
+
+type ProductRow = {
+  sku: string;
+  name: string;
+  b2bPrice: number | null;
+  createdAt: string;
+};
+
+// The initial catalog sync seeded most product rows in one burst, so
+// created_at is only meaningful AFTER that day. Epoch = earliest
+// calendar day holding >= 30% of all rows.
+export function catalogEpoch(products: ProductRow[]): string | null {
+  if (products.length === 0) return null;
+  const byDay = new Map<string, number>();
+  for (const p of products) {
+    const day = p.createdAt.slice(0, 10);
+    byDay.set(day, (byDay.get(day) ?? 0) + 1);
+  }
+  const days = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b));
+  for (const [day, count] of days) {
+    if (count / products.length >= 0.3) return day;
+  }
+  return days[0][0]; // no burst day — treat earliest as epoch
+}
+
+export function newProducts(
+  products: ProductRow[],
+  genDate: string,
+): ProductRow[] {
+  const epoch = catalogEpoch(products);
+  const [y, m, d] = genDate.split("-").map(Number);
+  const cutoff = new Date(Date.UTC(y, m - 1 - 6, d)).toISOString().slice(0, 10);
+  return products
+    .filter((p) => {
+      const day = p.createdAt.slice(0, 10);
+      return (epoch === null || day > epoch) && day >= cutoff;
+    })
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export function purchasedSkus(docs: GatheredDoc[]): Set<string> {
+  const set = new Set<string>();
+  for (const d of docs) for (const l of d.lines) if (l.sku) set.add(l.sku);
+  return set;
+}
+
+// "N of the stores we supply buy this, you don't" — ranked by breadth
+// (how many OTHER roster stores bought the sku), capped for punchiness.
+export function popularGaps(
+  storeId: string,
+  purchasedByStore: Map<string, Set<string>>,
+  skuNames: Map<string, string>,
+  cap = 10,
+): Array<{ sku: string; name: string; storesBuying: number }> {
+  const breadth = new Map<string, number>();
+  for (const [sid, skus] of purchasedByStore) {
+    if (sid === storeId) continue;
+    for (const sku of skus) breadth.set(sku, (breadth.get(sku) ?? 0) + 1);
+  }
+  const own = purchasedByStore.get(storeId) ?? new Set();
+  return [...breadth.entries()]
+    .filter(([sku]) => !own.has(sku))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, cap)
+    .map(([sku, storesBuying]) => ({
+      sku,
+      name: skuNames.get(sku) ?? sku,
+      storesBuying,
+    }));
+}
+
+export function topProducts(
+  docs: GatheredDoc[],
+  cap = 5,
+): Array<{ sku: string; name: string | null; value: number }> {
+  const bySku = new Map<string, { name: string | null; value: number }>();
+  for (const d of docs)
+    for (const l of d.lines) {
+      if (!l.sku) continue;
+      const cur = bySku.get(l.sku) ?? { name: l.name, value: 0 };
+      cur.value += l.lineTotal;
+      bySku.set(l.sku, cur);
+    }
+  return [...bySku.entries()]
+    .sort((a, b) => b[1].value - a[1].value)
+    .slice(0, cap)
+    .map(([sku, v]) => ({ sku, name: v.name, value: v.value }));
+}
