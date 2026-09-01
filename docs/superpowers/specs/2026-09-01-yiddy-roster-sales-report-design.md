@@ -33,8 +33,10 @@ any browser. Josh reviews it, then sends Yiddy the file.
   the QBO API at generation time (the existing `qb` client has
   sales-receipt queries) for the roster customers over the full
   comparison window, then merges them with locally-synced invoices.
-  Must cover both books' realms. In the orders dropdown they are
-  labelled "Sales receipt" and always paid.
+  Both books live in ONE QBO realm — origin (feldart/tj) is derived
+  from the DocNumber prefix (1 vs 2), same rule the invoice sync uses.
+  In the orders dropdown they are labelled "Sales receipt" and always
+  paid. Voided sales receipts (TotalAmt 0) are excluded.
 - **Window:** trailing 12 months, month-by-month, plus the prior 12
   months for year-on-year comparison. Lifetime first-order date shown.
 - **New product:** a `products` row created within the last 6 months
