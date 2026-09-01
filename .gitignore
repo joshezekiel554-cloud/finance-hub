@@ -47,3 +47,6 @@ scripts/smoke/
 
 # Visual companion sessions (superpowers:brainstorming)
 .superpowers/
+
+# one-off yiddy report working data (customer data — never commit)
+scripts/yiddy-report-out/
