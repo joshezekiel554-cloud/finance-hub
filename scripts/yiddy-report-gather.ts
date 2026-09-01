@@ -207,6 +207,9 @@ async function main(): Promise<void> {
   const itemMap = new Map(
     items.map((i) => [i.Id, { sku: i.Sku ?? null, name: i.Name ?? null }]),
   );
+  const qboSkuSet = new Set(
+    items.map((i) => i.Sku).filter((s): s is string => !!s),
+  );
   console.error(`qbo items: ${items.length}`);
 
   type QboSrSlim = {
@@ -242,9 +245,28 @@ async function main(): Promise<void> {
   >();
   for (const l of lineRows) {
     const arr = linesByInv.get(l.invoiceId) ?? [];
+    // The invoice sync stores the item NAME in invoice_lines.sku and
+    // the SKU CODE in description for ~93% of lines (verified against
+    // prod 2026-09-01). Canonicalize to code-in-sku so invoice lines
+    // share a keyspace with SR lines, Shopify variant skus, and the
+    // QBO Item catalog.
+    const rawSku = l.sku ?? null;
+    const rawDesc = l.description ?? null;
+    const codeLike = (s: string | null): boolean =>
+      !!s && /^[A-Z0-9][A-Z0-9-]{2,19}$/.test(s);
+    let sku = rawSku;
+    let name = rawDesc;
+    if (
+      !(rawSku && qboSkuSet.has(rawSku)) &&
+      rawDesc &&
+      (qboSkuSet.has(rawDesc) || (codeLike(rawDesc) && !codeLike(rawSku)))
+    ) {
+      sku = rawDesc;
+      name = rawSku;
+    }
     arr.push({
-      sku: l.sku ?? null,
-      name: l.description ?? null,
+      sku,
+      name,
       qty: num(l.qty),
       lineTotal: num(l.lineTotal),
     });

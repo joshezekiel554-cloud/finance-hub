@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yiddy roster — sales focus report</title>
+<style>
+  :root {
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series: #2a78d6;
+    --series-deep: #1c5cab;
+    --prior: #c3c2b7;
+    --good-text: #006300;
+    --bad-text: #b42c2c;
+    --held-wash: rgba(250, 178, 25, 0.16);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); margin-bottom: 8px; }
+  .sub { color: var(--ink-2); margin-top: 2px; }
+  section { margin-top: 28px; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: -4px 0 8px; }
+
+  /* stat tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 18px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { font-size: 12px; color: var(--ink-2); }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile .delta { font-size: 12.5px; margin-top: 2px; }
+  .tile .delta.up { color: var(--good-text); }
+  .tile .delta.down { color: var(--bad-text); }
+  .tile .minirow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+  /* strips */
+  .strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; -webkit-overflow-scrolling: touch; }
+  .stripcard {
+    flex: 0 0 auto; width: 210px; text-align: left; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; font: inherit; color: inherit;
+  }
+  .stripcard:hover { border-color: var(--axis); }
+  .stripcard .name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .stripcard .meta { color: var(--ink-2); font-size: 12.5px; margin-top: 4px; }
+
+  /* badges */
+  .badge {
+    display: inline-block; font-size: 11.5px; font-weight: 600; line-height: 1;
+    padding: 4px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .b-growing { background: #e3f3e3; color: #006300; }
+  .b-steady { background: #f0efec; color: #52514e; }
+  .b-declining { background: #fdeadd; color: #9a4a1f; }
+  .b-dormant { background: #f9e2e2; color: #a12e2e; }
+  .b-hold { background: #f9e2e2; color: #a12e2e; }
+  .b-prepay { background: #e3edfb; color: #1c5cab; }
+  .b-overdue { background: #fdf0d5; color: #8a6100; }
+  .b-clear { color: var(--muted); font-weight: 400; }
+
+  /* filter bar */
+  .filters {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    background: var(--page); padding: 12px 0; margin-top: 24px;
+    border-bottom: 1px solid var(--grid);
+  }
+  .filters input[type="search"], .filters select {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--axis); border-radius: 8px; padding: 7px 10px;
+  }
+  .filters input[type="search"] { flex: 1 1 160px; min-width: 140px; }
+  .filters select { flex: 0 1 auto; }
+  #fCount { color: var(--muted); font-size: 12.5px; margin-left: auto; }
+
+  /* store table */
+  .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-top: 14px; }
+  table { border-collapse: collapse; width: 100%; }
+  #storeTable { min-width: 840px; }
+  #storeTable th {
+    text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--muted); font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--grid);
+    white-space: nowrap;
+  }
+  #storeTable td { padding: 10px 12px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+  #storeTable tr:last-child > td { border-bottom: none; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .store-row { cursor: pointer; }
+  .store-row:hover { background: rgba(11, 11, 11, 0.025); }
+  .store-row .name { font-weight: 600; max-width: 300px; }
+  .store-row.open { background: rgba(42, 120, 214, 0.05); }
+  .store-row.flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { 0% { background: rgba(42, 120, 214, 0.22); } 100% { background: rgba(42, 120, 214, 0.05); } }
+  .yoy-up { color: var(--good-text); }
+  .yoy-down { color: var(--bad-text); }
+  .muted { color: var(--muted); }
+
+  /* detail row */
+  .detail-row > td { background: var(--page); padding: 16px; }
+  .detail { display: flex; flex-direction: column; gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .d-grid { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 1.6fr); gap: 14px; }
+  .d-grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted); white-space: nowrap; }
+  .kv dd { min-width: 0; overflow-wrap: anywhere; }
+  .plainlist { list-style: none; font-size: 13px; }
+  .plainlist li { padding: 3px 0; border-bottom: 1px solid var(--grid); display: flex; justify-content: space-between; gap: 10px; }
+  .plainlist li:last-child { border-bottom: none; }
+  .plainlist .v { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink-2); }
+  .chart-svg { width: 100%; height: auto; display: block; }
+  .holdlist { margin-top: 8px; font-size: 12.5px; color: var(--ink-2); }
+  .holdlist li { list-style: none; padding: 2px 0; }
+  .holdswatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--held-wash); border: 1px solid rgba(250, 178, 25, 0.5); margin-right: 6px; vertical-align: -1px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--ink-2); margin: 0 0 6px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .sw-cur { background: var(--series); }
+  .sw-prior { background: var(--prior); }
+  .avgrow { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13px; color: var(--ink-2); }
+  .avgrow b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  details.orders > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+  .openline { margin: 8px 0 4px; font-size: 13px; color: var(--bad-text); font-weight: 600; }
+  .subtablewrap { overflow-x: auto; margin-top: 8px; }
+  .subtable { min-width: 520px; font-size: 13px; }
+  .subtable th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--grid); }
+  .subtable td { padding: 6px 10px; border-bottom: 1px solid var(--grid); }
+  .subtable tr:last-child > td { border-bottom: none; }
+  .st-overdue { color: var(--bad-text); font-weight: 600; }
+  .newcols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .newcols h4 { font-size: 12px; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; }
+  .newcols ul { list-style: none; font-size: 13px; }
+  .newcols li { padding: 2px 0; }
+  .returnsline { font-size: 13px; color: var(--ink-2); }
+  .note { font-size: 13px; background: #f5f2e9; border: 1px solid #e7e0cd; border-radius: 8px; padding: 10px 12px; }
+  .note::before { content: "Note — "; font-weight: 600; }
+  .empty-chart { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
+  .emptyrow td { text-align: center; color: var(--muted); padding: 28px 12px !important; }
+
+  /* tooltip */
+  #tooltip {
+    position: absolute; display: none; pointer-events: none; z-index: 20;
+    background: var(--ink); color: #fff; font-size: 12px; line-height: 1.4;
+    padding: 6px 9px; border-radius: 6px; white-space: nowrap;
+  }
+
+  @media (max-width: 700px) {
+    .d-grid { grid-template-columns: 1fr; }
+    .newcols { grid-template-columns: 1fr; }
+    .tile .value { font-size: 22px; }
+    #fCount { margin-left: 0; flex-basis: 100%; }
+    /* the detail cell spans the 840px table; pin its content to the visible
+       strip of the scroll container so it reads as a full-width card */
+    .detail-row > td { padding: 12px 10px; }
+    .detail { position: sticky; left: 10px; max-width: calc(100vw - 56px); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Yiddy roster — sales focus report</h1>
+    <p class="sub" id="subline"></p>
+    <div class="tiles" id="tiles"></div>
+  </header>
+
+  <section id="winbackSection" hidden>
+    <h2>Win-back priorities</h2>
+    <p class="hint">Highest prior-year spend among declining and dormant stores. Click a card to jump to the store.</p>
+    <div class="strip" id="winbackStrip"></div>
+  </section>
+
+  <section id="seasonSection" hidden>
+    <h2>Season watch</h2>
+    <p class="hint">Bought this season last year — nothing yet this year.</p>
+    <div class="strip" id="seasonStrip"></div>
+  </section>
+
+  <div class="filters">
+    <input id="fSearch" type="search" placeholder="Search stores…" aria-label="Search stores by name">
+    <select id="fTrend" aria-label="Filter by trend">
+      <option value="all">All trends</option>
+      <option value="growing">Growing</option>
+      <option value="steady">Steady</option>
+      <option value="declining">Declining</option>
+      <option value="dormant">Dormant</option>
+    </select>
+    <select id="fBlocker" aria-label="Filter by blocker">
+      <option value="all">All blockers</option>
+      <option value="hold">On hold</option>
+      <option value="prepay">Prepay</option>
+      <option value="overdue">Has overdue</option>
+      <option value="clear">Clear</option>
+    </select>
+    <select id="fSort" aria-label="Sort stores">
+      <option value="spend">Sort: TTM spend</option>
+      <option value="yoy">Sort: YoY %</option>
+      <option value="days">Sort: days since last order</option>
+      <option value="name">Sort: name</option>
+    </select>
+    <span id="fCount"></span>
+  </div>
+
+  <div class="tablewrap">
+    <table id="storeTable">
+      <thead>
+        <tr>
+          <th>Store</th>
+          <th class="num">TTM spend</th>
+          <th class="num">YoY</th>
+          <th class="num">Orders</th>
+          <th class="num">Last order</th>
+          <th class="num">Median gap</th>
+          <th>Trend</th>
+          <th>Blocker</th>
+        </tr>
+      </thead>
+      <tbody id="storeBody"></tbody>
+    </table>
+  </div>
+</div>
+<div id="tooltip"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+
+// ---------- formatting ----------
+const gbp = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 });
+const fmtC = (n) => gbp.format(Math.round(n));
+const fmtAxis = (v) => v >= 1000 ? "£" + (Math.round(v / 100) / 10) + "k" : "£" + v;
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const monthLabel = (m) => { const mo = MONTHS[+m.slice(5) - 1]; return +m.slice(5) === 1 ? mo + " " + m.slice(2, 4) : mo; };
+const monthFull = (m) => MONTHS[+m.slice(5) - 1] + " " + m.slice(0, 4);
+const fmtDate = (iso) => { const [y, mo, d] = iso.split("-"); return +d + " " + MONTHS[+mo - 1] + " " + y; };
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const TREND_LABEL = { growing: "Growing", steady: "Steady", declining: "Declining", dormant: "Dormant" };
+const trendBadge = (t) => '<span class="badge b-' + t + '">' + TREND_LABEL[t] + "</span>";
+const HOLD_LABEL = { active: "Active", hold: "On hold", payment_upfront: "Payment upfront" };
+function blockerOf(s) {
+  if (s.holdStatus === "hold") return "hold";
+  if (s.holdStatus === "payment_upfront") return "prepay";
+  if (s.overdueBalance > 0) return "overdue";
+  return "clear";
+}
+const BLOCKER_LABEL = { hold: "On hold", prepay: "Prepay", overdue: "Overdue", clear: "—" };
+const blockerBadge = (s) => { const b = blockerOf(s); return b === "clear" ? '<span class="b-clear">—</span>' : '<span class="badge b-' + b + '">' + BLOCKER_LABEL[b] + "</span>"; };
+const yoyCell = (p) => p === null ? '<span class="muted">—</span>' : '<span class="' + (p >= 0 ? "yoy-up" : "yoy-down") + '">' + (p >= 0 ? "+" : "−") + Math.abs(p) + "%</span>";
+
+// ---------- header ----------
+function renderHeader() {
+  document.getElementById("subline").textContent =
+    "Generated " + fmtDate(DATA.genDate) + " · " + DATA.rosterCount + " stores · trailing twelve months vs the year before";
+  const t = DATA.totals;
+  const yoy = t.priorYearSpend > 0 ? Math.round(((t.ttmSpend - t.priorYearSpend) / t.priorYearSpend) * 100) : null;
+  const deltaHtml = yoy === null ? "" :
+    '<div class="delta ' + (yoy >= 0 ? "up" : "down") + '">' + (yoy >= 0 ? "↑ +" : "↓ −") + Math.abs(yoy) + "% vs prior year (" + fmtC(t.priorYearSpend) + ")</div>";
+  const tc = t.trendCounts;
+  document.getElementById("tiles").innerHTML =
+    '<div class="tile"><div class="label">TTM spend</div><div class="value">' + fmtC(t.ttmSpend) + "</div>" + deltaHtml + "</div>" +
+    '<div class="tile"><div class="label">TTM orders</div><div class="value">' + t.ttmOrders + "</div></div>" +
+    '<div class="tile"><div class="label">Trend mix</div><div class="minirow">' +
+      ["growing", "steady", "declining", "dormant"].map((k) => '<span class="badge b-' + k + '">' + tc[k] + " " + k + "</span>").join("") +
+    "</div></div>" +
+    '<div class="tile"><div class="label">Season flags</div><div class="value">' + DATA.seasonFlags.length + '</div><div class="delta muted">bought this season last year, nothing yet</div></div>';
+}
+
+// ---------- strips ----------
+function renderStrips() {
+  if (DATA.winBack.length) {
+    document.getElementById("winbackSection").hidden = false;
+    document.getElementById("winbackStrip").innerHTML = DATA.winBack.map((w) =>
+      '<button type="button" class="stripcard" data-jump="' + esc(w.id) + '">' +
+        '<div class="name">' + esc(w.name) + "</div>" +
+        '<div class="meta">' + fmtC(w.priorSpend) + " prior year</div>" +
+        '<div class="meta">' + (w.daysSinceLastOrder === null ? "never ordered" : w.daysSinceLastOrder + " days quiet") + "</div>" +
+        '<div style="margin-top:6px">' + trendBadge(w.trend) + "</div>" +
+      "</button>").join("");
+  }
+  if (DATA.seasonFlags.length) {
+    document.getElementById("seasonSection").hidden = false;
+    document.getElementById("seasonStrip").innerHTML = DATA.seasonFlags.map((f) =>
+      '<button type="button" class="stripcard" data-jump="' + esc(f.id) + '">' +
+        '<div class="name">' + esc(f.name) + "</div>" +
+        '<div class="meta">' + fmtC(f.lastYearSeasonSpend) + " this season last year</div>" +
+        '<div class="meta">nothing yet this year</div>' +
+      "</button>").join("");
+  }
+}
+
+// ---------- chart (inline SVG, single series) ----------
+function barPath(x, y, w, h, by) {
+  if (h < 4) return "M" + x + "," + by + " L" + x + "," + y + " L" + (x + w) + "," + y + " L" + (x + w) + "," + by + " Z";
+  return "M" + x + "," + by + " L" + x + "," + (y + 4) + " Q" + x + "," + y + " " + (x + 4) + "," + y +
+    " L" + (x + w - 4) + "," + y + " Q" + (x + w) + "," + y + " " + (x + w) + "," + (y + 4) +
+    " L" + (x + w) + "," + by + " Z";
+}
+function niceMax(v) {
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 5, 10]) if (m * pow >= v) return m * pow;
+  return 10 * pow;
+}
+function chartSvg(s) {
+  const prior = (m) => m.priorSpend || 0;
+  const max = Math.max(...s.monthly.map((m) => Math.max(m.spend, prior(m))));
+  if (max <= 0) return '<div class="empty-chart">No orders in the last 12 months or the year before.</div>';
+  const W = 600, H = 190, padL = 46, padR = 8, padT = 20, padB = 24;
+  const plotW = W - padL - padR, plotH = H - padT - padB, band = plotW / 12, base = padT + plotH;
+  const top = niceMax(max);
+  let out = '<svg class="chart-svg" viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="Monthly spend, last 12 months vs the same months a year earlier">';
+  // held-month background bands (meaning carried by the hold list below, wash is supplementary)
+  s.monthly.forEach((m, i) => {
+    if (m.held) out += '<rect x="' + (padL + i * band).toFixed(1) + '" y="' + padT + '" width="' + band.toFixed(1) + '" height="' + plotH + '" fill="var(--held-wash)"/>';
+  });
+  // gridlines + y labels (clean halves of the nice max)
+  for (const v of [top / 2, top]) {
+    const y = base - (v / top) * plotH;
+    out += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '" stroke="var(--grid)" stroke-width="1"/>';
+    out += '<text x="' + (padL - 6) + '" y="' + (y + 3.5).toFixed(1) + '" text-anchor="end" font-size="10" fill="var(--muted)">' + fmtAxis(v) + "</text>";
+  }
+  out += '<line x1="' + padL + '" y1="' + base + '" x2="' + (W - padR) + '" y2="' + base + '" stroke="var(--axis)" stroke-width="1"/>';
+  // paired bars per month: prior year (muted, left) then this year (series
+  // blue, right), 2px surface gap; 4px rounded caps square at the baseline.
+  // Order-count cap labels ride the current-year bar only.
+  const bw = Math.min(16, (band - 6) / 2);
+  s.monthly.forEach((m, i) => {
+    const pairW = 2 * bw + 2;
+    const x0 = padL + i * band + (band - pairW) / 2;
+    const cx = padL + i * band + band / 2;
+    const attrs = ' class="bar" data-month="' + m.month + '" data-spend="' + m.spend + '" data-orders="' + m.orders +
+      '" data-prior-spend="' + prior(m) + '" data-prior-orders="' + (m.priorOrders || 0) + '"';
+    if (prior(m) > 0) {
+      const ph = Math.max(3, (prior(m) / top) * plotH);
+      out += '<path d="' + barPath(x0, base - ph, bw, ph, base) + '" fill="var(--prior)"' + attrs + "/>";
+    }
+    if (m.spend > 0) {
+      const h = Math.max(3, (m.spend / top) * plotH);
+      const y = base - h;
+      const x = x0 + bw + 2;
+      out += '<path d="' + barPath(x, y, bw, h, base) + '" fill="var(--series)"' + attrs + "/>";
+      if (m.orders > 0) out += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (y - 5).toFixed(1) + '" text-anchor="middle" font-size="10" fill="var(--ink-2)">' + m.orders + "</text>";
+    }
+    out += '<text x="' + cx.toFixed(1) + '" y="' + (base + 15) + '" text-anchor="middle" font-size="10" fill="var(--muted)">' + monthLabel(m.month) + "</text>";
+  });
+  out += "</svg>";
+  return out;
+}
+
+// ---------- detail row ----------
+function detailHtml(s) {
+  const phones = s.phones.map((p) => "<li><span>" + esc(p.label) + '</span><span class="v">' + esc(p.number) + "</span></li>").join("");
+  const emails = s.emails.map((e) => "<li><span>" + esc(e) + "</span></li>").join("");
+  const contacts = s.contacts.map((c) => {
+    const bits = [c.role, c.email, c.phone].filter(Boolean).map(esc).join(" · ");
+    return "<li><span><b>" + esc(c.name || "—") + "</b>" + (bits ? ' <span class="muted">' + bits + "</span>" : "") + "</span></li>";
+  }).join("");
+  const callsheet =
+    '<div class="card"><h3>Call sheet</h3>' +
+    (phones ? '<ul class="plainlist">' + phones + "</ul>" : "") +
+    (emails ? '<ul class="plainlist" style="margin-top:6px">' + emails + "</ul>" : "") +
+    (contacts ? '<ul class="plainlist" style="margin-top:6px">' + contacts + "</ul>" : "") +
+    '<dl class="kv" style="margin-top:10px">' +
+    "<dt>Payment terms</dt><dd>" + esc(s.paymentTerms || "—") + "</dd>" +
+    "<dt>Hold status</dt><dd>" + esc(HOLD_LABEL[s.holdStatus] || s.holdStatus) + "</dd>" +
+    "<dt>Balance</dt><dd>" + fmtC(s.balance) + "</dd>" +
+    "<dt>Overdue</dt><dd>" + (s.overdueBalance > 0 ? '<span class="st-overdue">' + fmtC(s.overdueBalance) + "</span>" : fmtC(0)) + "</dd>" +
+    "</dl></div>";
+
+  const holds = s.holdPeriods.length
+    ? '<ul class="holdlist">' + s.holdPeriods.map((h) =>
+        '<li><span class="holdswatch"></span>On hold ' + fmtDate(h.from) + " – " + (h.to ? fmtDate(h.to) : "ongoing") +
+        (h.reason ? ' <span class="muted">— ' + esc(h.reason) + "</span>" : "") + "</li>").join("") + "</ul>"
+    : "";
+  const chartCard = '<div class="card"><h3>Last 12 months — spend vs same month last year</h3>' +
+    '<div class="legend"><span><span class="sw sw-cur"></span>This year (order count on bar)</span>' +
+    '<span><span class="sw sw-prior"></span>Same month last year</span></div>' +
+    chartSvg(s) + holds + "</div>";
+
+  const avg =
+    '<div class="card avgrow">' +
+    "<span>AOV TTM <b>" + (s.aovTtm === null ? "—" : fmtC(s.aovTtm)) + "</b>" +
+    ' <span class="muted">vs ' + (s.aovPriorYear === null ? "—" : fmtC(s.aovPriorYear)) + " prior year</span></span>" +
+    "<span>Distinct SKUs TTM <b>" + s.distinctSkusTtm + "</b></span>" +
+    (s.bookSplit.tj > 0 ? "<span>Book split <b>Feldart " + fmtC(s.bookSplit.feldart) + " · TJ " + fmtC(s.bookSplit.tj) + "</b></span>" : "") +
+    "<span>First order <b>" + (s.firstOrderDate ? fmtDate(s.firstOrderDate) : "—") + "</b></span>" +
+    "</div>";
+
+  const orderRows = s.orders.map((o) =>
+    "<tr><td>" + esc(o.docNumber || "—") + "</td>" +
+    "<td>" + (o.kind === "sr" ? "Sales receipt" : "Invoice") + "</td>" +
+    "<td>" + fmtDate(o.date) + "</td>" +
+    '<td class="num">' + fmtC(o.total) + "</td>" +
+    "<td>" + (o.origin === "tj" ? "TJ" : "Feldart") + "</td>" +
+    "<td" + (o.status === "overdue" ? ' class="st-overdue"' : "") + ">" + esc(o.status) + "</td></tr>").join("");
+  const ordersBlock =
+    '<details class="orders card"><summary>Orders (' + s.orders.length + ")</summary>" +
+    (s.openInvoiceTotal > 0 ? '<p class="openline">Open invoices: ' + fmtC(s.openInvoiceTotal) + "</p>" : "") +
+    (s.orders.length
+      ? '<div class="subtablewrap"><table class="subtable"><thead><tr><th>Doc</th><th>Type</th><th>Date</th><th class="num">Value</th><th>Book</th><th>Status</th></tr></thead><tbody>' + orderRows + "</tbody></table></div>"
+      : '<p class="muted" style="margin-top:8px">No orders in the last 12 months.</p>') +
+    "</details>";
+
+  const topProds = s.topProducts.length
+    ? '<ul class="plainlist">' + s.topProducts.map((p) =>
+        "<li><span>" + esc(p.name || p.sku) + '</span><span class="v">' + fmtC(p.value) + "</span></li>").join("") + "</ul>"
+    : '<p class="muted">No product lines in the window.</p>';
+  const newList = (arr) => arr.length
+    ? "<ul>" + arr.map((p) => "<li>" + esc(p.name) + "</li>").join("") + "</ul>"
+    : '<p class="muted">None.</p>';
+  const gaps = s.popularGaps.length
+    ? '<ul class="plainlist">' + s.popularGaps.map((g) =>
+        "<li><span>" + esc(g.name) + '</span><span class="v">' + g.storesBuying + " stores buy this</span></li>").join("") + "</ul>"
+    : '<p class="muted">No gaps found.</p>';
+  const products =
+    '<div class="d-grid3">' +
+    '<div class="card"><h3>Top products (TTM)</h3>' + topProds + "</div>" +
+    '<div class="card"><h3>New products</h3><div class="newcols">' +
+      "<div><h4>Taken (" + s.newProductsTaken.length + ")</h4>" + newList(s.newProductsTaken) + "</div>" +
+      "<div><h4>Not yet taken (" + s.newProductsNotTaken.length + ")</h4>" + newList(s.newProductsNotTaken) + "</div>" +
+    "</div></div>" +
+    '<div class="card"><h3>Popular gaps</h3>' + gaps + "</div>" +
+    "</div>";
+
+  const returns = s.returns.count > 0
+    ? '<p class="returnsline">Returns: ' + s.returns.count + " credit memo" + (s.returns.count === 1 ? "" : "s") + " · " + fmtC(s.returns.value) + " in the last 12 months</p>"
+    : "";
+  const note = s.note ? '<p class="note">' + esc(s.note) + "</p>" : "";
+
+  return '<div class="detail"><div class="d-grid">' + callsheet + chartCard + "</div>" + avg + ordersBlock + products + returns + note + "</div>";
+}
+
+// ---------- table ----------
+const expanded = new Set();
+
+function rowHtml(s) {
+  return '<tr class="store-row' + (expanded.has(s.id) ? " open" : "") + '" data-id="' + esc(s.id) + '">' +
+    '<td class="name">' + esc(s.name) + "</td>" +
+    '<td class="num">' + fmtC(s.ttmSpend) + "</td>" +
+    '<td class="num">' + yoyCell(s.yoyPct) + "</td>" +
+    '<td class="num">' + s.ttmOrders + "</td>" +
+    '<td class="num">' + (s.daysSinceLastOrder === null ? '<span class="muted">never</span>' : s.daysSinceLastOrder + "d") + "</td>" +
+    '<td class="num">' + (s.medianGapDays === null ? '<span class="muted">—</span>' : s.medianGapDays + "d") + "</td>" +
+    "<td>" + trendBadge(s.trend) + "</td>" +
+    "<td>" + blockerBadge(s) + "</td></tr>" +
+    '<tr class="detail-row" data-detail="' + esc(s.id) + '"' + (expanded.has(s.id) ? "" : " hidden") + '><td colspan="8"></td></tr>';
+}
+
+function filteredStores() {
+  const q = document.getElementById("fSearch").value.trim().toLowerCase();
+  const trend = document.getElementById("fTrend").value;
+  const blocker = document.getElementById("fBlocker").value;
+  const sort = document.getElementById("fSort").value;
+  let list = DATA.stores.filter((s) =>
+    (!q || s.name.toLowerCase().includes(q)) &&
+    (trend === "all" || s.trend === trend) &&
+    (blocker === "all" ||
+      (blocker === "hold" && s.holdStatus === "hold") ||
+      (blocker === "prepay" && s.holdStatus === "payment_upfront") ||
+      (blocker === "overdue" && s.overdueBalance > 0) ||
+      (blocker === "clear" && blockerOf(s) === "clear")));
+  const cmp = {
+    spend: (a, b) => b.ttmSpend - a.ttmSpend,
+    yoy: (a, b) => (b.yoyPct ?? -Infinity) - (a.yoyPct ?? -Infinity),
+    days: (a, b) => (b.daysSinceLastOrder ?? Infinity) - (a.daysSinceLastOrder ?? Infinity),
+    name: (a, b) => a.name.localeCompare(b.name),
+  }[sort];
+  return list.slice().sort(cmp);
+}
+
+function render() {
+  const list = filteredStores();
+  const body = document.getElementById("storeBody");
+  body.innerHTML = list.length
+    ? list.map(rowHtml).join("")
+    : '<tr class="emptyrow"><td colspan="8">No stores match the current filters.</td></tr>';
+  document.getElementById("fCount").textContent = list.length + " of " + DATA.stores.length + " stores";
+  for (const id of expanded) fillDetail(id);
+}
+
+function fillDetail(id) {
+  const tr = document.querySelector('.detail-row[data-detail="' + CSS.escape(id) + '"]');
+  if (!tr) return;
+  const cell = tr.firstElementChild;
+  if (!cell.firstElementChild) {
+    const s = DATA.stores.find((x) => x.id === id);
+    if (s) cell.innerHTML = detailHtml(s);
+  }
+  tr.hidden = false;
+}
+
+function toggle(id) {
+  const row = document.querySelector('.store-row[data-id="' + CSS.escape(id) + '"]');
+  const tr = document.querySelector('.detail-row[data-detail="' + CSS.escape(id) + '"]');
+  if (!row || !tr) return;
+  if (expanded.has(id)) {
+    expanded.delete(id);
+    tr.hidden = true;
+    row.classList.remove("open");
+  } else {
+    expanded.add(id);
+    fillDetail(id);
+    row.classList.add("open");
+  }
+}
+
+function reveal(id) {
+  let row = document.querySelector('.store-row[data-id="' + CSS.escape(id) + '"]');
+  if (!row) {
+    document.getElementById("fSearch").value = "";
+    document.getElementById("fTrend").value = "all";
+    document.getElementById("fBlocker").value = "all";
+    render();
+    row = document.querySelector('.store-row[data-id="' + CSS.escape(id) + '"]');
+  }
+  if (!row) return;
+  if (!expanded.has(id)) toggle(id);
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.remove("flash");
+  void row.offsetWidth;
+  row.classList.add("flash");
+}
+
+// ---------- events ----------
+document.getElementById("storeBody").addEventListener("click", (e) => {
+  const row = e.target.closest(".store-row");
+  if (row) toggle(row.dataset.id);
+});
+document.addEventListener("click", (e) => {
+  const card = e.target.closest("[data-jump]");
+  if (card) reveal(card.dataset.jump);
+});
+for (const id of ["fSearch", "fTrend", "fBlocker", "fSort"]) {
+  document.getElementById(id).addEventListener("input", render);
+}
+
+// bar hover tooltip
+const tip = document.getElementById("tooltip");
+document.addEventListener("mouseover", (e) => {
+  if (!(e.target instanceof Element) || !e.target.classList.contains("bar")) return;
+  const d = e.target.dataset;
+  const ord = (n) => n + " order" + (+n === 1 ? "" : "s");
+  tip.textContent = monthFull(d.month) + " — this year " + fmtC(+d.spend) + " (" + ord(d.orders) + ") · last year " + fmtC(+d.priorSpend) + " (" + ord(d.priorOrders) + ")";
+  tip.style.display = "block";
+});
+document.addEventListener("mousemove", (e) => {
+  if (tip.style.display !== "block") return;
+  const x = Math.min(e.pageX + 12, document.documentElement.scrollWidth - tip.offsetWidth - 8);
+  tip.style.left = x + "px";
+  tip.style.top = (e.pageY - 32) + "px";
+});
+document.addEventListener("mouseout", (e) => {
+  if (e.target instanceof Element && e.target.classList.contains("bar")) tip.style.display = "none";
+});
+
+renderHeader();
+renderStrips();
+render();
+</script>
+</body>
+</html>
