@@ -9,7 +9,10 @@ export default defineConfig({
   },
   test: {
     root: __dirname,
-    include: ["src/**/*.{test,spec}.?(c|m)[jt]s?(x)"],
+    include: [
+      "src/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+      "scripts/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+    ],
     globals: false,
   },
 });
