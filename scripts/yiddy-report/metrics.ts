@@ -9,7 +9,8 @@ export const monthOf = (isoDate: string): string => isoDate.slice(0, 7);
 // month of genDate (endOffset 0 = ends with the generation month;
 // negative offsets reach into future months — the season window uses -1).
 const monthsEnding = (genDate: string, n: number, endOffset = 0): string[] => {
-  const [y, m] = genDate.split("-").map(Number);
+  const y = Number(genDate.slice(0, 4));
+  const m = Number(genDate.slice(5, 7));
   const out: string[] = [];
   for (let i = n - 1 + endOffset; i >= endOffset; i--) {
     const d = new Date(Date.UTC(y, m - 1 - i, 1));
@@ -46,10 +47,12 @@ export const daysBetween = (a: string, b: string): number =>
 
 export function medianGapDays(sortedDates: string[]): number | null {
   if (sortedDates.length < 3) return null;
-  const gaps = sortedDates.slice(1).map((d, i) => daysBetween(sortedDates[i], d));
+  const gaps = sortedDates.slice(1).map((d, i) => daysBetween(sortedDates[i]!, d));
   gaps.sort((x, y) => x - y);
   const mid = Math.floor(gaps.length / 2);
-  return gaps.length % 2 ? gaps[mid] : Math.round((gaps[mid - 1] + gaps[mid]) / 2);
+  return gaps.length % 2
+    ? gaps[mid]!
+    : Math.round((gaps[mid - 1]! + gaps[mid]!) / 2);
 }
 
 // Thresholds: growing >= 1.15x prior-90d spend, declining <= 0.7x,
@@ -127,7 +130,7 @@ export function catalogEpoch(products: ProductRow[]): string | null {
   for (const [day, count] of days) {
     if (count / products.length >= 0.3) return day;
   }
-  return days[0][0]; // no burst day — treat earliest as epoch
+  return days[0]![0]; // no burst day — treat earliest as epoch
 }
 
 export function newProducts(
@@ -135,7 +138,9 @@ export function newProducts(
   genDate: string,
 ): ProductRow[] {
   const epoch = catalogEpoch(products);
-  const [y, m, d] = genDate.split("-").map(Number);
+  const y = Number(genDate.slice(0, 4));
+  const m = Number(genDate.slice(5, 7));
+  const d = Number(genDate.slice(8, 10));
   const cutoff = new Date(Date.UTC(y, m - 1 - 6, d)).toISOString().slice(0, 10);
   return products
     .filter((p) => {

@@ -69,7 +69,7 @@ describe("bucketMonthly", () => {
     expect(rows).toHaveLength(12);
     expect(rows[0]).toEqual({ month: "2025-10", orders: 1, spend: 25 });
     expect(rows[11]).toEqual({ month: "2026-09", orders: 2, spend: 150 });
-    expect(rows[5].orders).toBe(0); // zero-filled
+    expect(rows[5]!.orders).toBe(0); // zero-filled
   });
 });
 
@@ -193,7 +193,7 @@ describe("purchase analysis", () => {
   ];
   test("purchasedSkus collects line skus, skipping nulls", () => {
     const d = docsFor(["A", "B"]);
-    d[0].lines.push({ sku: null, name: "freight", qty: 1, lineTotal: 5 });
+    d[0]!.lines.push({ sku: null, name: "freight", qty: 1, lineTotal: 5 });
     expect(purchasedSkus(d)).toEqual(new Set(["A", "B"]));
   });
   test("popularGaps ranks by breadth across stores, excludes own skus, caps at 10", () => {
