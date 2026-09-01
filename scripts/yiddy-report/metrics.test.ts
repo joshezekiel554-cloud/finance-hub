@@ -182,6 +182,22 @@ describe("catalogEpoch + newProducts", () => {
     expect(catalogEpoch([])).toBeNull();
     expect(newProducts([], "2026-09-01")).toEqual([]);
   });
+
+  test("bulk-import days (>= 5% of catalog in one day) are excluded from new", () => {
+    // 100 products: 40 on the epoch day, 8 on a recent bulk day (8%),
+    // 2 genuine recent launches, 50 spread over old distinct days.
+    const many = [
+      ...Array.from({ length: 40 }, (_, i) => prod(`E${i}`, "2025-01-15")),
+      ...Array.from({ length: 8 }, (_, i) => prod(`BULK${i}`, "2026-06-11")),
+      prod("REAL1", "2026-07-01"),
+      prod("REAL2", "2026-08-01"),
+      ...Array.from({ length: 50 }, (_, i) =>
+        prod(`OLD${i}`, `2025-0${(i % 8) + 1}-${String((i % 27) + 1).padStart(2, "0")}`),
+      ),
+    ];
+    const n = newProducts(many, "2026-09-01");
+    expect(n.map((p) => p.sku)).toEqual(["REAL1", "REAL2"]);
+  });
 });
 
 describe("purchase analysis", () => {

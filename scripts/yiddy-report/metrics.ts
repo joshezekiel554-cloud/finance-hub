@@ -133,11 +133,30 @@ export function catalogEpoch(products: ProductRow[]): string | null {
   return days[0]![0]; // no burst day — treat earliest as epoch
 }
 
+// Days holding >= 5% of the whole catalog are administrative bulk
+// imports (initial sync, catalog migrations), not product launches —
+// real launches trickle in small batches.
+function bulkDays(products: ProductRow[]): Set<string> {
+  const byDay = new Map<string, number>();
+  for (const p of products) {
+    const day = p.createdAt.slice(0, 10);
+    byDay.set(day, (byDay.get(day) ?? 0) + 1);
+  }
+  const out = new Set<string>();
+  for (const [day, count] of byDay) {
+    // Absolute floor of 5 keeps tiny catalogs (and tests) from flagging
+    // every day; the 5% share is what catches real bulk imports.
+    if (count >= 5 && count / products.length >= 0.05) out.add(day);
+  }
+  return out;
+}
+
 export function newProducts(
   products: ProductRow[],
   genDate: string,
 ): ProductRow[] {
   const epoch = catalogEpoch(products);
+  const bulk = bulkDays(products);
   const y = Number(genDate.slice(0, 4));
   const m = Number(genDate.slice(5, 7));
   const d = Number(genDate.slice(8, 10));
@@ -145,7 +164,9 @@ export function newProducts(
   return products
     .filter((p) => {
       const day = p.createdAt.slice(0, 10);
-      return (epoch === null || day > epoch) && day >= cutoff;
+      return (
+        (epoch === null || day > epoch) && day >= cutoff && !bulk.has(day)
+      );
     })
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }

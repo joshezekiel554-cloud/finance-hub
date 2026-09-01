@@ -17,7 +17,7 @@ import { db } from "../src/db/index.js";
 import { customers, customerContacts } from "../src/db/schema/customers.js";
 import { invoices, invoiceLines } from "../src/db/schema/invoices.js";
 import { activities } from "../src/db/schema/crm.js";
-import { orders, products } from "../src/db/schema/catalog.js";
+import { orders } from "../src/db/schema/catalog.js";
 import { creditMemos } from "../src/db/schema/credit-memos.js";
 import { QboClient } from "../src/integrations/qb/client.js";
 
@@ -173,16 +173,6 @@ async function main(): Promise<void> {
       ),
     );
 
-  // ---- products ----
-  const prodRows = await db
-    .select({
-      sku: products.sku,
-      name: products.name,
-      b2bPriceGbp: products.b2bPriceGbp,
-      createdAt: products.createdAt,
-    })
-    .from(products);
-
   // ---- QBO: item map + sales receipts ----
   // query/queryAll are `private` on the client class — compile-time
   // only; reach them at runtime for this one-off READ. (Adding a public
@@ -195,9 +185,21 @@ async function main(): Promise<void> {
       }) => T[] | undefined,
     ): Promise<T[]>;
   };
-  type QboItemSlim = { Id: string; Name?: string; Sku?: string };
+  // NOTE: the local `products` table is EMPTY on prod (Shopify product
+  // sync never populated it), so QBO Items are the product catalog
+  // here: same SKU keyspace as invoice_lines, and MetaData.CreateTime
+  // gives the "new product" date. Active items only — discontinued
+  // lines shouldn't appear in pitch lists.
+  type QboItemSlim = {
+    Id: string;
+    Name?: string;
+    Sku?: string;
+    Active?: boolean;
+    UnitPrice?: number;
+    MetaData?: { CreateTime?: string };
+  };
   const items = await q.queryAll<QboItemSlim>(
-    "SELECT Id, Name, Sku FROM Item",
+    "SELECT * FROM Item WHERE Active = true",
     (r) => r.QueryResponse.Item,
   );
   const itemMap = new Map(
@@ -361,15 +363,14 @@ async function main(): Promise<void> {
   const out = {
     generatedAt: new Date().toISOString(),
     genDate: GEN_DATE,
-    products: prodRows.map((p) => ({
-      sku: p.sku,
-      name: p.name,
-      b2bPrice: p.b2bPriceGbp === null ? null : num(p.b2bPriceGbp),
-      createdAt:
-        p.createdAt instanceof Date
-          ? p.createdAt.toISOString()
-          : String(p.createdAt),
-    })),
+    products: items
+      .filter((i) => i.MetaData?.CreateTime && (i.Sku || i.Name))
+      .map((i) => ({
+        sku: i.Sku ?? i.Name!,
+        name: i.Name ?? i.Sku!,
+        b2bPrice: i.UnitPrice ?? null,
+        createdAt: i.MetaData!.CreateTime!,
+      })),
     customers: outCustomers,
   };
 
