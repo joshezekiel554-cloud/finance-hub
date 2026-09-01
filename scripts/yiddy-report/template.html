@@ -89,7 +89,7 @@
   /* store table */
   .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-top: 14px; }
   table { border-collapse: collapse; width: 100%; }
-  #storeTable { min-width: 840px; }
+  #storeTable { min-width: 960px; }
   #storeTable th {
     text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em;
     color: var(--muted); font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--grid);
@@ -98,6 +98,37 @@
   #storeTable td { padding: 10px 12px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
   #storeTable tr:last-child > td { border-bottom: none; }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .hsort {
+    background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+    font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+    display: inline-flex; align-items: center; gap: 3px; border-radius: 3px;
+  }
+  .hsort:hover { color: var(--ink-2); }
+  .hsort:focus-visible { outline: 2px solid var(--series); outline-offset: 2px; }
+  .hsort .arr { font-size: 8px; min-width: 9px; text-align: left; }
+  th[aria-sort] .hsort { color: var(--ink); }
+  .hidecol { width: 28px; }
+  .hidebtn {
+    background: none; border: 0; cursor: pointer; color: var(--muted);
+    opacity: 0.35; font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 4px;
+  }
+  .store-row:hover .hidebtn { opacity: 1; }
+  .hidebtn:focus-visible { opacity: 1; outline: 2px solid var(--series); outline-offset: 1px; }
+  .hidebtn:hover { background: rgba(11, 11, 11, 0.06); color: var(--ink); }
+  #hiddenChip {
+    font: inherit; font-size: 12.5px; cursor: pointer; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--axis); border-radius: 999px; padding: 6px 12px;
+  }
+  #hiddenChip:hover { color: var(--ink); }
+  .hiddenpanel { margin-top: 10px; }
+  .hiddenpanel ul { list-style: none; margin-bottom: 10px; }
+  .hiddenpanel li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+  .hiddenpanel li:last-child { border-bottom: none; }
+  .restorebtn, .restoreall {
+    font: inherit; font-size: 12px; cursor: pointer; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--axis); border-radius: 6px; padding: 3px 10px; white-space: nowrap;
+  }
+  .restorebtn:hover, .restoreall:hover { border-color: var(--ink-2); }
   .store-row { cursor: pointer; }
   .store-row:hover { background: rgba(11, 11, 11, 0.025); }
   .store-row .name { font-weight: 600; max-width: 300px; }
@@ -204,27 +235,30 @@
       <option value="overdue">Has overdue</option>
       <option value="clear">Clear</option>
     </select>
-    <select id="fSort" aria-label="Sort stores">
-      <option value="spend">Sort: TTM spend</option>
-      <option value="yoy">Sort: YoY %</option>
-      <option value="days">Sort: days since last order</option>
-      <option value="name">Sort: name</option>
-    </select>
+    <button type="button" id="hiddenChip" hidden aria-expanded="false" aria-controls="hiddenPanel"></button>
     <span id="fCount"></span>
+  </div>
+
+  <div id="hiddenPanel" class="card hiddenpanel" hidden>
+    <h3>Hidden stores</h3>
+    <ul id="hiddenList"></ul>
+    <button type="button" class="restoreall" id="restoreAll">Restore all</button>
   </div>
 
   <div class="tablewrap">
     <table id="storeTable">
       <thead>
         <tr>
-          <th>Store</th>
-          <th class="num">TTM spend</th>
-          <th class="num">YoY</th>
-          <th class="num">Orders</th>
-          <th class="num">Last order</th>
-          <th class="num">Median gap</th>
-          <th>Trend</th>
-          <th>Blocker</th>
+          <th><button type="button" class="hsort" data-key="name">Store<span class="arr" aria-hidden="true"></span></button></th>
+          <th class="num"><button type="button" class="hsort" data-key="spend">TTM spend<span class="arr" aria-hidden="true"></span></button></th>
+          <th class="num"><button type="button" class="hsort" data-key="prior">Prior 12m<span class="arr" aria-hidden="true"></span></button></th>
+          <th class="num"><button type="button" class="hsort" data-key="yoy">YoY<span class="arr" aria-hidden="true"></span></button></th>
+          <th class="num"><button type="button" class="hsort" data-key="orders">Orders<span class="arr" aria-hidden="true"></span></button></th>
+          <th class="num"><button type="button" class="hsort" data-key="days">Last order<span class="arr" aria-hidden="true"></span></button></th>
+          <th class="num"><button type="button" class="hsort" data-key="gap">Median gap<span class="arr" aria-hidden="true"></span></button></th>
+          <th><button type="button" class="hsort" data-key="trend">Trend<span class="arr" aria-hidden="true"></span></button></th>
+          <th><button type="button" class="hsort" data-key="blocker">Blocker<span class="arr" aria-hidden="true"></span></button></th>
+          <th class="hidecol"></th>
         </tr>
       </thead>
       <tbody id="storeBody"></tbody>
@@ -279,9 +313,12 @@ function renderHeader() {
 
 // ---------- strips ----------
 function renderStrips() {
-  if (DATA.winBack.length) {
-    document.getElementById("winbackSection").hidden = false;
-    document.getElementById("winbackStrip").innerHTML = DATA.winBack.map((w) =>
+  const winBack = DATA.winBack.filter((w) => !excluded.has(w.id));
+  const seasonFlags = DATA.seasonFlags.filter((f) => !excluded.has(f.id));
+  document.getElementById("winbackSection").hidden = winBack.length === 0;
+  document.getElementById("seasonSection").hidden = seasonFlags.length === 0;
+  if (winBack.length) {
+    document.getElementById("winbackStrip").innerHTML = winBack.map((w) =>
       '<button type="button" class="stripcard" data-jump="' + esc(w.id) + '">' +
         '<div class="name">' + esc(w.name) + "</div>" +
         '<div class="meta">' + fmtC(w.priorSpend) + " prior year</div>" +
@@ -289,9 +326,8 @@ function renderStrips() {
         '<div style="margin-top:6px">' + trendBadge(w.trend) + "</div>" +
       "</button>").join("");
   }
-  if (DATA.seasonFlags.length) {
-    document.getElementById("seasonSection").hidden = false;
-    document.getElementById("seasonStrip").innerHTML = DATA.seasonFlags.map((f) =>
+  if (seasonFlags.length) {
+    document.getElementById("seasonStrip").innerHTML = seasonFlags.map((f) =>
       '<button type="button" class="stripcard" data-jump="' + esc(f.id) + '">' +
         '<div class="name">' + esc(f.name) + "</div>" +
         '<div class="meta">' + fmtC(f.lastYearSeasonSpend) + " this season last year</div>" +
@@ -441,6 +477,47 @@ function detailHtml(s) {
   return '<div class="detail"><div class="d-grid">' + callsheet + chartCard + "</div>" + avg + ordersBlock + products + returns + note + "</div>";
 }
 
+// ---------- excluded stores (persisted) ----------
+const EXCL_KEY = "yiddy-report-excluded";
+function loadExcluded() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(EXCL_KEY) || "[]");
+    return new Set(ids.filter((id) => DATA.stores.some((s) => s.id === id)));
+  } catch { return new Set(); }
+}
+const excluded = loadExcluded();
+function saveExcluded() {
+  try { localStorage.setItem(EXCL_KEY, JSON.stringify([...excluded])); } catch { /* private mode etc. */ }
+}
+function hideStore(id) {
+  excluded.add(id);
+  expanded.delete(id);
+  saveExcluded();
+  renderStrips();
+  render();
+}
+function restoreStore(id) {
+  excluded.delete(id);
+  saveExcluded();
+  renderStrips();
+  render();
+}
+function renderHiddenUI() {
+  const chip = document.getElementById("hiddenChip");
+  const panel = document.getElementById("hiddenPanel");
+  chip.hidden = excluded.size === 0;
+  chip.textContent = "Hidden (" + excluded.size + ")";
+  if (excluded.size === 0) {
+    panel.hidden = true;
+    chip.setAttribute("aria-expanded", "false");
+    return;
+  }
+  document.getElementById("hiddenList").innerHTML = DATA.stores
+    .filter((s) => excluded.has(s.id))
+    .map((s) => "<li><span>" + esc(s.name) + '</span><button type="button" class="restorebtn" data-restore="' + esc(s.id) + '">Restore</button></li>')
+    .join("");
+}
+
 // ---------- table ----------
 const expanded = new Set();
 
@@ -448,21 +525,42 @@ function rowHtml(s) {
   return '<tr class="store-row' + (expanded.has(s.id) ? " open" : "") + '" data-id="' + esc(s.id) + '">' +
     '<td class="name">' + esc(s.name) + "</td>" +
     '<td class="num">' + fmtC(s.ttmSpend) + "</td>" +
+    '<td class="num">' + fmtC(s.priorYearSpend) + "</td>" +
     '<td class="num">' + yoyCell(s.yoyPct) + "</td>" +
     '<td class="num">' + s.ttmOrders + "</td>" +
     '<td class="num">' + (s.daysSinceLastOrder === null ? '<span class="muted">never</span>' : s.daysSinceLastOrder + "d") + "</td>" +
     '<td class="num">' + (s.medianGapDays === null ? '<span class="muted">—</span>' : s.medianGapDays + "d") + "</td>" +
     "<td>" + trendBadge(s.trend) + "</td>" +
-    "<td>" + blockerBadge(s) + "</td></tr>" +
-    '<tr class="detail-row" data-detail="' + esc(s.id) + '"' + (expanded.has(s.id) ? "" : " hidden") + '><td colspan="8"></td></tr>';
+    "<td>" + blockerBadge(s) + "</td>" +
+    '<td class="hidecol"><button type="button" class="hidebtn" data-hide="' + esc(s.id) + '" title="Hide from list" aria-label="Hide ' + esc(s.name) + ' from the list">×</button></td></tr>' +
+    '<tr class="detail-row" data-detail="' + esc(s.id) + '"' + (expanded.has(s.id) ? "" : " hidden") + '><td colspan="10"></td></tr>';
 }
+
+// column sorting — click a header to sort desc, click again for asc.
+// Trend and blocker sort by severity rank (growing > steady > declining >
+// dormant; hold > prepay > overdue > clear), not alphabetically.
+const TREND_RANK = { growing: 3, steady: 2, declining: 1, dormant: 0 };
+const BLOCKER_RANK = { hold: 3, prepay: 2, overdue: 1, clear: 0 };
+const SORT_COLS = {
+  name: { get: (s) => s.name.toLowerCase(), firstDir: "asc" },
+  spend: { get: (s) => s.ttmSpend },
+  prior: { get: (s) => s.priorYearSpend },
+  yoy: { get: (s) => s.yoyPct, nullsLast: true },
+  orders: { get: (s) => s.ttmOrders },
+  days: { get: (s) => (s.daysSinceLastOrder === null ? Infinity : s.daysSinceLastOrder) },
+  gap: { get: (s) => s.medianGapDays, nullsLast: true },
+  trend: { get: (s) => TREND_RANK[s.trend] },
+  blocker: { get: (s) => BLOCKER_RANK[blockerOf(s)] },
+};
+let sortKey = "spend";
+let sortDir = "desc";
 
 function filteredStores() {
   const q = document.getElementById("fSearch").value.trim().toLowerCase();
   const trend = document.getElementById("fTrend").value;
   const blocker = document.getElementById("fBlocker").value;
-  const sort = document.getElementById("fSort").value;
-  let list = DATA.stores.filter((s) =>
+  const list = DATA.stores.filter((s) =>
+    !excluded.has(s.id) &&
     (!q || s.name.toLowerCase().includes(q)) &&
     (trend === "all" || s.trend === trend) &&
     (blocker === "all" ||
@@ -470,13 +568,17 @@ function filteredStores() {
       (blocker === "prepay" && s.holdStatus === "payment_upfront") ||
       (blocker === "overdue" && s.overdueBalance > 0) ||
       (blocker === "clear" && blockerOf(s) === "clear")));
-  const cmp = {
-    spend: (a, b) => b.ttmSpend - a.ttmSpend,
-    yoy: (a, b) => (b.yoyPct ?? -Infinity) - (a.yoyPct ?? -Infinity),
-    days: (a, b) => (b.daysSinceLastOrder ?? Infinity) - (a.daysSinceLastOrder ?? Infinity),
-    name: (a, b) => a.name.localeCompare(b.name),
-  }[sort];
-  return list.slice().sort(cmp);
+  const col = SORT_COLS[sortKey];
+  return list.sort((a, b) => {
+    const va = col.get(a), vb = col.get(b);
+    if (col.nullsLast) {
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+    }
+    const c = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+    return sortDir === "asc" ? c : -c;
+  });
 }
 
 function render() {
@@ -484,8 +586,16 @@ function render() {
   const body = document.getElementById("storeBody");
   body.innerHTML = list.length
     ? list.map(rowHtml).join("")
-    : '<tr class="emptyrow"><td colspan="8">No stores match the current filters.</td></tr>';
-  document.getElementById("fCount").textContent = list.length + " of " + DATA.stores.length + " stores";
+    : '<tr class="emptyrow"><td colspan="10">No stores match the current filters.</td></tr>';
+  document.getElementById("fCount").textContent = list.length + " of " + (DATA.stores.length - excluded.size) + " stores";
+  for (const btn of document.querySelectorAll(".hsort")) {
+    const active = btn.dataset.key === sortKey;
+    btn.querySelector(".arr").textContent = active ? (sortDir === "desc" ? "▼" : "▲") : "";
+    const th = btn.closest("th");
+    if (active) th.setAttribute("aria-sort", sortDir === "desc" ? "descending" : "ascending");
+    else th.removeAttribute("aria-sort");
+  }
+  renderHiddenUI();
   for (const id of expanded) fillDetail(id);
 }
 
@@ -534,14 +644,39 @@ function reveal(id) {
 
 // ---------- events ----------
 document.getElementById("storeBody").addEventListener("click", (e) => {
+  const hb = e.target.closest(".hidebtn");
+  if (hb) { hideStore(hb.dataset.hide); return; }
   const row = e.target.closest(".store-row");
   if (row) toggle(row.dataset.id);
+});
+document.querySelector("#storeTable thead").addEventListener("click", (e) => {
+  const btn = e.target.closest(".hsort");
+  if (!btn) return;
+  const key = btn.dataset.key;
+  if (sortKey === key) sortDir = sortDir === "desc" ? "asc" : "desc";
+  else { sortKey = key; sortDir = SORT_COLS[key].firstDir || "desc"; }
+  render();
+});
+document.getElementById("hiddenChip").addEventListener("click", () => {
+  const panel = document.getElementById("hiddenPanel");
+  panel.hidden = !panel.hidden;
+  document.getElementById("hiddenChip").setAttribute("aria-expanded", String(!panel.hidden));
+});
+document.getElementById("hiddenPanel").addEventListener("click", (e) => {
+  const rb = e.target.closest("[data-restore]");
+  if (rb) restoreStore(rb.dataset.restore);
+});
+document.getElementById("restoreAll").addEventListener("click", () => {
+  excluded.clear();
+  saveExcluded();
+  renderStrips();
+  render();
 });
 document.addEventListener("click", (e) => {
   const card = e.target.closest("[data-jump]");
   if (card) reveal(card.dataset.jump);
 });
-for (const id of ["fSearch", "fTrend", "fBlocker", "fSort"]) {
+for (const id of ["fSearch", "fTrend", "fBlocker"]) {
   document.getElementById(id).addEventListener("input", render);
 }
 
