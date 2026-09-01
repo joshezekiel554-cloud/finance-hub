@@ -21,10 +21,20 @@ any browser. Josh reviews it, then sends Yiddy the file.
 ## Population & definitions
 
 - **Stores:** customers whose `tags` JSON array contains `"yiddy"`.
-- **An order:** a non-voided QBO invoice (`invoices` table). Value =
-  invoice total. Both books combined (Feldart + TJ), with a per-book
-  split shown where a store spans both. Shopify `orders` are used only
-  for hold-lifecycle context, not for order counts/values.
+- **An order:** a non-voided QBO Invoice OR SalesReceipt. Sales
+  receipts are prepaid orders (payment-upfront stores transact almost
+  entirely this way) and count identically for every metric — order
+  counts, values, monthly chart, SKU/product analysis. Value = document
+  total. Both books combined (Feldart + TJ), with a per-book split
+  shown where a store spans both. Shopify `orders` are used only for
+  hold-lifecycle context, not for order counts/values.
+- **Sales-receipt sourcing:** SalesReceipts are NOT synced into the
+  local `invoices` table — the generator fetches them read-only from
+  the QBO API at generation time (the existing `qb` client has
+  sales-receipt queries) for the roster customers over the full
+  comparison window, then merges them with locally-synced invoices.
+  Must cover both books' realms. In the orders dropdown they are
+  labelled "Sales receipt" and always paid.
 - **Window:** trailing 12 months, month-by-month, plus the prior 12
   months for year-on-year comparison. Lifetime first-order date shown.
 - **New product:** a `products` row created within the last 6 months
@@ -69,10 +79,11 @@ order · typical order gap · trend badge · blocker badge.
   visibly lines up with its cause. YoY comparison figures alongside.
 - **Averages:** average order value TTM vs prior year, median days
   between orders, distinct SKUs bought TTM.
-- **Orders dropdown (collapsed by default):** every invoice in the
-  trailing 12 months — invoice number, date, value, book, paid/open
-  status — with an "open invoices" subtotal above it. Older history
-  stays aggregate-only to keep the file small.
+- **Orders dropdown (collapsed by default):** every invoice and sales
+  receipt in the trailing 12 months — doc number, type
+  (Invoice / Sales receipt), date, value, book, paid/open status —
+  with an "open invoices" subtotal above it. Older history stays
+  aggregate-only to keep the file small.
 - **Top 5 products** by value for this store (conversation opener).
 - **New-product adoption:** which recently-added products the store has
   taken; "not yet taken" list as a pitch list.
@@ -96,7 +107,9 @@ order · typical order gap · trend badge · blocker badge.
 ## Generation approach
 
 - A read-only script queries prod MySQL over `ssh finance-vps`
-  (established recipe). No writes to prod, no app/schema changes.
+  (established recipe) plus read-only QBO API queries for sales
+  receipts (both realms). No writes to prod or QBO, no app/schema
+  changes.
 - Data is crunched locally; the HTML is rendered from a template with
   the JSON embedded.
 - The script is kept in `scripts/` so the report can be regenerated
