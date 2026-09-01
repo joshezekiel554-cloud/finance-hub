@@ -39,13 +39,16 @@ any browser. Josh reviews it, then sends Yiddy the file.
   paid. Voided sales receipts (TotalAmt 0) are excluded.
 - **Window:** trailing 12 months, month-by-month, plus the prior 12
   months for year-on-year comparison. Lifetime first-order date shown.
-- **New product:** sourced from QBO Items (the local `products` table
-  turned out to be empty on prod — Shopify product sync never populated
-  it). Active items only; `MetaData.CreateTime` is the launch date;
-  Sku/Name share the invoice-line keyspace. "New" = created within the
-  last 6 months, excluding the initial-sync epoch day AND any bulk
-  import day (a day holding ≥5% of the catalog, min 5 items — those are
-  administrative imports, not launches).
+- **New product:** the curated Shopify tag **"new arrivals july 26"**
+  (operator decision 2026-09-01; the operator said "new july26" — the
+  store's actual tag string was verified against productTags). Variant
+  SKUs under tagged products = the new-product set (112 SKUs at first
+  generation). Fallback when the tag query returns nothing: QBO Item
+  `MetaData.CreateTime` within 6 months, excluding the initial-sync
+  epoch day and bulk-import days (≥5% of catalog, min 5 items).
+  Catalog names/prices come from QBO Items (the local `products` table
+  is empty on prod); QBO Service items (shipping/admin lines) are
+  filtered out of the catalog.
 
 ## Report structure
 
@@ -78,10 +81,12 @@ order · typical order gap · trend badge · blocker badge.
   hold status badge. (Deliberately no "last contact" date — the email
   log only sees the shared inbox, and stores often deal with Yiddy
   directly, so it would misread as "gone cold".)
-- **12-month chart:** monthly order count + spend bars, with hold
-  periods shaded onto the timeline (reason captured: customer on hold /
-  prepay unpaid / overdue non-communicating / manual + note) so a lull
-  visibly lines up with its cause. YoY comparison figures alongside.
+- **12-month chart:** monthly order count + spend bars, with a muted
+  prior-year overlay (same calendar month one year earlier) so seasonal
+  shape and YoY shifts read directly off the chart, and hold periods
+  shaded onto the timeline (reason captured: customer on hold / prepay
+  unpaid / overdue non-communicating / manual + note) so a lull visibly
+  lines up with its cause. YoY comparison figures alongside.
 - **Averages:** average order value TTM vs prior year, median days
   between orders, distinct SKUs bought TTM.
 - **Orders dropdown (collapsed by default):** every invoice and sales
