@@ -56,6 +56,10 @@ export type GatheredData = {
     b2bPrice: number | null;
     createdAt: string;
   }>;
+  // Products tagged "new july26" in Shopify — the curated definition of
+  // "new product" (operator decision 2026-09-01). When non-empty this
+  // REPLACES the CreateTime heuristic in compute.
+  shopifyNewProducts: Array<{ sku: string; title: string }>;
   customers: GatheredCustomer[];
 };
 
@@ -89,8 +93,16 @@ export type StoreReport = {
   seasonFlag: boolean;
   firstOrderDate: string | null;
   bookSplit: { feldart: number; tj: number }; // TTM spend per book
-  // chart
-  monthly: Array<{ month: string; orders: number; spend: number; held: boolean }>;
+  // chart — priorSpend/priorOrders are the SAME calendar month one year
+  // earlier (index-aligned), for the prior-year overlay
+  monthly: Array<{
+    month: string;
+    orders: number;
+    spend: number;
+    held: boolean;
+    priorSpend: number;
+    priorOrders: number;
+  }>;
   // averages
   aovTtm: number | null;
   aovPriorYear: number | null;

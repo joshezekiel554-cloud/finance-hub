@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import type { GatheredData, ReportData, StoreReport } from "./types";
 import {
   bucketMonthly,
+  bucketByMonths,
   windowTotals,
   ttmMonths,
   priorYearMonths,
@@ -30,8 +31,20 @@ const genDate =
 const ttm = ttmMonths(genDate);
 const prior = priorYearMonths(genDate);
 const ttmSet = new Set(ttm);
-const fresh = newProducts(data.products, genDate);
 const skuNames = new Map(data.products.map((p) => [p.sku, p.name]));
+// "New products" = the curated Shopify "new july26" tag when present
+// (operator decision 2026-09-01); CreateTime heuristic only as fallback.
+const fresh =
+  data.shopifyNewProducts && data.shopifyNewProducts.length > 0
+    ? [
+        ...new Map(
+          data.shopifyNewProducts.map((p) => [
+            p.sku,
+            { sku: p.sku, name: skuNames.get(p.sku) ?? p.title },
+          ]),
+        ).values(),
+      ]
+    : newProducts(data.products, genDate);
 
 // breadth base: what every roster store bought across the whole window
 const purchasedByStore = new Map(
@@ -43,15 +56,15 @@ const stores: StoreReport[] = data.customers.map((c) => {
   const t = windowTotals(c.docs, ttm);
   const p = windowTotals(c.docs, prior);
   // cadence: lifetime invoice dates; SR-only stores fall back to the
-  // windowed docs (documented caveat — 25-month view, not lifetime)
+  // windowed docs (documented caveat — 25-month view, not lifetime).
+  // Future-dated docs (QBO placeholder invoices parked on e.g.
+  // 2030-01-01) are excluded — they corrupt last-order and cadence.
+  const lifetimePast = c.lifetimeOrderDates.filter((d) => d <= genDate);
+  const docsPastDates = c.docs.map((d) => d.date).filter((d) => d <= genDate);
   const cadenceDates =
-    c.lifetimeOrderDates.length >= 3
-      ? c.lifetimeOrderDates
-      : c.docs.map((d) => d.date);
+    lifetimePast.length >= 3 ? lifetimePast : docsPastDates;
   const gap = medianGapDays(cadenceDates);
-  const allDates = [
-    ...new Set([...c.lifetimeOrderDates, ...c.docs.map((d) => d.date)]),
-  ].sort();
+  const allDates = [...new Set([...lifetimePast, ...docsPastDates])].sort();
   const last = allDates.length > 0 ? allDates[allDates.length - 1]! : null;
   const dsl = last ? daysBetween(last, genDate) : null;
   const trend = trendBadge({
@@ -61,12 +74,15 @@ const stores: StoreReport[] = data.customers.map((c) => {
     medianGap: gap,
   });
   const season = seasonFlag(c.docs, genDate);
-  const monthly = bucketMonthly(c.docs, genDate).map((m) => ({
+  const priorMonthly = bucketByMonths(c.docs, prior);
+  const monthly = bucketMonthly(c.docs, genDate).map((m, i) => ({
     ...m,
     held: c.holdPeriods.some(
       (h) =>
         monthOf(h.from) <= m.month && (h.to === null || monthOf(h.to) >= m.month),
     ),
+    priorSpend: priorMonthly[i]?.spend ?? 0,
+    priorOrders: priorMonthly[i]?.orders ?? 0,
   }));
   const own = purchasedByStore.get(c.id) ?? new Set<string>();
   const cmTtm = c.creditMemos.filter((m) => ttmSet.has(monthOf(m.date)));
@@ -123,7 +139,11 @@ const stores: StoreReport[] = data.customers.map((c) => {
       }))
       .sort((a, b) => b.date.localeCompare(a.date)),
     openInvoiceTotal: ttmDocs.reduce((a, d) => a + d.openBalance, 0),
-    topProducts: topProducts(ttmDocs),
+    // Line descriptions are often just the SKU — prefer the catalog name.
+    topProducts: topProducts(ttmDocs).map((tp) => ({
+      ...tp,
+      name: skuNames.get(tp.sku) ?? tp.name ?? tp.sku,
+    })),
     newProductsTaken: fresh
       .filter((pr) => own.has(pr.sku))
       .map(({ sku, name }) => ({ sku, name })),

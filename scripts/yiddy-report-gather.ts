@@ -20,6 +20,7 @@ import { activities } from "../src/db/schema/crm.js";
 import { orders } from "../src/db/schema/catalog.js";
 import { creditMemos } from "../src/db/schema/credit-memos.js";
 import { QboClient } from "../src/integrations/qb/client.js";
+import { ShopifyClient } from "../src/integrations/shopify/client.js";
 
 const GEN_DATE = process.env.GEN_DATE ?? new Date().toISOString().slice(0, 10);
 const gy = Number(GEN_DATE.slice(0, 4));
@@ -194,6 +195,7 @@ async function main(): Promise<void> {
     Id: string;
     Name?: string;
     Sku?: string;
+    Type?: string;
     Active?: boolean;
     UnitPrice?: number;
     MetaData?: { CreateTime?: string };
@@ -360,11 +362,58 @@ async function main(): Promise<void> {
     };
   });
 
+  // ---- Shopify: curated new-product set ----
+  // Operator asked for "new july26"; the store's actual tag is
+  // "new arrivals july 26" (verified against productTags 2026-09-01).
+  const shopify = new ShopifyClient();
+  type ShopifyProductsResp = {
+    products: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: Array<{
+        title: string;
+        variants: { nodes: Array<{ sku: string | null }> };
+      }>;
+    };
+  };
+  const shopifyNewProducts: Array<{ sku: string; title: string }> = [];
+  let after: string | null = null;
+  do {
+    const resp: ShopifyProductsResp = await shopify.graphql<ShopifyProductsResp>(
+      `query($after: String) {
+        products(first: 100, after: $after, query: "tag:'new arrivals july 26'") {
+          pageInfo { hasNextPage endCursor }
+          nodes { title variants(first: 50) { nodes { sku } } }
+        }
+      }`,
+      { after },
+    );
+    for (const p of resp.products.nodes) {
+      for (const v of p.variants.nodes) {
+        if (v.sku) shopifyNewProducts.push({ sku: v.sku, title: p.title });
+      }
+    }
+    after = resp.products.pageInfo.hasNextPage
+      ? resp.products.pageInfo.endCursor
+      : null;
+  } while (after);
+  console.error(
+    `shopify "new arrivals july 26" tagged variant skus: ${shopifyNewProducts.length}`,
+  );
+
   const out = {
     generatedAt: new Date().toISOString(),
     genDate: GEN_DATE,
+    shopifyNewProducts,
     products: items
       .filter((i) => i.MetaData?.CreateTime && (i.Sku || i.Name))
+      // Sellable product only: QBO Service items are shipping/admin
+      // lines ("Shipping per item", "Name", …) and would pollute the
+      // new-product pitch lists. Belt-and-braces name filter too.
+      .filter(
+        (i) =>
+          i.Type !== "Service" &&
+          !/shipp?ing|delivery|postage|freight/i.test(i.Name ?? ""),
+      )
       .map((i) => ({
         sku: i.Sku ?? i.Name!,
         name: i.Name ?? i.Sku!,

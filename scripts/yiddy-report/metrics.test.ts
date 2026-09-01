@@ -253,3 +253,16 @@ describe("spendInDayWindow", () => {
     expect(spendInDayWindow(docs, "2026-09-01", 90, 180)).toBe(40); // prior 90
   });
 });
+
+describe("bucketByMonths", () => {
+  test("buckets over an arbitrary month list, zero-filled, index-aligned", async () => {
+    const { bucketByMonths } = await import("./metrics");
+    const docs = [doc("2025-10-05", 25), doc("2025-12-01", 10)];
+    const rows = bucketByMonths(docs, ["2025-10", "2025-11", "2025-12"]);
+    expect(rows).toEqual([
+      { month: "2025-10", orders: 1, spend: 25 },
+      { month: "2025-11", orders: 0, spend: 0 },
+      { month: "2025-12", orders: 1, spend: 10 },
+    ]);
+  });
+});

@@ -234,3 +234,22 @@ export function spendInDayWindow(
   }
   return total;
 }
+
+// Generalized month bucketing over an explicit month list (the TTM
+// variant above is the common case; the prior-year overlay uses this
+// with priorYearMonths so rows stay index-aligned with the TTM rows).
+export function bucketByMonths(
+  docs: GatheredDoc[],
+  months: string[],
+): Array<{ month: string; orders: number; spend: number }> {
+  const map = new Map(
+    months.map((m) => [m, { month: m, orders: 0, spend: 0 }]),
+  );
+  for (const d of docs) {
+    const row = map.get(monthOf(d.date));
+    if (!row) continue;
+    row.orders += 1;
+    row.spend += d.total;
+  }
+  return months.map((m) => map.get(m)!);
+}
