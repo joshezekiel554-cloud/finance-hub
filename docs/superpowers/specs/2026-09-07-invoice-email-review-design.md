@@ -72,10 +72,16 @@ invoice_email_dismissals
   dismissed_by_user_id  varchar(255) NULL, FK users.id ON DELETE SET NULL
 ```
 
-A dismissed row stays dismissed; if QBO later reports `EmailSent` it leaves
-the never-emailed set anyway. The existing shipment-level "sent manually in
-QBO" dismissal is untouched, but no longer hides the invoice from this
-report — that is the safety net for the 3 Sep incident.
+A dismissal only counts while it is **newer than the last delivery
+attempt**: `dismissed_at > delivery_time` (or `delivery_time` is null). So a
+never-emailed invoice dismissed as "sent elsewhere" that is later sent and
+bounces re-surfaces under Delivery failed, and a dismissed bounce that is
+re-sent and bounces again re-surfaces too. (Found in Task 1 review: with a
+plain "no dismissal row" rule the invisible-bounce class of failure would
+have survived the feature.) If QBO later reports `EmailSent` with no error
+the invoice leaves both sets anyway. The existing shipment-level "sent
+manually in QBO" dismissal is untouched, but no longer hides the invoice
+from this report — that is the safety net for the 3 Sep incident.
 
 ### 3. Selection rules (pure function + query, `src/modules/invoice-email-review/`)
 
@@ -93,12 +99,24 @@ Never emailed:
   audit doc's job, not the daily queue's)
 - `created_at < now - 24h` (grace: today's shipments are still in the normal
   queue)
-- no dismissal row
+- no *active* dismissal (see §2: `dismissed_at > delivery_time`, or
+  `delivery_time` null)
 
 Delivery failed:
 - `delivery_error IS NOT NULL`, `status <> 'void'`, `issue_date >= today - 90
-  days`, no dismissal row. (Balance not required: a bounced invoice the
+  days`, no *active* dismissal. (Balance not required: a bounced invoice the
   customer later paid still tells us the address is bad.)
+
+`select.ts` also exports `isDismissalActive(dismissedAt, deliveryTime)` so
+the route and the classifier share the one definition; the candidate carries
+`dismissedAt` and `deliveryTime` rather than a pre-computed boolean. It
+exports `emailReviewWindowStart(now)` too, and the route's SQL floor MUST use
+it (not `CURDATE()`), so the pre-filter can never be narrower than the rule.
+The "not future-dated" and "inside the window" checks apply to BOTH buckets
+(keeps the 2030-01-01 placeholders out of the bounce list as well).
+`issue_date` is selected as a `DATE_FORMAT` string: mysql2 returns DATE
+columns as local-midnight `Date`s, which read back as the previous day on any
+host ahead of UTC (the VPS is UTC today; the rule should not depend on it).
 
 Rows are ordered oldest first, then balance desc.
 
@@ -163,7 +181,8 @@ own `useQuery(["invoicing","email-review"])`, `staleTime` 60s.
 - `select.test.ts`: `classifyForEmailReview` table-driven cases: NotSet+open
   → never_emailed; NotSet+void → null; future issue date → null; < 24h old →
   null; > 90d → null; delivery_error set + paid → delivery_failed;
-  dismissed → null; NULL email_status → null.
+  active dismissal → null in both buckets; stale dismissal (older than
+  delivery_time) → still classified; NULL email_status → null.
 - `email-review.route.test.ts`: GET shape + dismiss/restore audit rows,
   using the mocked-db pattern from `statements.test.ts`.
 - Manual: deploy, wait one sync, confirm the never-emailed list matches the

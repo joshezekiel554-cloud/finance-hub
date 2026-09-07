@@ -436,6 +436,8 @@ Create `src/modules/invoice-email-review/select.test.ts`:
 import { describe, expect, it } from "vitest";
 import {
   classifyForEmailReview,
+  emailReviewWindowStart,
+  isDismissalActive,
   EMAIL_REVIEW_GRACE_HOURS,
   EMAIL_REVIEW_WINDOW_DAYS,
   type EmailReviewCandidate,
@@ -452,10 +454,34 @@ function candidate(overrides: Partial<EmailReviewCandidate> = {}): EmailReviewCa
     balance: "195.00",
     issueDate: "2026-09-02",
     createdAt: new Date("2026-09-02T23:41:34Z"),
-    dismissed: false,
+    dismissedAt: null,
+    deliveryTime: null,
     ...overrides,
   };
 }
+
+describe("isDismissalActive", () => {
+  it("no dismissal → false", () => {
+    expect(isDismissalActive(null, null)).toBe(false);
+    expect(isDismissalActive(null, new Date("2026-09-06T21:43:23Z"))).toBe(false);
+  });
+  it("dismissal with no delivery attempt → true", () => {
+    expect(isDismissalActive(new Date("2026-09-03T12:00:00Z"), null)).toBe(true);
+  });
+  it("dismissal newer than the last delivery attempt → true", () => {
+    expect(
+      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-02T13:36:04Z")),
+    ).toBe(true);
+  });
+  it("delivery attempt after the dismissal → false (stale)", () => {
+    expect(
+      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-06T21:43:23Z")),
+    ).toBe(false);
+  });
+  it("accepts ISO strings", () => {
+    expect(isDismissalActive("2026-09-03T12:00:00Z", "2026-09-02T13:36:04Z")).toBe(true);
+  });
+});
 
 describe("classifyForEmailReview", () => {
   it("exports the documented constants", () => {
@@ -503,7 +529,25 @@ describe("classifyForEmailReview", () => {
 
   it("issued exactly on the window edge is included", () => {
     // NOW is 2026-09-07; 90 days earlier is 2026-06-09.
+    expect(emailReviewWindowStart(NOW)).toBe("2026-06-09");
     expect(classifyForEmailReview(candidate({ issueDate: "2026-06-09" }), NOW)).toBe("never_emailed");
+  });
+
+  it("issued the day before the window edge is excluded", () => {
+    expect(classifyForEmailReview(candidate({ issueDate: "2026-06-08" }), NOW)).toBeNull();
+  });
+
+  it("created exactly 24h ago is no longer in grace", () => {
+    expect(
+      classifyForEmailReview(
+        candidate({ issueDate: "2026-09-06", createdAt: new Date("2026-09-06T14:00:00Z") }),
+        NOW,
+      ),
+    ).toBe("never_emailed");
+  });
+
+  it("null status still classifies", () => {
+    expect(classifyForEmailReview(candidate({ status: null }), NOW)).toBe("never_emailed");
   });
 
   it("created within the grace period → null (still in today's queue)", () => {
@@ -513,10 +557,6 @@ describe("classifyForEmailReview", () => {
         NOW,
       ),
     ).toBeNull();
-  });
-
-  it("accepts a Date for issueDate", () => {
-    expect(classifyForEmailReview(candidate({ issueDate: new Date("2026-09-02T00:00:00Z") }), NOW)).toBe("never_emailed");
   });
 
   it("missing issueDate → null", () => {
@@ -536,11 +576,34 @@ describe("classifyForEmailReview", () => {
     expect(classifyForEmailReview(candidate({ deliveryError: "Bounced Email" }), NOW)).toBe("delivery_failed");
   });
 
-  it("dismissed → null in either bucket", () => {
-    expect(classifyForEmailReview(candidate({ dismissed: true }), NOW)).toBeNull();
+  it("active dismissal → null in either bucket", () => {
+    const dismissedAt = new Date("2026-09-03T12:00:00Z");
+    expect(classifyForEmailReview(candidate({ dismissedAt }), NOW)).toBeNull();
     expect(
-      classifyForEmailReview(candidate({ dismissed: true, deliveryError: "Bounced Email" }), NOW),
+      classifyForEmailReview(
+        candidate({
+          dismissedAt,
+          emailStatus: "EmailSent",
+          deliveryError: "Bounced Email",
+          deliveryTime: new Date("2026-09-02T13:36:04Z"),
+        }),
+        NOW,
+      ),
     ).toBeNull();
+  });
+
+  it("stale dismissal (re-sent after dismissing, then bounced) → delivery_failed", () => {
+    expect(
+      classifyForEmailReview(
+        candidate({
+          dismissedAt: new Date("2026-09-03T12:00:00Z"),
+          emailStatus: "EmailSent",
+          deliveryError: "Bounced Email",
+          deliveryTime: new Date("2026-09-06T21:43:23Z"),
+        }),
+        NOW,
+      ),
+    ).toBe("delivery_failed");
   });
 });
 ```
@@ -584,13 +647,20 @@ export type EmailReviewCandidate = {
   // decimal(12,2) strings as Drizzle returns them.
   total: string;
   balance: string;
-  // invoices.issue_date — Drizzle may hand back a Date or a YYYY-MM-DD string.
-  issueDate: string | Date | null;
+  // invoices.issue_date as a plain YYYY-MM-DD string. The route selects it
+  // with DATE_FORMAT on purpose: mysql2 returns DATE columns as LOCAL-midnight
+  // Date objects, so reading them back as a UTC day shifts by one on any host
+  // ahead of UTC. A string keeps this module host-timezone independent.
+  issueDate: string | null;
   createdAt: string | Date;
-  dismissed: boolean;
+  // invoice_email_dismissals.dismissed_at (null = never dismissed) and
+  // invoices.delivery_time (QBO's last delivery attempt). A dismissal only
+  // counts while it is newer than the last attempt — see isDismissalActive.
+  dismissedAt: string | Date | null;
+  deliveryTime: string | Date | null;
 };
 
-// YYYY-MM-DD in UTC for a Date, or the first 10 chars of a string.
+// YYYY-MM-DD in UTC for `now`; strings are taken as already-formatted days.
 function isoDay(v: string | Date): string {
   return v instanceof Date ? v.toISOString().slice(0, 10) : v.slice(0, 10);
 }
@@ -601,27 +671,55 @@ function addDays(day: string, delta: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function ms(v: string | Date): number {
+  return v instanceof Date ? v.getTime() : new Date(v).getTime();
+}
+
+// First issue day still inside the window (inclusive). Exported so the
+// route's SQL pre-filter uses the SAME floor as the classifier — a
+// CURDATE()-based floor evaluated in the MySQL server timezone could be a day
+// narrower than this UTC-day computation and silently drop rows.
+export function emailReviewWindowStart(now: Date = new Date()): string {
+  return addDays(isoDay(now), -EMAIL_REVIEW_WINDOW_DAYS);
+}
+
+// A dismissal hides an invoice only until QBO records a NEWER delivery
+// attempt. So "dismissed while NotSet, later sent and bounced" and
+// "dismissed bounce, re-sent, bounced again" both re-surface — otherwise the
+// invisible-bounce failure this feature exists to catch would survive it.
+export function isDismissalActive(
+  dismissedAt: string | Date | null,
+  deliveryTime: string | Date | null,
+): boolean {
+  if (!dismissedAt) return false;
+  if (!deliveryTime) return true;
+  return ms(dismissedAt) > ms(deliveryTime);
+}
+
 export function classifyForEmailReview(
   c: EmailReviewCandidate,
   now: Date = new Date(),
 ): EmailReviewBucket | null {
-  if (c.dismissed) return null;
+  if (isDismissalActive(c.dismissedAt, c.deliveryTime)) return null;
   if (c.status === "void") return null;
   if (!c.issueDate) return null;
 
   const today = isoDay(now);
   const issued = isoDay(c.issueDate);
-  if (issued > today) return null; // placeholder / future-dated
-  if (issued < addDays(today, -EMAIL_REVIEW_WINDOW_DAYS)) return null;
+  // Both buckets: future-dated rows (the 2030-01-01 placeholders) and rows
+  // older than the window are out, bounce or not.
+  if (issued > today) return null;
+  if (issued < emailReviewWindowStart(now)) return null;
 
   if (c.deliveryError) return "delivery_failed";
 
-  const notEmailed = (NOT_EMAILED_STATUSES as readonly string[]).includes(
-    c.emailStatus ?? "",
-  );
+  const notEmailed = NOT_EMAILED_STATUSES.some((s) => s === c.emailStatus);
   if (!notEmailed) return null;
-  if (Number(c.total) <= 0) return null;
-  if (Number(c.balance) <= 0) return null;
+  // decimal(12,2) NOT NULL columns, so NaN means corrupt data — fail closed.
+  const total = Number(c.total);
+  const balance = Number(c.balance);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  if (!Number.isFinite(balance) || balance <= 0) return null;
 
   const createdMs = new Date(c.createdAt).getTime();
   if (now.getTime() - createdMs < EMAIL_REVIEW_GRACE_HOURS * 60 * 60 * 1000) {
@@ -634,7 +732,7 @@ export function classifyForEmailReview(
 - [ ] **Step 4: Run the test**
 
 Run: `npx vitest run src/modules/invoice-email-review/select.test.ts`
-Expected: PASS (17 tests).
+Expected: PASS (25 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -740,7 +838,8 @@ import { invoices } from "../../db/schema/invoices.js";
 import { createLogger } from "../../lib/logger.js";
 import {
   classifyForEmailReview,
-  EMAIL_REVIEW_WINDOW_DAYS,
+  emailReviewWindowStart,
+  isDismissalActive,
   NOT_EMAILED_STATUSES,
   type EmailReviewBucket,
 } from "../../modules/invoice-email-review/select.js";
@@ -794,11 +893,6 @@ export type EmailReviewResponse = {
   syncedAt: string | null;
 };
 
-function isoDay(v: string | Date | null): string | null {
-  if (!v) return null;
-  return v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
-}
-
 function iso(v: Date | string | null): string | null {
   if (!v) return null;
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
@@ -812,9 +906,9 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req, reply) => {
     await requireAuth(req);
     const now = new Date();
-    const windowStart = new Date(now);
-    windowStart.setUTCDate(windowStart.getUTCDate() - EMAIL_REVIEW_WINDOW_DAYS);
-    const windowStartDay = windowStart.toISOString().slice(0, 10);
+    // Same floor the classifier uses — never CURDATE(), which would be
+    // evaluated in the MySQL server timezone.
+    const windowStartDay = emailReviewWindowStart(now);
 
     const rows = await db
       .select({
@@ -824,7 +918,10 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
         customerId: invoices.customerId,
         customerName: customers.displayName,
         origin: invoices.origin,
-        issueDate: invoices.issueDate,
+        // DATE_FORMAT → plain 'YYYY-MM-DD'. mysql2 hands DATE columns back as
+        // local-midnight Date objects, which would shift the day on a
+        // non-UTC host; the classifier's contract is a string day.
+        issueDate: sql<string | null>`DATE_FORMAT(${invoices.issueDate}, '%Y-%m-%d')`,
         createdAt: invoices.createdAt,
         total: invoices.total,
         balance: invoices.balance,
@@ -866,10 +963,14 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
     };
 
     for (const r of rows) {
-      const dismissed = r.dismissReason !== null;
-      // Classify as if not dismissed so dismissed rows that would otherwise
-      // qualify land in the Dismissed tab (restore path); rows that no
-      // longer qualify at all are dropped regardless of dismissal.
+      // A dismissal only hides the row while it is newer than QBO's last
+      // delivery attempt (isDismissalActive). Stale dismissals fall through
+      // to the live buckets but keep their `dismissal` info for display.
+      const dismissed =
+        r.dismissReason !== null && isDismissalActive(r.dismissedAt, r.deliveryTime);
+      // Classify as if not dismissed so actively-dismissed rows that would
+      // otherwise qualify land in the Dismissed tab (restore path); rows
+      // that no longer qualify at all are dropped regardless of dismissal.
       const bucket: EmailReviewBucket | null = classifyForEmailReview(
         {
           emailStatus: r.emailStatus,
@@ -879,7 +980,8 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
           balance: r.balance,
           issueDate: r.issueDate,
           createdAt: r.createdAt,
-          dismissed: false,
+          dismissedAt: null,
+          deliveryTime: r.deliveryTime,
         },
         now,
       );
@@ -892,7 +994,7 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
         customerId: r.customerId,
         customerName: r.customerName,
         origin: r.origin,
-        issueDate: isoDay(r.issueDate),
+        issueDate: r.issueDate,
         createdAt: iso(r.createdAt) ?? now.toISOString(),
         total: r.total,
         balance: r.balance,
@@ -905,7 +1007,7 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
           cc: strings(r.invoiceCcEmails),
         },
         dismissal:
-          dismissed && r.dismissReason && r.dismissedAt
+          r.dismissReason && r.dismissedAt
             ? {
                 reason: r.dismissReason,
                 reasonNote: r.dismissNote,
