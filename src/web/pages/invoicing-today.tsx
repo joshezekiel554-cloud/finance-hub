@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, getRouteApi } from "@tanstack/react-router";
+import { classifyTodayRow, type TodayTab } from "./invoicing-today-classify";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { InvoicingTodaySearch } from "../lib/search-schemas/invoicing-today";
@@ -139,6 +140,10 @@ type Row = {
     }>;
   } | null;
   qbInvoiceError: string | null;
+  // Set by the server when it filed this row away with no operator input —
+  // currently only B2C paid-upfront sales receipts, which have nothing to
+  // reconcile or send. Such rows show under Dismissed with no Restore.
+  autoHidden: "b2c_paid_upfront" | null;
   shopifyOrder: {
     id: number;
     name: string;
@@ -217,22 +222,15 @@ const REASON_LABELS: Record<DismissReason, string> = {
   other: "Other",
 };
 
-type Tab = "open" | "unparseable" | "sent" | "dismissed" | "phone_calls";
+type Tab = TodayTab;
 
-// Single source of truth for which tab a row belongs in. Priority order:
-//   1. Dismissed wins (a dismissed row stays under Dismissed regardless).
-//   2. Already-sent rows live in Sent (matches QBO EmailStatus).
-//   3. Low-confidence parses go to Unparseable so the Open tab is just
-//      actionable shipment emails.
-//   4. Everything else is Open.
+// Single source of truth for which tab a row belongs in. The rules live in
+// invoicing-today-classify.ts so they can be unit-tested without a DOM.
 function classifyRow(
   row: Row,
   dismissed: Record<string, DismissedRecord>,
 ): Tab {
-  if (dismissed[row.gmailId]) return "dismissed";
-  if (row.qbInvoice?.emailStatus === "EmailSent") return "sent";
-  if (row.parseConfidence < 0.5) return "unparseable";
-  return "open";
+  return classifyTodayRow(row, dismissed);
 }
 
 export default function InvoicingTodayPage() {
@@ -505,7 +503,9 @@ export default function InvoicingTodayPage() {
                             ? { addsNeedingPrice: row.reconcileResult.summary.addsNeedingPrice }
                             : null
                         }
-                        dismissed={Boolean(data.dismissed[row.gmailId])}
+                        dismissed={
+                          classifyRow(row, data.dismissed) === "dismissed"
+                        }
                       />
                     </div>
                     {/* Desktop: full inline shipment card unchanged */}
@@ -997,8 +997,10 @@ function ShipmentCard({
   dismissedRecord: DismissedRecord | null;
 }) {
   // Low-confidence rows still render in the dismissed tab if they were
-  // dismissed manually. Hide from the active tab as before.
-  if (row.parseConfidence < 0.5 && !dismissedRecord) return null;
+  // dismissed manually or auto-hidden. Hide from the active tab as before.
+  if (row.parseConfidence < 0.5 && !dismissedRecord && !row.autoHidden) {
+    return null;
+  }
 
   // Local editable state. Initialised from the reconciler output and from
   // the parsed shipment, both treated as defaults the user can override.
@@ -1403,7 +1405,7 @@ function ShipmentCard({
   }
 
   return (
-    <Card className={cn(dismissedRecord && "opacity-60")}>
+    <Card className={cn((dismissedRecord || row.autoHidden) && "opacity-60")}>
       <CardHeader>
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -1421,14 +1423,18 @@ function ShipmentCard({
                 Feldart Tx #{row.parsed.transactionNumber} · {row.parsed.carrierShort} ·{" "}
                 {row.parsed.trackingNumber} · ship date {row.parsed.shipDate}
               </div>
-              {dismissedRecord && (
+              {dismissedRecord ? (
                 <div className="mt-1 text-xs">
                   <Badge tone="neutral">
                     Dismissed: {REASON_LABELS[dismissedRecord.reason]}
                     {dismissedRecord.reasonNote ? ` — ${dismissedRecord.reasonNote}` : ""}
                   </Badge>
                 </div>
-              )}
+              ) : row.autoHidden ? (
+                <div className="mt-1 text-xs">
+                  <Badge tone="neutral">auto-hidden: B2C paid upfront</Badge>
+                </div>
+              ) : null}
             </div>
           </div>
           {row.qbInvoice ? (
@@ -1495,6 +1501,13 @@ function ShipmentCard({
               {restoreMutation.isPending ? "Restoring…" : "Restore"}
             </Button>
           </div>
+        ) : row.autoHidden ? (
+          // Nothing to restore — the row was never dismissed, the server
+          // just never had anything for the operator to do with it.
+          <div className="text-xs text-secondary">
+            Hidden automatically: the customer paid upfront on Shopify, so
+            there is no invoice to reconcile or send.
+          </div>
         ) : showDismissForm ? (
           <DismissForm
             reason={dismissReason}
@@ -1540,7 +1553,7 @@ function ShipmentCard({
           </div>
         )}
 
-        {!dismissedRecord && (
+        {!dismissedRecord && !row.autoHidden && (
           <>
         {row.shopifyOrder?.note && (
           <div className="flex items-start gap-2 rounded-md border border-accent-info/30 bg-accent-info/5 px-3 py-2 text-sm text-secondary">

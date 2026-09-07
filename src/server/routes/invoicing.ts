@@ -133,6 +133,13 @@ export type InvoicingTodayRow = {
     }>;
   } | null;
   qbInvoiceError: string | null;
+  // Non-null when the server filed this row away without operator input.
+  // Currently only "b2c_paid_upfront": the order matched a QBO SalesReceipt
+  // whose customer isn't B2B, so it was paid on the consumer storefront and
+  // there is nothing to reconcile or send. The operator used to clear these
+  // by hand ~390 times a month. `qbInvoiceError` still carries the legacy
+  // human-readable phrase for back-compat; this field is the typed signal.
+  autoHidden: "b2c_paid_upfront" | null;
   shopifyOrder: {
     id: number;
     name: string;
@@ -568,6 +575,18 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       ),
     );
 
+    // Rows the SalesReceipt gate filed away on the operator's behalf. Logged
+    // and reported so the volume stays visible — this is ~390 clicks a month
+    // that used to be manual.
+    const autoHiddenCount = rows.filter((r) => r.autoHidden !== null).length;
+    log.info(
+      {
+        enriched: rows.length,
+        autoHidden: autoHiddenCount,
+      },
+      "invoicing today auto-hidden rows",
+    );
+
     // Phase 4: shape the dismissed-shipments map so the UI can split rows
     // into Active vs Dismissed tabs. We always send all rows; the tab
     // toggle is purely client-side filtering. Rows were loaded in Phase 0.
@@ -731,6 +750,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
         emailLog: dbEmails.length,
         merged: emails.length,
         enriched: parsed.length,
+        autoHidden: autoHiddenCount,
       },
     });
   });
@@ -1447,15 +1467,20 @@ async function buildRow(
   // paid orders are intentionally hidden — operator doesn't need to
   // reconcile + send those). The resolved record is a discriminated
   // union so downstream code can branch by docType.
-  const [resolved, qbInvoiceError, shopifyOrder, shopifyOrderError] =
-    await resolveLookups(
-      docNumber,
-      qbInvoiceMap,
-      qbSalesReceiptMap,
-      customerByQbId,
-      qbBatchError,
-      shopify,
-    );
+  const {
+    resolved,
+    qbErr: qbInvoiceError,
+    autoHidden,
+    shopifyOrder,
+    shopErr: shopifyOrderError,
+  } = await resolveLookups(
+    docNumber,
+    qbInvoiceMap,
+    qbSalesReceiptMap,
+    customerByQbId,
+    qbBatchError,
+    shopify,
+  );
   const qbInvoice = resolved?.doc ?? null;
   const docType = resolved?.docType ?? null;
 
@@ -1565,6 +1590,7 @@ async function buildRow(
         }
       : null,
     qbInvoiceError,
+    autoHidden,
     shopifyOrder: shopifyOrder
       ? {
           id: shopifyOrder.id,
@@ -1664,6 +1690,16 @@ type ResolvedQbDoc =
   | { docType: "invoice"; doc: QboInvoice }
   | { docType: "salesreceipt"; doc: QboSalesReceipt };
 
+type ResolvedLookups = {
+  resolved: ResolvedQbDoc | null;
+  qbErr: string | null;
+  // Typed counterpart to the B2C-paid-upfront branch of qbErr. Set only
+  // when the SalesReceipt gate below fires; null otherwise.
+  autoHidden: InvoicingTodayRow["autoHidden"];
+  shopifyOrder: Awaited<ReturnType<typeof getOrderByName>>;
+  shopErr: string | null;
+};
+
 async function resolveLookups(
   docNumber: string | null,
   qbInvoiceMap: Map<string, QboInvoice>,
@@ -1671,22 +1707,22 @@ async function resolveLookups(
   customerByQbId: Map<string, Customer>,
   qbBatchError: string | null,
   shopify: ShopifyClient,
-): Promise<
-  [
-    ResolvedQbDoc | null,
-    string | null,
-    Awaited<ReturnType<typeof getOrderByName>>,
-    string | null,
-  ]
-> {
+): Promise<ResolvedLookups> {
   if (!docNumber) {
-    return [null, "no shopify order number parsed", null, "no shopify order number parsed"];
+    return {
+      resolved: null,
+      qbErr: "no shopify order number parsed",
+      autoHidden: null,
+      shopifyOrder: null,
+      shopErr: "no shopify order number parsed",
+    };
   }
   const qbInvoice = qbInvoiceMap.get(docNumber) ?? null;
   const qbSalesReceipt = qbSalesReceiptMap.get(docNumber) ?? null;
 
   let resolved: ResolvedQbDoc | null = null;
   let qbErr: string | null = null;
+  let autoHidden: InvoicingTodayRow["autoHidden"] = null;
 
   if (qbInvoice) {
     resolved = { docType: "invoice", doc: qbInvoice };
@@ -1702,7 +1738,10 @@ async function resolveLookups(
     if (cust?.customerType === "b2b") {
       resolved = { docType: "salesreceipt", doc: qbSalesReceipt };
     } else {
+      // Keep the legacy phrase verbatim — the page's isHiddenSalesReceipt
+      // still matches on it, and older clients depend on it.
       qbErr = `paid upfront sales receipt — customer is ${cust?.customerType ?? "unknown"}, hidden by default`;
+      autoHidden = "b2c_paid_upfront";
     }
   } else {
     qbErr =
@@ -1721,7 +1760,7 @@ async function resolveLookups(
     shopErr = (err as Error).message;
   }
 
-  return [resolved, qbErr, shopifyOrder, shopErr];
+  return { resolved, qbErr, autoHidden, shopifyOrder, shopErr };
 }
 
 // Map a QboInvoice or QboSalesReceipt's SalesItemLineDetail rows into the
