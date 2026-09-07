@@ -47,6 +47,32 @@ export type TodaySelection = {
   truncated: { unparseable: number; dismissed: number };
 };
 
+// Whether a row still needs its Shopify order fetched.
+//
+// The Shopify lookup is the single most expensive thing /today does: one
+// network call per row, against a 40-request bucket that leaks 2/s. Once
+// commit 1 lifted the 50-email cap the row count went to ~150 and the page
+// blew through nginx's 60 s upstream timeout. Shopify data is only ever
+// USED to reconcile an invoice the operator is about to send, so any row
+// that can't be sent doesn't need the call.
+export type ShopifyLookupInput = {
+  // False for dismissed rows — they're history, never reconciled.
+  wantShopify: boolean;
+  // Null when no QB doc resolved: either nothing matched the DocNumber, or
+  // the B2C paid-upfront gate fired. Neither can be actioned.
+  resolvedDocType: "invoice" | "salesreceipt" | null;
+  // QBO's EmailStatus on the resolved doc. "EmailSent" means the row lives
+  // in the Sent tab, which is display-only.
+  emailStatus: string | null;
+};
+
+export function shouldLookupShopify(input: ShopifyLookupInput): boolean {
+  if (!input.wantShopify) return false;
+  if (input.resolvedDocType === null) return false;
+  if (input.emailStatus === "EmailSent") return false;
+  return true;
+}
+
 export function selectTodayCandidates(
   candidates: TodayCandidate[],
   caps: TodayCandidateCaps = TODAY_CANDIDATE_CAPS,

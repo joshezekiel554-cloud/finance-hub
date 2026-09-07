@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   selectTodayCandidates,
+  shouldLookupShopify,
   TODAY_CANDIDATE_CAPS,
   type TodayCandidate,
 } from "./today-candidates.js";
@@ -122,6 +123,7 @@ describe("selectTodayCandidates", () => {
   });
 
   it("defaults to the exported caps", () => {
+
     expect(TODAY_CANDIDATE_CAPS).toEqual({ unparseable: 100, dismissed: 50 });
 
     const noise = Array.from({ length: 120 }, (_, i) => cand(`n-${i}`, i));
@@ -129,5 +131,55 @@ describe("selectTodayCandidates", () => {
 
     expect(result.keep.size).toBe(100);
     expect(result.truncated).toEqual({ unparseable: 20, dismissed: 0 });
+  });
+});
+
+describe("shouldLookupShopify", () => {
+  it("fetches for an open invoice that has not been emailed", () => {
+    expect(
+      shouldLookupShopify({
+        wantShopify: true,
+        resolvedDocType: "invoice",
+        emailStatus: "NotSet",
+      }),
+    ).toBe(true);
+    // A B2B sales receipt not yet emailed is equally actionable.
+    expect(
+      shouldLookupShopify({
+        wantShopify: true,
+        resolvedDocType: "salesreceipt",
+        emailStatus: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips dismissed rows", () => {
+    expect(
+      shouldLookupShopify({
+        wantShopify: false,
+        resolvedDocType: "invoice",
+        emailStatus: "NotSet",
+      }),
+    ).toBe(false);
+  });
+
+  it("skips rows with no resolved QB doc", () => {
+    expect(
+      shouldLookupShopify({
+        wantShopify: true,
+        resolvedDocType: null,
+        emailStatus: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("skips rows QBO has already emailed", () => {
+    expect(
+      shouldLookupShopify({
+        wantShopify: true,
+        resolvedDocType: "invoice",
+        emailStatus: "EmailSent",
+      }),
+    ).toBe(false);
   });
 });

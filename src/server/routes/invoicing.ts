@@ -33,6 +33,7 @@ import {
 } from "../../modules/b2b-invoicing/index.js";
 import {
   selectTodayCandidates,
+  shouldLookupShopify,
   type TodayCandidate,
 } from "../../modules/b2b-invoicing/today-candidates.js";
 import type { ParsedEmail } from "../../integrations/gmail/types.js";
@@ -561,28 +562,30 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     // Shopify's 40-request bucket (2/s leak) instantly and burn all three
     // retries. Six at a time keeps us under the leak rate.
     const SHOPIFY_CONCURRENCY = 6;
-    const rows: InvoicingTodayRow[] = await mapWithLimit(
-      parsed,
-      SHOPIFY_CONCURRENCY,
-      (p) =>
-        buildRow(
-          p.gmailId,
-          p.receivedAt,
-          p.parseResult,
-          {
-            subject: p.emailSubject,
-            from: p.emailFrom,
-            snippet: p.emailSnippet,
-            body: p.emailBody,
-          },
-          qbInvoiceMap,
-          qbSalesReceiptMap,
-          qbBatchError,
-          shopifyClient,
-          customerByQbId,
-          allRoutingRules,
-        ),
+    const built = await mapWithLimit(parsed, SHOPIFY_CONCURRENCY, (p) =>
+      buildRow(
+        p.gmailId,
+        p.receivedAt,
+        p.parseResult,
+        {
+          subject: p.emailSubject,
+          from: p.emailFrom,
+          snippet: p.emailSnippet,
+          body: p.emailBody,
+        },
+        qbInvoiceMap,
+        qbSalesReceiptMap,
+        qbBatchError,
+        shopifyClient,
+        customerByQbId,
+        allRoutingRules,
+        // Dismissed rows are history — never reconciled, so never worth a
+        // Shopify call.
+        !dismissedIds.has(p.gmailId),
+      ),
     );
+    const rows: InvoicingTodayRow[] = built.map((b) => b.row);
+    const shopifyLookups = built.filter((b) => b.shopifyLookedUp).length;
 
     // Rows the SalesReceipt gate filed away on the operator's behalf. Logged
     // and reported so the volume stays visible — this is ~390 clicks a month
@@ -592,6 +595,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       {
         enriched: rows.length,
         autoHidden: autoHiddenCount,
+        shopifyLookups,
       },
       "invoicing today auto-hidden rows",
     );
@@ -760,6 +764,7 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
         merged: emails.length,
         enriched: parsed.length,
         autoHidden: autoHiddenCount,
+        shopifyLookups,
       },
     });
   });
@@ -1468,7 +1473,10 @@ async function buildRow(
     action: RoutingRuleAction;
     value: string;
   }>,
-): Promise<InvoicingTodayRow> {
+  // False for dismissed rows: they're never reconciled, so they don't need
+  // the Shopify round-trip that dominates this handler's latency.
+  wantShopify: boolean,
+): Promise<{ row: InvoicingTodayRow; shopifyLookedUp: boolean }> {
   const docNumber = parseResult.shipment.shopifyOrderNumber;
 
   // Resolve the matched QBO doc — Invoice first (the common case),
@@ -1482,6 +1490,7 @@ async function buildRow(
     autoHidden,
     shopifyOrder,
     shopErr: shopifyOrderError,
+    shopifyLookedUp,
   } = await resolveLookups(
     docNumber,
     qbInvoiceMap,
@@ -1489,6 +1498,7 @@ async function buildRow(
     customerByQbId,
     qbBatchError,
     shopify,
+    wantShopify,
   );
   const qbInvoice = resolved?.doc ?? null;
   const docType = resolved?.docType ?? null;
@@ -1523,7 +1533,7 @@ async function buildRow(
     reconcileResult = result;
   }
 
-  return {
+  const row: InvoicingTodayRow = {
     gmailId,
     receivedAt: receivedAt?.toISOString() ?? null,
     parseConfidence: parseResult.confidence,
@@ -1630,6 +1640,7 @@ async function buildRow(
     shopifyOrderError,
     reconcileResult,
   };
+  return { row, shopifyLookedUp };
 }
 
 // Pre-fill the form's BillEmail/Cc/Bcc fields from finance-hub's
@@ -1707,6 +1718,9 @@ type ResolvedLookups = {
   autoHidden: InvoicingTodayRow["autoHidden"];
   shopifyOrder: Awaited<ReturnType<typeof getOrderByName>>;
   shopErr: string | null;
+  // Whether we actually spent a Shopify call on this row. Reported in the
+  // /today log line so the skip rate is visible in prod.
+  shopifyLookedUp: boolean;
 };
 
 async function resolveLookups(
@@ -1716,6 +1730,7 @@ async function resolveLookups(
   customerByQbId: Map<string, Customer>,
   qbBatchError: string | null,
   shopify: ShopifyClient,
+  wantShopify: boolean,
 ): Promise<ResolvedLookups> {
   if (!docNumber) {
     return {
@@ -1724,6 +1739,7 @@ async function resolveLookups(
       autoHidden: null,
       shopifyOrder: null,
       shopErr: "no shopify order number parsed",
+      shopifyLookedUp: false,
     };
   }
   const qbInvoice = qbInvoiceMap.get(docNumber) ?? null;
@@ -1762,19 +1778,39 @@ async function resolveLookups(
       qbBatchError ?? `no QB invoice/receipt with DocNumber=${docNumber}`;
   }
 
-  // Shopify per-row — fast and rarely the bottleneck.
+  // Shopify per-row. This IS the bottleneck: one network call per row
+  // against a 40-request bucket that leaks 2/s. Skip it for any row the
+  // operator can't act on — the reconciler treats a missing Shopify order
+  // exactly as it treats a failed lookup, so those rows still render.
+  const wantLookup = shouldLookupShopify({
+    wantShopify,
+    resolvedDocType: resolved?.docType ?? null,
+    emailStatus: resolved?.doc.EmailStatus ?? null,
+  });
+
   let shopifyOrder: Awaited<ReturnType<typeof getOrderByName>> = null;
   let shopErr: string | null = null;
-  try {
-    shopifyOrder = await getOrderByName(shopify, docNumber);
-    if (shopifyOrder === null) {
-      shopErr = `no Shopify order matching ${docNumber}`;
+  if (wantLookup) {
+    try {
+      shopifyOrder = await getOrderByName(shopify, docNumber);
+      if (shopifyOrder === null) {
+        shopErr = `no Shopify order matching ${docNumber}`;
+      }
+    } catch (err) {
+      shopErr = (err as Error).message;
     }
-  } catch (err) {
-    shopErr = (err as Error).message;
+  } else {
+    shopErr = "skipped: not actionable";
   }
 
-  return { resolved, qbErr, autoHidden, shopifyOrder, shopErr };
+  return {
+    resolved,
+    qbErr,
+    autoHidden,
+    shopifyOrder,
+    shopErr,
+    shopifyLookedUp: wantLookup,
+  };
 }
 
 // Map a QboInvoice or QboSalesReceipt's SalesItemLineDetail rows into the
