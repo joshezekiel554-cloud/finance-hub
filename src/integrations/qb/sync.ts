@@ -603,14 +603,15 @@ async function upsertInvoice(
   return "updated";
 }
 
-// Replace strategy: delete + reinsert lines on each update. Cheaper than
-// diffing and the row count per invoice is small. FK is ON DELETE CASCADE.
-async function syncInvoiceLines(
+// Pure row-mapping, split out for testability. sku is clamped to the
+// invoice_lines.sku varchar(64) width — a truncated SKU is strictly better
+// than losing the whole insert to ER_DATA_TOO_LONG (see syncInvoiceLines).
+// description is a text column so it needs no clamp. The sku/name swap some
+// rows carry from upstream is a known separate bug — not touched here.
+export function buildInvoiceLineRows(
   invoiceId: string,
   qboLines: QboInvoiceLine[],
-): Promise<void> {
-  await db.delete(invoiceLines).where(eq(invoiceLines.invoiceId, invoiceId));
-
+): NewInvoiceLine[] {
   const rows: NewInvoiceLine[] = [];
   for (const line of qboLines) {
     if (line.DetailType !== "SalesItemLineDetail") continue; // skip subtotals/discounts
@@ -620,7 +621,7 @@ async function syncInvoiceLines(
     rows.push({
       id: nanoid(24),
       invoiceId,
-      sku: detail?.ItemRef?.name ?? null,
+      sku: clampQboString(detail?.ItemRef?.name, 64),
       description: line.Description ?? null,
       qty: qty !== null ? qty.toString() : null,
       unitPrice: unitPrice !== null ? unitPrice.toString() : null,
@@ -628,9 +629,26 @@ async function syncInvoiceLines(
       position: line.LineNum ?? null,
     });
   }
-  if (rows.length > 0) {
-    await db.insert(invoiceLines).values(rows);
-  }
+  return rows;
+}
+
+// Replace strategy: delete + reinsert lines on each update. Cheaper than
+// diffing and the row count per invoice is small. FK is ON DELETE CASCADE.
+// Wrapped in a transaction: without it, an insert failure (e.g.
+// ER_DATA_TOO_LONG on an over-long field) leaves the delete committed and
+// the invoice with zero lines — a real risk the first time this runs
+// post-deploy, when every invoice drifts at once on the new email columns.
+async function syncInvoiceLines(
+  invoiceId: string,
+  qboLines: QboInvoiceLine[],
+): Promise<void> {
+  const rows = buildInvoiceLineRows(invoiceId, qboLines);
+  await db.transaction(async (tx) => {
+    await tx.delete(invoiceLines).where(eq(invoiceLines.invoiceId, invoiceId));
+    if (rows.length > 0) {
+      await tx.insert(invoiceLines).values(rows);
+    }
+  });
 }
 
 // -------- deletion reconciliation --------
