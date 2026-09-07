@@ -100,7 +100,7 @@ function timeOfDay(iso: string | null): string {
   });
 }
 
-async function postJson(url: string, body: unknown): Promise<void> {
+async function postJson<T = unknown>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -116,6 +116,7 @@ async function postJson(url: string, body: unknown): Promise<void> {
     }
     throw new Error(message);
   }
+  return (await res.json()) as T;
 }
 
 export function EmailReviewSection({
@@ -235,20 +236,31 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
   const [reason, setReason] = useState<DismissReason>("sent_elsewhere");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: EMAIL_REVIEW_QUERY_KEY });
 
   const dismiss = useMutation({
     mutationFn: () =>
-      postJson("/api/invoicing/email-review/dismiss", {
-        invoiceId: row.invoiceId,
-        reason,
-        reasonNote: note.trim() || undefined,
-      }),
-    onSuccess: () => {
+      postJson<{ ok: boolean; hidden?: boolean }>(
+        "/api/invoicing/email-review/dismiss",
+        {
+          invoiceId: row.invoiceId,
+          reason,
+          reasonNote: note.trim() || undefined,
+        },
+      ),
+    onSuccess: (result) => {
       setDismissOpen(false);
       setError(null);
+      // The dismissal is saved either way; hidden:false means it cannot take
+      // effect yet, so say so rather than letting the row look stuck.
+      setNotice(
+        result.hidden === false
+          ? "Dismissal saved, but this bounce has no delivery timestamp so it stays visible until QuickBooks records a newer send."
+          : null,
+      );
       void invalidate();
     },
     onError: (e: Error) => setError(e.message),
@@ -256,11 +268,13 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
 
   const restore = useMutation({
     mutationFn: () =>
-      postJson("/api/invoicing/email-review/restore", {
-        invoiceId: row.invoiceId,
-      }),
+      postJson<{ ok: boolean; restored?: boolean }>(
+        "/api/invoicing/email-review/restore",
+        { invoiceId: row.invoiceId },
+      ),
     onSuccess: () => {
       setError(null);
+      setNotice(null);
       void invalidate();
     },
     onError: (e: Error) => setError(e.message),
@@ -328,6 +342,7 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
             </div>
           )}
           {error && <div className="text-xs text-accent-danger">{error}</div>}
+          {notice && <div className="text-xs text-secondary">{notice}</div>}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">

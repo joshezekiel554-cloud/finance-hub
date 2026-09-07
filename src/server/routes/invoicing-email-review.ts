@@ -2,13 +2,19 @@
 // the invoice" (see docs/superpowers/invoice-delivery-audit-2026-09-07.md):
 //
 //   GET  /            → { neverEmailed, deliveryFailed, dismissed, syncedAt }
-//   POST /dismiss     → hide an invoice from the lists (reason required)
-//   POST /restore     → un-hide
+//   POST /dismiss     → hide an invoice from the lists (reason required).
+//                       Returns { ok, hidden } — `hidden` is false when the
+//                       dismissal cannot take effect yet (an undated bounce
+//                       can never be hidden, see isDismissalActive).
+//   POST /restore     → un-hide. Idempotent: { ok, restored } is
+//                       { ok: true, restored: false } when there was nothing
+//                       to restore, and no audit row is written.
 //
 // Data comes from invoices.email_status / delivery_* which the QB sync
 // mirrors every 30 min; no live QBO call here. Rules live in
-// modules/invoice-email-review/select.ts; the SQL below is only a cheap
-// superset pre-filter and MUST use the same window floor.
+// modules/invoice-email-review/ — classification in select.ts, bucketing in
+// bucket.ts — so this file is a query plus a call. The SQL below is only a
+// cheap superset pre-filter and MUST use the same window floor.
 
 import type { FastifyPluginAsync } from "fastify";
 import { and, asc, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
@@ -25,13 +31,18 @@ import {
 import { invoices } from "../../db/schema/invoices.js";
 import { createLogger } from "../../lib/logger.js";
 import {
-  classifyForEmailReview,
+  bucketEmailReviewRows,
   emailReviewWindowStart,
   isDismissalActive,
+  iso,
   NOT_EMAILED_STATUSES,
-  type EmailReviewBucket,
 } from "../../modules/invoice-email-review/index.js";
 import { requireAuth } from "../lib/auth.js";
+
+export type {
+  EmailReviewResponse,
+  EmailReviewRow,
+} from "../../modules/invoice-email-review/index.js";
 
 const log = createLogger({ component: "invoicing-email-review-route" });
 
@@ -49,46 +60,6 @@ export const dismissBodySchema = z
 export const restoreBodySchema = z.object({
   invoiceId: z.string().min(1).max(24),
 });
-
-export type EmailReviewRow = {
-  invoiceId: string;
-  qbInvoiceId: string;
-  docNumber: string | null;
-  customerId: string;
-  customerName: string;
-  origin: "feldart" | "tj";
-  issueDate: string | null;
-  createdAt: string;
-  total: string;
-  balance: string;
-  status: string | null;
-  emailStatus: string | null;
-  deliveryTime: string | null;
-  deliveryError: string | null;
-  recipients: { to: string[]; cc: string[] };
-  dismissal: {
-    reason: (typeof EMAIL_REVIEW_DISMISS_REASONS)[number];
-    reasonNote: string | null;
-    dismissedAt: string;
-    dismissedBy: string | null;
-  } | null;
-};
-
-export type EmailReviewResponse = {
-  neverEmailed: EmailReviewRow[];
-  deliveryFailed: EmailReviewRow[];
-  dismissed: EmailReviewRow[];
-  syncedAt: string | null;
-};
-
-function iso(v: Date | string | null): string | null {
-  if (!v) return null;
-  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
-}
-
-function strings(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-}
 
 const emailReviewRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req, reply) => {
@@ -143,75 +114,11 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
       .select({ syncedAt: sql<string | Date | null>`MAX(${invoices.lastSyncedAt})` })
       .from(invoices);
 
-    const out: EmailReviewResponse = {
-      neverEmailed: [],
-      deliveryFailed: [],
-      dismissed: [],
+    const buckets = bucketEmailReviewRows(rows, now);
+    return reply.send({
+      ...buckets,
       syncedAt: iso(syncedRows[0]?.syncedAt ?? null),
-    };
-
-    for (const r of rows) {
-      // A dismissal only hides the row while it is newer than QBO's last
-      // delivery attempt (isDismissalActive). Stale dismissals fall through
-      // to the live buckets but keep their `dismissal` info for display.
-      const dismissed =
-        r.dismissReason !== null &&
-        isDismissalActive(r.dismissedAt, r.deliveryTime, r.deliveryError);
-      // Classify as if not dismissed so actively-dismissed rows that would
-      // otherwise qualify land in the Dismissed tab (restore path); rows
-      // that no longer qualify at all are dropped regardless of dismissal.
-      const bucket: EmailReviewBucket | null = classifyForEmailReview(
-        {
-          emailStatus: r.emailStatus,
-          deliveryError: r.deliveryError,
-          status: r.status,
-          total: r.total,
-          balance: r.balance,
-          issueDate: r.issueDate,
-          createdAt: r.createdAt,
-          dismissedAt: null,
-          deliveryTime: r.deliveryTime,
-        },
-        now,
-      );
-      if (!bucket) continue;
-
-      const row: EmailReviewRow = {
-        invoiceId: r.invoiceId,
-        qbInvoiceId: r.qbInvoiceId,
-        docNumber: r.docNumber,
-        customerId: r.customerId,
-        customerName: r.customerName,
-        origin: r.origin,
-        issueDate: r.issueDate,
-        createdAt: iso(r.createdAt) ?? now.toISOString(),
-        total: r.total,
-        balance: r.balance,
-        status: r.status,
-        emailStatus: r.emailStatus,
-        deliveryTime: iso(r.deliveryTime),
-        deliveryError: r.deliveryError,
-        recipients: {
-          to: strings(r.invoiceToEmails),
-          cc: strings(r.invoiceCcEmails),
-        },
-        dismissal:
-          r.dismissReason && r.dismissedAt
-            ? {
-                reason: r.dismissReason,
-                reasonNote: r.dismissNote,
-                dismissedAt: iso(r.dismissedAt) ?? now.toISOString(),
-                dismissedBy: r.dismissedBy,
-              }
-            : null,
-      };
-
-      if (dismissed) out.dismissed.push(row);
-      else if (bucket === "never_emailed") out.neverEmailed.push(row);
-      else out.deliveryFailed.push(row);
-    }
-
-    return reply.send(out);
+    });
   });
 
   app.post("/dismiss", async (req, reply) => {
@@ -223,46 +130,61 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
     const { invoiceId, reason } = parse.data;
     const reasonNote = parse.data.reasonNote?.trim() || null;
 
+    // deliveryTime/deliveryError come back with the existence check so the
+    // response can tell the operator whether the dismissal actually hides
+    // the row (an undated bounce never can).
     const invoiceRows = await db
-      .select({ id: invoices.id })
+      .select({
+        id: invoices.id,
+        deliveryTime: invoices.deliveryTime,
+        deliveryError: invoices.deliveryError,
+      })
       .from(invoices)
       .where(eq(invoices.id, invoiceId))
       .limit(1);
-    if (!invoiceRows[0]) return reply.code(404).send({ error: "invoice not found" });
-
-    const beforeRows = await db
-      .select()
-      .from(invoiceEmailDismissals)
-      .where(eq(invoiceEmailDismissals.invoiceId, invoiceId))
-      .limit(1);
-    const before = beforeRows[0] ?? null;
+    const invoice = invoiceRows[0];
+    if (!invoice) return reply.code(404).send({ error: "invoice not found" });
 
     const dismissedAt = new Date();
-    await db
-      .insert(invoiceEmailDismissals)
-      .values({ invoiceId, reason, reasonNote, dismissedAt, dismissedByUserId: user.id })
-      .onDuplicateKeyUpdate({
-        set: { reason, reasonNote, dismissedAt, dismissedByUserId: user.id },
-      });
+    await db.transaction(async (tx) => {
+      const beforeRows = await tx
+        .select()
+        .from(invoiceEmailDismissals)
+        .where(eq(invoiceEmailDismissals.invoiceId, invoiceId))
+        .limit(1);
+      const before = beforeRows[0] ?? null;
 
-    await db.insert(auditLog).values({
-      id: nanoid(24),
-      userId: user.id,
-      action: "invoice_email_review.dismiss",
-      entityType: "invoice",
-      entityId: invoiceId,
-      before: before ? ({ ...before } as Record<string, unknown>) : null,
-      after: {
-        invoiceId,
-        reason,
-        reasonNote,
-        dismissedAt: dismissedAt.toISOString(),
-        dismissedByUserId: user.id,
-      },
+      await tx
+        .insert(invoiceEmailDismissals)
+        .values({ invoiceId, reason, reasonNote, dismissedAt, dismissedByUserId: user.id })
+        .onDuplicateKeyUpdate({
+          set: { reason, reasonNote, dismissedAt, dismissedByUserId: user.id },
+        });
+
+      await tx.insert(auditLog).values({
+        id: nanoid(24),
+        userId: user.id,
+        action: "invoice_email_review.dismiss",
+        entityType: "invoice",
+        entityId: invoiceId,
+        before: before ? ({ ...before } as Record<string, unknown>) : null,
+        after: {
+          invoiceId,
+          reason,
+          reasonNote,
+          dismissedAt: dismissedAt.toISOString(),
+          dismissedByUserId: user.id,
+        },
+      });
     });
 
-    log.info({ invoiceId, reason, userId: user.id }, "email-review dismissed");
-    return reply.send({ ok: true });
+    const hidden = isDismissalActive(
+      dismissedAt,
+      invoice.deliveryTime,
+      invoice.deliveryError,
+    );
+    log.info({ invoiceId, reason, hidden, userId: user.id }, "email-review dismissed");
+    return reply.send({ ok: true, hidden });
   });
 
   app.post("/restore", async (req, reply) => {
@@ -273,30 +195,35 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
     }
     const { invoiceId } = parse.data;
 
-    const beforeRows = await db
-      .select()
-      .from(invoiceEmailDismissals)
-      .where(eq(invoiceEmailDismissals.invoiceId, invoiceId))
-      .limit(1);
-    const before = beforeRows[0] ?? null;
-    if (!before) return reply.code(404).send({ error: "no dismissal to restore" });
+    // Idempotent: a second Restore (or one racing another operator's) is a
+    // no-op, not a 404 — and writes no audit row, since nothing changed.
+    const restored = await db.transaction(async (tx) => {
+      const beforeRows = await tx
+        .select()
+        .from(invoiceEmailDismissals)
+        .where(eq(invoiceEmailDismissals.invoiceId, invoiceId))
+        .limit(1);
+      const before = beforeRows[0] ?? null;
+      if (!before) return false;
 
-    await db
-      .delete(invoiceEmailDismissals)
-      .where(eq(invoiceEmailDismissals.invoiceId, invoiceId));
+      await tx
+        .delete(invoiceEmailDismissals)
+        .where(eq(invoiceEmailDismissals.invoiceId, invoiceId));
 
-    await db.insert(auditLog).values({
-      id: nanoid(24),
-      userId: user.id,
-      action: "invoice_email_review.restore",
-      entityType: "invoice",
-      entityId: invoiceId,
-      before: { ...before } as Record<string, unknown>,
-      after: null,
+      await tx.insert(auditLog).values({
+        id: nanoid(24),
+        userId: user.id,
+        action: "invoice_email_review.restore",
+        entityType: "invoice",
+        entityId: invoiceId,
+        before: { ...before } as Record<string, unknown>,
+        after: null,
+      });
+      return true;
     });
 
-    log.info({ invoiceId, userId: user.id }, "email-review dismissal restored");
-    return reply.send({ ok: true });
+    log.info({ invoiceId, restored, userId: user.id }, "email-review dismissal restored");
+    return reply.send({ ok: true, restored });
   });
 };
 
