@@ -166,6 +166,20 @@ Deployed 2026-09-07 18:00 UK (`3782aa3`), mobile detail polish 18:03 UK
 (`ebffc21`). Poller freshness at deploy: latest warehouse email 14 min old,
 579/579 rows in the window with HTML bodies.
 
+**Incident 18:28–18:32 UK:** first operator loads 504'd — nginx's live
+`proxy_read_timeout` for finance.feldart.com is 60 s (the repo's
+`deployment/nginx-finance.feldart.com.conf` says 300 s; config drift on the
+box) and the route was doing a Shopify `getOrderByName` for every enriched
+row (~150) → 702 Shopify 429 retries, four stacked requests, none finished.
+Hotfix `0c1e8d2` (18:38 UK): `shouldLookupShopify` — Shopify is consulted
+only for rows that are not dismissed, resolved to a QBO doc (so not the
+B2C auto-hidden gate) and not already `EmailSent`. Result on the next loads:
+200 in 7–9 s; `gmail 50 / emailLog 581 / merged 582 / shipments 567 /
+enriched 217 / autoHidden 60 / shopifyLookups 8 / truncated 121 unparseable
++ 229 dismissed`. Durable follow-up if the actionable backlog ever grows
+past ~100: cache the Shopify order on the row instead of live fetches.
+Also worth aligning the live nginx timeout with the repo (needs sudo).
+
 ## Why the hub can't see any of this today
 
 - `sendInvoiceUpdate` treats a 200 from `/invoice/{id}/send` as delivered.
