@@ -12,7 +12,11 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { searchEmails, getMessage } from "../../integrations/gmail/client.js";
+import {
+  searchEmails,
+  getMessage,
+  mapWithLimit,
+} from "../../integrations/gmail/client.js";
 import { classifyExtensivEmail } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
@@ -551,10 +555,16 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       })
       .from(emailRoutingRules);
 
-    // Phase 3: Shopify lookups in parallel (their rate limits are looser),
-    // then assemble. Keep parallelism since we no longer compete with QBO.
-    const rows: InvoicingTodayRow[] = await Promise.all(
-      parsed.map((p) =>
+    // Phase 3: Shopify lookups, then assemble. Each row with a doc number
+    // costs one Shopify REST call, and since commit 1 removed the 50-email
+    // cap this list can be ~150 long — an unbounded Promise.all would empty
+    // Shopify's 40-request bucket (2/s leak) instantly and burn all three
+    // retries. Six at a time keeps us under the leak rate.
+    const SHOPIFY_CONCURRENCY = 6;
+    const rows: InvoicingTodayRow[] = await mapWithLimit(
+      parsed,
+      SHOPIFY_CONCURRENCY,
+      (p) =>
         buildRow(
           p.gmailId,
           p.receivedAt,
@@ -572,7 +582,6 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
           customerByQbId,
           allRoutingRules,
         ),
-      ),
     );
 
     // Rows the SalesReceipt gate filed away on the operator's behalf. Logged

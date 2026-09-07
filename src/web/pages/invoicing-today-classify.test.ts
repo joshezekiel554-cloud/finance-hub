@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildTruncationNotice,
   classifyTodayRow,
   type ClassifiableTodayRow,
 } from "./invoicing-today-classify.js";
@@ -67,5 +68,28 @@ describe("classifyTodayRow", () => {
 
   it("ignores dismissal records belonging to other rows", () => {
     expect(classifyTodayRow(row({ gmailId: "gm-a" }), { "gm-b": {} })).toBe("open");
+  });
+});
+
+describe("buildTruncationNotice", () => {
+  it("says nothing when nothing was trimmed", () => {
+    expect(buildTruncationNotice({ unparseable: 0, dismissed: 0 })).toBeNull();
+    // An older server that doesn't send the field at all is also silent.
+    expect(buildTruncationNotice(undefined)).toBeNull();
+  });
+
+  it("names only the non-zero count when just one kind was trimmed", () => {
+    expect(buildTruncationNotice({ unparseable: 229, dismissed: 0 })).toBe(
+      "Older noise trimmed: 229 unparseable — every shipment with an order number is shown.",
+    );
+    expect(buildTruncationNotice({ unparseable: 0, dismissed: 101 })).toBe(
+      "Older noise trimmed: 101 dismissed — every shipment with an order number is shown.",
+    );
+  });
+
+  it("names both counts when both kinds were trimmed", () => {
+    expect(buildTruncationNotice({ unparseable: 229, dismissed: 101 })).toBe(
+      "Older noise trimmed: 229 unparseable, 101 dismissed — every shipment with an order number is shown.",
+    );
   });
 });

@@ -420,8 +420,12 @@ export class QboClient {
       const inClause = chunk
         .map((d) => `'${escapeQboLiteral(d)}'`)
         .join(",");
+      // MAXRESULTS is REQUIRED, not decorative: QBO caps a query at 100
+      // rows when it is omitted, so a full 200-entry chunk would silently
+      // return only its first half and the rest would render as "No QB
+      // invoice". Chunk is 200, so 1000 is a safe ceiling.
       const data = await this.query<QboInvoice>(
-        `SELECT * FROM Invoice WHERE DocNumber IN (${inClause})`,
+        `SELECT * FROM Invoice WHERE DocNumber IN (${inClause}) MAXRESULTS 1000`,
       );
       for (const inv of data.QueryResponse.Invoice ?? []) {
         if (inv.DocNumber) result.set(inv.DocNumber, inv);
@@ -606,8 +610,10 @@ export class QboClient {
       const inClause = chunk
         .map((d) => `'${escapeQboLiteral(d)}'`)
         .join(",");
+      // See getInvoicesByDocNumbers: without MAXRESULTS, QBO returns at
+      // most 100 rows. Chunk is 200, so 1000 is a safe ceiling.
       const data = await this.query<QboSalesReceipt>(
-        `SELECT * FROM SalesReceipt WHERE DocNumber IN (${inClause})`,
+        `SELECT * FROM SalesReceipt WHERE DocNumber IN (${inClause}) MAXRESULTS 1000`,
       );
       for (const sr of data.QueryResponse.SalesReceipt ?? []) {
         if (sr.DocNumber) result.set(sr.DocNumber, sr);

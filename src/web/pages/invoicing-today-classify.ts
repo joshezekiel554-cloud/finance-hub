@@ -24,6 +24,27 @@ export type ClassifiableTodayRow = {
   qbInvoice: { emailStatus: string | null } | null;
 };
 
+// One-line "we left some out" notice for the Today page header. Returns
+// null when nothing was dropped.
+//
+// Deliberately informational rather than alarming: at current warehouse
+// volume something is trimmed on essentially every load, so a warning tone
+// would cry wolf. Nothing actionable is ever trimmed — the server never
+// caps a row carrying an order number — so the copy leads with what was
+// dropped being noise and closes with the guarantee.
+export function buildTruncationNotice(
+  truncated: { unparseable: number; dismissed: number } | undefined,
+): string | null {
+  const unparseable = truncated?.unparseable ?? 0;
+  const dismissed = truncated?.dismissed ?? 0;
+  if (unparseable <= 0 && dismissed <= 0) return null;
+
+  const parts: string[] = [];
+  if (unparseable > 0) parts.push(`${unparseable} unparseable`);
+  if (dismissed > 0) parts.push(`${dismissed} dismissed`);
+  return `Older noise trimmed: ${parts.join(", ")} — every shipment with an order number is shown.`;
+}
+
 // Priority order:
 //   1. A real dismissal wins — a row the operator filed stays filed,
 //      whatever else is true of it.

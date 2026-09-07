@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, getRouteApi } from "@tanstack/react-router";
-import { classifyTodayRow, type TodayTab } from "./invoicing-today-classify";
+import {
+  buildTruncationNotice,
+  classifyTodayRow,
+  type TodayTab,
+} from "./invoicing-today-classify";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { InvoicingTodaySearch } from "../lib/search-schemas/invoicing-today";
@@ -188,31 +192,6 @@ type ApiResponse = {
     enriched: number;
   };
 };
-// One-line "we left some out" notice. Returns null when nothing was
-// dropped, which is the normal case. Never fires for rows with an order
-// number — the server never caps those — so the reassurance in the copy
-// is a guarantee, not a hope.
-function buildTruncationNotice(
-  truncated: { unparseable: number; dismissed: number } | undefined,
-): string | null {
-  const unparseable = truncated?.unparseable ?? 0;
-  const dismissed = truncated?.dismissed ?? 0;
-  if (unparseable <= 0 && dismissed <= 0) return null;
-
-  const parts: string[] = [];
-  if (unparseable > 0) {
-    parts.push(
-      `${unparseable} older unparseable ${unparseable === 1 ? "email" : "emails"}`,
-    );
-  }
-  if (dismissed > 0) {
-    parts.push(
-      `${dismissed} older dismissed ${dismissed === 1 ? "email" : "emails"}`,
-    );
-  }
-  return `Not showing ${parts.join(" and ")} — the queue is complete for everything with an order number.`;
-}
-
 type Term = { id: string; name: string; dueDays: number | null };
 type TermsResponse = { terms: Term[] };
 
@@ -372,7 +351,7 @@ export default function InvoicingTodayPage() {
 
       {truncationNotice && (
         <div>
-          <Badge tone="critical">{truncationNotice}</Badge>
+          <Badge tone="info">{truncationNotice}</Badge>
         </div>
       )}
 
