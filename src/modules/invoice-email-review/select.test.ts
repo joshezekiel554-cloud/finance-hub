@@ -3,6 +3,7 @@ import {
   classifyForEmailReview,
   EMAIL_REVIEW_GRACE_HOURS,
   EMAIL_REVIEW_WINDOW_DAYS,
+  isDismissalActive,
   type EmailReviewCandidate,
 } from "./select.js";
 
@@ -17,10 +18,34 @@ function candidate(overrides: Partial<EmailReviewCandidate> = {}): EmailReviewCa
     balance: "195.00",
     issueDate: "2026-09-02",
     createdAt: new Date("2026-09-02T23:41:34Z"),
-    dismissed: false,
+    dismissedAt: null,
+    deliveryTime: null,
     ...overrides,
   };
 }
+
+describe("isDismissalActive", () => {
+  it("no dismissal → false", () => {
+    expect(isDismissalActive(null, null)).toBe(false);
+    expect(isDismissalActive(null, new Date("2026-09-06T21:43:23Z"))).toBe(false);
+  });
+  it("dismissal with no delivery attempt → true", () => {
+    expect(isDismissalActive(new Date("2026-09-03T12:00:00Z"), null)).toBe(true);
+  });
+  it("dismissal newer than the last delivery attempt → true", () => {
+    expect(
+      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-02T13:36:04Z")),
+    ).toBe(true);
+  });
+  it("delivery attempt after the dismissal → false (stale)", () => {
+    expect(
+      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-06T21:43:23Z")),
+    ).toBe(false);
+  });
+  it("accepts ISO strings", () => {
+    expect(isDismissalActive("2026-09-03T12:00:00Z", "2026-09-02T13:36:04Z")).toBe(true);
+  });
+});
 
 describe("classifyForEmailReview", () => {
   it("exports the documented constants", () => {
@@ -101,10 +126,33 @@ describe("classifyForEmailReview", () => {
     expect(classifyForEmailReview(candidate({ deliveryError: "Bounced Email" }), NOW)).toBe("delivery_failed");
   });
 
-  it("dismissed → null in either bucket", () => {
-    expect(classifyForEmailReview(candidate({ dismissed: true }), NOW)).toBeNull();
+  it("active dismissal → null in either bucket", () => {
+    const dismissedAt = new Date("2026-09-03T12:00:00Z");
+    expect(classifyForEmailReview(candidate({ dismissedAt }), NOW)).toBeNull();
     expect(
-      classifyForEmailReview(candidate({ dismissed: true, deliveryError: "Bounced Email" }), NOW),
+      classifyForEmailReview(
+        candidate({
+          dismissedAt,
+          emailStatus: "EmailSent",
+          deliveryError: "Bounced Email",
+          deliveryTime: new Date("2026-09-02T13:36:04Z"),
+        }),
+        NOW,
+      ),
     ).toBeNull();
+  });
+
+  it("stale dismissal (re-sent after dismissing, then bounced) → delivery_failed", () => {
+    expect(
+      classifyForEmailReview(
+        candidate({
+          dismissedAt: new Date("2026-09-03T12:00:00Z"),
+          emailStatus: "EmailSent",
+          deliveryError: "Bounced Email",
+          deliveryTime: new Date("2026-09-06T21:43:23Z"),
+        }),
+        NOW,
+      ),
+    ).toBe("delivery_failed");
   });
 });

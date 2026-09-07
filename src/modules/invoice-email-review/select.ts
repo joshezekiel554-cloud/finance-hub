@@ -30,7 +30,11 @@ export type EmailReviewCandidate = {
   // invoices.issue_date — Drizzle may hand back a Date or a YYYY-MM-DD string.
   issueDate: string | Date | null;
   createdAt: string | Date;
-  dismissed: boolean;
+  // invoice_email_dismissals.dismissed_at (null = never dismissed) and
+  // invoices.delivery_time (QBO's last delivery attempt). A dismissal only
+  // counts while it is newer than the last attempt — see isDismissalActive.
+  dismissedAt: string | Date | null;
+  deliveryTime: string | Date | null;
 };
 
 // YYYY-MM-DD in UTC for a Date, or the first 10 chars of a string.
@@ -44,11 +48,28 @@ function addDays(day: string, delta: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function ms(v: string | Date): number {
+  return v instanceof Date ? v.getTime() : new Date(v).getTime();
+}
+
+// A dismissal hides an invoice only until QBO records a NEWER delivery
+// attempt. So "dismissed while NotSet, later sent and bounced" and
+// "dismissed bounce, re-sent, bounced again" both re-surface — otherwise the
+// invisible-bounce failure this feature exists to catch would survive it.
+export function isDismissalActive(
+  dismissedAt: string | Date | null,
+  deliveryTime: string | Date | null,
+): boolean {
+  if (!dismissedAt) return false;
+  if (!deliveryTime) return true;
+  return ms(dismissedAt) > ms(deliveryTime);
+}
+
 export function classifyForEmailReview(
   c: EmailReviewCandidate,
   now: Date = new Date(),
 ): EmailReviewBucket | null {
-  if (c.dismissed) return null;
+  if (isDismissalActive(c.dismissedAt, c.deliveryTime)) return null;
   if (c.status === "void") return null;
   if (!c.issueDate) return null;
 
