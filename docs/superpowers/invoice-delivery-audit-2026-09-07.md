@@ -140,6 +140,24 @@ the cap + "N older shipments not loaded" banner; (B) source shipment rows
 from `email_log` (the Gmail poller already stores every warehouse email with
 body) and auto-hide B2C paid-upfront rows; (C) both.
 
+**Operator chose B (17:32 UK). Shipped the same evening in two commits:**
+1. `/today` reads the full 7-day window from `email_log` (≥ 2026-05-06 all
+   rows carry `body_html`), unions it with the live 50-newest Gmail search
+   (dedupe by id, Gmail copy wins), parses everything with the pure parser,
+   then `selectTodayCandidates` (`src/modules/b2b-invoicing/today-candidates.ts`)
+   keeps EVERY undismissed row that has an order number, caps only
+   unparseable noise (newest 100) and dismissed history (newest 50), and
+   returns `truncated` counts that the page shows as a red badge. Only the
+   kept set goes through QBO/Shopify enrichment. Seam check on 241 real
+   stored emails: all parsed; 108 had an order number; the old cap hid 64
+   of them.
+2. Rows that hit the existing "SalesReceipt but customer is not B2B" gate
+   get `autoHidden: "b2c_paid_upfront"` and file under Dismissed
+   automatically (label "auto-hidden: B2C paid upfront", no Restore), via a
+   pure `classifyTodayRow` extracted to
+   `src/web/pages/invoicing-today-classify.ts` with tests. This replaces the
+   ~390 manual "Dismiss (B2C paid upfront)" clicks a month.
+
 ## Why the hub can't see any of this today
 
 - `sendInvoiceUpdate` treats a 200 from `/invoice/{id}/send` as delivered.
