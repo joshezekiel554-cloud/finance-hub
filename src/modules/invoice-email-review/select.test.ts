@@ -3,6 +3,7 @@ import {
   classifyForEmailReview,
   EMAIL_REVIEW_GRACE_HOURS,
   EMAIL_REVIEW_WINDOW_DAYS,
+  emailReviewWindowStart,
   isDismissalActive,
   type EmailReviewCandidate,
 } from "./select.js";
@@ -93,7 +94,25 @@ describe("classifyForEmailReview", () => {
 
   it("issued exactly on the window edge is included", () => {
     // NOW is 2026-09-07; 90 days earlier is 2026-06-09.
+    expect(emailReviewWindowStart(NOW)).toBe("2026-06-09");
     expect(classifyForEmailReview(candidate({ issueDate: "2026-06-09" }), NOW)).toBe("never_emailed");
+  });
+
+  it("issued the day before the window edge is excluded", () => {
+    expect(classifyForEmailReview(candidate({ issueDate: "2026-06-08" }), NOW)).toBeNull();
+  });
+
+  it("created exactly 24h ago is no longer in grace", () => {
+    expect(
+      classifyForEmailReview(
+        candidate({ issueDate: "2026-09-06", createdAt: new Date("2026-09-06T14:00:00Z") }),
+        NOW,
+      ),
+    ).toBe("never_emailed");
+  });
+
+  it("null status still classifies", () => {
+    expect(classifyForEmailReview(candidate({ status: null }), NOW)).toBe("never_emailed");
   });
 
   it("created within the grace period → null (still in today's queue)", () => {
@@ -103,10 +122,6 @@ describe("classifyForEmailReview", () => {
         NOW,
       ),
     ).toBeNull();
-  });
-
-  it("accepts a Date for issueDate", () => {
-    expect(classifyForEmailReview(candidate({ issueDate: new Date("2026-09-02T00:00:00Z") }), NOW)).toBe("never_emailed");
   });
 
   it("missing issueDate → null", () => {
