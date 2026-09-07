@@ -158,6 +158,14 @@ body) and auto-hide B2C paid-upfront rows; (C) both.
    `src/web/pages/invoicing-today-classify.ts` with tests. This replaces the
    ~390 manual "Dismiss (B2C paid upfront)" clicks a month.
 
+Review-driven fixes shipped in the same deploy: QBO `IN()` batch lookups had
+no `MAXRESULTS` (QBO defaults to 100 → silent drops once the queue exceeded
+~100 order numbers) — now `MAXRESULTS 1000`; per-row Shopify enrichment is
+bounded with `mapWithLimit(…, 6)`; the truncation notice is informational.
+Deployed 2026-09-07 18:00 UK (`3782aa3`), mobile detail polish 18:03 UK
+(`ebffc21`). Poller freshness at deploy: latest warehouse email 14 min old,
+579/579 rows in the window with HTML bodies.
+
 ## Why the hub can't see any of this today
 
 - `sendInvoiceUpdate` treats a 200 from `/invoice/{id}/send` as delivered.
