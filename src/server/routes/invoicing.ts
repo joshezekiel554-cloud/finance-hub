@@ -1737,18 +1737,23 @@ async function resolveLookups(
     resolved = { docType: "invoice", doc: qbInvoice };
   } else if (qbSalesReceipt) {
     // Gate SalesReceipt surfacing on customerType=b2b. The 99% B2C
-    // case (paid upfront on the consumer Shopify storefront) silently
-    // drops out — those don't need an emailed doc; Shopify already
-    // sent the order confirmation. The 1% B2B-prepay case stays on
-    // the form so the operator can reconcile + send.
+    // case (paid upfront on the consumer Shopify storefront) resolves to
+    // no doc — those don't need an emailed doc; Shopify already sent the
+    // order confirmation. It is no longer silent: the row carries
+    // autoHidden and the UI files it under Dismissed with a badge saying
+    // why. The 1% B2B-prepay case stays on the form so the operator can
+    // reconcile + send.
     const cust = customerByQbId.get(
       qbSalesReceipt.CustomerRef?.value ?? "",
     );
     if (cust?.customerType === "b2b") {
       resolved = { docType: "salesreceipt", doc: qbSalesReceipt };
     } else {
-      // Keep the legacy phrase verbatim — the page's isHiddenSalesReceipt
-      // still matches on it, and older clients depend on it.
+      // Keep the legacy phrase verbatim. The current UI routes on
+      // `autoHidden` above, so this string now only matters for a browser
+      // still running an older bundle against this server (it keeps the
+      // pre-autoHidden one-click Dismiss button working). Safe to drop
+      // once no stale bundles are in circulation.
       qbErr = `paid upfront sales receipt — customer is ${cust?.customerType ?? "unknown"}, hidden by default`;
       autoHidden = "b2c_paid_upfront";
     }

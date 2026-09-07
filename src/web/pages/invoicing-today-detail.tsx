@@ -117,6 +117,10 @@ type Row = {
     }>;
   } | null;
   qbInvoiceError: string | null;
+  // Server filed this row away with no operator input — currently only B2C
+  // paid-upfront sales receipts, which have nothing to reconcile or send.
+  // Mirrors the field on the list page's Row type.
+  autoHidden: "b2c_paid_upfront" | null;
   shopifyOrder: {
     id: number;
     name: string;
@@ -497,7 +501,11 @@ function DetailBody(props: DetailBodyProps) {
         subtitle={
           row.qbInvoice
             ? `${row.qbInvoice.docType === "salesreceipt" ? "Sales receipt" : "Invoice"} #${row.qbInvoice.docNumber}`
-            : "No QB invoice"
+            : row.autoHidden
+              ? // Expected state, not a missing document — don't head the
+                // screen with what reads as an error.
+                "Paid upfront on Shopify"
+              : "No QB invoice"
         }
         back={onBack}
       />
@@ -593,8 +601,20 @@ function DetailBody(props: DetailBodyProps) {
           </>
         )}
 
-        {/* QB error */}
-        {row.qbInvoiceError && !row.qbInvoice && (
+        {/* QB error. An auto-hidden row also has no QB doc, but that is
+            expected rather than a failure, so it gets a neutral
+            explanation instead of the red lookup-error string. */}
+        {row.autoHidden ? (
+          <Card>
+            <CardBody>
+              <Badge tone="neutral">auto-hidden: B2C paid upfront</Badge>
+              <p className="mt-2 text-xs text-secondary">
+                The customer paid upfront on Shopify, so there is no invoice
+                to reconcile or send.
+              </p>
+            </CardBody>
+          </Card>
+        ) : row.qbInvoiceError && !row.qbInvoice ? (
           <Card>
             <CardBody>
               <p className="text-xs text-accent-danger">
@@ -602,7 +622,7 @@ function DetailBody(props: DetailBodyProps) {
               </p>
             </CardBody>
           </Card>
-        )}
+        ) : null}
 
         {/* Total */}
         {row.qbInvoice && (
@@ -619,8 +639,9 @@ function DetailBody(props: DetailBodyProps) {
       </div>
 
       {/* Sticky action bar. Hide when send already succeeded — operator
-          should go back, not re-send. */}
-      {!dismissedRecord && !sendSucceeded && (
+          should go back, not re-send — and on auto-hidden rows, where
+          there is nothing to send and nothing to dismiss. */}
+      {!dismissedRecord && !row.autoHidden && !sendSucceeded && (
         <StickyActionBar>
           <Button
             variant="ghost"
