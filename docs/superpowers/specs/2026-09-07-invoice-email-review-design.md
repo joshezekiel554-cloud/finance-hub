@@ -212,8 +212,13 @@ was delete-then-insert with no transaction, an over-long `sku` (varchar 64)
 could strand an invoice with zero lines; this branch makes the resync
 transactional and clamps `sku`. Pre-deploy baseline on prod (2026-09-07
 15:30 UK): 73 invoices already have zero lines, 10 of them open — the
-pre-existing hazard had already fired. Re-check after the first sync; the
-number must not grow. Manual
+pre-existing hazard had already fired. **Post-deploy result (15:40 UK, forced
+sync job 5762):** 3,419 invoices updated, 0 failed, 104 sku truncation warns,
+and invoices-without-lines went 73 → **0** — the clamp let the previously
+failing invoices resync their lines. `email_status`: 3,231 EmailSent / 353
+NotSet / 24 NULL (rows no longer returned by QBO, all void). Email review
+showed 27 never-emailed and 16 delivery-failed within the 90-day window,
+matching the audit plus three June rows. Manual
 deploy over `ssh finance-vps` per the standing recipe: build → tar dist +
 migrations → `db:migrate` → `pm2 reload`. First sync after reload populates
 `email_status`; the section is empty until then (by design, see §3).
