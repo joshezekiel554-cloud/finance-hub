@@ -73,6 +73,14 @@ export const invoices = mysqlTable(
     bookkeeperThreadId: varchar("bookkeeper_thread_id", { length: 128 }),
     sentAt: timestamp("sent_at"),
     sentVia: varchar("sent_via", { length: 32 }),
+    // QBO-owned email delivery state, mirrored by the 30-min sync (unlike
+    // sent_at / sent_via, which are local). email_status is QBO's
+    // EmailStatus (NotSet | NeedToSend | EmailSent); delivery_* come from
+    // DeliveryInfo and are the only signal that an accepted send later
+    // bounced. Drives the Email review section on Invoicing Today.
+    emailStatus: varchar("email_status", { length: 32 }),
+    deliveryTime: timestamp("delivery_time"),
+    deliveryError: varchar("delivery_error", { length: 64 }),
     // QBO Invoice.CustomerMemo.value — the customer-facing memo
     // printed on the invoice + statement. Synced from QBO every 30
     // min. Surfaced as a read-only column on the customer profile's

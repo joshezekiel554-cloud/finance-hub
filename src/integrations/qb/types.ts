@@ -95,6 +95,14 @@ export type QboInvoice = {
   Line?: QboInvoiceLine[];
   TxnTaxDetail?: QboTxnTaxDetail;
   EmailStatus?: string;
+  // Populated by QBO after /send. DeliveryErrorType appears asynchronously
+  // (minutes after the send call returned 200) when Intuit's mail step
+  // failed — values seen in prod: "Bounced Email", "Undeliverable".
+  DeliveryInfo?: {
+    DeliveryType?: string;
+    DeliveryTime?: string;
+    DeliveryErrorType?: string;
+  };
   PrintStatus?: string;
   SyncToken?: string;
   PrivateNote?: string;

@@ -24,6 +24,7 @@ export * from "./oauth";
 export * from "./returns";
 export * from "./vocatech";
 export * from "./invoice-bcc-forwards";
+export * from "./invoice-email-dismissals";
 export * from "./user-active-minutes";
 export * from "./time-clock-sessions";
 export * from "../relations";
