@@ -139,9 +139,16 @@ Rows are ordered oldest first, then balance desc.
   `syncedAt` = `MAX(invoices.last_synced_at)` so the UI can say "as of".
 - `POST /api/invoicing/email-review/dismiss` `{ invoiceId, reason,
   reasonNote? }` — upsert dismissal; `reason='other'` requires a note. Writes
-  `audit_log` (`action: invoice_email_review.dismiss`, before/after).
+  `audit_log` (`action: invoice_email_review.dismiss`, before/after) in the
+  same transaction. Returns `{ ok: true, hidden }` where `hidden` is whether
+  the dismissal actually hides the row now (false for an undated bounce, see
+  §2); the UI shows a notice when it is false.
 - `POST /api/invoicing/email-review/restore` `{ invoiceId }` — delete
-  dismissal; audit row.
+  dismissal + audit row in one transaction; idempotent: returns
+  `{ ok: true, restored: false }` when there was nothing to restore.
+- Bucketing is a pure, tested function `bucketEmailReviewRows(rows, now)` in
+  `src/modules/invoice-email-review/bucket.ts`; the route only runs the SQL
+  and calls it.
 
 Send reuses the existing `POST /api/customers/:id/invoices/:qbInvoiceId/send`
 via `InvoiceSendDialog`; nothing new server-side for sending.
