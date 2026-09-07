@@ -4,11 +4,23 @@ import { Link, getRouteApi } from "@tanstack/react-router";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { InvoicingTodaySearch } from "../lib/search-schemas/invoicing-today";
-import { AlertCircle, CheckCircle2, Mail, MessageSquare, Package, Truck } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Mail,
+  MailWarning,
+  MessageSquare,
+  Package,
+  Truck,
+} from "lucide-react";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ShipmentRowMobile } from "../components/invoicing/shipment-row-mobile";
+import {
+  EmailReviewSection,
+  useEmailReview,
+} from "../components/invoicing/email-review-section";
 import { cn } from "../lib/cn";
 // ReturnReceiptReviewDialog intentionally NOT removed here — Phase 5 (Task 5.1) handles deletion.
 import ReturnReceiptReviewDialog, {
@@ -288,6 +300,11 @@ export default function InvoicingTodayPage() {
   });
   const unmatchedCount = unmatchedData?.rows.length ?? 0;
 
+  const emailReview = useEmailReview();
+  const emailReviewCount =
+    (emailReview.data?.neverEmailed.length ?? 0) +
+    (emailReview.data?.deliveryFailed.length ?? 0);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -349,6 +366,12 @@ export default function InvoicingTodayPage() {
           onScrollToReturns={() => {
             document
               .getElementById("returns-section")
+              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+          emailReviewCount={emailReviewCount}
+          onScrollToEmailReview={() => {
+            document
+              .getElementById("email-review-section")
               ?.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
         />
@@ -457,6 +480,9 @@ export default function InvoicingTodayPage() {
           )}
         </section>
       )}
+
+      {/* ──────────────── Email review ─────────────────────────────── */}
+      {data && <EmailReviewSection id="email-review-section" query={emailReview} />}
 
       {/* ──────────────── Returns section ───────────────────────────── */}
       {data && (
@@ -700,6 +726,8 @@ function Summary(props: {
   receiptRowCount: number;
   onSelectOrdersTab: (tab: Tab) => void;
   onScrollToReturns: () => void;
+  emailReviewCount: number;
+  onScrollToEmailReview: () => void;
 }) {
   const awaitingInvoice = props.rows.filter(
     (r) => classifyRow(r, props.dismissed) === "open",
@@ -708,7 +736,7 @@ function Summary(props: {
     (r) => classifyRow(r, props.dismissed) === "sent",
   ).length;
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
       <StatCard
         icon={AlertCircle}
         iconClassName="text-accent-warning"
@@ -729,6 +757,13 @@ function Summary(props: {
         count={props.receiptRowCount}
         label={`pending return${props.receiptRowCount === 1 ? "" : "s"} to review`}
         onClick={props.onScrollToReturns}
+      />
+      <StatCard
+        icon={MailWarning}
+        iconClassName="text-accent-warning"
+        count={props.emailReviewCount}
+        label={`invoice${props.emailReviewCount === 1 ? "" : "s"} need email review`}
+        onClick={props.onScrollToEmailReview}
       />
     </div>
   );
