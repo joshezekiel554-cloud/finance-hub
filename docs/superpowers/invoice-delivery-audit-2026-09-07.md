@@ -125,6 +125,21 @@ for manual handling and then missed.
   (Eichlers) or never (Merkaz). The "sent manually" dismissal should verify
   QBO `EmailStatus` before hiding the row.
 
+## ROOT CAUSE of bucket 2 (found 2026-09-07 18:20 UK, via Judaica Corner 19557)
+
+`GET /api/invoicing/today` calls `searchEmails(sinceQuery, 50)` — a 7-day
+Gmail search capped at the **50 newest** warehouse emails. Warehouse volume
+is 581 emails / 7 days (388 on 1 Sep alone), so every shipment email older
+than the newest 50 silently disappears from Open / Sent / Unparseable. At
+the time of discovery everything before Wed 3 Sep 20:56 UTC was invisible;
+19557's shipment email (3 Sep 18:30, confidence 0.86, not dismissed) was one
+of 410 undismissed emails beyond the cap. 10 of the 27 never-emailed
+invoices map to hidden shipment emails (19466, 19468, 19472, 19490, 19492,
+19502, 19509, 19515, 19557, 19558). Options put to the operator: (A) raise
+the cap + "N older shipments not loaded" banner; (B) source shipment rows
+from `email_log` (the Gmail poller already stores every warehouse email with
+body) and auto-hide B2C paid-upfront rows; (C) both.
+
 ## Why the hub can't see any of this today
 
 - `sendInvoiceUpdate` treats a 200 from `/invoice/{id}/send` as delivered.
