@@ -26,6 +26,9 @@ function before(overrides: Partial<Before> = {}): Before {
     customerMemo: null,
     syncToken: "3",
     originSource: "prefix",
+    emailStatus: null,
+    deliveryTime: null,
+    deliveryError: null,
     ...overrides,
   };
 }
@@ -42,6 +45,9 @@ function desired(overrides: Partial<Desired> = {}): Desired {
     customerMemo: null,
     syncToken: "3",
     origin: "feldart",
+    emailStatus: null,
+    deliveryTime: null,
+    deliveryError: null,
     lastSyncedAt: new Date("2026-08-20T15:19:00Z"),
     ...overrides,
   };

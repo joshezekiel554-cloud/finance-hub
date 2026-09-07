@@ -406,6 +406,9 @@ type InvoiceUpdateBefore = Pick<
   | "customerMemo"
   | "syncToken"
   | "originSource"
+  | "emailStatus"
+  | "deliveryTime"
+  | "deliveryError"
 >;
 type InvoiceUpdateDesired = Pick<
   NewInvoice,
@@ -419,6 +422,9 @@ type InvoiceUpdateDesired = Pick<
   | "customerMemo"
   | "syncToken"
   | "origin"
+  | "emailStatus"
+  | "deliveryTime"
+  | "deliveryError"
 > & { lastSyncedAt: Date };
 
 export function planInvoiceUpdate(
@@ -434,7 +440,10 @@ export function planInvoiceUpdate(
     before.balance !== desired.balance ||
     before.status !== desired.status ||
     before.customerMemo !== desired.customerMemo ||
-    before.syncToken !== desired.syncToken;
+    before.syncToken !== desired.syncToken ||
+    (before.emailStatus ?? null) !== (desired.emailStatus ?? null) ||
+    isoDateTimeOrNull(before.deliveryTime) !== isoDateTimeOrNull(desired.deliveryTime) ||
+    (before.deliveryError ?? null) !== (desired.deliveryError ?? null);
   if (!drift) return null;
 
   const set: Partial<NewInvoice> = {
@@ -447,6 +456,9 @@ export function planInvoiceUpdate(
     status: desired.status,
     customerMemo: desired.customerMemo,
     syncToken: desired.syncToken,
+    emailStatus: desired.emailStatus ?? null,
+    deliveryTime: desired.deliveryTime ?? null,
+    deliveryError: desired.deliveryError ?? null,
     lastSyncedAt: desired.lastSyncedAt,
   };
   // Re-derive origin from the (possibly changed) docNumber, but never
@@ -490,6 +502,9 @@ async function upsertInvoice(
     status,
     customerMemo: qboInvoice.CustomerMemo?.value ?? null,
     syncToken: qboInvoice.SyncToken ?? null,
+    emailStatus: qboInvoice.EmailStatus ?? null,
+    deliveryTime: parseQboDateTime(qboInvoice.DeliveryInfo?.DeliveryTime),
+    deliveryError: qboInvoice.DeliveryInfo?.DeliveryErrorType ?? null,
     lastSyncedAt: new Date(),
   };
 
@@ -522,6 +537,9 @@ async function upsertInvoice(
           status: desired.status,
           customerMemo: desired.customerMemo,
           syncToken: desired.syncToken,
+          emailStatus: desired.emailStatus,
+          deliveryTime: desired.deliveryTime,
+          deliveryError: desired.deliveryError,
           lastSyncedAt: desired.lastSyncedAt,
         },
       });
@@ -1166,6 +1184,22 @@ function parseQboDate(v: string | undefined | null): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
   if (!m) return null;
   return new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00.000Z`);
+}
+
+// QBO DeliveryInfo.DeliveryTime is an ISO-8601 string with an offset
+// ("2026-09-06T14:43:23-07:00"). Unparsable → null with a warn, never throw.
+function parseQboDateTime(v: string | undefined | null): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) {
+    log.warn({ value: v }, "unparsable QBO DeliveryTime; storing null");
+    return null;
+  }
+  return d;
+}
+
+function isoDateTimeOrNull(v: Date | null | undefined): string | null {
+  return v ? v.toISOString() : null;
 }
 
 function serializableCustomer(c: Customer): Record<string, unknown> {
