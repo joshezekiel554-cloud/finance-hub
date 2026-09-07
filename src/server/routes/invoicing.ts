@@ -16,7 +16,7 @@ import { searchEmails, getMessage } from "../../integrations/gmail/client.js";
 import { classifyExtensivEmail } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
-import { and, count, eq, gte, inArray, isNull, lt, max } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, like, lt, max } from "drizzle-orm";
 import {
   parseShipmentHtml,
   reconcile,
@@ -27,6 +27,11 @@ import {
   type ShipmentForReconcile,
   type ShopifyOrderLineForReconcile,
 } from "../../modules/b2b-invoicing/index.js";
+import {
+  selectTodayCandidates,
+  type TodayCandidate,
+} from "../../modules/b2b-invoicing/today-candidates.js";
+import type { ParsedEmail } from "../../integrations/gmail/types.js";
 import type {
   QboInvoice,
   QboSalesReceipt,
@@ -293,18 +298,108 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
     const sinceQuery = `from:${SENDER} subject:"${SUBJECT}" after:${Math.floor(sinceMs / 1000)}`;
 
-    let emails;
+    // Source the candidate set from TWO places and merge:
+    //
+    //  1. email_log — the Gmail poller writes EVERY warehouse notification
+    //     here, so this is the complete window (~580 rows / 7 days in prod)
+    //     lagging live Gmail by at most one poll interval.
+    //  2. A live Gmail search — covers the sub-poll-interval tail so an
+    //     email that landed two minutes ago still shows up now.
+    //
+    // Historically this handler used ONLY (2), capped at the 50 newest
+    // messages, which silently hid every older shipment email in the
+    // window. The cap now applies to noise only — see selectTodayCandidates.
+    const sinceDate = new Date(sinceMs);
+
+    let dbEmails: ParsedEmail[] = [];
+    let dbEmailError: string | null = null;
     try {
-      emails = await searchEmails(sinceQuery, 50);
+      const logRows = await db
+        .select({
+          gmailMessageId: emailLog.gmailMessageId,
+          threadId: emailLog.threadId,
+          fromAddress: emailLog.fromAddress,
+          toAddress: emailLog.toAddress,
+          subject: emailLog.subject,
+          snippet: emailLog.snippet,
+          body: emailLog.body,
+          bodyHtml: emailLog.bodyHtml,
+          emailDate: emailLog.emailDate,
+        })
+        .from(emailLog)
+        .where(
+          and(
+            like(emailLog.fromAddress, `%${SENDER}%`),
+            // Contains-match, mirroring Gmail's `subject:"..."` semantics —
+            // a prefix match would miss any subject the warehouse prefixes.
+            like(emailLog.subject, `%${SUBJECT}%`),
+            gte(emailLog.emailDate, sinceDate),
+          ),
+        )
+        .orderBy(desc(emailLog.emailDate));
+
+      // email_log stores the bare lowercase address in from_address /
+      // to_address (see poller.ts), so display-name and address forms are
+      // the same value here.
+      dbEmails = logRows.map((row) => ({
+        id: row.gmailMessageId,
+        threadId: row.threadId ?? "",
+        messageIdHeader: "",
+        from: row.fromAddress ?? "",
+        to: row.toAddress ?? "",
+        fromEmail: row.fromAddress ?? "",
+        toEmail: row.toAddress ?? "",
+        subject: row.subject ?? "",
+        date: row.emailDate.toISOString(),
+        emailDate: row.emailDate,
+        body: row.body ?? "",
+        htmlBody: row.bodyHtml ?? "",
+        snippet: row.snippet ?? "",
+        labelIds: [],
+      }));
     } catch (err) {
+      dbEmailError = (err as Error).message;
+      log.error({ err }, "email_log shipment fetch failed");
+    }
+
+    let gmailEmails: ParsedEmail[] = [];
+    let gmailError: string | null = null;
+    try {
+      gmailEmails = await searchEmails(sinceQuery, 50);
+    } catch (err) {
+      gmailError = (err as Error).message;
       log.error({ err }, "gmail search failed");
+    }
+
+    // Only hard-fail when BOTH sources are gone — a Gmail blip must not take
+    // the page down now that the DB carries the full window.
+    if (gmailError !== null && dbEmails.length === 0) {
       return reply.code(502).send({ error: "gmail search failed" });
     }
 
-    log.info({ count: emails.length, lookbackDays }, "found feldart shipment emails");
+    // Dedupe by Gmail message id, preferring the live Gmail copy (fresher
+    // labels + guaranteed-complete body) over the stored one.
+    const byId = new Map<string, ParsedEmail>();
+    for (const email of dbEmails) byId.set(email.id, email);
+    for (const email of gmailEmails) byId.set(email.id, email);
+    const emails = Array.from(byId.values()).sort(
+      (a, b) => (b.emailDate?.getTime() ?? 0) - (a.emailDate?.getTime() ?? 0),
+    );
 
-    // The Gmail search above pulls every "requested transaction
-    // notification" email — that includes outbound shipments (what this
+    log.info(
+      {
+        count: emails.length,
+        fromEmailLog: dbEmails.length,
+        fromGmail: gmailEmails.length,
+        lookbackDays,
+        gmailError,
+        dbEmailError,
+      },
+      "found feldart shipment emails",
+    );
+
+    // The merged set holds every "requested transaction notification"
+    // email — that includes outbound shipments (what this
     // page is for) AND return receipts (handled by the separate Pending
     // Return Receipts section below). Run the receipt classifier first
     // and drop the return-receipt rows so they don't double-up as
@@ -328,10 +423,20 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     const qbClient = new QboClient();
     const shopifyClient = new ShopifyClient();
 
-    // Phase 1: parse htmlBody already populated by searchEmails. The Gmail
+    // Phase 0: the dismissed-shipments map. Loaded up front (rather than
+    // after enrichment, where it used to live) because candidate selection
+    // needs to know which rows are already actioned. The same rows feed the
+    // `dismissed` response map below — one query, two consumers.
+    const dismissedRows = await db.select().from(dismissedShipments);
+    const dismissedIds = new Set(dismissedRows.map((row) => row.gmailId));
+
+    // Phase 1: parse htmlBody, which both sources already carry — the Gmail
     // client extracts text/html alongside text/plain in one messages.get
-    // pass, so no second round-trip is needed here.
-    const parsed = shipmentEmails.map((email) => ({
+    // pass, and email_log persists it. No second round-trip needed.
+    //
+    // Parsing is pure and cheap, so we parse the WHOLE window and let the
+    // parse result decide what deserves the expensive per-row enrichment.
+    const parsedAll = shipmentEmails.map((email) => ({
       gmailId: email.id,
       receivedAt: email.emailDate,
       // Keep subject/from/snippet on each parsed entry so unparseable rows
@@ -345,6 +450,33 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       emailBody: (email.body ?? "").slice(0, 8 * 1024),
       parseResult: parseShipmentHtml(email.htmlBody),
     }));
+
+    // Phase 1.5: pick what to enrich. Everything with an order number that
+    // isn't dismissed survives; only noise and already-actioned history can
+    // be capped, and whatever we drop is reported to the UI.
+    const candidates: TodayCandidate[] = parsedAll.map((p) => ({
+      gmailId: p.gmailId,
+      // A missing date can only happen on a malformed Gmail message; sorting
+      // it oldest means it's capped before anything with a real timestamp.
+      emailDate: p.receivedAt ?? new Date(0),
+      hasOrderNumber: Boolean(p.parseResult.shipment.shopifyOrderNumber),
+      dismissed: dismissedIds.has(p.gmailId),
+    }));
+    const selection = selectTodayCandidates(candidates);
+    const parsed = parsedAll.filter((p) => selection.keep.has(p.gmailId));
+
+    log.info(
+      {
+        gmail: gmailEmails.length,
+        emailLog: dbEmails.length,
+        merged: emails.length,
+        shipments: shipmentEmails.length,
+        enriched: parsed.length,
+        truncatedUnparseable: selection.truncated.unparseable,
+        truncatedDismissed: selection.truncated.dismissed,
+      },
+      "invoicing today candidate selection",
+    );
 
     // Phase 2: ONE batched QBO query for all docNumbers we managed to parse.
     // Replaces the N parallel per-row queries that were tripping QBO's
@@ -436,10 +568,9 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       ),
     );
 
-    // Phase 4: load the dismissed-shipments map so the UI can split rows
+    // Phase 4: shape the dismissed-shipments map so the UI can split rows
     // into Active vs Dismissed tabs. We always send all rows; the tab
-    // toggle is purely client-side filtering.
-    const dismissedRows = await db.select().from(dismissedShipments);
+    // toggle is purely client-side filtering. Rows were loaded in Phase 0.
     const dismissed: Record<
       string,
       { reason: string; reasonNote: string | null; dismissedAt: string }
@@ -586,7 +717,22 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       // Non-fatal: return shipment rows without receipt rows.
     }
 
-    return reply.send({ rows, receiptRows, dismissed, shadowMode: env.SHADOW_MODE });
+    return reply.send({
+      rows,
+      receiptRows,
+      dismissed,
+      shadowMode: env.SHADOW_MODE,
+      // How many candidates were deliberately left out, so the page can say
+      // so rather than looking complete when it isn't. Both are always zero
+      // for anything carrying an order number.
+      truncated: selection.truncated,
+      sourceCounts: {
+        gmail: gmailEmails.length,
+        emailLog: dbEmails.length,
+        merged: emails.length,
+        enriched: parsed.length,
+      },
+    });
   });
 
   // Batch dismiss for the "Dismiss all visible" page-level button.

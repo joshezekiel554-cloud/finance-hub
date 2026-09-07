@@ -172,7 +172,42 @@ type ApiResponse = {
   receiptRows?: ReceiptRow[];
   dismissed: Record<string, DismissedRecord>;
   shadowMode: boolean;
+  // Candidates the server left unenriched. Only ever non-zero for
+  // unparseable noise and already-dismissed history — anything with an
+  // order number is always included.
+  truncated?: { unparseable: number; dismissed: number };
+  sourceCounts?: {
+    gmail: number;
+    emailLog: number;
+    merged: number;
+    enriched: number;
+  };
 };
+// One-line "we left some out" notice. Returns null when nothing was
+// dropped, which is the normal case. Never fires for rows with an order
+// number — the server never caps those — so the reassurance in the copy
+// is a guarantee, not a hope.
+function buildTruncationNotice(
+  truncated: { unparseable: number; dismissed: number } | undefined,
+): string | null {
+  const unparseable = truncated?.unparseable ?? 0;
+  const dismissed = truncated?.dismissed ?? 0;
+  if (unparseable <= 0 && dismissed <= 0) return null;
+
+  const parts: string[] = [];
+  if (unparseable > 0) {
+    parts.push(
+      `${unparseable} older unparseable ${unparseable === 1 ? "email" : "emails"}`,
+    );
+  }
+  if (dismissed > 0) {
+    parts.push(
+      `${dismissed} older dismissed ${dismissed === 1 ? "email" : "emails"}`,
+    );
+  }
+  return `Not showing ${parts.join(" and ")} — the queue is complete for everything with an order number.`;
+}
+
 type Term = { id: string; name: string; dueDays: number | null };
 type TermsResponse = { terms: Term[] };
 
@@ -305,6 +340,8 @@ export default function InvoicingTodayPage() {
     (emailReview.data?.neverEmailed.length ?? 0) +
     (emailReview.data?.deliveryFailed.length ?? 0);
 
+  const truncationNotice = buildTruncationNotice(data?.truncated);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -334,6 +371,12 @@ export default function InvoicingTodayPage() {
           </Button>
         </div>
       </div>
+
+      {truncationNotice && (
+        <div>
+          <Badge tone="critical">{truncationNotice}</Badge>
+        </div>
+      )}
 
       {isPending && (
         <Card>
