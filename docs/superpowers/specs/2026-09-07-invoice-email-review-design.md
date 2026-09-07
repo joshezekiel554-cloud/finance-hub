@@ -111,7 +111,7 @@ Delivery failed:
   days`, no *active* dismissal. (Balance not required: a bounced invoice the
   customer later paid still tells us the address is bad.)
 
-`select.ts` also exports `isDismissalActive(dismissedAt, deliveryTime)` so
+`select.ts` also exports `isDismissalActive(dismissedAt, deliveryTime, deliveryError)` so
 the route and the classifier share the one definition; the candidate carries
 `dismissedAt` and `deliveryTime` rather than a pre-computed boolean. It
 exports `emailReviewWindowStart(now)` too, and the route's SQL floor MUST use
@@ -124,7 +124,7 @@ host ahead of UTC (the VPS is UTC today; the rule should not depend on it).
 
 Rows are ordered oldest first, then balance desc.
 
-### 4. API (`src/server/routes/invoicing.ts`, same auth as the rest)
+### 4. API (`src/server/routes/invoicing-email-review.ts`, registered at `/api/invoicing/email-review`, same auth as the rest)
 
 - `GET /api/invoicing/email-review` →
   ```ts
@@ -194,8 +194,9 @@ own `useQuery(["invoicing","email-review"])`, `staleTime` 60s.
   null; > 90d → null; delivery_error set + paid → delivery_failed;
   active dismissal → null in both buckets; stale dismissal (older than
   delivery_time) → still classified; NULL email_status → null.
-- `email-review.route.test.ts`: GET shape + dismiss/restore audit rows,
-  using the mocked-db pattern from `statements.test.ts`.
+- `invoicing-email-review.test.ts`: zod body-schema contract tests (the
+  repo's route-test convention, as in `statements.test.ts`); the GET's
+  bucketing logic is covered by `bucket.test.ts` instead of an HTTP test.
 - Manual: deploy, wait one sync, confirm the never-emailed list matches the
   audit's bucket 2 for the last 90 days and the failed list shows the 15
   bounced invoices with `fak423@verizon.ne` visible on Elegant Linen rows.
@@ -206,7 +207,13 @@ Migration 0057 (three `ALTER TABLE invoices ADD`, one `CREATE TABLE`, two
 FKs, one index; all instant/metadata-only on the hot `invoices` table). The
 first sync after deploy will report `updated` ≈ every invoice (email_status
 NULL → value) and re-run the per-invoice line resync once — pre-existing
-per-drift behaviour, no activities or audit rows emitted. Manual
+per-drift behaviour, no activities or audit rows emitted. Because that resync
+was delete-then-insert with no transaction, an over-long `sku` (varchar 64)
+could strand an invoice with zero lines; this branch makes the resync
+transactional and clamps `sku`. Pre-deploy baseline on prod (2026-09-07
+15:30 UK): 73 invoices already have zero lines, 10 of them open — the
+pre-existing hazard had already fired. Re-check after the first sync; the
+number must not grow. Manual
 deploy over `ssh finance-vps` per the standing recipe: build → tar dist +
 migrations → `db:migrate` → `pm2 reload`. First sync after reload populates
 `email_status`; the section is empty until then (by design, see §3).
