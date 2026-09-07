@@ -56,6 +56,9 @@ type Tab = "never_emailed" | "delivery_failed" | "dismissed";
 
 function money(v: string): string {
   const n = Number(v);
+  // DECIMAL columns arrive as strings; a null or malformed one would render
+  // as "$NaN", which reads like a real amount.
+  if (!Number.isFinite(n)) return "—";
   return `$${n.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -340,8 +343,14 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
                 : ""}{" "}
               · {REASON_LABELS[row.dismissal.reason]}
               {row.dismissal.reasonNote ? ` — ${row.dismissal.reasonNote}` : ""}
+              {/* Two different reasons a dismissed row is still showing: the
+                  dismissal was outrun by a newer send, or it never had a
+                  delivery timestamp to be measured against in the first
+                  place. Saying the wrong one sends the operator hunting. */}
               {tab !== "dismissed" &&
-                " · re-surfaced: QBO recorded a newer delivery attempt"}
+                (row.deliveryTime === null
+                  ? " · re-surfaced: bounce has no delivery timestamp, so the dismissal can't hide it"
+                  : " · re-surfaced: QBO recorded a newer delivery attempt")}
             </div>
           )}
           {error && (
