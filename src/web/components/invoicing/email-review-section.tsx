@@ -20,41 +20,16 @@ import { Card, CardBody } from "../ui/card";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { cn } from "../../lib/cn";
+// The wire shape is owned by the module that produces it — importing the
+// types keeps this component honest if the response ever changes. These are
+// type-only imports, so nothing server-side reaches the browser bundle.
+import type {
+  EmailReviewRow,
+  EmailReviewResponse,
+} from "../../../modules/invoice-email-review/bucket.js";
+import type { EmailReviewDismissReason } from "../../../db/schema/invoice-email-dismissals.js";
 
-type DismissReason = "sent_elsewhere" | "no_invoice_needed" | "other";
-
-export type EmailReviewRow = {
-  invoiceId: string;
-  qbInvoiceId: string;
-  docNumber: string | null;
-  customerId: string;
-  customerName: string;
-  origin: "feldart" | "tj";
-  issueDate: string | null;
-  createdAt: string;
-  total: string;
-  balance: string;
-  status: string | null;
-  emailStatus: string | null;
-  deliveryTime: string | null;
-  deliveryError: string | null;
-  recipients: { to: string[]; cc: string[] };
-  dismissal: {
-    reason: DismissReason;
-    reasonNote: string | null;
-    dismissedAt: string;
-    dismissedBy: string | null;
-  } | null;
-};
-
-export type EmailReviewResponse = {
-  neverEmailed: EmailReviewRow[];
-  deliveryFailed: EmailReviewRow[];
-  dismissed: EmailReviewRow[];
-  syncedAt: string | null;
-};
-
-const REASON_LABELS: Record<DismissReason, string> = {
+const REASON_LABELS: Record<EmailReviewDismissReason, string> = {
   sent_elsewhere: "Sent another way",
   no_invoice_needed: "No invoice needed",
   other: "Other",
@@ -71,6 +46,9 @@ export function useEmailReview(): UseQueryResult<EmailReviewResponse> {
       return res.json();
     },
     staleTime: 60_000,
+    // refetchOnWindowFocus is off globally, so poll like the page's other
+    // count queries do — otherwise the section goes stale after a sync.
+    refetchInterval: 60_000,
   });
 }
 
@@ -89,7 +67,8 @@ function ageDays(isoDay: string | null): string {
   const days = Math.floor(
     (Date.now() - new Date(`${isoDay}T00:00:00Z`).getTime()) / 86_400_000,
   );
-  return days <= 0 ? "today" : `${days}d`;
+  // QBO accepts a TxnDate in the future, so negative ages are real.
+  return days < 0 ? "future-dated" : days === 0 ? "today" : `${days}d`;
 }
 
 function timeOfDay(iso: string | null): string {
@@ -154,7 +133,7 @@ export function EmailReviewSection({
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Email review</h2>
-          <p className="text-sm text-secondary">
+          <p className="mt-0.5 text-xs text-secondary">
             What QuickBooks says about recent invoices: never emailed by anyone,
             or emailed and bounced. As of {timeOfDay(data?.syncedAt ?? null)}{" "}
             (30-min QB sync).
@@ -233,7 +212,7 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
   const queryClient = useQueryClient();
   const [sendOpen, setSendOpen] = useState(false);
   const [dismissOpen, setDismissOpen] = useState(false);
-  const [reason, setReason] = useState<DismissReason>("sent_elsewhere");
+  const [reason, setReason] = useState<EmailReviewDismissReason>("sent_elsewhere");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -251,6 +230,12 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
           reasonNote: note.trim() || undefined,
         },
       ),
+    // Clear the previous attempt's message so a retry never shows a stale
+    // error next to a fresh result.
+    onMutate: () => {
+      setError(null);
+      setNotice(null);
+    },
     onSuccess: (result) => {
       setDismissOpen(false);
       setError(null);
@@ -272,6 +257,10 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
         "/api/invoicing/email-review/restore",
         { invoiceId: row.invoiceId },
       ),
+    onMutate: () => {
+      setError(null);
+      setNotice(null);
+    },
     onSuccess: () => {
       setError(null);
       setNotice(null);
@@ -297,7 +286,13 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
             </Link>
             {row.origin === "tj" && <Badge tone="neutral">TJ</Badge>}
             {row.deliveryError && (
-              <Badge tone="critical">
+              // QBO delivery errors can be a full SMTP transcript, so cap the
+              // badge and keep the whole string in the tooltip.
+              <Badge
+                tone="critical"
+                className="max-w-[24rem] truncate"
+                title={row.deliveryError}
+              >
                 <MailX className="mr-1 inline size-3" />
                 {row.deliveryError}
               </Badge>
@@ -319,7 +314,15 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
               ` · last email ${new Date(row.deliveryTime).toLocaleString()}`}
           </div>
           <div className="text-sm">
-            <span className="font-medium">
+            {/* A missing TO address is the reason the invoice can't go out,
+                so it reads as a warning rather than as a recipient. */}
+            <span
+              className={
+                row.recipients.to.length > 0
+                  ? "font-medium"
+                  : "text-accent-warning"
+              }
+            >
               {row.recipients.to.join(", ") || "no TO address"}
             </span>
             {row.recipients.cc.length > 0 && (
@@ -341,8 +344,16 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
                 " · re-surfaced: QBO recorded a newer delivery attempt"}
             </div>
           )}
-          {error && <div className="text-xs text-accent-danger">{error}</div>}
-          {notice && <div className="text-xs text-secondary">{notice}</div>}
+          {error && (
+            <div aria-live="polite" className="text-xs text-accent-danger">
+              {error}
+            </div>
+          )}
+          {notice && (
+            <div aria-live="polite" className="text-xs text-secondary">
+              {notice}
+            </div>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -378,9 +389,9 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
           <div className="md:w-48">
             <Select
               value={reason}
-              onChange={(e) => setReason(e.target.value as DismissReason)}
+              onChange={(e) => setReason(e.target.value as EmailReviewDismissReason)}
             >
-              {(Object.keys(REASON_LABELS) as DismissReason[]).map((r) => (
+              {(Object.keys(REASON_LABELS) as EmailReviewDismissReason[]).map((r) => (
                 <option key={r} value={r}>
                   {REASON_LABELS[r]}
                 </option>
@@ -406,7 +417,14 @@ function EmailReviewRowItem({ row, tab }: { row: EmailReviewRow; tab: Tab }) {
             >
               Confirm
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setDismissOpen(false)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setDismissOpen(false);
+                setError(null);
+              }}
+            >
               Cancel
             </Button>
           </div>

@@ -762,7 +762,7 @@ function Summary(props: {
         icon={MailWarning}
         iconClassName="text-accent-warning"
         count={props.emailReviewCount}
-        label={`invoice${props.emailReviewCount === 1 ? "" : "s"} need email review`}
+        label={`${props.emailReviewCount === 1 ? "invoice needs" : "invoices need"} email review`}
         onClick={props.onScrollToEmailReview}
       />
     </div>
