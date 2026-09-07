@@ -461,25 +461,25 @@ function candidate(overrides: Partial<EmailReviewCandidate> = {}): EmailReviewCa
 }
 
 describe("isDismissalActive", () => {
+  const dismissed = new Date("2026-09-03T12:00:00Z");
   it("no dismissal → false", () => {
-    expect(isDismissalActive(null, null)).toBe(false);
-    expect(isDismissalActive(null, new Date("2026-09-06T21:43:23Z"))).toBe(false);
+    expect(isDismissalActive(null, null, null)).toBe(false);
+    expect(isDismissalActive(null, new Date("2026-09-06T21:43:23Z"), "Bounced Email")).toBe(false);
   });
-  it("dismissal with no delivery attempt → true", () => {
-    expect(isDismissalActive(new Date("2026-09-03T12:00:00Z"), null)).toBe(true);
+  it("dismissal with no delivery attempt and no error → true", () => {
+    expect(isDismissalActive(dismissed, null, null)).toBe(true);
+  });
+  it("undated bounce → dismissal never hides it", () => {
+    expect(isDismissalActive(dismissed, null, "Bounced Email")).toBe(false);
   });
   it("dismissal newer than the last delivery attempt → true", () => {
-    expect(
-      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-02T13:36:04Z")),
-    ).toBe(true);
+    expect(isDismissalActive(dismissed, new Date("2026-09-02T13:36:04Z"), "Bounced Email")).toBe(true);
   });
   it("delivery attempt after the dismissal → false (stale)", () => {
-    expect(
-      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-06T21:43:23Z")),
-    ).toBe(false);
+    expect(isDismissalActive(dismissed, new Date("2026-09-06T21:43:23Z"), null)).toBe(false);
   });
   it("accepts ISO strings", () => {
-    expect(isDismissalActive("2026-09-03T12:00:00Z", "2026-09-02T13:36:04Z")).toBe(true);
+    expect(isDismissalActive("2026-09-03T12:00:00Z", "2026-09-02T13:36:04Z", null)).toBe(true);
   });
 });
 
@@ -684,15 +684,20 @@ export function emailReviewWindowStart(now: Date = new Date()): string {
 }
 
 // A dismissal hides an invoice only until QBO records a NEWER delivery
-// attempt. So "dismissed while NotSet, later sent and bounced" and
+// attempt. QBO moves DeliveryInfo.DeliveryTime on every send (observed in
+// prod 2026-09-06: eight invoices re-sent from the QBO UI all carry the same
+// new DeliveryTime), so "dismissed while NotSet, later sent and bounced" and
 // "dismissed bounce, re-sent, bounced again" both re-surface — otherwise the
 // invisible-bounce failure this feature exists to catch would survive it.
+// A bounce with NO usable DeliveryTime (QBO omitted it, or the sync could not
+// parse it) can't prove the dismissal came later, so it is never hidden.
 export function isDismissalActive(
   dismissedAt: string | Date | null,
   deliveryTime: string | Date | null,
+  deliveryError: string | null,
 ): boolean {
   if (!dismissedAt) return false;
-  if (!deliveryTime) return true;
+  if (!deliveryTime) return !deliveryError;
   return ms(dismissedAt) > ms(deliveryTime);
 }
 
@@ -700,7 +705,7 @@ export function classifyForEmailReview(
   c: EmailReviewCandidate,
   now: Date = new Date(),
 ): EmailReviewBucket | null {
-  if (isDismissalActive(c.dismissedAt, c.deliveryTime)) return null;
+  if (isDismissalActive(c.dismissedAt, c.deliveryTime, c.deliveryError)) return null;
   if (c.status === "void") return null;
   if (!c.issueDate) return null;
 
@@ -721,7 +726,9 @@ export function classifyForEmailReview(
   if (!Number.isFinite(total) || total <= 0) return null;
   if (!Number.isFinite(balance) || balance <= 0) return null;
 
-  const createdMs = new Date(c.createdAt).getTime();
+  // created_at is NOT NULL; an unparsable value is corrupt data — fail closed.
+  const createdMs = ms(c.createdAt);
+  if (!Number.isFinite(createdMs)) return null;
   if (now.getTime() - createdMs < EMAIL_REVIEW_GRACE_HOURS * 60 * 60 * 1000) {
     return null;
   }
@@ -732,7 +739,23 @@ export function classifyForEmailReview(
 - [ ] **Step 4: Run the test**
 
 Run: `npx vitest run src/modules/invoice-email-review/select.test.ts`
-Expected: PASS (25 tests).
+Expected: PASS (26 tests).
+
+Also create the module barrel `src/modules/invoice-email-review/index.ts`
+(every other module directory has one) and have the route import from it:
+
+```ts
+export {
+  classifyForEmailReview,
+  emailReviewWindowStart,
+  isDismissalActive,
+  EMAIL_REVIEW_GRACE_HOURS,
+  EMAIL_REVIEW_WINDOW_DAYS,
+  NOT_EMAILED_STATUSES,
+  type EmailReviewBucket,
+  type EmailReviewCandidate,
+} from "./select.js";
+```
 
 - [ ] **Step 5: Commit**
 
@@ -967,7 +990,8 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
       // delivery attempt (isDismissalActive). Stale dismissals fall through
       // to the live buckets but keep their `dismissal` info for display.
       const dismissed =
-        r.dismissReason !== null && isDismissalActive(r.dismissedAt, r.deliveryTime);
+        r.dismissReason !== null &&
+        isDismissalActive(r.dismissedAt, r.deliveryTime, r.deliveryError);
       // Classify as if not dismissed so actively-dismissed rows that would
       // otherwise qualify land in the Dismissed tab (restore path); rows
       // that no longer qualify at all are dropped regardless of dismissal.

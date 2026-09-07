@@ -73,7 +73,11 @@ invoice_email_dismissals
 ```
 
 A dismissal only counts while it is **newer than the last delivery
-attempt**: `dismissed_at > delivery_time` (or `delivery_time` is null). So a
+attempt**: `dismissed_at > delivery_time`; if `delivery_time` is null it
+counts only when there is also no `delivery_error` (an undated bounce can't
+prove the dismissal came after it, so it stays visible). QBO moves
+`DeliveryTime` on every send (observed 2026-09-06: eight Eichlers BP invoices
+re-sent from the QBO UI all carry the same new `DeliveryTime`). So a
 never-emailed invoice dismissed as "sent elsewhere" that is later sent and
 bounces re-surfaces under Delivery failed, and a dismissed bounce that is
 re-sent and bounces again re-surfaces too. (Found in Task 1 review: with a
@@ -191,7 +195,11 @@ own `useQuery(["invoicing","email-review"])`, `staleTime` 60s.
 
 ### 8. Rollout
 
-Migration 0057 (two `ALTER TABLE invoices ADD`, one `CREATE TABLE`). Manual
+Migration 0057 (three `ALTER TABLE invoices ADD`, one `CREATE TABLE`, two
+FKs, one index; all instant/metadata-only on the hot `invoices` table). The
+first sync after deploy will report `updated` ≈ every invoice (email_status
+NULL → value) and re-run the per-invoice line resync once — pre-existing
+per-drift behaviour, no activities or audit rows emitted. Manual
 deploy over `ssh finance-vps` per the standing recipe: build → tar dist +
 migrations → `db:migrate` → `pm2 reload`. First sync after reload populates
 `email_status`; the section is empty until then (by design, see §3).
@@ -208,8 +216,14 @@ migrations → `db:migrate` → `pm2 reload`. First sync after reload populates
 - No live QBO call from the route: the 30-min sync is already a full fetch,
   and a live call would add QBO latency/rate-limit risk to a page that loads
   many times a day.
+- `syncedAt` is `MAX(invoices.last_synced_at)`, an unindexed aggregate over
+  ~3.2k rows (≈1 ms). Not worth an index; revisit at six-figure row counts.
+- The Dismissed tab is a *restore path*, not a dismissal history: a dismissed
+  invoice that is later paid, voided, or emailed drops off it (the dismissal
+  row stays in the table and in `audit_log`).
+- No pagination: the 90-day window plus the NotSet/bounced pre-filter bounds
+  the list to tens of rows in practice.
 
 Operator A/B answer: no reply within 30 min of the question (13:39–14:10 UK);
 proceeded with A per the standing "decide independently, flag at end"
-convention and told the operator over radio that B is a cheap switch until
-ship.
+convention. Operator confirmed "A please" over radio at 14:43 UK.
