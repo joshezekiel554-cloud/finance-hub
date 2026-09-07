@@ -30,7 +30,7 @@ import {
   isDismissalActive,
   NOT_EMAILED_STATUSES,
   type EmailReviewBucket,
-} from "../../modules/invoice-email-review/select.js";
+} from "../../modules/invoice-email-review/index.js";
 import { requireAuth } from "../lib/auth.js";
 
 const log = createLogger({ component: "invoicing-email-review-route" });
@@ -155,7 +155,8 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
       // delivery attempt (isDismissalActive). Stale dismissals fall through
       // to the live buckets but keep their `dismissal` info for display.
       const dismissed =
-        r.dismissReason !== null && isDismissalActive(r.dismissedAt, r.deliveryTime);
+        r.dismissReason !== null &&
+        isDismissalActive(r.dismissedAt, r.deliveryTime, r.deliveryError);
       // Classify as if not dismissed so actively-dismissed rows that would
       // otherwise qualify land in the Dismissed tab (restore path); rows
       // that no longer qualify at all are dropped regardless of dismissal.

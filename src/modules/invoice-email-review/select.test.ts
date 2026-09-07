@@ -26,25 +26,25 @@ function candidate(overrides: Partial<EmailReviewCandidate> = {}): EmailReviewCa
 }
 
 describe("isDismissalActive", () => {
+  const dismissed = new Date("2026-09-03T12:00:00Z");
   it("no dismissal → false", () => {
-    expect(isDismissalActive(null, null)).toBe(false);
-    expect(isDismissalActive(null, new Date("2026-09-06T21:43:23Z"))).toBe(false);
+    expect(isDismissalActive(null, null, null)).toBe(false);
+    expect(isDismissalActive(null, new Date("2026-09-06T21:43:23Z"), "Bounced Email")).toBe(false);
   });
-  it("dismissal with no delivery attempt → true", () => {
-    expect(isDismissalActive(new Date("2026-09-03T12:00:00Z"), null)).toBe(true);
+  it("dismissal with no delivery attempt and no error → true", () => {
+    expect(isDismissalActive(dismissed, null, null)).toBe(true);
+  });
+  it("undated bounce → dismissal never hides it", () => {
+    expect(isDismissalActive(dismissed, null, "Bounced Email")).toBe(false);
   });
   it("dismissal newer than the last delivery attempt → true", () => {
-    expect(
-      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-02T13:36:04Z")),
-    ).toBe(true);
+    expect(isDismissalActive(dismissed, new Date("2026-09-02T13:36:04Z"), "Bounced Email")).toBe(true);
   });
   it("delivery attempt after the dismissal → false (stale)", () => {
-    expect(
-      isDismissalActive(new Date("2026-09-03T12:00:00Z"), new Date("2026-09-06T21:43:23Z")),
-    ).toBe(false);
+    expect(isDismissalActive(dismissed, new Date("2026-09-06T21:43:23Z"), null)).toBe(false);
   });
   it("accepts ISO strings", () => {
-    expect(isDismissalActive("2026-09-03T12:00:00Z", "2026-09-02T13:36:04Z")).toBe(true);
+    expect(isDismissalActive("2026-09-03T12:00:00Z", "2026-09-02T13:36:04Z", null)).toBe(true);
   });
 });
 
@@ -165,6 +165,20 @@ describe("classifyForEmailReview", () => {
           emailStatus: "EmailSent",
           deliveryError: "Bounced Email",
           deliveryTime: new Date("2026-09-06T21:43:23Z"),
+        }),
+        NOW,
+      ),
+    ).toBe("delivery_failed");
+  });
+
+  it("dismissed, then an undated bounce → delivery_failed (never hidden)", () => {
+    expect(
+      classifyForEmailReview(
+        candidate({
+          dismissedAt: new Date("2026-09-03T12:00:00Z"),
+          emailStatus: "EmailSent",
+          deliveryError: "Undeliverable",
+          deliveryTime: null,
         }),
         NOW,
       ),

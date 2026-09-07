@@ -64,15 +64,20 @@ export function emailReviewWindowStart(now: Date = new Date()): string {
 }
 
 // A dismissal hides an invoice only until QBO records a NEWER delivery
-// attempt. So "dismissed while NotSet, later sent and bounced" and
+// attempt. QBO moves DeliveryInfo.DeliveryTime on every send (observed in
+// prod 2026-09-06: eight invoices re-sent from the QBO UI all carry the same
+// new DeliveryTime), so "dismissed while NotSet, later sent and bounced" and
 // "dismissed bounce, re-sent, bounced again" both re-surface — otherwise the
 // invisible-bounce failure this feature exists to catch would survive it.
+// A bounce with NO usable DeliveryTime (QBO omitted it, or the sync could not
+// parse it) can't prove the dismissal came later, so it is never hidden.
 export function isDismissalActive(
   dismissedAt: string | Date | null,
   deliveryTime: string | Date | null,
+  deliveryError: string | null,
 ): boolean {
   if (!dismissedAt) return false;
-  if (!deliveryTime) return true;
+  if (!deliveryTime) return !deliveryError;
   return ms(dismissedAt) > ms(deliveryTime);
 }
 
@@ -80,7 +85,7 @@ export function classifyForEmailReview(
   c: EmailReviewCandidate,
   now: Date = new Date(),
 ): EmailReviewBucket | null {
-  if (isDismissalActive(c.dismissedAt, c.deliveryTime)) return null;
+  if (isDismissalActive(c.dismissedAt, c.deliveryTime, c.deliveryError)) return null;
   if (c.status === "void") return null;
   if (!c.issueDate) return null;
 
@@ -101,7 +106,9 @@ export function classifyForEmailReview(
   if (!Number.isFinite(total) || total <= 0) return null;
   if (!Number.isFinite(balance) || balance <= 0) return null;
 
-  const createdMs = new Date(c.createdAt).getTime();
+  // created_at is NOT NULL; an unparsable value is corrupt data — fail closed.
+  const createdMs = ms(c.createdAt);
+  if (!Number.isFinite(createdMs)) return null;
   if (now.getTime() - createdMs < EMAIL_REVIEW_GRACE_HOURS * 60 * 60 * 1000) {
     return null;
   }
