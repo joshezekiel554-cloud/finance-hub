@@ -502,9 +502,9 @@ async function upsertInvoice(
     status,
     customerMemo: qboInvoice.CustomerMemo?.value ?? null,
     syncToken: qboInvoice.SyncToken ?? null,
-    emailStatus: qboInvoice.EmailStatus ?? null,
+    emailStatus: clampQboString(qboInvoice.EmailStatus, 32),
     deliveryTime: parseQboDateTime(qboInvoice.DeliveryInfo?.DeliveryTime),
-    deliveryError: qboInvoice.DeliveryInfo?.DeliveryErrorType ?? null,
+    deliveryError: clampQboString(qboInvoice.DeliveryInfo?.DeliveryErrorType, 64),
     lastSyncedAt: new Date(),
   };
 
@@ -1186,16 +1186,33 @@ function parseQboDate(v: string | undefined | null): Date | null {
   return new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00.000Z`);
 }
 
-// QBO DeliveryInfo.DeliveryTime is an ISO-8601 string with an offset
-// ("2026-09-06T14:43:23-07:00"). Unparsable → null with a warn, never throw.
-function parseQboDateTime(v: string | undefined | null): Date | null {
+// QBO DeliveryInfo.DeliveryTime is an ISO-8601 datetime with an offset
+// ("2026-09-06T14:43:23-07:00"). Strict on shape (like parseQboDate) so a
+// bare "2026" can't become a valid-but-wrong date. Unparsable → null with a
+// warn, never throw. Milliseconds are zeroed because delivery_time has no
+// fractional-seconds precision: MySQL would round on write and the next sync
+// would see phantom drift and rewrite the row forever.
+export function parseQboDateTime(v: string | undefined | null): Date | null {
   if (!v) return null;
-  const d = new Date(v);
+  const d = /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v) : new Date(NaN);
   if (Number.isNaN(d.getTime())) {
     log.warn({ value: v }, "unparsable QBO DeliveryTime; storing null");
     return null;
   }
+  d.setMilliseconds(0);
   return d;
+}
+
+// QBO strings land in narrow varchars. Under MySQL strict mode an over-long
+// value is ER_DATA_TOO_LONG, which fails the whole invoice upsert — and
+// per-invoice failures are only warn-logged, so the row would silently stop
+// syncing (the repo already has ~12 ancient invoices stuck this way on SKU
+// length). Truncate instead; a clipped error string still classifies.
+export function clampQboString(v: string | undefined | null, max: number): string | null {
+  if (!v) return null;
+  if (v.length <= max) return v;
+  log.warn({ value: v, max }, "QBO string exceeds column width; truncating");
+  return v.slice(0, max);
 }
 
 function isoDateTimeOrNull(v: Date | null | undefined): string | null {

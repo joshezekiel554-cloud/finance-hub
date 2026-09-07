@@ -2,7 +2,7 @@
 // drift on any of them produces an update set that carries all three, and
 // sent_at / sent_via stay out of the set (they are local-only).
 import { describe, expect, it } from "vitest";
-import { planInvoiceUpdate } from "./sync.js";
+import { clampQboString, parseQboDateTime, planInvoiceUpdate } from "./sync.js";
 
 type Before = Parameters<typeof planInvoiceUpdate>[0];
 type Desired = Parameters<typeof planInvoiceUpdate>[1];
@@ -99,10 +99,50 @@ describe("planInvoiceUpdate — email/delivery fields", () => {
     expect(set?.deliveryTime?.toISOString()).toBe("2026-09-06T21:43:23.000Z");
   });
 
-  it("never includes sent_at / sent_via in the set", () => {
+  it("update set is exactly the sync-owned fields — never sent_at / sent_via", () => {
     const set = planInvoiceUpdate(before(), desired({ emailStatus: "EmailSent" }));
     expect(set).not.toBeNull();
-    expect(Object.keys(set ?? {})).not.toContain("sentAt");
-    expect(Object.keys(set ?? {})).not.toContain("sentVia");
+    expect(Object.keys(set ?? {}).sort()).toEqual(
+      [
+        "balance",
+        "customerId",
+        "customerMemo",
+        "deliveryError",
+        "deliveryTime",
+        "docNumber",
+        "dueDate",
+        "emailStatus",
+        "issueDate",
+        "lastSyncedAt",
+        "origin",
+        "status",
+        "syncToken",
+        "total",
+      ].sort(),
+    );
+  });
+});
+
+describe("parseQboDateTime", () => {
+  it("parses an offset ISO datetime to the right instant with ms zeroed", () => {
+    expect(parseQboDateTime("2026-09-06T14:43:23-07:00")?.toISOString()).toBe("2026-09-06T21:43:23.000Z");
+    expect(parseQboDateTime("2026-09-06T14:43:23.500-07:00")?.toISOString()).toBe("2026-09-06T21:43:23.000Z");
+  });
+  it("returns null on empty or non-ISO input", () => {
+    expect(parseQboDateTime(undefined)).toBeNull();
+    expect(parseQboDateTime("")).toBeNull();
+    expect(parseQboDateTime("2026")).toBeNull();
+    expect(parseQboDateTime("not a date")).toBeNull();
+  });
+});
+
+describe("clampQboString", () => {
+  it("passes short values through and nulls empties", () => {
+    expect(clampQboString("Bounced Email", 64)).toBe("Bounced Email");
+    expect(clampQboString(undefined, 64)).toBeNull();
+    expect(clampQboString("", 64)).toBeNull();
+  });
+  it("truncates over-long values to the column width", () => {
+    expect(clampQboString("x".repeat(70), 64)).toBe("x".repeat(64));
   });
 });
