@@ -36,6 +36,8 @@ describe("buildNeedsYou", () => {
       title: "now-old",
       detail: null,
       age: "6d",
+      // ISO twin of `age` so the hub can sort a merged inbox+finance list.
+      at: "2026-09-08T14:00:00.000Z",
       urgency: "now",
       url: "https://finance.feldart.com/",
     });

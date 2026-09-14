@@ -59,7 +59,10 @@ export type NeedsYouItem = {
   kind: NeedsYouKind;
   title: string;
   detail: string | null;
+  /** Compact human label ("14m", "3h", "6d") — displayed as-is by the hub. */
   age: string;
+  /** ISO twin of `age` — the hub sorts its merged inbox+finance list on it. */
+  at: string;
   urgency: NeedsYouUrgency;
   url: string;
 };
@@ -91,6 +94,7 @@ export function buildNeedsYou(items: readonly NeedsYouCandidate[], now: Date): N
       title: c.title,
       detail: c.detail,
       age: ageLabel(c.since, now),
+      at: c.since.toISOString(),
       urgency: c.urgency,
       url: c.url,
     }));
@@ -106,10 +110,10 @@ export type HubSummary = {
   chaseAccounts: number;
   holds: {
     count: number;
-    items: Array<{ order: string; customer: string; reason: string | null; age: string; url: string }>;
+    items: Array<{ order: string; customer: string; reason: string | null; age: string; at: string; url: string }>;
   };
   invoicing: { toInvoice: number | null; needingReview: number; bounced: number };
-  returns: Array<{ rma: string; customer: string; status: string; url: string }>;
+  returns: Array<{ rma: string; customer: string; status: string; at: string; url: string }>;
   needsYou: NeedsYouItem[];
   syncedAt: string;
 };
@@ -231,6 +235,7 @@ async function buildSummary(now: Date): Promise<HubSummary> {
         customer: o.customerName ?? "",
         reason: o.reason,
         age: `${o.heldDays}d`,
+        at: new Date(now.getTime() - o.heldDays * 86_400_000).toISOString(),
         url: url(`/customers/${o.customerId}`),
       })),
     },
@@ -241,6 +246,7 @@ async function buildSummary(now: Date): Promise<HubSummary> {
       rma: r.rmaNumber ?? r.id,
       customer: r.customerName,
       status: r.status,
+      at: (r.updatedAt instanceof Date ? r.updatedAt : new Date(r.updatedAt)).toISOString(),
       url: url(`/returns/${r.id}`),
     })),
     needsYou: buildNeedsYou(candidates, now),
