@@ -98,7 +98,9 @@ export default function App({ children }: { children: ReactNode }) {
           })}
         </nav>
         <div className="border-t border-default p-3 space-y-2">
-          <SignOutFooter />
+          {/* Signing out of finance alone inside the hub would just bounce
+              the frame back through the handoff — the hub owns sign-out. */}
+          {!embedded && <SignOutFooter />}
           <div className="text-xs text-muted">v2.0</div>
         </div>
       </aside>
@@ -142,17 +144,26 @@ export default function App({ children }: { children: ReactNode }) {
           >
             <Menu className="size-5" />
           </button>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <div className="size-6 shrink-0 rounded-md bg-accent-primary/10 ring-1 ring-accent-primary/30" />
-            <span className="truncate text-sm font-semibold tracking-tight">
-              Finance Hub
-            </span>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <AgentToggleButton />
-            <NotificationBell />
-            <UserPill />
-          </div>
+          {/* Inside the hub the hub's own bar carries brand, bell and account,
+              so this row keeps only the hamburger (finance's inner nav). */}
+          {!embedded && (
+            <>
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <div className="size-6 shrink-0 rounded-md bg-accent-primary/10 ring-1 ring-accent-primary/30" />
+                <span className="truncate text-sm font-semibold tracking-tight">
+                  Finance Hub
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <AgentToggleButton />
+                <NotificationBell />
+                <UserPill />
+              </div>
+            </>
+          )}
+          {embedded && (
+            <span className="truncate text-sm font-medium text-secondary">Menu</span>
+          )}
         </header>
 
         {/* No `overflow-y-auto` here: the app is window-scrolled (outer is
@@ -167,7 +178,7 @@ export default function App({ children }: { children: ReactNode }) {
           open={drawerOpen}
           onOpenChange={setDrawerOpen}
           items={navItems}
-          footer={<SignOutFooter />}
+          footer={embedded ? null : <SignOutFooter />}
         />
         <AgentPanel />
       </div>
