@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hub.feldart.com — shell + Home (rev 2, inbox design language)</title>
+<style>
+  /* Tokens lifted verbatim from Feldart Inbox DESIGN.md / globals.css */
+  :root{
+    --bg: oklch(0.985 0.005 65);
+    --page: oklch(0.970 0.006 65);
+    --surface: oklch(1.000 0 0);
+    --border: oklch(0.910 0.008 65);
+    --border-strong: oklch(0.860 0.010 65);
+    --muted: oklch(0.960 0.008 65);
+    --text: oklch(0.205 0.012 65);
+    --text-soft: oklch(0.450 0.010 65);
+    --text-faint: oklch(0.650 0.008 65);
+    --accent: oklch(0.490 0.085 155);
+    --accent-soft: oklch(0.940 0.025 155);
+    --accent-text: oklch(0.985 0.005 65);
+    --s-unassigned: oklch(0.620 0.012 65);
+    --s-todo: oklch(0.585 0.180 25);
+    --s-prog: oklch(0.700 0.150 75);
+    --s-wait: oklch(0.700 0.090 220);
+    --s-done: oklch(0.700 0.060 155);
+    --s-todo-bg: oklch(0.960 0.030 25);
+    --s-prog-bg: oklch(0.965 0.035 75);
+    --s-wait-bg: oklch(0.960 0.020 220);
+    --s-done-bg: oklch(0.960 0.020 155);
+    --radius: 10px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:"Inter","Segoe UI Variable","Segoe UI",system-ui,sans-serif;background:var(--page);color:var(--text);
+    font-size:13px;-webkit-font-smoothing:antialiased;width:1480px;padding:0 0 40px}
+  .mono{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+  .flabel{display:flex;align-items:baseline;gap:10px;padding:22px 20px 10px}
+  .flabel .n{font-size:10.5px;font-weight:700;letter-spacing:.10em;color:#fff;background:var(--text);border-radius:5px;padding:2px 7px}
+  .flabel .t{font-size:13.5px;font-weight:700}
+  .flabel .s{font-size:12px;color:var(--text-soft)}
+
+  /* ── shell ──────────────────────────────────────── */
+  .shell{width:1440px;height:900px;margin:0 20px;display:grid;grid-template-columns:212px 1fr;
+    border:1px solid var(--border-strong);border-radius:12px;overflow:hidden;background:var(--page)}
+  .rail{background:var(--bg);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:14px 10px}
+  .brand{display:flex;align-items:center;gap:9px;padding:6px 8px 18px;font-weight:700;font-size:14px}
+  .brand .logo{width:24px;height:24px;border-radius:6px;background:var(--accent);color:var(--accent-text);display:grid;place-items:center;font-size:11.5px;font-weight:700}
+  .nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;font-weight:550;font-size:13px;color:var(--text-soft);text-decoration:none;margin-bottom:2px}
+  .nav a.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
+  .nav a .ic{width:16px;text-align:center;font-size:13px;opacity:.85}
+  .nav a .cnt{margin-left:auto;font-size:11.5px;color:var(--text-faint);font-variant-numeric:tabular-nums}
+  .nav a .cnt.hot{color:var(--s-todo);font-weight:650}
+  .nav a .cnt .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--s-todo);margin-right:5px;vertical-align:middle}
+  .rail .foot{margin-top:auto;display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px}
+  .avatar{width:26px;height:26px;border-radius:50%;background:var(--muted);border:1px solid var(--border-strong);color:var(--text-soft);display:grid;place-items:center;font-weight:700;font-size:10.5px}
+  .rail .foot .who{line-height:1.2;font-size:12.5px;font-weight:600}
+  .rail .foot .who small{display:block;color:var(--text-faint);font-weight:400;font-size:10.5px}
+  .rail .foot .chev{margin-left:auto;color:var(--text-faint);font-size:10px}
+
+  .main{display:flex;flex-direction:column;min-width:0;background:var(--page)}
+  .topbar{height:52px;display:flex;align-items:center;gap:12px;padding:0 22px;border-bottom:1px solid var(--border);background:var(--bg)}
+  .topbar .title{font-weight:700;font-size:15px}
+  .topbar .crumb{color:var(--text-faint);font-size:12.5px}
+  .topbar .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .search{width:220px;height:32px;border:1px solid var(--border);border-radius:8px;background:var(--surface);display:flex;align-items:center;gap:8px;padding:0 10px;color:var(--text-faint);font-size:12.5px}
+  .search kbd{margin-left:auto;font:500 10.5px/1 system-ui;border:1px solid var(--border);border-radius:4px;padding:2px 5px;color:var(--text-faint)}
+  .obtn{height:32px;border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:0 11px;display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--text);position:relative}
+  .obtn.icon{width:32px;padding:0;justify-content:center}
+  .obtn .dot{position:absolute;top:7px;right:7px;width:6px;height:6px;border-radius:50%;background:var(--s-todo)}
+
+  .content{padding:20px 22px;display:grid;grid-template-columns:1fr 372px;gap:18px;overflow:hidden;min-height:0}
+  .greet{grid-column:1/3;display:flex;align-items:baseline;gap:12px}
+  .greet h1{font-size:18px;font-weight:700}
+  .greet .d{color:var(--text-faint);font-size:12.5px}
+  .greet .sync{margin-left:auto;font-size:11.5px;color:var(--text-faint);display:flex;align-items:center;gap:6px}
+  .greet .sync i{width:6px;height:6px;border-radius:50%;background:var(--s-done)}
+
+  /* needs-you list */
+  .needs{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);display:flex;flex-direction:column;min-height:0}
+  .needs .nh{display:flex;align-items:baseline;gap:10px;padding:12px 16px 10px;border-bottom:1px solid var(--border)}
+  .needs .nh h2{font-size:14px;font-weight:700}
+  .needs .nh .sub{color:var(--text-faint);font-size:12px}
+  .needs .nh .filt{margin-left:auto;display:flex;gap:4px}
+  .needs .nh .filt span{font-size:11.5px;color:var(--text-soft);padding:3px 8px;border-radius:6px}
+  .needs .nh .filt span.on{background:var(--muted);color:var(--text);font-weight:600}
+  .grp{padding:8px 16px 4px;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint)}
+  .item{display:grid;grid-template-columns:14px 64px 1fr auto;align-items:center;gap:10px;padding:9px 16px;border-top:1px solid var(--border)}
+  .item .sd{width:6px;height:6px;border-radius:50%;justify-self:center}
+  .sd.todo{background:var(--s-todo)} .sd.prog{background:var(--s-prog)} .sd.wait{background:var(--s-wait)} .sd.done{background:var(--s-done)} .sd.un{background:var(--s-unassigned)}
+  .chip{font-size:10.5px;font-weight:600;color:var(--text-soft);background:var(--muted);border-radius:5px;padding:2px 7px;text-align:center}
+  .item .tx{min-width:0}
+  .item .tx .l1{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item .tx .l2{color:var(--text-soft);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+  .item .age{color:var(--text-faint);font-size:11.5px;white-space:nowrap}
+  .item .age b{color:var(--text);font-weight:600;font-family:ui-monospace,Consolas,monospace}
+  .needs .nf{margin-top:auto;padding:9px 16px;border-top:1px solid var(--border);color:var(--text-faint);font-size:11.5px;display:flex;gap:10px}
+  .needs .nf a{color:var(--accent);font-weight:600;margin-left:auto}
+
+  /* digests */
+  .digests{display:flex;flex-direction:column;gap:12px;min-height:0}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px 10px}
+  .panel .ph{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+  .panel .ph h3{font-size:13px;font-weight:700}
+  .panel .ph .sub{color:var(--text-faint);font-size:12px}
+  .panel .ph a{margin-left:auto;color:var(--accent);font-weight:600;font-size:12px}
+  .prow{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px;border-top:1px solid var(--border)}
+  .prow:first-of-type{border-top:0}
+  .prow .k{color:var(--text-soft);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .prow .k b{color:var(--text);font-weight:600}
+  .prow .v{font-weight:600;font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums}
+  .prow .v.soft{color:var(--text-faint);font-weight:500}
+  .prow .sd{width:6px;height:6px;border-radius:50%;flex:none}
+  .subh{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);padding:9px 0 3px}
+  .pill{font-size:10.5px;font-weight:600;border-radius:5px;padding:1px 6px;white-space:nowrap}
+  .pill.todo{background:var(--s-todo-bg);color:var(--s-todo)} .pill.prog{background:var(--s-prog-bg);color:oklch(0.50 0.12 75)} .pill.wait{background:var(--s-wait-bg);color:oklch(0.48 0.09 220)} .pill.done{background:var(--s-done-bg);color:var(--accent)}
+
+  /* embedded (frame B) */
+  .embedbar{height:32px;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--bg);border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-faint)}
+  .embedbar .url{font-family:ui-monospace,Consolas,monospace;color:var(--text-soft)}
+  .embedbar .open{margin-left:auto;color:var(--accent);font-weight:600}
+  .fakeinbox{flex:1;display:grid;grid-template-columns:220px 380px 1fr;background:var(--surface);min-height:0}
+  .fi-side{border-right:1px solid var(--border);padding:12px 10px;font-size:12.5px;background:var(--bg)}
+  .fi-side .h{font-weight:700;font-size:12.5px;padding:4px 8px 8px;color:var(--text-soft)}
+  .fi-side a{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;color:var(--text-soft)}
+  .fi-side a.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
+  .fi-side a .c{margin-left:auto;font-size:11px;color:var(--text-faint)}
+  .fi-list{border-right:1px solid var(--border);overflow:hidden}
+  .fi-list .lh{padding:12px 14px;font-weight:700;font-size:13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+  .fi-list .lh .seg{margin-left:auto;display:flex;background:var(--muted);border-radius:7px;padding:2px;font-size:11px}
+  .fi-list .lh .seg span{padding:2px 8px;border-radius:5px;color:var(--text-soft)}
+  .fi-list .lh .seg span.on{background:var(--surface);color:var(--text);font-weight:650;box-shadow:0 0 0 1px var(--border)}
+  .fi-item{padding:10px 14px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:auto 1fr auto;gap:3px 10px;font-size:12.5px}
+  .fi-item.on{background:var(--muted)}
+  .fi-item .f{font-weight:650}
+  .fi-item .t{grid-column:1/3;color:var(--text-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fi-item .w{color:var(--text-faint);font-size:11px}
+  .fi-read{padding:16px 22px;font-size:12.5px;color:var(--text-soft);line-height:1.55}
+  .fi-read h3{font-size:15px;color:var(--text);margin-bottom:6px}
+  .fi-read .meta{font-size:11.5px;color:var(--text-faint);margin-bottom:14px}
+  .fi-read p{margin-bottom:10px;max-width:560px}
+  .fi-read .actions{display:flex;gap:8px;margin-top:14px}
+  .fi-read .actions span{border:1px solid var(--border);border-radius:8px;padding:5px 11px;font-weight:600;font-size:12px;color:var(--text)}
+  .fi-read .actions span.p{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+  .fpanel{margin-top:16px;border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;max-width:560px;background:var(--bg)}
+  .fpanel .ph{font-weight:700;font-size:12px;margin-bottom:6px;display:flex;gap:8px;align-items:center}
+  .fpanel .ph .pill{margin-left:auto}
+  .fpanel .pr{display:flex;gap:14px;font-size:12px;color:var(--text-soft)}
+  .fpanel .pr b{color:var(--text)}
+
+  .changes{margin:18px 20px 0;width:1440px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;font-size:12.5px;color:var(--text-soft);line-height:1.55;display:grid;grid-template-columns:1fr 1fr;gap:6px 24px}
+  .changes b{color:var(--text)}
+</style>
+</head>
+<body>
+
+<!-- ═══ FRAME A2 — Home, rev 2 ═══ -->
+<div class="flabel"><span class="n">A2</span><span class="t">hub.feldart.com — Home (desktop, rev 2)</span><span class="s">inbox design language. One list to act from; per-app digests stay quiet on the right.</span></div>
+<div class="shell" id="frame-a">
+  <aside class="rail">
+    <div class="brand"><span class="logo">F</span>Feldart</div>
+    <nav class="nav">
+      <a class="on"><span class="ic">⌂</span>Home</a>
+      <a><span class="ic">✉</span>Inbox<span class="cnt hot"><span class="dot"></span>12</span></a>
+      <a><span class="ic">£</span>Finance<span class="cnt hot"><span class="dot"></span>4</span></a>
+      <a><span class="ic">☑</span>Tasks<span class="cnt">5</span></a>
+      <a><span class="ic">▦</span>Internal</a>
+    </nav>
+    <div class="foot"><span class="avatar">LF</span><span class="who">Leibel<small>leibel@feldart.com</small></span><span class="chev">▾</span></div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <span class="title">Home</span>
+      <div class="right">
+        <div class="search">⌕ Search inbox <kbd>Ctrl K</kbd></div>
+        <div class="obtn icon">🔔<span class="dot"></span></div>
+        <div class="obtn">+ New task</div>
+      </div>
+    </div>
+    <div class="content">
+      <div class="greet"><h1>Good afternoon, Leibel</h1><span class="d">Monday 14 September</span><span class="sync"><i></i>All apps synced · 2 min ago</span></div>
+
+      <!-- LEFT: needs you -->
+      <section class="needs">
+        <div class="nh"><h2>Needs you</h2><span class="sub">9 items across Inbox, Finance, Tasks · newest urgent first</span>
+          <div class="filt"><span class="on">All</span><span>Inbox</span><span>Finance</span><span>Tasks</span></div></div>
+
+        <div class="grp">Now</div>
+        <div class="item"><span class="sd todo"></span><span class="chip">Inbox</span><div class="tx"><div class="l1">Elegant Linen — Re: Invoice 10422</div><div class="l2">Chasing tracking for the Monsey order · also never received the invoice email</div></div><span class="age"><b>14m</b></span></div>
+        <div class="item"><span class="sd todo"></span><span class="chip">Inbox</span><div class="tx"><div class="l1">Vocatech — Damaged carton, wants credit memo</div><div class="l2">3 photos attached · RMA DC38828 already open</div></div><span class="age"><b>41m</b></span></div>
+        <div class="item"><span class="sd todo"></span><span class="chip">Finance</span><div class="tx"><div class="l1">Decide: hold on order #18926 Meoros</div><div class="l2">Promised payment (8 Sep) hasn't landed · hold ladder paused 6 days</div></div><span class="age"><b>6d</b></span></div>
+        <div class="item"><span class="sd todo"></span><span class="chip">Tasks</span><div class="tx"><div class="l1">Approve Meoros credit memo</div><div class="l2">Assigned by Josh · due yesterday</div></div><span class="age">overdue <b>1d</b></span></div>
+        <div class="item"><span class="sd prog"></span><span class="chip">Inbox</span><div class="tx"><div class="l1">Josh mentioned you — "TJ wind-down · final statements"</div><div class="l2">"@Leibel can you confirm we close the TJ book on the 30th?"</div></div><span class="age"><b>1h</b></span></div>
+
+        <div class="grp">Today</div>
+        <div class="item"><span class="sd prog"></span><span class="chip">Finance</span><div class="tx"><div class="l1">2 invoices bounced — Elegant Linen</div><div class="l2">QBO delivery failed (address over 100 chars) · fix address then resend</div></div><span class="age"><b>3h</b></span></div>
+        <div class="item"><span class="sd prog"></span><span class="chip">Tasks</span><div class="tx"><div class="l1">Sign off Yiddy roster report</div><div class="l2">Ready for review · due today</div></div><span class="age">due <b>today</b></span></div>
+        <div class="item"><span class="sd wait"></span><span class="chip">Inbox</span><div class="tx"><div class="l1">Meoros Judaica — "Payment sent today, please release hold"</div><div class="l2">Waiting on bank · links to hold #18926 above</div></div><span class="age"><b>1h</b></span></div>
+        <div class="item"><span class="sd wait"></span><span class="chip">Finance</span><div class="tx"><div class="l1">RMA DC38831 Judaica Plus — awaiting credit memo</div><div class="l2">Received at warehouse 12 Sep · 2 items checked in</div></div><span class="age"><b>2d</b></span></div>
+
+        <div class="nf">Everything else is in the apps · nothing here is auto-generated noise <a>Show 6 more ↓</a></div>
+      </section>
+
+      <!-- RIGHT: digests -->
+      <aside class="digests">
+        <div class="panel">
+          <div class="ph"><h3>Inbox</h3><span class="sub">12 unread · 3 urgent · 2 mentions</span><a>Open →</a></div>
+          <div class="prow"><span class="sd todo"></span><span class="k"><b>Elegant Linen</b> Re: Invoice 10422</span><span class="v soft">14m</span></div>
+          <div class="prow"><span class="sd todo"></span><span class="k"><b>Vocatech</b> Damaged carton</span><span class="v soft">41m</span></div>
+          <div class="prow"><span class="sd wait"></span><span class="k"><b>Meoros</b> Payment sent, release hold</span><span class="v soft">1h</span></div>
+          <div class="prow"><span class="sd un"></span><span class="k">Extensiv · Malchut · Judaica Plus + 6 more</span><span class="v soft">today</span></div>
+        </div>
+        <div class="panel">
+          <div class="ph"><h3>Tasks</h3><span class="sub">5 due today · 2 overdue</span><a>Open →</a></div>
+          <div class="prow"><span class="sd todo"></span><span class="k">Approve Meoros credit memo</span><span class="pill todo">overdue</span></div>
+          <div class="prow"><span class="sd todo"></span><span class="k">Sign off Yiddy roster report</span><span class="pill prog">today</span></div>
+          <div class="prow"><span class="sd prog"></span><span class="k">Call Elegant Linen re: BillEmail</span><span class="pill prog">today</span></div>
+          <div class="prow"><span class="sd un"></span><span class="k">14 open across all boards</span><span class="v soft"></span></div>
+        </div>
+        <div class="panel">
+          <div class="ph"><h3>Finance</h3><span class="sub">chase · holds · invoicing · returns</span><a>Open →</a></div>
+          <div class="subh">Chase — 9 accounts</div>
+          <div class="prow"><span class="k"><b>Elegant Linen</b> 90+ days · L3</span><span class="v">£6,210</span></div>
+          <div class="prow"><span class="k"><b>Vocatech</b> 60 days · L2</span><span class="v">£4,880</span></div>
+          <div class="prow"><span class="k"><b>Judaica Plus</b> 45 days · promised 12 Sep</span><span class="v">£2,340</span></div>
+          <div class="prow"><span class="k">6 more</span><span class="v">£18,420 total</span></div>
+          <div class="subh">Today</div>
+          <div class="prow"><span class="k">Orders on hold</span><span class="v">4</span></div>
+          <div class="prow"><span class="k">Warehouse emails to invoice</span><span class="v">7</span></div>
+          <div class="prow"><span class="k">Invoices needing email review</span><span class="v">6</span></div>
+          <div class="prow"><span class="k">Returns awaiting credit memo</span><span class="v">1</span></div>
+          <div class="prow"><span class="k soft" style="color:var(--text-faint)">Last QB sync 15:12 · daily chase 17:00</span></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FRAME B2 — Inbox inside the shell, rev 2 skin ═══ -->
+<div class="flabel"><span class="n">B2</span><span class="t">Inbox inside the shell (rev 2)</span><span class="s">same rail; app hides its own nav in embedded mode; escape hatch on the thin strip.</span></div>
+<div class="shell" id="frame-b">
+  <aside class="rail">
+    <div class="brand"><span class="logo">F</span>Feldart</div>
+    <nav class="nav">
+      <a><span class="ic">⌂</span>Home</a>
+      <a class="on"><span class="ic">✉</span>Inbox<span class="cnt hot"><span class="dot"></span>12</span></a>
+      <a><span class="ic">£</span>Finance<span class="cnt hot"><span class="dot"></span>4</span></a>
+      <a><span class="ic">☑</span>Tasks<span class="cnt">5</span></a>
+      <a><span class="ic">▦</span>Internal</a>
+    </nav>
+    <div class="foot"><span class="avatar">LF</span><span class="who">Leibel<small>leibel@feldart.com</small></span><span class="chev">▾</span></div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <span class="title">Inbox</span><span class="crumb">› Elegant Linen › Re: Invoice 10422</span>
+      <div class="right">
+        <div class="search">⌕ Search inbox <kbd>Ctrl K</kbd></div>
+        <div class="obtn icon">🔔<span class="dot"></span></div>
+        <div class="obtn">+ New task</div>
+      </div>
+    </div>
+    <div class="embedbar">▣ embedded <span class="url">inbox.feldart.com/threads/8f21…</span><span class="open">Open in full tab ↗</span></div>
+    <div class="fakeinbox">
+      <div class="fi-side">
+        <div class="h">Mail</div>
+        <a class="on">Inbox<span class="c">12</span></a><a>Mentions<span class="c">2</span></a><a>Sent</a><a>Snoozed<span class="c">3</span></a><a>Done</a>
+        <div class="h" style="margin-top:12px">Boards</div>
+        <a>Chasing<span class="c">6</span></a><a>Returns<span class="c">2</span></a><a>Supplier</a>
+      </div>
+      <div class="fi-list">
+        <div class="lh">Inbox <span class="seg"><span class="on">Emails</span><span>All</span></span></div>
+        <div class="fi-item on"><span class="f">Elegant Linen</span><span></span><span class="w">14m</span><span class="t">Re: Invoice 10422 — chasing tracking for the Monsey order</span></div>
+        <div class="fi-item"><span class="f">Vocatech</span><span></span><span class="w">41m</span><span class="t">Damaged carton — photos attached, want credit memo</span></div>
+        <div class="fi-item"><span class="f">Meoros Judaica</span><span></span><span class="w">1h</span><span class="t">Payment sent today, please release hold</span></div>
+        <div class="fi-item"><span class="f" style="font-weight:500">Extensiv</span><span></span><span class="w">2h</span><span class="t">Shipment notification — 6 orders shipped</span></div>
+        <div class="fi-item"><span class="f" style="font-weight:500">Malchut</span><span></span><span class="w">3h</span><span class="t">Statement request for August</span></div>
+        <div class="fi-item"><span class="f" style="font-weight:500">Judaica Plus</span><span></span><span class="w">5h</span><span class="t">Promised payment Friday</span></div>
+      </div>
+      <div class="fi-read">
+        <h3>Re: Invoice 10422 — chasing tracking for the Monsey order</h3>
+        <div class="meta">Rivky @ Elegant Linen → accounts@feldart.com · today 15:06</div>
+        <p>Hi, can you send the tracking for the Monsey order that was on invoice 10422? We still haven’t received anything and the customer is asking.</p>
+        <p>Also we never got this invoice by email — only the statement. Can you resend?</p>
+        <div class="fpanel">
+          <div class="ph">Finance <span class="pill todo">£6,210 overdue · 90+ days</span></div>
+          <div class="pr"><span>Open invoices <b>4</b></span><span>Last chase <b>L3 · 9 Sep</b></span><span>On hold <b>1</b></span><span style="color:var(--accent);font-weight:600">Open customer →</span></div>
+        </div>
+        <div class="actions"><span class="p">Reply</span><span>Reply with AI</span><span>Create task</span><span>Snooze</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="changes">
+  <div><b>Rev 1 → rev 2</b><br>• Six-number strip removed; counts live in rail + panel headers only.<br>• 3×2 card grid → one “Needs you” list (left, wide) + three quiet digest panels (right).<br>• Rail: light sand, accent-soft active state, counts as faint numerals with a red dot only when something is urgent.<br>• Colour budget: five status dots/pills; links + primary in forest green; money plain mono.</div>
+  <div><b>Also</b><br>• Search scoped to inbox, Ctrl K. “+ New” → “+ New task”. Settings moved under the avatar.<br>• Tags like auto/manual/L1–L3 demoted to subtitle text.<br>• Still open: rail order, bell scope (mentions + urgent only?), dark mode later, mobile follows once desktop is agreed.</div>
+</div>
+
+</body>
+</html>
