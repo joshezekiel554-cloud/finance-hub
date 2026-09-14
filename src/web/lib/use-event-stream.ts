@@ -112,8 +112,14 @@ function totalListeners(): number {
 
 function open(): void {
   if (source) return;
-  reconnectAttempt = 0;
   source = new EventSource("/api/events/stream");
+  // Reset the backoff only once a connection actually succeeds. Resetting
+  // in open() (the old behaviour) meant every retry started again at 1 s,
+  // so an unauthenticated or down server was hammered once a second — which
+  // inside the hub tripped the API rate limit for the whole app.
+  source.onopen = () => {
+    reconnectAttempt = 0;
+  };
   source.onmessage = (msg) => {
     try {
       const ev = JSON.parse(msg.data) as SSEEvent;

@@ -17,7 +17,8 @@ export function hubNavigateMessage(path: string): HubNavigateMessage {
   return { type: "hub:navigate", path };
 }
 
-function inFrame(): boolean {
+/** True when this document is inside any iframe. */
+export function isFramed(): boolean {
   try {
     return typeof window !== "undefined" && window.self !== window.top;
   } catch {
@@ -27,9 +28,14 @@ function inFrame(): boolean {
   }
 }
 
+/**
+ * Embedded chrome mode: framed AND arrived via the hub handoff. The cookie
+ * alone is not enough (a later top-level visit would lose the nav), and
+ * framing alone is not enough (we'd hide chrome for any parent).
+ */
 export function isHubEmbedded(): boolean {
   if (typeof document === "undefined") return false;
-  return inFrame() && parseHubEmbeddedCookie(document.cookie);
+  return isFramed() && parseHubEmbeddedCookie(document.cookie);
 }
 
 // The parent is hub.feldart.com in production; the message carries only a

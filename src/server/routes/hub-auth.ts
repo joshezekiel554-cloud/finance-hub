@@ -15,6 +15,7 @@ import { sessions, users } from "../../db/schema/auth.js";
 import { env } from "../../lib/env.js";
 import { verifyHubToken } from "../../lib/hub-token.js";
 import { createLogger } from "../../lib/logger.js";
+import { getSession } from "../lib/auth.js";
 import {
   ConsumedJtiGuard,
   buildHubEmbeddedCookie,
@@ -67,6 +68,18 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
       return refuse(403, "This account is not allowed in Finance.");
     }
 
+    const secure = env.PUBLIC_URL.startsWith("https://");
+
+    // Already signed in as this very user (the hub re-minted while our
+    // cookie was fine, or the user clicked the rail twice)? Don't mint a
+    // second session row — just (re)assert the embedded marker and go.
+    const current = await getSession(req);
+    if (current && current.user.email?.toLowerCase() === claims.email) {
+      if (req.query.hub === "1") reply.raw.setHeader("set-cookie", [buildHubEmbeddedCookie(secure)]);
+      log.info({ email: claims.email, jti: claims.jti }, "hub handoff reused existing session");
+      return reply.redirect(safeNextPath(req.query.next, env.PUBLIC_URL), 302);
+    }
+
     // Same identity rule as the Google flow: one user row per email.
     const existing = await db
       .select({ id: users.id })
@@ -84,7 +97,6 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
     const expires = sessionExpiry();
     await db.insert(sessions).values({ sessionToken, userId, expires });
 
-    const secure = env.PUBLIC_URL.startsWith("https://");
     const cookies = [buildSessionCookie({ token: sessionToken, expires, secure })];
     if (req.query.hub === "1") cookies.push(buildHubEmbeddedCookie(secure));
     reply.raw.setHeader("set-cookie", cookies);
