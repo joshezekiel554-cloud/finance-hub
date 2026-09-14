@@ -3,9 +3,14 @@ import fp from "fastify-plugin";
 import { Auth, type AuthConfig } from "@auth/core";
 import Google from "@auth/core/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
+import { and, eq } from "drizzle-orm";
 import { db } from "~/db/index.js";
 import { users, accounts, sessions, verificationTokens } from "~/db/schema/auth.js";
 import { env } from "~/lib/env.js";
+import { createLogger } from "~/lib/logger.js";
+import { accountTokenPatch } from "../lib/account-token-refresh.js";
+
+const log = createLogger({ component: "plugins.auth" });
 
 function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
   return {
@@ -82,6 +87,30 @@ function buildAuthConfig(allowList: ReadonlySet<string>): AuthConfig {
           session.user.email = user.email;
         }
         return session;
+      },
+    },
+    events: {
+      // Keep the stored Google grant current. The adapter writes the
+      // account row once (first link) and never again, but Drive uploads
+      // refresh off that row's refresh_token — see
+      // src/server/lib/account-token-refresh.ts for the why.
+      async signIn({ account }) {
+        const patch = accountTokenPatch(account);
+        if (!patch || !account) return;
+        try {
+          await db
+            .update(accounts)
+            .set(patch)
+            .where(
+              and(
+                eq(accounts.provider, account.provider),
+                eq(accounts.providerAccountId, account.providerAccountId),
+              ),
+            );
+        } catch (err) {
+          // Never block a sign-in over this; the old grant simply stays.
+          log.error({ err, provider: account.provider }, "failed to persist sign-in tokens");
+        }
       },
     },
   };
