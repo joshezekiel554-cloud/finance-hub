@@ -62,6 +62,36 @@ export function buildHubEmbeddedCookie(secure: boolean): string {
   return parts.join("; ");
 }
 
+/**
+ * One-shot guard for handoff token ids. The token rides in a query string,
+ * so it lands in nginx access logs; within its TTL a log reader could replay
+ * it into a fresh session. Each jti is accepted once, then remembered for
+ * `retentionSeconds` (≥ the token TTL) and forgotten so memory stays bounded.
+ * In-memory: pm2 runs one finance-hub process, so this is sufficient.
+ */
+export class ConsumedJtiGuard {
+  private readonly seen = new Map<string, number>();
+  constructor(private readonly retentionSeconds = 600) {}
+
+  get size(): number {
+    return this.seen.size;
+  }
+
+  consume(jti: string, nowSeconds: number): boolean {
+    if (!jti) return false;
+    this.prune(nowSeconds);
+    if (this.seen.has(jti)) return false;
+    this.seen.set(jti, nowSeconds);
+    return true;
+  }
+
+  private prune(nowSeconds: number): void {
+    for (const [id, at] of this.seen) {
+      if (nowSeconds - at > this.retentionSeconds) this.seen.delete(id);
+    }
+  }
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")

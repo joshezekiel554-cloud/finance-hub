@@ -1,11 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
+  ConsumedJtiGuard,
   buildSessionCookie,
   buildHubEmbeddedCookie,
   isEmailAllowed,
   renderHandoffErrorPage,
   safeNextPath,
 } from "./hub-handoff.js";
+
+describe("ConsumedJtiGuard", () => {
+  // The handoff token rides in a query string, so it lands in nginx access
+  // logs; within its TTL a log reader could replay it. Burn each jti once.
+  it("accepts a jti the first time and rejects the replay", () => {
+    const g = new ConsumedJtiGuard();
+    expect(g.consume("abc", 1_000)).toBe(true);
+    expect(g.consume("abc", 1_001)).toBe(false);
+    expect(g.consume("def", 1_001)).toBe(true);
+  });
+  it("forgets entries after the retention window so memory stays bounded", () => {
+    const g = new ConsumedJtiGuard(600);
+    expect(g.consume("abc", 1_000)).toBe(true);
+    expect(g.consume("abc", 1_000 + 601)).toBe(true);
+    expect(g.size).toBe(1);
+  });
+  it("treats an empty jti as unusable (never accepted)", () => {
+    const g = new ConsumedJtiGuard();
+    expect(g.consume("", 1_000)).toBe(false);
+  });
+});
 
 describe("renderHandoffErrorPage", () => {
   it("is a small HTML page with the reason and an open-in-new-tab link, no Google button", () => {

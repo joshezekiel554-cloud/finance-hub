@@ -16,6 +16,7 @@ import { env } from "../../lib/env.js";
 import { verifyHubToken } from "../../lib/hub-token.js";
 import { createLogger } from "../../lib/logger.js";
 import {
+  ConsumedJtiGuard,
   buildHubEmbeddedCookie,
   buildSessionCookie,
   isEmailAllowed,
@@ -25,6 +26,10 @@ import {
 } from "../lib/hub-handoff.js";
 
 const log = createLogger({ component: "routes.hub-auth" });
+
+// Replay guard — see ConsumedJtiGuard. Retention comfortably exceeds the
+// hub's token TTL (60–300 s).
+const consumedJti = new ConsumedJtiGuard(600);
 
 type Query = { ht?: string; next?: string; hub?: string };
 
@@ -43,14 +48,19 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
       return refuse(503, "Hub sign-in is not configured on this app.");
     }
 
+    const nowSeconds = Math.floor(Date.now() / 1000);
     const claims = verifyHubToken(req.query.ht ?? "", {
       secret,
       aud: "finance",
-      nowSeconds: Math.floor(Date.now() / 1000),
+      nowSeconds,
     });
     if (!claims || claims.scope !== "user") {
       log.warn({ ip: req.ip }, "hub handoff rejected: invalid token");
       return refuse(401, "The sign-in link from the hub is invalid or has expired. Go back to the hub and try again.");
+    }
+    if (!consumedJti.consume(claims.jti, nowSeconds)) {
+      log.warn({ email: claims.email, jti: claims.jti, ip: req.ip }, "hub handoff rejected: token replayed");
+      return refuse(401, "This sign-in link was already used. Go back to the hub and try again.");
     }
     if (!isEmailAllowed(claims.email, env.ALLOWED_EMAILS)) {
       log.warn({ email: claims.email, jti: claims.jti }, "hub handoff rejected: not on ALLOWED_EMAILS");
