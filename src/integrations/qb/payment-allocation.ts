@@ -36,6 +36,15 @@ export function allocatePaymentByBook(
     // else: unknown / non-invoice → falls into unallocated below
   }
 
+  // When a credit memo is applied alongside a payment, QBO's line Amount
+  // includes the memo's portion, so lines can sum above the cash total.
+  // Only cash counts as "received": scale the book shares down to the total.
+  const linked = feldart + tj;
+  if (linked > total && linked > 0) {
+    const k = total / linked;
+    feldart *= k;
+    tj *= k;
+  }
   feldart = round2(feldart);
   tj = round2(tj);
   // Whatever the books don't account for (unapplied credit, unknown links,

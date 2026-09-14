@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardBody, CardHeader } from "../ui/card";
 import { WidgetHeader } from "./widget-header";
+import { awaitingArrivalRmas } from "../../lib/dashboard-derive";
 
 type RmaRow = {
   id: string;
@@ -82,7 +83,10 @@ export function RmasWidget() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["autopilot"] }),
   });
 
-  const rows = data?.rows ?? [];
+  // Dashboard shows only returns we're still waiting to receive (operator,
+  // 2026-09-14); received/draft ones live on the Returns page.
+  const rows = awaitingArrivalRmas(data?.rows ?? []);
+  const daysWaiting = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
   const aiSuggestions = (proposalsData?.proposals ?? []).filter(
     (p) =>
       (p.status === "pending" || p.status === "drafted") &&
@@ -93,7 +97,7 @@ export function RmasWidget() {
     <Card>
       <CardHeader>
         <WidgetHeader
-          title="RMAs in flight"
+          title="Returns awaiting arrival"
           count={rows.length}
           link="/returns"
         />
@@ -157,26 +161,35 @@ export function RmasWidget() {
         ) : isError ? (
           <div className="text-xs text-accent-danger">Failed to load RMAs.</div>
         ) : rows.length === 0 ? (
-          <div className="text-xs text-muted">No RMAs in flight.</div>
+          <div className="text-xs text-muted">Nothing on its way back.</div>
         ) : (
           <ul className="divide-y divide-default">
-            {rows.map((r) => (
-              <li key={r.id} className="py-2 first:pt-0 last:pb-0">
-                <Link
-                  to="/returns"
-                  className="flex items-center justify-between gap-2 text-sm hover:text-accent-info"
-                >
-                  <div className="min-w-0">
-                    <div className="font-medium text-primary truncate">
-                      {r.rmaNumber ?? r.id.slice(0, 8)} · {r.customerName}
+            {rows.map((r) => {
+              const days = daysWaiting(r.updatedAt);
+              return (
+                <li key={r.id} className="py-2 first:pt-0 last:pb-0">
+                  <Link
+                    to="/returns/$rmaId"
+                    params={{ rmaId: r.id }}
+                    className="flex items-center justify-between gap-2 text-sm hover:text-accent-info"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium text-primary truncate">
+                        {r.rmaNumber ?? r.id.slice(0, 8)} · {r.customerName}
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-xs rounded bg-subtle px-1.5 py-0.5 text-muted shrink-0">
-                    {STATUS_LABELS[r.status] ?? r.status}
-                  </span>
-                </Link>
-              </li>
-            ))}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs rounded bg-subtle px-1.5 py-0.5 text-muted">
+                        {STATUS_LABELS[r.status] ?? r.status}
+                      </span>
+                      <span className={`text-xs tabular-nums ${days >= 14 ? "text-accent-danger" : "text-muted"}`}>
+                        {days}d
+                      </span>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         )}
       </CardBody>

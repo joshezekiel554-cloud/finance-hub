@@ -49,6 +49,23 @@ describe("allocatePaymentByBook", () => {
     expect(allocatePaymentByBook(base, origins)).toEqual({ feldart: 0, tj: 0, unallocated: 150 });
   });
 
+  it("scales book amounts down when line amounts exceed the cash total (credit memos applied alongside)", () => {
+    // QBO: when a credit memo is applied with a payment, the line Amount
+    // includes the memo's portion, so lines can sum above TotalAmt. Only
+    // real cash counts as "received".
+    const p: QboPayment = {
+      ...base,
+      TotalAmt: 100,
+      Line: [
+        { Amount: 120, LinkedTxn: [{ TxnId: "inv-f", TxnType: "Invoice" }, { TxnId: "cm-9", TxnType: "CreditMemo" }] },
+        { Amount: 80, LinkedTxn: [{ TxnId: "inv-t", TxnType: "Invoice" }] },
+      ],
+    };
+    const a = allocatePaymentByBook(p, origins);
+    expect(a).toEqual({ feldart: 60, tj: 40, unallocated: 0 });
+    expect(a.feldart + a.tj + a.unallocated).toBeCloseTo(100, 2);
+  });
+
   it("never lets rounding push the parts above the total", () => {
     const p: QboPayment = {
       ...base,
