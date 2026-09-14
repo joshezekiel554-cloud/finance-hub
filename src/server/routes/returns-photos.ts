@@ -37,7 +37,6 @@ import {
 import {
   uploadFile,
   deleteFile,
-  ensureFolder,
   makeViewable,
 } from "../../integrations/google-drive/index.js";
 import { getRmaById } from "../../modules/returns/index.js";
@@ -175,58 +174,12 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       sku = rawSku;
     }
 
-    // 4. Determine / ensure Drive folder.
-    //
-    // Atomicity: lock the rma row (SELECT ... FOR UPDATE) before deciding
-    // whether to create a new Drive folder. Without the lock, two concurrent
-    // first-uploads on the same RMA both see driveFolderId === null, both
-    // call ensureFolder, and Google Drive ends up with two folders for the
-    // same RMA (ensureFolder lists by name + creates if no match — but the
-    // other request's folder may not be visible yet during the race window).
+    // 4. Destination: the shared returns root, flat. Operator decision
+    // 2026-09-14: no per-RMA subfolders — the SKU-<doc>-<n> filename is
+    // the organising key. (Legacy RMAs may still carry a driveFolderId from
+    // the subfolder era; it's simply not used for new uploads.)
     const folderLabel = rma.rmaNumber ?? `RMA-${rma.id}`;
-    let folderId: string;
-    {
-      // Snapshot the current driveFolderId under a row lock; if absent,
-      // create the folder + persist before the lock is released so the
-      // other concurrent caller sees the freshly-stored id.
-      let lockedFolderId: string | null = null;
-      try {
-        await db.transaction(async (tx) => {
-          const lockedRows = await tx
-            .select({ driveFolderId: rmas.driveFolderId })
-            .from(rmas)
-            .where(eq(rmas.id, rma.id))
-            .for("update");
-          if (lockedRows.length === 0) {
-            throw new Error("RMA disappeared during photo upload");
-          }
-          if (lockedRows[0]!.driveFolderId) {
-            lockedFolderId = lockedRows[0]!.driveFolderId;
-            return;
-          }
-          const created = await ensureFolder({
-            userId: user.id,
-            parentId: rootFolderId,
-            name: folderLabel,
-          });
-          await tx
-            .update(rmas)
-            .set({ driveFolderId: created })
-            .where(eq(rmas.id, rma.id));
-          lockedFolderId = created;
-        });
-      } catch (err) {
-        log.error({ err, rmaId: rma.id }, "failed to ensure Drive folder");
-        return reply.code(502).send({
-          error: "Failed to create Drive folder — check Google Drive authorization.",
-        });
-      }
-      if (!lockedFolderId) {
-        // Defensive — transaction body should have set this.
-        return reply.code(500).send({ error: "Drive folder allocation failed unexpectedly." });
-      }
-      folderId = lockedFolderId;
-    }
+    const folderId = rootFolderId;
 
     // 5. Determine filename: SKU-<doc>-<n>.<ext> where <doc> is the credit
     // memo number once issued, else the RMA number (renamed on issue by
