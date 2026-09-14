@@ -8,13 +8,14 @@
 // are logged at warn and skipped (so one bad invoice doesn't fail the whole
 // sync). Caller (BullMQ worker job) handles top-level errors.
 
-import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
 import { BUSINESS_EMAILS } from "../gmail/business-emails.js";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { activities } from "../../db/schema/crm.js";
 import { creditMemos } from "../../db/schema/credit-memos.js";
+import { payments } from "../../db/schema/payments.js";
 import { customers, type Customer } from "../../db/schema/customers.js";
 import {
   invoiceLines,
@@ -32,6 +33,7 @@ import {
 import { recordActivity } from "../../modules/crm/index.js";
 import { QboClient } from "./client.js";
 import { aggregateCreditBalanceByQbCustomerId } from "./credit-memo-aggregation.js";
+import { allocatePaymentByBook } from "./payment-allocation.js";
 import type {
   QboCreditMemo,
   QboCustomer,
@@ -746,16 +748,68 @@ async function reconcileDeletedInvoices(
 
 export async function syncPayments(client?: QboClient): Promise<SyncStats> {
   const qb = client ?? new QboClient();
-  log.info("starting QB payment sync (via invoice resync)");
-  const payments = await qb.getPayments();
-  log.info({ count: payments.length }, "fetched QB payments");
+  log.info("starting QB payment sync");
+  const qboPayments = await qb.getPayments();
+  log.info({ count: qboPayments.length }, "fetched QB payments");
 
   // Emit per-payment activities for any payments we haven't seen before.
-  // Without a payments table the activities row itself is the dedup key:
-  // (refType='qb_payment', refId=payment.Id) is unique per emission.
-  await emitPaymentActivities(payments);
+  // The activities row is the dedup key: (refType='qb_payment', refId=Id).
+  await emitPaymentActivities(qboPayments);
+
+  // Persist per-row payments with the Feldart / TJ split (dashboard
+  // "received in the last 30 days" by book). Runs after syncInvoices in the
+  // job so the invoice → origin map is current.
+  await syncPaymentRows(qboPayments, await loadCustomerIdMap());
 
   return syncInvoices(qb);
+}
+
+// Upsert payments with their per-book allocation. Idempotent on
+// qb_payment_id; amounts/allocation are refreshed every sync because a
+// payment can be re-applied to different invoices after the fact.
+async function syncPaymentRows(
+  qboPayments: QboPayment[],
+  customerIdMap: Map<string, string>,
+): Promise<void> {
+  if (qboPayments.length === 0) return;
+
+  // Origin lookup for every invoice any of these payments links to.
+  const linkedInvoiceIds = new Set<string>();
+  for (const p of qboPayments) {
+    for (const line of p.Line ?? []) {
+      for (const l of line.LinkedTxn ?? []) if (l.TxnType === "Invoice") linkedInvoiceIds.add(l.TxnId);
+    }
+  }
+  const originByQbInvoiceId = new Map<string, "feldart" | "tj">();
+  const ids = [...linkedInvoiceIds];
+  for (let i = 0; i < ids.length; i += 500) {
+    const rows = await db
+      .select({ qbInvoiceId: invoices.qbInvoiceId, origin: invoices.origin })
+      .from(invoices)
+      .where(inArray(invoices.qbInvoiceId, ids.slice(i, i + 500)));
+    for (const r of rows) originByQbInvoiceId.set(r.qbInvoiceId, r.origin);
+  }
+
+  for (const p of qboPayments) {
+    const customerId = customerIdMap.get(p.CustomerRef?.value ?? "");
+    if (!customerId) continue;
+    const alloc = allocatePaymentByBook(p, originByQbInvoiceId);
+    const values = {
+      customerId,
+      docNumber: p.DocNumber ?? null,
+      txnDate: parseQboDate(p.TxnDate),
+      total: formatMoney(p.TotalAmt ?? 0),
+      feldartAmount: formatMoney(alloc.feldart),
+      tjAmount: formatMoney(alloc.tj),
+      unallocatedAmount: formatMoney(alloc.unallocated),
+      paymentMethod: p.PaymentMethodRef?.name ?? null,
+      lastSyncedAt: new Date(),
+    };
+    await db
+      .insert(payments)
+      .values({ id: nanoid(24), qbPaymentId: p.Id, ...values })
+      .onDuplicateKeyUpdate({ set: values });
+  }
 }
 
 export async function syncCreditMemos(client?: QboClient): Promise<SyncStats> {
@@ -1063,6 +1117,7 @@ export async function syncOneCustomer(
   paymentStats.fetched = qboPayments.length;
   try {
     await emitPaymentActivities(qboPayments);
+    await syncPaymentRows(qboPayments, customerIdMap);
     paymentStats.created = qboPayments.length;
   } catch (err) {
     paymentStats.failed++;

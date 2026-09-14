@@ -21,6 +21,7 @@ import statementPdfPreviewRoute from "./statement-pdf-preview.js";
 import statementSendsRoute from "./statement-sends.js";
 import notificationsRoute from "./notifications.js";
 import dashboardRoute from "./dashboard.js";
+import dashboardMoneyRoute from "./dashboard-money.js";
 import mondaySyncRoute from "./monday-sync.js";
 import shopifyB2bAuditRoute from "./shopify-b2b-audit.js";
 import shopifyLinkRoute from "./shopify-link.js";
@@ -87,6 +88,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(statementSendsRoute, { prefix: "/api/statement-sends" });
   await app.register(notificationsRoute, { prefix: "/api/notifications" });
   await app.register(dashboardRoute, { prefix: "/api/dashboard" });
+  await app.register(dashboardMoneyRoute, { prefix: "/api/dashboard" });
   await app.register(mondaySyncRoute, { prefix: "/api/monday-sync" });
   await app.register(shopifyB2bAuditRoute, {
     prefix: "/api/shopify-b2b-audit",

@@ -32,6 +32,8 @@ import {
   NOT_EMAILED_STATUSES,
 } from "../../modules/invoice-email-review/index.js";
 import { listHoldableHoldOrders } from "../../modules/orders/hold-alerts.js";
+import type { MoneySummary } from "../../modules/dashboard/money.js";
+import { getMoneySummaryCached } from "./dashboard-money.js";
 import { isEmailAllowed } from "../lib/hub-handoff.js";
 
 const log = createLogger({ component: "routes.ext-hub" });
@@ -115,6 +117,8 @@ export type HubSummary = {
   invoicing: { toInvoice: number | null; needingReview: number; bounced: number };
   returns: Array<{ rma: string; customer: string; status: string; at: string; url: string }>;
   needsYou: NeedsYouItem[];
+  /** The dashboard's Money section, verbatim — see modules/dashboard/money.ts. */
+  money: MoneySummary;
   syncedAt: string;
 };
 
@@ -134,7 +138,7 @@ async function buildSummary(now: Date): Promise<HubSummary> {
     sql`, `,
   );
 
-  const [chaseAgg, chaseTop, holdOrders, emailCounts, rmaTop] = await Promise.all([
+  const [chaseAgg, chaseTop, holdOrders, emailCounts, rmaTop, money] = await Promise.all([
     db
       .select({ n: count(), total: sum(customers.overdueBalance) })
       .from(customers)
@@ -176,6 +180,7 @@ async function buildSummary(now: Date): Promise<HubSummary> {
       .where(inArray(rmas.status, [...OPEN_RMA_STATUSES]))
       .orderBy(desc(rmas.updatedAt))
       .limit(5),
+    getMoneySummaryCached(now),
   ]);
 
   const needingReview = Number(emailCounts[0]?.needingReview ?? 0);
@@ -250,6 +255,7 @@ async function buildSummary(now: Date): Promise<HubSummary> {
       url: url(`/returns/${r.id}`),
     })),
     needsYou: buildNeedsYou(candidates, now),
+    money,
     syncedAt: now.toISOString(),
   };
 }

@@ -152,14 +152,24 @@ export type QboSalesReceipt = {
   };
 };
 
+export type QboPaymentLine = {
+  Amount?: number;
+  // Which transaction(s) this line pays down — Invoice ids are what we
+  // need to attribute a payment to the Feldart or TJ book.
+  LinkedTxn?: Array<{ TxnId: string; TxnType: string }>;
+};
+
 export type QboPayment = {
   Id: string;
   TxnDate?: string;
   TotalAmt?: number;
+  // Portion not applied to any transaction (sits as customer credit).
+  UnappliedAmt?: number;
   DocNumber?: string;
   CustomerRef: QboReference;
   CurrencyRef?: QboReference;
   PaymentMethodRef?: QboReference;
+  Line?: QboPaymentLine[];
   SyncToken?: string;
 };
 
