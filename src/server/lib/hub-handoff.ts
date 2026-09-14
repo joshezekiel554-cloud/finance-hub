@@ -61,3 +61,34 @@ export function buildHubEmbeddedCookie(secure: boolean): string {
   if (secure) parts.push("Secure");
   return parts.join("; ");
 }
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * What the hub's iframe shows when a handoff is refused. Deliberately no
+ * Google button (Google won't render inside a frame); the way out is a
+ * top-level tab where finance's normal sign-in works.
+ */
+export function renderHandoffErrorPage(input: { reason: string; publicUrl: string }): string {
+  const base = input.publicUrl.replace(/\/$/, "");
+  const reason = escapeHtml(input.reason);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Finance</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body{margin:0;font:14px/1.5 Inter,"Segoe UI",system-ui,sans-serif;color:oklch(20% 0.015 250);background:oklch(99% 0.003 250);display:grid;place-items:center;min-height:100vh}
+  .card{max-width:420px;padding:24px 28px;border:1px solid oklch(91% 0.008 250);border-radius:12px;background:#fff;box-shadow:0 1px 2px rgb(0 0 0/.04)}
+  h1{font-size:16px;margin:0 0 8px}
+  p{margin:0 0 16px;color:oklch(40% 0.015 250)}
+  a{display:inline-block;padding:8px 14px;border-radius:8px;background:oklch(58% 0.18 260);color:#fff;text-decoration:none;font-weight:600}
+</style></head>
+<body><div class="card"><h1>Finance can’t sign you in here</h1><p>${reason}</p>
+<a href="${base}/" target="_blank" rel="noopener">Open Finance in a new tab</a></div></body></html>`;
+}

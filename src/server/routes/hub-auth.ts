@@ -19,6 +19,7 @@ import {
   buildHubEmbeddedCookie,
   buildSessionCookie,
   isEmailAllowed,
+  renderHandoffErrorPage,
   safeNextPath,
   sessionExpiry,
 } from "../lib/hub-handoff.js";
@@ -29,9 +30,17 @@ type Query = { ht?: string; next?: string; hub?: string };
 
 const hubAuthRoute: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: Query }>("/hub", async (req, reply) => {
+    // Refusals render a small page (this lands inside the hub's iframe)
+    // rather than JSON, with the "open in a new tab" escape hatch.
+    const refuse = (status: number, reason: string) =>
+      reply
+        .code(status)
+        .header("content-type", "text/html; charset=utf-8")
+        .send(renderHandoffErrorPage({ reason, publicUrl: env.PUBLIC_URL }));
+
     const secret = env.HUB_SSO_SECRET;
     if (!secret) {
-      return reply.code(503).send({ error: "Hub sign-in is not configured on this app." });
+      return refuse(503, "Hub sign-in is not configured on this app.");
     }
 
     const claims = verifyHubToken(req.query.ht ?? "", {
@@ -41,11 +50,11 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
     });
     if (!claims || claims.scope !== "user") {
       log.warn({ ip: req.ip }, "hub handoff rejected: invalid token");
-      return reply.code(401).send({ error: "Invalid or expired hub token." });
+      return refuse(401, "The sign-in link from the hub is invalid or has expired. Go back to the hub and try again.");
     }
     if (!isEmailAllowed(claims.email, env.ALLOWED_EMAILS)) {
       log.warn({ email: claims.email, jti: claims.jti }, "hub handoff rejected: not on ALLOWED_EMAILS");
-      return reply.code(403).send({ error: "This account is not allowed in Finance." });
+      return refuse(403, "This account is not allowed in Finance.");
     }
 
     // Same identity rule as the Google flow: one user row per email.

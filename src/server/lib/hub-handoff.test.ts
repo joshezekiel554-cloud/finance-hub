@@ -3,8 +3,28 @@ import {
   buildSessionCookie,
   buildHubEmbeddedCookie,
   isEmailAllowed,
+  renderHandoffErrorPage,
   safeNextPath,
 } from "./hub-handoff.js";
+
+describe("renderHandoffErrorPage", () => {
+  it("is a small HTML page with the reason and an open-in-new-tab link, no Google button", () => {
+    const html = renderHandoffErrorPage({
+      reason: "This account is not allowed in Finance.",
+      publicUrl: "https://finance.feldart.com",
+    });
+    expect(html).toContain("<!doctype html>");
+    expect(html).toContain("This account is not allowed in Finance.");
+    expect(html).toContain('href="https://finance.feldart.com/" target="_blank"');
+    expect(html).toContain("Open Finance in a new tab");
+    expect(html.toLowerCase()).not.toContain("google");
+  });
+  it("escapes the reason so a crafted message can't inject markup", () => {
+    const html = renderHandoffErrorPage({ reason: "<script>x</script>", publicUrl: "https://f.example" });
+    expect(html).not.toContain("<script>x</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+});
 
 describe("safeNextPath", () => {
   it("keeps a plain in-app path", () => {
