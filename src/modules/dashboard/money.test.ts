@@ -30,6 +30,8 @@ describe("buildMoneySummary", () => {
     expect(s.syncedAt).toEqual({ invoices: "2026-09-14T15:12:00.000Z", payments: null });
     expect(s.generatedAt).toBe(NOW.toISOString());
     expect(s.windowDays).toBe(30);
+    // Consumers (the hub) must not guess the symbol — the books are in USD.
+    expect(s.currency).toBe("USD");
   });
 
   it("fills a missing book with zeros", () => {

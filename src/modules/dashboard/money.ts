@@ -49,6 +49,8 @@ export type MoneySummary = {
   tj: BookMoney;
   total: BookMoney & { received30: { amount: string; payments: number; unallocated: string } };
   windowDays: 30;
+  /** ISO 4217. Both books are kept in US dollars; consumers format from this. */
+  currency: "USD";
   syncedAt: { invoices: string | null; payments: string | null };
   generatedAt: string;
 };
@@ -115,6 +117,7 @@ export function buildMoneySummary(input: {
     tj: books.tj,
     total,
     windowDays: 30,
+    currency: "USD",
     syncedAt: {
       invoices: input.invoicesSyncedAt ? input.invoicesSyncedAt.toISOString() : null,
       payments: input.paymentsSyncedAt ? input.paymentsSyncedAt.toISOString() : null,
