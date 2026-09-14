@@ -448,6 +448,29 @@ export async function renameFile(input: {
 }
 
 /**
+ * Move a file between folders (Drive "parents" swap). Used to flatten the
+ * legacy per-RMA subfolders into the returns root.
+ */
+export async function moveFile(input: {
+  userId: string;
+  fileId: string;
+  fromFolderId: string;
+  toFolderId: string;
+}): Promise<void> {
+  const drive = await getDriveClient(input.userId);
+  await drive.files.update({
+    fileId: input.fileId,
+    addParents: input.toFolderId,
+    removeParents: input.fromFolderId,
+    supportsAllDrives: true,
+  });
+  log.info(
+    { fileId: input.fileId, from: input.fromFolderId, to: input.toFolderId },
+    "drive file moved",
+  );
+}
+
+/**
  * Grant anyone-with-link read access to a file (so thumbnails/view URLs work
  * for users who aren't signed into Google).
  */

@@ -9,5 +9,6 @@ export {
   ensureFolder,
   renameFolder,
   renameFile,
+  moveFile,
   makeViewable,
 } from "./client.js";
