@@ -25,6 +25,7 @@ import { AgentProvider, useAgent } from "./agent/agent-store";
 import { AgentPanel } from "./agent/agent-panel";
 import { useHeartbeat } from "./lib/use-heartbeat";
 import { useMe } from "./lib/use-me";
+import { isHubEmbedded } from "./lib/hub-embed";
 
 const baseNavItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -59,6 +60,12 @@ export default function App({ children }: { children: ReactNode }) {
   // non-admin who deep-links is still bounced — this only hides the link.
   const { data: me } = useMe();
   const navItems = me?.isAdmin ? [...baseNavItems, ...adminNavItems] : baseNavItems;
+
+  // Inside hub.feldart.com the hub's top bar replaces ours (desktop). The
+  // mobile bar stays: it carries the hamburger, and the hub's mobile chrome
+  // doesn't know finance's inner pages. Sidebar always stays — spec says
+  // "hide only its own top bar", the rest is the full app.
+  const embedded = isHubEmbedded();
 
   return (
     <AgentProvider>
@@ -97,15 +104,18 @@ export default function App({ children }: { children: ReactNode }) {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
-        {/* Desktop top header — unchanged structure, hidden on mobile */}
-        <header className="hidden h-14 items-center justify-between border-b border-default bg-base px-6 md:flex">
-          <div className="text-sm font-medium text-primary">Welcome back</div>
-          <div className="flex items-center gap-3">
-            <AgentToggleButton />
-            <NotificationBell />
-            <UserPill />
-          </div>
-        </header>
+        {/* Desktop top header — unchanged structure, hidden on mobile and
+            when framed by the hub (its bar carries bell + user). */}
+        {!embedded && (
+          <header className="hidden h-14 items-center justify-between border-b border-default bg-base px-6 md:flex">
+            <div className="text-sm font-medium text-primary">Welcome back</div>
+            <div className="flex items-center gap-3">
+              <AgentToggleButton />
+              <NotificationBell />
+              <UserPill />
+            </div>
+          </header>
+        )}
 
         {/* Mobile top app bar — sticky, hamburger left, bell+user right.
             Per-page MobileAppBar components render BELOW this when a page

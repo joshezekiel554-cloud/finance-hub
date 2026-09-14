@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { isHubEmbedded, postHubUnauthenticated } from "./hub-embed";
 
 // Current signed-in user, from GET /api/me. Includes the server-derived
 // `isAdmin` flag (ADMIN_EMAILS) — the canonical client-side admin signal used
@@ -24,6 +25,9 @@ export function useMe() {
     queryKey: ["me"],
     queryFn: async () => {
       const res = await fetch("/api/me");
+      // Framed by the hub and our session is gone: ask the hub to re-mint a
+      // handoff token instead of showing finance's own login inside the frame.
+      if (res.status === 401 && isHubEmbedded()) postHubUnauthenticated();
       if (!res.ok) throw new Error(`GET /api/me failed: ${res.status}`);
       return (await res.json()) as MeResponse;
     },

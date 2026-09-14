@@ -11,6 +11,7 @@ import {
   ScrollRestoration,
 } from "@tanstack/react-router";
 import App from "./App";
+import { isHubEmbedded, postHubNavigate } from "./lib/hub-embed";
 import HomePage from "./pages/home";
 import InvoicingTodayPage from "./pages/invoicing-today";
 import InvoicingTodayDetailPage from "./pages/invoicing-today-detail";
@@ -265,6 +266,14 @@ const routeTree = rootRoute.addChildren([
 ]);
 
 const router = createRouter({ routeTree });
+
+// Inside hub.feldart.com: report every settled navigation so the hub can
+// mirror our URL (refresh / share / back land on the same inner page).
+if (isHubEmbedded()) {
+  router.subscribe("onResolved", ({ toLocation }) => {
+    postHubNavigate(toLocation.href);
+  });
+}
 
 declare module "@tanstack/react-router" {
   interface Register {

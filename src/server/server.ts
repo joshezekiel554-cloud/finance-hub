@@ -46,7 +46,16 @@ async function buildServer(): Promise<FastifyInstance> {
   // CSP off for now: the SPA is dev-served by Vite (different origin) and
   // prod-served as static assets here; we'll re-enable + tighten in week 6
   // when the CRM UI lands and we know the asset origins.
-  await app.register(helmet, { contentSecurityPolicy: false });
+  // frameguard off: helmet's X-Frame-Options: SAMEORIGIN would block
+  // hub.feldart.com from framing us. The frame-ancestors CSP below is the
+  // modern, more specific replacement (browsers prefer it over XFO).
+  await app.register(helmet, { contentSecurityPolicy: false, frameguard: false });
+  app.addHook("onSend", async (_req, reply) => {
+    reply.header(
+      "Content-Security-Policy",
+      `frame-ancestors 'self' ${env.HUB_PARENT_ORIGIN}`,
+    );
+  });
 
   // Same-origin everything; no CORS needed. If the SPA ever runs on a
   // separate origin we'll allow-list it explicitly.

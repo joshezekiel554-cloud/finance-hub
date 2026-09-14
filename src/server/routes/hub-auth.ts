@@ -1,0 +1,81 @@
+// GET /auth/hub?ht=<token>&next=<path>&hub=1 — sign-in handoff from
+// hub.feldart.com (hub phase-1 spec §4).
+//
+// Google's consent screen won't render inside an iframe, so the hub does the
+// one interactive sign-in and hands us a 300 s HMAC token. We verify it
+// (shared secret, exp, aud === "finance"), then apply finance's OWN
+// ALLOWED_EMAILS gate, create the same database session Auth.js would after
+// a Google callback, set the same cookie, and 302 to `next`.
+
+import type { FastifyPluginAsync } from "fastify";
+import { randomUUID } from "node:crypto";
+import { eq, sql } from "drizzle-orm";
+import { db } from "../../db/index.js";
+import { sessions, users } from "../../db/schema/auth.js";
+import { env } from "../../lib/env.js";
+import { verifyHubToken } from "../../lib/hub-token.js";
+import { createLogger } from "../../lib/logger.js";
+import {
+  buildHubEmbeddedCookie,
+  buildSessionCookie,
+  isEmailAllowed,
+  safeNextPath,
+  sessionExpiry,
+} from "../lib/hub-handoff.js";
+
+const log = createLogger({ component: "routes.hub-auth" });
+
+type Query = { ht?: string; next?: string; hub?: string };
+
+const hubAuthRoute: FastifyPluginAsync = async (app) => {
+  app.get<{ Querystring: Query }>("/hub", async (req, reply) => {
+    const secret = env.HUB_SSO_SECRET;
+    if (!secret) {
+      return reply.code(503).send({ error: "Hub sign-in is not configured on this app." });
+    }
+
+    const claims = verifyHubToken(req.query.ht ?? "", {
+      secret,
+      aud: "finance",
+      nowSeconds: Math.floor(Date.now() / 1000),
+    });
+    if (!claims || claims.scope !== "user") {
+      log.warn({ ip: req.ip }, "hub handoff rejected: invalid token");
+      return reply.code(401).send({ error: "Invalid or expired hub token." });
+    }
+    if (!isEmailAllowed(claims.email, env.ALLOWED_EMAILS)) {
+      log.warn({ email: claims.email, jti: claims.jti }, "hub handoff rejected: not on ALLOWED_EMAILS");
+      return reply.code(403).send({ error: "This account is not allowed in Finance." });
+    }
+
+    // Same identity rule as the Google flow: one user row per email.
+    const existing = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(sql`LOWER(${users.email}) = ${claims.email}`)
+      .limit(1);
+    let userId = existing[0]?.id;
+    if (!userId) {
+      userId = randomUUID();
+      await db.insert(users).values({ id: userId, email: claims.email, emailVerified: new Date() });
+      log.info({ email: claims.email, userId }, "hub handoff created finance user");
+    }
+
+    const sessionToken = randomUUID();
+    const expires = sessionExpiry();
+    await db.insert(sessions).values({ sessionToken, userId, expires });
+
+    const secure = env.PUBLIC_URL.startsWith("https://");
+    const cookies = [buildSessionCookie({ token: sessionToken, expires, secure })];
+    if (req.query.hub === "1") cookies.push(buildHubEmbeddedCookie(secure));
+    reply.raw.setHeader("set-cookie", cookies);
+
+    log.info({ email: claims.email, jti: claims.jti, embedded: req.query.hub === "1" }, "hub handoff session created");
+    return reply.redirect(safeNextPath(req.query.next), 302);
+  });
+
+  // Convenience for the hub's "open in full tab" + a manual sanity check.
+  app.get("/hub/ping", async () => ({ ok: true, app: "finance" }));
+};
+
+export default hubAuthRoute;

@@ -161,6 +161,15 @@ const schema = z.object({
   // required on the VPS before M1 ships.
   TASKS_EMBED_SIGNING_SECRET: optionalSecret(32),
 
+  // --- Feldart Hub (hub.feldart.com) — unified shell, phase 1 ---
+  // Shared HMAC secret the hub mints sign-in handoff tokens with (GET
+  // /auth/hub) and Home-tile service tokens (GET /api/ext/hub-summary).
+  // Source of truth on the VPS: ~/.hub-sso-secret. Unset → both routes 503.
+  HUB_SSO_SECRET: optionalSecret(32),
+  // Origin allowed to frame finance, added to the frame-ancestors CSP next
+  // to 'self'. The hub loads finance in an iframe.
+  HUB_PARENT_ORIGIN: z.string().url().default("https://hub.feldart.com"),
+
   VOCATECH_API_KEY: optionalSecret(1),
   VOCATECH_WEBHOOK_SECRET: optionalSecret(1),
   // E.164 or 10-digit US sender number registered to your Vocatech tenant.
