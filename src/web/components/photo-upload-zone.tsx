@@ -3,8 +3,15 @@
 
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Image, Upload, X } from "lucide-react";
+import { Image, Play, Upload, Video, X } from "lucide-react";
 import { Card, CardBody, CardHeader } from "./ui/card";
+import {
+  RMA_MEDIA_ACCEPT_ATTR,
+  RMA_MEDIA_MAX_BYTES,
+  describeAcceptedRmaMedia,
+  isAcceptedRmaMedia,
+  isVideoMime,
+} from "~/lib/rma-media";
 
 // ---- Types ------------------------------------------------------------------
 
@@ -90,11 +97,20 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
     for (const file of files) {
       const key = ++uploadKeyRef.current;
 
+      // Client-side pre-checks so an obvious miss (wrong type, oversized
+      // clip) fails instantly instead of after a long upload.
+      const preflightError = !isAcceptedRmaMedia(file.type)
+        ? `Unsupported file type — accepted: ${describeAcceptedRmaMedia()}.`
+        : file.size > RMA_MEDIA_MAX_BYTES
+          ? `File too large — max ${RMA_MEDIA_MAX_BYTES / 1024 / 1024} MB.`
+          : null;
+
       setUploadingFiles((prev) => {
         const next = new Map(prev);
-        next.set(key, { name: file.name, error: null });
+        next.set(key, { name: file.name, error: preflightError });
         return next;
       });
+      if (preflightError) continue;
 
       // Async IIFE so all files start concurrently
       void (async () => {
@@ -168,7 +184,7 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
           <div className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed border-default px-6 py-8 text-center">
             <Image className="size-8 text-muted" />
             <p className="text-sm text-muted">
-              Save the RMA as a draft first to upload photos.
+              Save the RMA as a draft first to upload photos or videos.
             </p>
           </div>
         </CardBody>
@@ -191,7 +207,7 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
         <div
           role="button"
           tabIndex={0}
-          aria-label="Upload photos — drag and drop or click to select"
+          aria-label="Upload photos or videos — drag and drop or click to select"
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
@@ -213,15 +229,20 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
           <span className="text-sm">
             {isDraggingOver
               ? "Drop to upload"
-              : "Drop images here or click to select"}
+              : "Drop photos or videos here or click to select"}
           </span>
+          {!isDraggingOver && (
+            <span className="text-[11px] text-muted">
+              {describeAcceptedRmaMedia()} · up to {RMA_MEDIA_MAX_BYTES / 1024 / 1024} MB each
+            </span>
+          )}
         </div>
 
         {/* Hidden file input */}
         <input
           ref={inputRef}
           type="file"
-          accept="image/*"
+          accept={RMA_MEDIA_ACCEPT_ATTR}
           multiple
           className="hidden"
           onChange={(e) => {
@@ -291,7 +312,7 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
 
         {/* Empty state (no uploading in-flight, no existing photos) */}
         {!hasContent && (
-          <p className="text-center text-xs text-muted">No photos yet.</p>
+          <p className="text-center text-xs text-muted">No photos or videos yet.</p>
         )}
       </CardBody>
     </Card>
@@ -309,24 +330,44 @@ function PhotoThumbnail({
   onDelete: () => void;
   isDeleting: boolean;
 }) {
-  const src = photo.driveThumbnailUrl ?? photo.driveViewUrl;
+  const isVideo = isVideoMime(photo.mimeType);
+  // Drive generates poster thumbnails for videos too; when it hasn't yet
+  // (thumbnailLink is null for a few seconds after upload) fall back to a
+  // film icon rather than trying to <img> the view URL.
+  const src = photo.driveThumbnailUrl ?? (isVideo ? null : photo.driveViewUrl);
 
   return (
     <div className="group relative overflow-hidden rounded-md border border-default bg-elevated">
-      {/* Clickable image */}
+      {/* Clickable image / video poster */}
       <a
         href={photo.driveViewUrl}
         target="_blank"
         rel="noopener noreferrer"
         aria-label={`Open ${photo.filename} in Drive`}
-        className="block aspect-square"
+        className="relative block aspect-square"
       >
-        <img
-          src={src}
-          alt={photo.filename}
-          className="h-full w-full object-cover transition-opacity group-hover:opacity-80"
-          loading="lazy"
-        />
+        {src ? (
+          <img
+            src={src}
+            alt={photo.filename}
+            className="h-full w-full object-cover transition-opacity group-hover:opacity-80"
+            loading="lazy"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-muted">
+            <Video className="size-8" />
+          </div>
+        )}
+        {isVideo && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          >
+            <span className="rounded-full bg-black/60 p-1.5 text-white">
+              <Play className="size-4" fill="currentColor" />
+            </span>
+          </span>
+        )}
       </a>
 
       {/* Delete button — visible on hover */}

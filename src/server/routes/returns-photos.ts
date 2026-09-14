@@ -1,17 +1,25 @@
-// Photo upload / list / delete routes for RMA photos.
+// Photo / video upload, list and delete routes for RMA evidence.
 //
-// Mounts under /api/rmas/:id/photos (registered by returns.ts).
+// Mounts under /api/rmas/:id/photos (registered by returns.ts). The path
+// still says "photos" because the table + UI do; videos ride the same row
+// type with a video/* mime.
 //
 // Multipart handling uses the same multer + content-type-parser pattern
 // as logo-upload.ts: Fastify is told to pass multipart/form-data through
 // untouched; multer reads the raw socket and populates req.raw.file.
+// Files land on disk (os.tmpdir) rather than in memory so a 200 MB clip
+// doesn't pin 200 MB of heap per in-flight upload on the shared VPS; the
+// temp file is streamed to Drive and unlinked in `finally`.
 //
-// POST  /api/rmas/:id/photos     — upload one photo
-// GET   /api/rmas/:id/photos     — list photos for RMA (sorted by position)
-// DELETE /api/rmas/:id/photos/:photoId — delete one photo
+// POST  /api/rmas/:id/photos     — upload one photo or video
+// GET   /api/rmas/:id/photos     — list media for RMA (sorted by position)
+// DELETE /api/rmas/:id/photos/:photoId — delete one item
 
 import type { FastifyPluginAsync } from "fastify";
 import multer from "multer";
+import { createReadStream } from "node:fs";
+import { unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { asc, count, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
@@ -19,6 +27,12 @@ import { rmas, rmaPhotos } from "../../db/schema/returns.js";
 import { appSettings } from "../../db/schema/app-settings.js";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
+import {
+  RMA_MEDIA_MAX_BYTES,
+  describeAcceptedRmaMedia,
+  extensionForRmaMedia,
+  isAcceptedRmaMedia,
+} from "../../lib/rma-media.js";
 import {
   uploadFile,
   deleteFile,
@@ -29,31 +43,28 @@ import { getRmaById } from "../../modules/returns/index.js";
 
 const log = createLogger({ component: "routes.returns-photos" });
 
-// 20 MB — enough headroom for high-res phone photos (typical 8-12 MP JPEG
-// is 3-6 MB; 20 gives room for RAW / burst-mode shots users occasionally
-// send). Revisit if storage costs become a concern.
-const MAX_BYTES = 20 * 1024 * 1024;
-
-const ACCEPTED_MIME: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/jpg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/heic": "heic",
-  "image/heif": "heif",
-};
+const MAX_BYTES = RMA_MEDIA_MAX_BYTES;
 
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({ destination: tmpdir() }),
   limits: { fileSize: MAX_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
-    if (!ACCEPTED_MIME[file.mimetype]) {
+    if (!isAcceptedRmaMedia(file.mimetype)) {
       cb(new Error("UNSUPPORTED_MIME"));
       return;
     }
     cb(null, true);
   },
 });
+
+async function discardTempFile(path: string | undefined): Promise<void> {
+  if (!path) return;
+  try {
+    await unlink(path);
+  } catch (err) {
+    log.warn({ err, path }, "failed to remove upload temp file");
+  }
+}
 
 const singleFile = upload.single("file");
 
@@ -68,18 +79,31 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
     (_req, _payload, done) => done(null),
   );
 
-  // ---- POST / — upload one photo ------------------------------------------
-  // bodyLimit overrides Fastify's 1MB default so phone photos (3-6 MB) and
-  // RAW shots (up to 20 MB per MAX_BYTES below) aren't rejected at the
-  // connection layer before multer can parse them.
+  // ---- POST / — upload one photo or video ---------------------------------
+  // bodyLimit overrides Fastify's 1MB default so phone photos and video
+  // clips (up to MAX_BYTES) aren't rejected at the connection layer before
+  // multer can parse them. nginx's client_max_body_size must also be ≥ this.
   app.post<{ Params: { id: string } }>("/", { bodyLimit: MAX_BYTES + 1024 * 1024 }, async (req, reply) => {
     const user = await requireAuth(req);
 
     // 1. Resolve RMA
-    const rma = await getRmaById(req.params.id);
-    if (!rma) {
+    const rmaMaybe = await getRmaById(req.params.id);
+    if (!rmaMaybe) {
       return reply.code(404).send({ error: "RMA not found" });
     }
+    // Re-bind under the narrowed type so the nested handler sees non-null.
+    const rma = rmaMaybe;
+
+    // Everything past multer owns a temp file; make sure it's gone on every
+    // exit path (early returns included).
+    let tempPath: string | undefined;
+    try {
+      return await handleUpload();
+    } finally {
+      await discardTempFile(tempPath);
+    }
+
+    async function handleUpload() {
 
     // 2. Read drive_root_folder_id from app_settings
     const settingRows = await db
@@ -111,8 +135,7 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       const message = err instanceof Error ? err.message : "upload failed";
       if (message === "UNSUPPORTED_MIME") {
         return reply.code(400).send({
-          error:
-            "Unsupported file type — accepted: JPEG, PNG, WebP, HEIC.",
+          error: `Unsupported file type — accepted: ${describeAcceptedRmaMedia()}.`,
         });
       }
       if (
@@ -128,6 +151,7 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
     }
 
     const file = (req.raw as unknown as { file?: Express.Multer.File }).file;
+    tempPath = file?.path;
     if (!file) {
       return reply.code(400).send({ error: "Missing 'file' field." });
     }
@@ -200,10 +224,10 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
     const pad = (v: number) => String(v).padStart(2, "0");
     const datePart =
       `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-    const rawExt = ACCEPTED_MIME[file.mimetype] ?? "jpg";
+    const rawExt = extensionForRmaMedia(file.mimetype);
     const filename = `${folderLabel}_${datePart}_${photoNumber}.${rawExt}`;
 
-    // 6. Upload to Drive
+    // 6. Upload to Drive — streamed from the temp file.
     let uploadResult: Awaited<ReturnType<typeof uploadFile>>;
     try {
       uploadResult = await uploadFile({
@@ -211,7 +235,7 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
         folderId,
         filename,
         mimeType: file.mimetype,
-        content: file.buffer,
+        content: createReadStream(file.path),
       });
     } catch (err) {
       log.error({ err, rmaId: rma.id }, "Drive upload failed");
@@ -284,6 +308,7 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
     );
 
     return reply.code(201).send(newPhoto);
+    }
   });
 
   // ---- GET / — list photos for an RMA -------------------------------------

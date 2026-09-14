@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import {
+  RMA_MEDIA_MAX_BYTES,
+  RMA_MEDIA_ACCEPT_ATTR,
+  describeAcceptedRmaMedia,
+  extensionForRmaMedia,
+  isAcceptedRmaMedia,
+  isVideoMime,
+} from "./rma-media.js";
+
+describe("rma-media", () => {
+  it("accepts the image types the RMA photo upload always took", () => {
+    for (const m of ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif"]) {
+      expect(isAcceptedRmaMedia(m)).toBe(true);
+    }
+  });
+
+  it("accepts phone + browser video containers", () => {
+    for (const m of ["video/mp4", "video/quicktime", "video/webm", "video/x-m4v"]) {
+      expect(isAcceptedRmaMedia(m)).toBe(true);
+    }
+  });
+
+  it("rejects everything else", () => {
+    for (const m of ["application/pdf", "image/svg+xml", "video/x-msvideo", "text/plain", ""]) {
+      expect(isAcceptedRmaMedia(m)).toBe(false);
+    }
+  });
+
+  it("maps mime → file extension, defaulting to jpg", () => {
+    expect(extensionForRmaMedia("image/jpeg")).toBe("jpg");
+    expect(extensionForRmaMedia("video/quicktime")).toBe("mov");
+    expect(extensionForRmaMedia("video/mp4")).toBe("mp4");
+    expect(extensionForRmaMedia("application/octet-stream")).toBe("jpg");
+  });
+
+  it("identifies video mimes", () => {
+    expect(isVideoMime("video/mp4")).toBe(true);
+    expect(isVideoMime("image/png")).toBe(false);
+  });
+
+  it("caps uploads at 200 MB so a phone clip fits", () => {
+    expect(RMA_MEDIA_MAX_BYTES).toBe(200 * 1024 * 1024);
+  });
+
+  it("exposes an <input accept> attribute covering images + videos", () => {
+    expect(RMA_MEDIA_ACCEPT_ATTR).toBe("image/*,video/*");
+  });
+
+  it("describes the accepted set for error messages", () => {
+    expect(describeAcceptedRmaMedia()).toBe("JPEG, PNG, WebP, HEIC, MP4, MOV, WebM");
+  });
+});

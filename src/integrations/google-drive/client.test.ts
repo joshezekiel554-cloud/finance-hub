@@ -25,6 +25,8 @@ vi.mock("~/lib/env.js", () => ({
   env: {
     GOOGLE_CLIENT_ID: "test-client-id",
     GOOGLE_CLIENT_SECRET: "test-client-secret",
+    AUTH_GOOGLE_CLIENT_ID: "test-auth-client-id",
+    AUTH_GOOGLE_CLIENT_SECRET: "test-auth-client-secret",
     PUBLIC_URL: "https://test.example.com",
   },
 }));
@@ -48,6 +50,7 @@ const drivePermissionsCreateMock = vi.hoisted(() => vi.fn());
 const oauthGetAccessTokenMock = vi.hoisted(() => vi.fn().mockResolvedValue({ token: "tok" }));
 const oauthOnMock = vi.hoisted(() => vi.fn());
 const oauthSetCredentialsMock = vi.hoisted(() => vi.fn());
+const oauth2CtorMock = vi.hoisted(() => vi.fn());
 
 vi.mock("googleapis", () => {
   const mockDriveInstance = {
@@ -71,7 +74,7 @@ vi.mock("googleapis", () => {
   return {
     google: {
       auth: {
-        OAuth2: vi.fn(() => mockOAuth2Instance),
+        OAuth2: oauth2CtorMock.mockImplementation(() => mockOAuth2Instance),
       },
       drive: vi.fn(() => mockDriveInstance),
     },
@@ -113,6 +116,68 @@ function setupValidToken() {
   return chainNode;
 }
 
+/**
+ * Wire up mockDbSelect so consecutive db.select() calls resolve, in order,
+ * to the given row arrays. loadStoredToken issues up to three selects:
+ * (1) the signed-in user's Auth.js `account` row, (2) any staff `account`
+ * row carrying a Drive grant, (3) the legacy oauth_tokens gmail row.
+ */
+function setupSelectSequence(rowsPerCall: unknown[][]) {
+  let i = 0;
+  mockDbSelect.mockImplementation(() => {
+    const rows = rowsPerCall[i] ?? [];
+    i += 1;
+    return {
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue(rows),
+    };
+  });
+}
+
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
+const PROFILE_SCOPES =
+  "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
+
+function accountRow(overrides: Partial<{
+  userId: string;
+  providerAccountId: string;
+  access_token: string | null;
+  refresh_token: string | null;
+  expires_at: number | null;
+  scope: string | null;
+}> = {}) {
+  return {
+    userId: "user-1",
+    type: "oauth",
+    provider: "google",
+    providerAccountId: "google-sub-1",
+    access_token: "acct-access",
+    refresh_token: "acct-refresh",
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+    scope: `${PROFILE_SCOPES} ${DRIVE_SCOPE}`,
+    ...overrides,
+  };
+}
+
+function legacyGmailRow() {
+  return {
+    id: "token-row-1",
+    provider: "gmail",
+    externalAccountId: "user@example.com",
+    accessTokenEnc: "enc-access",
+    refreshTokenEnc: "enc-refresh",
+    expiresAt: new Date(Date.now() + 3_600_000),
+    scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.file",
+    revokedAt: null,
+  };
+}
+
+function oauth2CtorArgs(): [string, string, string] {
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return oauth2CtorMock.mock.calls[0]! as [string, string, string];
+}
+
 // ---------------------------------------------------------------------------
 // Import subject (after mocks)
 // ---------------------------------------------------------------------------
@@ -127,6 +192,85 @@ import {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe("getDriveClient credential selection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    driveFilesCreateMock.mockResolvedValue({
+      data: { id: "file-1", mimeType: "image/jpeg", size: "1" },
+    });
+  });
+
+  async function upload(userId = "user-1") {
+    return uploadFile({
+      userId,
+      folderId: "folder-1",
+      filename: "x.jpg",
+      mimeType: "image/jpeg",
+      content: Buffer.from("x"),
+    });
+  }
+
+  it("uses the Auth.js OAuth client when the token comes from the account table", async () => {
+    // Regression: prod refresh tokens in `account` were issued to
+    // AUTH_GOOGLE_CLIENT_ID; refreshing them with the Gmail client yields
+    // "unauthorized_client" from Google and every upload 502s.
+    setupSelectSequence([[accountRow()]]);
+
+    await upload();
+
+    const [clientId, clientSecret, redirect] = oauth2CtorArgs();
+    expect(clientId).toBe("test-auth-client-id");
+    expect(clientSecret).toBe("test-auth-client-secret");
+    expect(redirect).toBe("https://test.example.com/api/auth/callback/google");
+  });
+
+  it("uses the Gmail OAuth client for the legacy oauth_tokens row", async () => {
+    setupSelectSequence([[], [], [legacyGmailRow()]]);
+
+    await upload();
+
+    const [clientId, clientSecret] = oauth2CtorArgs();
+    expect(clientId).toBe("test-client-id");
+    expect(clientSecret).toBe("test-client-secret");
+  });
+
+  it("falls back to another staff member's Drive grant when the caller's account lacks drive scope", async () => {
+    const own = accountRow({ userId: "user-2", providerAccountId: "sub-2", scope: PROFILE_SCOPES });
+    const staff = accountRow({ userId: "user-1", providerAccountId: "sub-1", access_token: "staff-access", refresh_token: "staff-refresh" });
+    setupSelectSequence([[own], [staff]]);
+
+    await upload("user-2");
+
+    expect(oauthSetCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ access_token: "staff-access", refresh_token: "staff-refresh" }),
+    );
+    expect(oauth2CtorArgs()[0]).toBe("test-auth-client-id");
+  });
+
+  it("persists refreshed tokens back onto the account row", async () => {
+    setupSelectSequence([[accountRow()]]);
+    const setMock = vi.fn().mockReturnThis();
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    mockDbUpdate.mockReturnValue({ set: setMock, where: whereMock });
+
+    await upload();
+
+    // Grab the "tokens" listener registered on the OAuth2 client and fire it
+    // the way google-auth-library does after a refresh.
+    const tokensCall = oauthOnMock.mock.calls.find((c) => c[0] === "tokens");
+    expect(tokensCall).toBeDefined();
+    const handler = tokensCall![1] as (t: { access_token?: string; expiry_date?: number }) => void;
+    handler({ access_token: "fresh-access", expiry_date: 1_800_000_000_000 });
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockDbUpdate).toHaveBeenCalledOnce();
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ access_token: "fresh-access", expires_at: 1_800_000_000 }),
+    );
+    expect(whereMock).toHaveBeenCalledOnce();
+  });
+});
 
 describe("uploadFile", () => {
   beforeEach(() => {

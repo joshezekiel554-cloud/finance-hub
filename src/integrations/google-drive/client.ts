@@ -51,7 +51,17 @@ type TokenSet = {
   externalAccountId: string;
 };
 
+// Where a token came from decides which Google OAuth client can refresh it.
+// Refresh tokens are bound to the client that issued them: rows in the
+// Auth.js `account` table were minted by the sign-in client
+// (AUTH_GOOGLE_CLIENT_ID); rows in `oauth_tokens` by the Gmail client
+// (GOOGLE_CLIENT_ID). Refreshing with the wrong one makes Google answer
+// `unauthorized_client` — which is exactly why every prod photo upload
+// 502'd from launch until 2026-09-14.
+type TokenSource = "account" | "oauth_tokens";
+
 type StoredToken = {
+  source: TokenSource;
   rowId: string;
   externalAccountId: string;
   tokens: TokenSet;
@@ -66,43 +76,89 @@ const DRIVE_SCOPES = [
 ];
 const TOKEN_REFRESH_LEAD_MS = 60_000;
 
-function buildOAuth2Client(): OAuth2Client {
+function buildOAuth2Client(source: TokenSource): OAuth2Client {
+  const base = env.PUBLIC_URL.replace(/\/$/, "");
+  if (source === "account") {
+    return new google.auth.OAuth2(
+      env.AUTH_GOOGLE_CLIENT_ID,
+      env.AUTH_GOOGLE_CLIENT_SECRET,
+      `${base}/api/auth/callback/google`,
+    );
+  }
   return new google.auth.OAuth2(
     env.GOOGLE_CLIENT_ID,
     env.GOOGLE_CLIENT_SECRET,
-    `${env.PUBLIC_URL.replace(/\/$/, "")}/oauth/callback/gmail`,
+    `${base}/oauth/callback/gmail`,
   );
 }
 
+function tokenHasDriveScope(scope: string | null): boolean {
+  if (!scope) return false;
+  const granted = scope.split(/\s+/).filter(Boolean);
+  return DRIVE_SCOPES.some((s) => granted.includes(s));
+}
+
+type AccountRow = typeof accounts.$inferSelect;
+
+// An `account` row can drive uploads only if it carries offline access AND
+// a Drive scope. Staff who signed in before the drive scope was added to
+// the consent screen have a row with neither, so we skip those.
+function accountRowUsableForDrive(
+  row: AccountRow,
+): row is AccountRow & { access_token: string; refresh_token: string } {
+  return (
+    !!row.access_token && !!row.refresh_token && tokenHasDriveScope(row.scope ?? null)
+  );
+}
+
+function storedTokenFromAccountRow(
+  row: AccountRow & { access_token: string; refresh_token: string },
+): StoredToken {
+  return {
+    source: "account",
+    rowId: row.providerAccountId,
+    externalAccountId: row.providerAccountId,
+    tokens: {
+      accessToken: row.access_token,
+      refreshToken: row.refresh_token,
+      expiresAt: row.expires_at != null ? new Date(row.expires_at * 1000) : null,
+      scope: row.scope ?? null,
+      externalAccountId: row.providerAccountId,
+    },
+  };
+}
+
 async function loadStoredToken(userId?: string): Promise<StoredToken | null> {
-  // Drive uses tokens from the Auth.js `accounts` table (provider=google).
-  // The user signs in via Auth.js with the drive.file scope; that grant
-  // lands here. We prefer this source over the legacy oauth_tokens row
-  // used by Gmail polling (which doesn't include drive.file).
+  // 1. The signed-in user's own Auth.js `account` row (provider=google).
+  //    Signing in grants the full drive scope (see plugins/auth.ts), so
+  //    this is the normal source.
   if (userId) {
     const rows = await db
       .select()
       .from(accounts)
       .where(and(eq(accounts.userId, userId), eq(accounts.provider, "google")))
       .limit(1);
-    const row = rows[0];
-    if (row?.access_token && row?.refresh_token) {
-      return {
-        rowId: `account:${row.userId}:${row.providerAccountId}`,
-        externalAccountId: row.providerAccountId,
-        tokens: {
-          accessToken: row.access_token,
-          refreshToken: row.refresh_token,
-          expiresAt:
-            row.expires_at != null ? new Date(row.expires_at * 1000) : null,
-          scope: row.scope ?? null,
-          externalAccountId: row.providerAccountId,
-        },
-      };
+    const own = rows[0];
+    if (own && accountRowUsableForDrive(own)) {
+      return storedTokenFromAccountRow(own);
     }
   }
 
-  // Fallback: legacy oauth_tokens row (used by Gmail polling).
+  // 2. Any staff member's Drive grant. The returns photo tree is one shared
+  //    folder, so whose token performs the upload doesn't matter — this
+  //    keeps uploads working for teammates whose own sign-in predates the
+  //    drive scope, instead of bouncing them to "sign out and back in".
+  const staffRows = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.provider, "google"))
+    .limit(50);
+  const staff = staffRows.find(accountRowUsableForDrive);
+  if (staff) {
+    return storedTokenFromAccountRow(staff);
+  }
+
+  // 3. Legacy oauth_tokens row (used by Gmail polling).
   const rows = await db
     .select()
     .from(oauthTokens)
@@ -114,6 +170,7 @@ async function loadStoredToken(userId?: string): Promise<StoredToken | null> {
   if (row.externalAccountId.startsWith("pending:")) return null;
 
   return {
+    source: "oauth_tokens",
     rowId: row.id,
     externalAccountId: row.externalAccountId,
     tokens: {
@@ -126,27 +183,32 @@ async function loadStoredToken(userId?: string): Promise<StoredToken | null> {
   };
 }
 
-async function persistToken(
-  rowId: string,
-  externalAccountId: string,
-  tokens: TokenSet,
-): Promise<void> {
+async function persistToken(stored: StoredToken, tokens: TokenSet): Promise<void> {
+  if (stored.source === "account") {
+    // Auth.js rows keep raw tokens + unix-second expiry.
+    await db
+      .update(accounts)
+      .set({
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
+        expires_at: tokens.expiresAt ? Math.floor(tokens.expiresAt.getTime() / 1000) : null,
+        scope: tokens.scope,
+      })
+      .where(
+        and(eq(accounts.provider, "google"), eq(accounts.providerAccountId, stored.rowId)),
+      );
+    return;
+  }
   await db
     .update(oauthTokens)
     .set({
-      externalAccountId,
+      externalAccountId: stored.externalAccountId,
       accessTokenEnc: encrypt(tokens.accessToken),
       refreshTokenEnc: tokens.refreshToken ? encrypt(tokens.refreshToken) : null,
       expiresAt: tokens.expiresAt,
       scope: tokens.scope,
     })
-    .where(eq(oauthTokens.id, rowId));
-}
-
-function tokenHasDriveScope(scope: string | null): boolean {
-  if (!scope) return false;
-  const granted = scope.split(/\s+/).filter(Boolean);
-  return DRIVE_SCOPES.some((s) => granted.includes(s));
+    .where(eq(oauthTokens.id, stored.rowId));
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +233,7 @@ async function getDriveClient(userId?: string): Promise<ReturnType<typeof google
     );
   }
 
-  const oauth = buildOAuth2Client();
+  const oauth = buildOAuth2Client(stored.source);
   oauth.setCredentials({
     access_token: stored.tokens.accessToken,
     refresh_token: stored.tokens.refreshToken,
@@ -191,7 +253,7 @@ async function getDriveClient(userId?: string): Promise<ReturnType<typeof google
           scope: next.scope ?? stored.tokens.scope,
           externalAccountId: stored.externalAccountId,
         };
-        await persistToken(stored.rowId, stored.externalAccountId, merged);
+        await persistToken(stored, merged);
         log.debug({ externalAccountId: stored.externalAccountId }, "drive tokens refreshed");
       } catch (err) {
         log.error({ err }, "failed to persist refreshed Drive tokens");
