@@ -64,7 +64,8 @@ export function HoldsWidget() {
                 <div className="min-w-0">
                   <div className="font-medium text-primary truncate">{c.displayName}</div>
                   <div className="text-xs text-muted">
-                    {STATUS_LABEL[c.holdStatus] ?? c.holdStatus} since {daysSince(c.heldSinceAt)}
+                    {STATUS_LABEL[c.holdStatus] ?? c.holdStatus}
+                    {c.heldSinceAt ? ` · ${daysSince(c.heldSinceAt)}` : ""}
                   </div>
                 </div>
                 <span className={`shrink-0 text-xs tabular-nums ${Number(c.overdueBalance) > 0 ? "text-accent-danger" : "text-muted"}`}>
