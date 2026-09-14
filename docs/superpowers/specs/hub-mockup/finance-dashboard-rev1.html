@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Finance dashboard — rev 1 (operator spec 2026-09-14)</title>
+<style>
+  :root{
+    --bg: oklch(97.5% 0.005 250); --page: oklch(99% 0.003 250); --surface:#fff;
+    --border: oklch(91% 0.008 250); --border-strong: oklch(82% 0.012 250); --muted: oklch(94% 0.008 250);
+    --text: oklch(20% 0.015 250); --text-soft: oklch(40% 0.015 250); --text-faint: oklch(58% 0.012 250);
+    --accent: oklch(58% 0.18 260); --accent-soft: oklch(95% 0.03 260);
+    --danger: oklch(60% 0.21 25); --danger-bg: oklch(95.5% 0.035 25);
+    --warn: oklch(74% 0.16 75); --warn-bg: oklch(96% 0.05 85); --warn-text: oklch(50% 0.12 75);
+    --info: oklch(64% 0.14 220); --info-bg: oklch(95.5% 0.03 220);
+    --ok: oklch(60% 0.16 150); --ok-bg: oklch(95.5% 0.04 150);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:"Inter","Segoe UI Variable","Segoe UI",system-ui,sans-serif;background:var(--page);color:var(--text);font-size:13px;-webkit-font-smoothing:antialiased;width:1480px;padding-bottom:40px}
+  .mono{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+  .flabel{display:flex;align-items:baseline;gap:10px;padding:22px 20px 10px}
+  .flabel .n{font-size:10.5px;font-weight:700;letter-spacing:.10em;color:#fff;background:var(--text);border-radius:5px;padding:2px 7px}
+  .flabel .t{font-size:13.5px;font-weight:700}.flabel .s{font-size:12px;color:var(--text-soft)}
+
+  /* finance app shell */
+  .app{width:1440px;height:1060px;margin:0 20px;display:grid;grid-template-columns:240px 1fr;border:1px solid var(--border-strong);border-radius:12px;overflow:hidden;background:var(--page)}
+  .side{background:var(--bg);border-right:1px solid var(--border);padding:0}
+  .side .brand{height:56px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:14px}
+  .side .brand i{width:28px;height:28px;border-radius:6px;background:var(--accent-soft);box-shadow:inset 0 0 0 1px oklch(58% 0.18 260 / .3)}
+  .side nav{padding:8px}
+  .side nav a{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:6px;color:var(--text-soft);font-size:13.5px}
+  .side nav a.on{background:var(--muted);color:var(--text);font-weight:500}
+  .side nav a .ic{width:16px;height:16px;border-radius:3px;background:oklch(85% 0.01 250)}
+  .main{padding:22px 26px;overflow:hidden}
+  .hd{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px}
+  .hd h1{font-size:28px;font-weight:700;letter-spacing:-.01em}
+  .hd p{color:var(--text-soft);font-size:14px;margin-top:2px}
+  .hd .right{margin-left:auto;display:flex;gap:8px;align-items:center;position:relative}
+  .btn{height:34px;border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:0 12px;display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--text)}
+  .btn.p{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn .chev{font-size:9px;opacity:.7;margin-left:2px}
+  .menu{position:absolute;top:40px;right:0;width:260px;background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 8px 24px -4px rgb(0 0 0/.1);padding:6px;z-index:5;font-size:12.5px}
+  .menu .mh{padding:6px 10px 4px;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--text-faint);text-transform:uppercase}
+  .menu .mi{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px}
+  .menu .mi.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .menu .av{width:18px;height:18px;border-radius:50%;background:var(--muted);border:1px solid var(--border-strong);font-size:9px;display:grid;place-items:center;font-weight:700;color:var(--text-soft)}
+
+  /* money section */
+  .money{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 1px 2px rgb(0 0 0/.04);margin-bottom:14px;overflow:hidden}
+  .money .mh{display:flex;align-items:baseline;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)}
+  .money .mh h2{font-size:14.5px;font-weight:700}
+  .money .mh .sub{color:var(--text-faint);font-size:12px}
+  .money .mh .src{margin-left:auto;color:var(--text-faint);font-size:11.5px;display:flex;align-items:center;gap:6px}
+  .money .mh .src i{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  table.m{width:100%;border-collapse:collapse}
+  table.m th{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);text-align:right;padding:9px 16px;border-bottom:1px solid var(--border);background:var(--bg)}
+  table.m th:first-child{text-align:left}
+  table.m td{padding:10px 16px;border-bottom:1px solid var(--border);text-align:right;font-size:14px;font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+  table.m td:first-child{text-align:left;font-family:inherit;font-weight:600;font-size:13px}
+  table.m tr:last-child td{border-bottom:0;font-weight:700;background:var(--bg)}
+  table.m td .sub{display:block;font-family:inherit;font-size:11px;color:var(--text-faint);font-weight:400;margin-top:2px}
+  table.m td.od{color:var(--danger)}
+  table.m td.ok{color:var(--ok)}
+  table.m .book{display:inline-flex;align-items:center;gap:6px}
+  table.m .book i{width:8px;height:8px;border-radius:2px}
+  .money .foot{padding:8px 16px;font-size:11.5px;color:var(--text-faint);border-top:1px solid var(--border);display:flex;gap:16px}
+  .money .foot a{color:var(--accent);font-weight:600}
+
+  /* grid */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 1px 2px rgb(0 0 0/.04);display:flex;flex-direction:column;min-height:0}
+  .card .ch{display:flex;align-items:baseline;gap:8px;padding:11px 14px;border-bottom:1px solid var(--border)}
+  .card .ch h2{font-size:14px;font-weight:700}
+  .card .ch .cnt{color:var(--text-faint);font-size:12.5px}
+  .card .ch a{margin-left:auto;color:var(--accent);font-weight:600;font-size:12px}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border);font-size:12.5px;min-height:44px}
+  .row:last-child{border-bottom:0}
+  .row .who{font-weight:600;white-space:nowrap}
+  .row .what{color:var(--text-soft);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .amt{font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+  .row .age{color:var(--text-faint);font-size:11.5px;white-space:nowrap}
+  .pill{font-size:10.5px;font-weight:700;border-radius:5px;padding:2px 6px;white-space:nowrap}
+  .pill.d{background:var(--danger-bg);color:var(--danger)}.pill.w{background:var(--warn-bg);color:var(--warn-text)}.pill.i{background:var(--info-bg);color:oklch(45% 0.1 220)}.pill.g{background:var(--muted);color:var(--text-soft)}
+  .sub-h{padding:7px 14px 3px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);background:var(--bg);border-bottom:1px solid var(--border)}
+  .act{display:inline-flex;gap:6px}
+  .act span{border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11.5px;font-weight:600;background:var(--surface)}
+  .act span.p{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .jump{margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:8px;font-size:12.5px}
+  .jump b{margin-right:6px}
+  .jump span{background:var(--muted);border-radius:6px;padding:4px 10px;font-weight:500}
+  .jump .sync{margin-left:auto;color:var(--text-faint);font-size:11.5px}
+
+  /* hub panel frame */
+  .hubpanel{width:372px;margin:0 20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 1px 2px rgb(0 0 0/.04);padding:12px 14px 10px}
+  .hubpanel .ph{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+  .hubpanel .ph h3{font-size:13px;font-weight:700}
+  .hubpanel .ph .sub{color:var(--text-faint);font-size:12px}
+  .hubpanel .ph a{margin-left:auto;color:var(--accent);font-weight:600;font-size:12px}
+  .hubpanel table.m th,.hubpanel table.m td{padding:6px 6px;font-size:12px}
+  .hubpanel table.m th:first-child,.hubpanel table.m td:first-child{padding-left:0}
+  .hubpanel .prow{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px;border-top:1px solid var(--border)}
+  .hubpanel .prow .k{color:var(--text-soft);flex:1}
+  .hubpanel .prow .v{font-weight:600;font-family:ui-monospace,Consolas,monospace}
+  .hubpanel .subh{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);padding:9px 0 3px}
+  .notes{margin:18px 20px 0;width:1440px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;font-size:12.5px;color:var(--text-soft);line-height:1.55;display:grid;grid-template-columns:1fr 1fr;gap:6px 24px}
+  .notes b{color:var(--text)}
+</style>
+</head>
+<body>
+
+<div class="flabel"><span class="n">A</span><span class="t">Finance → Dashboard (desktop, rev 1)</span><span class="s">operator spec 2026-09-14: no tasks board; “+ New task” with board picker; money section split Feldart / TJ; orders to review; invoices not sent today; returns awaiting arrival; on hold + payment upfront.</span></div>
+<div class="app" id="frame-a">
+  <aside class="side">
+    <div class="brand"><i></i>Finance Hub</div>
+    <nav>
+      <a class="on"><span class="ic"></span>Dashboard</a><a><span class="ic"></span>Customers</a><a><span class="ic"></span>Today</a><a><span class="ic"></span>Chase</a><a><span class="ic"></span>Statements</a><a><span class="ic"></span>Tasks</a><a><span class="ic"></span>Returns</a><a><span class="ic"></span>Seasons</a><a><span class="ic"></span>Autopilot</a><a><span class="ic"></span>Agent</a><a><span class="ic"></span>AI Training</a><a><span class="ic"></span>Settings</a><a><span class="ic"></span>Team Activity</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <div class="hd">
+      <div><h1>Dashboard</h1><p>What needs your attention right now.</p></div>
+      <div class="right">
+        <span class="btn">Open tasks board →</span>
+        <span class="btn p">+ New task <span class="chev">▼</span></span>
+        <div class="menu">
+          <div class="mh">Add to board</div>
+          <div class="mi on"><span class="av">JO</span>My board (Josh)</div>
+          <div class="mi"><span class="av">SG</span>Shaya’s board</div>
+          <div class="mi"><span class="av">HS</span>Hillel’s board</div>
+          <div class="mi"><span class="av">LF</span>Leibel’s board</div>
+          <div class="mh">Then</div>
+          <div class="mi">Title, due date, priority, link to customer…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MONEY -->
+    <section class="money">
+      <div class="mh"><h2>Money</h2><span class="sub">open invoices by book · received in the last 30 days</span><span class="src"><i></i>QB synced 15:12 · payments synced 15:12</span></div>
+      <table class="m">
+        <thead><tr><th>Book</th><th>Overdue</th><th>Current due<span style="display:block;font-weight:500;letter-spacing:0;text-transform:none;color:var(--text-faint)">not yet past due</span></th><th>Due in next 7 days</th><th>Received · 30 days</th></tr></thead>
+        <tbody>
+          <tr><td><span class="book"><i style="background:var(--accent)"></i>Feldart</span></td><td class="od">£312,840.10<span class="sub">71 invoices · 68 customers</span></td><td>£148,220.55<span class="sub">124 invoices</span></td><td class="mono" style="color:var(--warn-text)">£38,410.00<span class="sub">19 invoices</span></td><td class="ok">£96,530.40<span class="sub">112 payments</span></td></tr>
+          <tr><td><span class="book"><i style="background:var(--warn)"></i>Torah Judaica</span></td><td class="od">£84,684.32<span class="sub">21 invoices · 19 customers</span></td><td>£22,905.00<span class="sub">18 invoices</span></td><td class="mono" style="color:var(--warn-text)">£6,120.00<span class="sub">4 invoices</span></td><td class="ok">£11,240.00<span class="sub">9 payments</span></td></tr>
+          <tr><td>Total</td><td class="od">£397,524.42</td><td>£171,125.55</td><td style="color:var(--warn-text)">£44,530.00</td><td class="ok">£107,770.40</td></tr>
+        </tbody>
+      </table>
+      <div class="foot"><span>Overdue = balance past due date · Current due = open balance not yet due · Received = QBO payments by transaction date</span><a>Chase list →</a><a>Statements →</a></div>
+    </section>
+
+    <div class="grid">
+      <!-- LEFT column -->
+      <div class="card">
+        <div class="ch"><h2>Invoices not sent yet today</h2><span class="cnt">7 warehouse emails</span><a>Today →</a></div>
+        <div class="row"><span class="who">Elegant Linen</span><span class="what">Order 19402 · shipped 09:14 · 12 lines</span><span class="amt">£2,180.00</span><span class="act"><span class="p">Invoice</span></span></div>
+        <div class="row"><span class="who">Judaica Plus</span><span class="what">Order 19405 · shipped 09:41 · 3 lines</span><span class="amt">£640.00</span><span class="act"><span class="p">Invoice</span></span></div>
+        <div class="row"><span class="who">Bais Hasforim</span><span class="what">Order 19399 · shipped 10:02 · parse gap: 1 line</span><span class="pill w">check</span><span class="act"><span>Review</span></span></div>
+        <div class="row"><span class="who">Malchut</span><span class="what">Order 19410 · shipped 11:20 · 8 lines</span><span class="amt">£1,315.50</span><span class="act"><span class="p">Invoice</span></span></div>
+        <div class="row"><span class="what" style="color:var(--text-faint)">+ 3 more on Today</span></div>
+      </div>
+
+      <!-- RIGHT column: orders to review -->
+      <div class="card">
+        <div class="ch"><h2>Orders to review</h2><span class="cnt">2 held · 3 overdue-flagged</span><a>All →</a></div>
+        <div class="sub-h">Hold orders</div>
+        <div class="row"><span class="who">Scharf’s Judaica</span><span class="what">#19380 · 26 Aug · manual hold</span><span class="amt">£2,445.00</span><span class="pill w">held 18d</span><span class="act"><span class="p">Good to send</span><span>Chase</span></span></div>
+        <div class="row"><span class="who">esther friedman</span><span class="what">#19284 · 21 Aug · manual hold</span><span class="amt">£4,062.50</span><span class="pill w">held 24d</span><span class="act"><span class="p">Good to send</span><span>Chase</span></span></div>
+        <div class="sub-h">Overdue balance on a new order</div>
+        <div class="row"><span class="who">Z. Berman Books</span><span class="what">#19523 · £5,613 overdue</span><span class="amt">£1,180.00</span><span class="act"><span>Hold</span><span>Dismiss</span></span></div>
+        <div class="row"><span class="who">Luxury Linen</span><span class="what">#19518 · £812 overdue</span><span class="amt">£940.00</span><span class="act"><span>Hold</span><span>Dismiss</span></span></div>
+      </div>
+
+      <!-- returns awaiting -->
+      <div class="card">
+        <div class="ch"><h2>Returns awaiting arrival</h2><span class="cnt">4 RMAs</span><a>Returns →</a></div>
+        <div class="row"><span class="who">DC38831</span><span class="what">Judaica Plus · damage · 2 items</span><span class="pill i">sent to warehouse</span><span class="age">6d</span></div>
+        <div class="row"><span class="who">DC38829</span><span class="what">Vocatech · damage · 1 item</span><span class="pill i">sent to warehouse</span><span class="age">9d</span></div>
+        <div class="row"><span class="who">SR-0412</span><span class="what">Malchut · seasonal · 14 items</span><span class="pill g">approved · awaiting number</span><span class="age">2d</span></div>
+        <div class="row"><span class="who">DC38826</span><span class="what">Bais Hasforim · damage · 1 item</span><span class="pill d">sent 21d ago</span><span class="age">21d</span></div>
+      </div>
+
+      <!-- holds -->
+      <div class="card">
+        <div class="ch"><h2>Customers on hold</h2><span class="cnt">4 on hold · 3 payment upfront</span><a>Customers →</a></div>
+        <div class="sub-h">On hold</div>
+        <div class="row"><span class="who">Torah Judaica</span><span class="what">overdue 531d · last chased 9 Sep</span><span class="amt" style="color:var(--danger)">£104,279.38</span><span class="age">since 2 Jun</span></div>
+        <div class="row"><span class="who">Judy Kennard</span><span class="what">overdue 413d</span><span class="amt" style="color:var(--danger)">£59,446.71</span><span class="age">since 14 Jul</span></div>
+        <div class="row"><span class="who">Menorah Judaica</span><span class="what">overdue 662d</span><span class="amt" style="color:var(--danger)">£8,951.00</span><span class="age">since 3 Mar</span></div>
+        <div class="sub-h">Payment upfront</div>
+        <div class="row"><span class="who">Meoros Judaica</span><span class="what">promised 8 Sep · not landed</span><span class="pill d">decision</span><span class="age">6d</span></div>
+        <div class="row"><span class="who">New Store LLC</span><span class="what">first order · awaiting payment</span><span class="pill g">upfront</span><span class="age">4h</span></div>
+      </div>
+    </div>
+
+    <div class="jump"><b>Jump to</b><span>Today’s invoicing</span><span>Chase list</span><span>Customers</span><span>Statements log</span><span>Tasks</span><span class="sync">Last QB sync 15:12 · 0 errors · next chase run 17:00</span></div>
+  </div>
+</div>
+
+<div class="flabel"><span class="n">B</span><span class="t">The same money section as the hub Home “Finance” panel</span><span class="s">numbers only, from the one finance endpoint; lists stay on the finance dashboard.</span></div>
+<div class="hubpanel" id="frame-b">
+  <div class="ph"><h3>Finance</h3><span class="sub">by book · 30 days</span><a>Open →</a></div>
+  <table class="m">
+    <thead><tr><th></th><th>Overdue</th><th>Due</th><th>Recv 30d</th></tr></thead>
+    <tbody>
+      <tr><td>Feldart</td><td class="od">£312.8k</td><td>£148.2k</td><td class="ok">£96.5k</td></tr>
+      <tr><td>TJ</td><td class="od">£84.7k</td><td>£22.9k</td><td class="ok">£11.2k</td></tr>
+      <tr><td>Total</td><td class="od">£397.5k</td><td>£171.1k</td><td class="ok">£107.8k</td></tr>
+    </tbody>
+  </table>
+  <div class="subh">Today</div>
+  <div class="prow"><span class="k">Invoices not sent yet</span><span class="v">7</span></div>
+  <div class="prow"><span class="k">Orders to review</span><span class="v">5</span></div>
+  <div class="prow"><span class="k">Returns awaiting arrival</span><span class="v">4</span></div>
+  <div class="prow"><span class="k">On hold · payment upfront</span><span class="v">4 · 3</span></div>
+  <div class="prow"><span class="k" style="color:var(--text-faint)">QB + payments synced 15:12</span></div>
+</div>
+
+<div class="notes">
+  <div><b>Decided</b><br>• No tasks board on the dashboard; “+ New task” picks a board (mine / a teammate’s) then the usual task fields.<br>• Money computed by finance once, read by both pages; overdue / current due / received-30d, each split Feldart / TJ / total.<br>• Received = real QBO payments (new payments sync + table), not balance deltas.</div>
+  <div><b>Still open (yes/no)</b><br>• “Due in next 7 days” column — shown here, drop if noise.<br>• Chase queue: not on this page (lives on Chase) — bring it back?<br>• Promised-to-pay list; delivery counts (never emailed / bounced) as a small row.<br>• Mobile: same cards stacked; money table becomes 3 stacked rows.</div>
+</div>
+</body>
+</html>
