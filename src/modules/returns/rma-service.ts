@@ -381,6 +381,14 @@ export async function approveRma(
       // Don't fail the whole approval if folder rename fails — log + continue.
       console.error("[approveRma] Drive folder rename failed:", err);
     }
+    // Files uploaded on the draft carry "RMA-<id>"; give them the real
+    // number too (SKU-<RMA#>-n) so Drive is readable before the CM exists.
+    const { renameRmaMediaForCreditMemo } = await import("./media-rename.js");
+    await renameRmaMediaForCreditMemo({
+      rmaId: id,
+      creditMemoDocNumber: rmaNumber,
+      userId: input.userId,
+    });
   }
 
   const updated = await db.select().from(rmas).where(eq(rmas.id, id));
@@ -790,6 +798,13 @@ export async function setWarehouseNumber(
     } catch (err) {
       console.error("[setWarehouseNumber] Drive folder rename failed:", err);
     }
+    // Same for the files inside: SKU-<txNumber>-n until the CM renames again.
+    const { renameRmaMediaForCreditMemo } = await import("./media-rename.js");
+    await renameRmaMediaForCreditMemo({
+      rmaId,
+      creditMemoDocNumber: txNumber,
+      userId,
+    });
   }
 
   const updated = await db.select().from(rmas).where(eq(rmas.id, rmaId));
