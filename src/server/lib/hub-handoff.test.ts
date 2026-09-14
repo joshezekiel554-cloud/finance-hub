@@ -63,6 +63,15 @@ describe("safeNextPath", () => {
   it("never bounces back into the handoff route itself", () => {
     expect(safeNextPath("/auth/hub?ht=abc")).toBe("/");
   });
+  it("judges the OUTCOME, not the characters: WHATWG strips tab/CR/LF so '/\\t/evil.com' resolves off-origin", () => {
+    expect(safeNextPath("/\t/evil.com")).toBe("/");
+    expect(safeNextPath("/\r\n/evil.com/x")).toBe("/");
+    expect(safeNextPath("/ok\t/path")).toBe("/ok/path");
+  });
+  it("normalises against the configured origin", () => {
+    expect(safeNextPath("/customers?x=1#h", "https://finance.feldart.com")).toBe("/customers?x=1#h");
+    expect(safeNextPath("https://finance.feldart.com/customers", "https://finance.feldart.com")).toBe("/");
+  });
 });
 
 describe("isEmailAllowed", () => {

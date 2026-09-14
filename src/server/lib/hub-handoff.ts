@@ -3,13 +3,30 @@
 
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // Auth.js default
 
-/** Only ever bounce to an in-app path; anything else lands on Home. */
-export function safeNextPath(next: string | undefined): string {
-  if (!next) return "/";
-  if (!next.startsWith("/")) return "/";
-  if (next.startsWith("//") || next.startsWith("/\\")) return "/";
-  if (next.startsWith("/auth/hub")) return "/";
-  return next;
+const DEFAULT_ORIGIN = "https://finance.feldart.com";
+
+/**
+ * Only ever bounce to an in-app path; anything else lands on Home.
+ *
+ * Judged on the OUTCOME, not the characters: the WHATWG parser strips tab,
+ * CR and LF and treats "\" as "/", so "/\t/evil.com" passes any
+ * starts-with-slash + no-"//" + no-"\" check yet resolves to
+ * https://evil.com/. Resolve against our origin and require it to survive.
+ */
+export function safeNextPath(next: string | undefined, origin: string = DEFAULT_ORIGIN): string {
+  if (!next || !next.startsWith("/")) return "/";
+  let base: URL;
+  let resolved: URL;
+  try {
+    base = new URL(origin);
+    resolved = new URL(next, base);
+  } catch {
+    return "/";
+  }
+  if (resolved.origin !== base.origin) return "/";
+  const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  if (path.startsWith("/auth/hub")) return "/";
+  return path;
 }
 
 /** Case-insensitive membership in the comma-separated allow-list. Empty list → nobody. */

@@ -90,7 +90,7 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
     reply.raw.setHeader("set-cookie", cookies);
 
     log.info({ email: claims.email, jti: claims.jti, embedded: req.query.hub === "1" }, "hub handoff session created");
-    return reply.redirect(safeNextPath(req.query.next), 302);
+    return reply.redirect(safeNextPath(req.query.next, env.PUBLIC_URL), 302);
   });
 
   // Convenience for the hub's "open in full tab" + a manual sanity check.
