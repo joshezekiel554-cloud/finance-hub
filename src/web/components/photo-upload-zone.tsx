@@ -25,6 +25,7 @@ type RmaPhoto = {
   filename: string;
   mimeType: string;
   sizeBytes: number;
+  sku: string | null;
   uploadedByUserId: string;
   uploadedAt: string;
 };
@@ -33,19 +34,36 @@ type PhotosResponse = { photos: RmaPhoto[] };
 
 // ---- Props ------------------------------------------------------------------
 
+export type PhotoUploadItem = { sku: string; name: string };
+
 type PhotoUploadZoneProps = {
   /** When null, show "Save draft first" placeholder — no uploads allowed. */
   rmaId: string | null;
+  /**
+   * RMA lines the uploader can attribute a file to. Drives the SKU picker;
+   * the chosen SKU becomes the Drive filename prefix (SKU-<doc>-<n>).
+   */
+  items?: PhotoUploadItem[];
 };
 
 // ---- Component --------------------------------------------------------------
 
-export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
+export function PhotoUploadZone({ rmaId, items = [] }: PhotoUploadZoneProps) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Drag-over highlight state
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+
+  // Which RMA line the next upload belongs to. Distinct SKUs only (an RMA
+  // can list the same SKU twice with different reasons). Defaults to the
+  // first line; re-syncs if the chosen SKU disappears from the RMA.
+  const skuOptions = Array.from(
+    new Map(items.filter((i) => i.sku).map((i) => [i.sku, i])).values(),
+  );
+  const [pickedSku, setPickedSku] = useState<string>("");
+  const effectiveSku =
+    skuOptions.some((o) => o.sku === pickedSku) ? pickedSku : (skuOptions[0]?.sku ?? "");
 
   // Per-file uploading state: map from a local key → error message (or null
   // while still uploading). We keep a counter to generate unique keys.
@@ -112,10 +130,15 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
       });
       if (preflightError) continue;
 
+      // Snapshot the SKU at click time so a picker change mid-upload
+      // doesn't relabel in-flight files.
+      const skuForFile = effectiveSku;
+
       // Async IIFE so all files start concurrently
       void (async () => {
         try {
           const fd = new FormData();
+          if (skuForFile) fd.append("sku", skuForFile);
           fd.append("file", file);
           const res = await fetch(`/api/rmas/${rmaId}/photos`, {
             method: "POST",
@@ -203,6 +226,26 @@ export function PhotoUploadZone({ rmaId }: PhotoUploadZoneProps) {
         <h2 className="text-sm font-medium">Photos</h2>
       </CardHeader>
       <CardBody className="space-y-4">
+        {/* SKU picker — names the file SKU-<doc>-<n> */}
+        {skuOptions.length > 0 && (
+          <label className="flex flex-wrap items-center gap-2 text-xs text-secondary">
+            <span className="shrink-0">For item</span>
+            <select
+              value={effectiveSku}
+              onChange={(e) => setPickedSku(e.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-default bg-elevated px-2 py-1 text-xs text-primary"
+              aria-label="Which item these files belong to"
+            >
+              {skuOptions.map((o) => (
+                <option key={o.sku} value={o.sku}>
+                  {o.sku}
+                  {o.name ? ` — ${o.name}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         {/* Drop zone */}
         <div
           role="button"

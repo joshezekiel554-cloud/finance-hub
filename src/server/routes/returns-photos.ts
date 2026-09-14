@@ -29,6 +29,7 @@ import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
 import {
   RMA_MEDIA_MAX_BYTES,
+  buildRmaMediaFilename,
   describeAcceptedRmaMedia,
   extensionForRmaMedia,
   isAcceptedRmaMedia,
@@ -150,10 +151,28 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: message });
     }
 
-    const file = (req.raw as unknown as { file?: Express.Multer.File }).file;
+    const raw = req.raw as unknown as {
+      file?: Express.Multer.File;
+      body?: Record<string, unknown>;
+    };
+    const file = raw.file;
     tempPath = file?.path;
     if (!file) {
       return reply.code(400).send({ error: "Missing 'file' field." });
+    }
+
+    // Optional `sku` text field: which RMA line this evidence is for. Must
+    // be one of the RMA's items so the filename can't carry a typo'd SKU.
+    const rawSku = typeof raw.body?.sku === "string" ? raw.body.sku.trim() : "";
+    let sku: string | null = null;
+    if (rawSku) {
+      const known = rma.items.some((it) => it.sku === rawSku);
+      if (!known) {
+        return reply.code(400).send({
+          error: `SKU "${rawSku}" is not on this RMA.`,
+        });
+      }
+      sku = rawSku;
     }
 
     // 4. Determine / ensure Drive folder.
@@ -209,7 +228,9 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       folderId = lockedFolderId;
     }
 
-    // 5. Determine filename: {folderLabel}_{yyyymmdd}_{n}.{ext}
+    // 5. Determine filename: SKU-<doc>-<n>.<ext> where <doc> is the credit
+    // memo number once issued, else the RMA number (renamed on issue by
+    // modules/returns/media-rename.ts).
     // (Filename's photoNumber is best-effort — multiple concurrent uploads
     // could land on the same number, but Drive tolerates duplicate names.
     // The DB position is allocated atomically below.)
@@ -221,11 +242,12 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
     const photoNumber = existingCount + 1;
 
     const now = new Date();
-    const pad = (v: number) => String(v).padStart(2, "0");
-    const datePart =
-      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-    const rawExt = extensionForRmaMedia(file.mimetype);
-    const filename = `${folderLabel}_${datePart}_${photoNumber}.${rawExt}`;
+    const filename = buildRmaMediaFilename({
+      sku,
+      docNumber: rma.creditMemoDocNumber ?? folderLabel,
+      n: photoNumber,
+      ext: extensionForRmaMedia(file.mimetype),
+    });
 
     // 6. Upload to Drive — streamed from the temp file.
     let uploadResult: Awaited<ReturnType<typeof uploadFile>>;
@@ -283,6 +305,7 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
         filename,
         mimeType: file.mimetype,
         sizeBytes: uploadResult.sizeBytes,
+        sku,
         uploadedByUserId: user.id,
         uploadedAt: now,
       });
@@ -298,6 +321,7 @@ const returnsPhotosRoute: FastifyPluginAsync = async (app) => {
       filename,
       mimeType: file.mimetype,
       sizeBytes: uploadResult.sizeBytes,
+      sku,
       uploadedByUserId: user.id,
       uploadedAt: now,
     };

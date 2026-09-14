@@ -1,0 +1,1 @@
+ALTER TABLE `rma_photos` ADD `sku` varchar(64);

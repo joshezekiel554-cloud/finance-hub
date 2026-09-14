@@ -2,11 +2,45 @@ import { describe, expect, it } from "vitest";
 import {
   RMA_MEDIA_MAX_BYTES,
   RMA_MEDIA_ACCEPT_ATTR,
+  buildRmaMediaFilename,
   describeAcceptedRmaMedia,
   extensionForRmaMedia,
+  extensionOfFilename,
   isAcceptedRmaMedia,
   isVideoMime,
 } from "./rma-media.js";
+
+describe("buildRmaMediaFilename", () => {
+  // Operator spec 2026-09-14: "SKU-creditmemo". Before the credit memo
+  // exists the doc number is the RMA number; files are renamed when the
+  // memo is issued.
+  it("names a file SKU-<doc>-<n>.<ext>", () => {
+    expect(
+      buildRmaMediaFilename({ sku: "ABC123", docNumber: "CM1042", n: 1, ext: "jpg" }),
+    ).toBe("ABC123-CM1042-1.jpg");
+  });
+
+  it("drops the SKU segment when none was picked", () => {
+    expect(
+      buildRmaMediaFilename({ sku: null, docNumber: "RMA-0207", n: 3, ext: "mp4" }),
+    ).toBe("RMA-0207-3.mp4");
+  });
+
+  it("strips path separators and squeezes whitespace out of the SKU", () => {
+    expect(
+      buildRmaMediaFilename({ sku: " AB/12\\ 3 ", docNumber: "RMA-1", n: 1, ext: "png" }),
+    ).toBe("AB12 3-RMA-1-1.png");
+  });
+});
+
+describe("extensionOfFilename", () => {
+  it("returns the lowercase extension", () => {
+    expect(extensionOfFilename("ABC-CM1-2.MOV")).toBe("mov");
+  });
+  it("defaults to jpg when there is none", () => {
+    expect(extensionOfFilename("noext")).toBe("jpg");
+  });
+});
 
 describe("rma-media", () => {
   it("accepts the image types the RMA photo upload always took", () => {

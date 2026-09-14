@@ -90,6 +90,12 @@ const { mockDb, insertCalls, setSelectResults } = vi.hoisted(() => {
 
 vi.mock("../../db/index.js", () => ({ db: mockDb }));
 
+// Drive evidence rename on credit-memo issue is best-effort and unit-tested
+// in media-rename.test.ts; here it must not consume the mocked select queue.
+vi.mock("./media-rename.js", () => ({
+  renameRmaMediaForCreditMemo: vi.fn().mockResolvedValue(0),
+}));
+
 const recordActivityMock = vi.hoisted(() =>
   vi.fn().mockResolvedValue("activity-1"),
 );

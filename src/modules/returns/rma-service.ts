@@ -1038,6 +1038,17 @@ export async function issueCreditMemo(
     meta: { creditMemoDocNumber: txResult.creditMemoDocNumber },
   });
 
+  // Evidence files were uploaded as SKU-<RMA#>-n; now that a credit memo
+  // number exists, rename them SKU-<CM#>-n (best-effort, never fails the CM).
+  {
+    const { renameRmaMediaForCreditMemo } = await import("./media-rename.js");
+    await renameRmaMediaForCreditMemo({
+      rmaId: id,
+      creditMemoDocNumber: txResult.creditMemoDocNumber,
+      userId: input.userId,
+    });
+  }
+
   return { ok: true, rma: txResult.rma };
 }
 
@@ -1146,6 +1157,16 @@ export async function markAlreadyCredited(
     },
     db,
   );
+
+  // Same rename as the native issue path: SKU-<RMA#>-n → SKU-<CM#>-n.
+  {
+    const { renameRmaMediaForCreditMemo } = await import("./media-rename.js");
+    await renameRmaMediaForCreditMemo({
+      rmaId: id,
+      creditMemoDocNumber: docNumber,
+      userId: input.userId,
+    });
+  }
 
   const updatedRows = await db.select().from(rmas).where(eq(rmas.id, id));
   return { ok: true, rma: updatedRows[0] as Rma };

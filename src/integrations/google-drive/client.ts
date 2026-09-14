@@ -430,6 +430,24 @@ export async function renameFolder(input: {
 }
 
 /**
+ * Rename a single file. Same Drive call as renameFolder (files.update),
+ * split out so call sites read honestly.
+ */
+export async function renameFile(input: {
+  userId: string;
+  fileId: string;
+  newName: string;
+}): Promise<void> {
+  const drive = await getDriveClient(input.userId);
+  await drive.files.update({
+    fileId: input.fileId,
+    requestBody: { name: input.newName },
+    supportsAllDrives: true,
+  });
+  log.info({ fileId: input.fileId, newName: input.newName }, "drive file renamed");
+}
+
+/**
  * Grant anyone-with-link read access to a file (so thumbnails/view URLs work
  * for users who aren't signed into Google).
  */

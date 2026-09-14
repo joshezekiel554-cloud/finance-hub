@@ -44,3 +44,34 @@ export function isVideoMime(mime: string): boolean {
 export function describeAcceptedRmaMedia(): string {
   return "JPEG, PNG, WebP, HEIC, MP4, MOV, WebM";
 }
+
+// ---------------------------------------------------------------------------
+// Drive filename: SKU-<doc>-<n>.<ext>  (operator spec 2026-09-14)
+//
+// <doc> is the RMA number until a credit memo exists, then the credit memo
+// number (files are renamed on issue — see modules/returns/media-rename.ts).
+// ---------------------------------------------------------------------------
+
+function cleanSku(sku: string): string {
+  return sku
+    .replace(/[\\/]+/g, "") // path separators would confuse Drive + humans
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function buildRmaMediaFilename(input: {
+  sku: string | null | undefined;
+  docNumber: string;
+  n: number;
+  ext: string;
+}): string {
+  const sku = input.sku ? cleanSku(input.sku) : "";
+  const stem = sku ? `${sku}-${input.docNumber}-${input.n}` : `${input.docNumber}-${input.n}`;
+  return `${stem}.${input.ext}`;
+}
+
+export function extensionOfFilename(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot <= 0 || dot === filename.length - 1) return "jpg";
+  return filename.slice(dot + 1).toLowerCase();
+}

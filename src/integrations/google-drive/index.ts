@@ -8,5 +8,6 @@ export {
   deleteFolder,
   ensureFolder,
   renameFolder,
+  renameFile,
   makeViewable,
 } from "./client.js";

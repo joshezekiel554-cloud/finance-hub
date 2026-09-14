@@ -218,6 +218,10 @@ export const rmaPhotos = mysqlTable(
     filename: varchar("filename", { length: 255 }).notNull(),
     mimeType: varchar("mime_type", { length: 64 }).notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    // Which RMA line this evidence belongs to, picked by the uploader.
+    // Drives the SKU-<doc>-<n> Drive filename (operator spec 2026-09-14);
+    // null when the RMA had no items yet or the uploader skipped it.
+    sku: varchar("sku", { length: 64 }),
     uploadedByUserId: varchar("uploaded_by_user_id", { length: 255 })
       .notNull()
       .references(() => users.id),

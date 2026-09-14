@@ -421,7 +421,10 @@ export default function ReturnDetailPage() {
 
           {/* Photos — damage RMAs only */}
           {rma.returnType === "damage" && (
-            <PhotoUploadZone rmaId={rma.id} />
+            <PhotoUploadZone
+              rmaId={rma.id}
+              items={rma.items.map((it) => ({ sku: it.sku, name: it.name }))}
+            />
           )}
 
           {/* Process return panel — visible while awaiting or processing receipt */}
