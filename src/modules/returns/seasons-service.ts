@@ -219,6 +219,67 @@ export async function bulkAddSeasonProductsBySku(input: {
 }
 
 // ---------------------------------------------------------------------------
+// bulkAddSeasonProductsByQbItemId — the search picker's multi-select
+// (operator 2026-09-15: adding one at a time "takes forever")
+// ---------------------------------------------------------------------------
+
+export type BulkAddByIdResult = {
+  added: SeasonalProduct[];
+  /** Ids that were already in the season. Repeats within the input are collapsed silently. */
+  skipped: number;
+  failed: { qbItemId: string; reason: string }[];
+};
+
+export async function bulkAddSeasonProductsByQbItemId(input: {
+  seasonId: string;
+  qbItemIds: string[];
+}): Promise<BulkAddByIdResult> {
+  const existing = new Set(
+    (await listSeasonProducts(input.seasonId)).map((p) => p.qbItemId),
+  );
+  const qbo = getQboClient();
+  const added: SeasonalProduct[] = [];
+  const failed: { qbItemId: string; reason: string }[] = [];
+  let skipped = 0;
+  const seen = new Set<string>();
+
+  for (const raw of input.qbItemIds) {
+    const qbItemId = raw.trim();
+    if (!qbItemId) continue;
+    if (seen.has(qbItemId)) continue;
+    seen.add(qbItemId);
+    if (existing.has(qbItemId)) {
+      skipped++;
+      continue;
+    }
+    try {
+      const item = await qbo.getItemById(qbItemId);
+      if (!item) {
+        failed.push({ qbItemId, reason: "Item not found in QBO" });
+        continue;
+      }
+      const row = {
+        id: nanoid(24),
+        seasonId: input.seasonId,
+        qbItemId,
+        sku: item.Sku ?? item.Name ?? qbItemId,
+        name: item.Name ?? qbItemId,
+        description: null as string | null,
+      };
+      await db.insert(seasonalProducts).values(row);
+      added.push(row as unknown as SeasonalProduct);
+    } catch (err) {
+      failed.push({
+        qbItemId,
+        reason: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  }
+
+  return { added, skipped, failed };
+}
+
+// ---------------------------------------------------------------------------
 // removeSeasonProduct
 // ---------------------------------------------------------------------------
 

@@ -18,6 +18,7 @@ import {
   listSeasonProducts,
   addSeasonProduct,
   bulkAddSeasonProductsBySku,
+  bulkAddSeasonProductsByQbItemId,
   removeSeasonProduct,
   importSeasonProductsCsv,
   exportSeasonProductsCsv,
@@ -83,6 +84,11 @@ const addProductBodySchema = z.object({
 
 const bulkPasteBodySchema = z.object({
   skus: z.array(z.string().min(1)).min(1).max(500),
+});
+
+// Multi-select from the QBO search picker: ids the operator ticked.
+const bulkAddByIdBodySchema = z.object({
+  qbItemIds: z.array(z.string().min(1).max(64)).min(1).max(500),
 });
 
 const duplicateBodySchema = z.object({
@@ -224,6 +230,28 @@ const seasonsRoute: FastifyPluginAsync = async (app) => {
       return { error: err instanceof Error ? err.message : "Add failed" };
     }
   });
+
+  // ---- POST /:id/products/bulk — add many by qbItemId (search multi-select)
+  app.post<{ Params: { id: string } }>(
+    "/:id/products/bulk",
+    async (req, reply) => {
+      await requireAuth(req);
+      const paramParse = idParamSchema.safeParse(req.params);
+      if (!paramParse.success) {
+        reply.code(400);
+        return { error: "Invalid params" };
+      }
+      const parse = bulkAddByIdBodySchema.safeParse(req.body);
+      if (!parse.success) {
+        reply.code(400);
+        return { error: "Invalid body", details: parse.error.flatten() };
+      }
+      return bulkAddSeasonProductsByQbItemId({
+        seasonId: paramParse.data.id,
+        qbItemIds: parse.data.qbItemIds,
+      });
+    },
+  );
 
   // ---- POST /:id/products/bulk-paste — add by SKU list ---------------------
   app.post<{ Params: { id: string } }>(

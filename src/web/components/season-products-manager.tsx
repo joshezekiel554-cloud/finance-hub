@@ -32,6 +32,12 @@ type BulkPasteResult = {
   errors: string[];
 };
 
+type BulkAddByIdResult = {
+  added: SeasonProduct[];
+  skipped: number;
+  failed: { qbItemId: string; reason: string }[];
+};
+
 export default function SeasonProductsManager({ seasonId }: { seasonId: string }) {
   const queryClient = useQueryClient();
   const queryKey = ["season-products", seasonId];
@@ -46,13 +52,14 @@ export default function SeasonProductsManager({ seasonId }: { seasonId: string }
     staleTime: 30_000,
   });
 
-  // Add single product
-  const addMutation = useMutation<{ product: SeasonProduct }, Error, string>({
-    mutationFn: async (qbItemId) => {
-      const res = await fetch(`/api/seasons/${seasonId}/products`, {
+  // Add the ticked search results in one request (operator 2026-09-15:
+  // adding one at a time "takes forever").
+  const addMutation = useMutation<BulkAddByIdResult, Error, string[]>({
+    mutationFn: async (qbItemIds) => {
+      const res = await fetch(`/api/seasons/${seasonId}/products/bulk`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ qbItemId }),
+        body: JSON.stringify({ qbItemIds }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
@@ -154,11 +161,11 @@ export default function SeasonProductsManager({ seasonId }: { seasonId: string }
           Search &amp; add items
         </h4>
         <QboProductSearch
-          seasonId={seasonId}
           existingIds={new Set(products.map((p) => p.qbItemId))}
-          onAdd={(id) => addMutation.mutate(id)}
+          onAdd={(ids) => addMutation.mutate(ids)}
           isAdding={addMutation.isPending}
           addError={addMutation.error?.message ?? null}
+          lastResult={addMutation.data ?? null}
         />
       </div>
 
@@ -301,21 +308,44 @@ export default function SeasonProductsManager({ seasonId }: { seasonId: string }
 
 // ---- QBO product search -------------------------------------------------------
 
+// Multi-select: tick any number of results (across several searches — the
+// selection survives retyping), then "Add N selected" posts them together.
 function QboProductSearch({
   existingIds,
   onAdd,
   isAdding,
   addError,
+  lastResult,
 }: {
-  seasonId: string;
   existingIds: Set<string>;
-  onAdd: (qbItemId: string) => void;
+  onAdd: (qbItemIds: string[]) => void;
   isAdding: boolean;
   addError: string | null;
+  lastResult: BulkAddByIdResult | null;
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QbItemHit[]>([]);
   const [loading, setLoading] = useState(false);
+  // qbItemId → hit, so the chips can show SKUs for items from earlier searches.
+  const [selected, setSelected] = useState<Map<string, QbItemHit>>(new Map());
+
+  function toggle(item: QbItemHit) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(item.id)) next.delete(item.id);
+      else next.set(item.id, item);
+      return next;
+    });
+  }
+
+  function addSelected() {
+    const ids = Array.from(selected.keys()).filter((id) => !existingIds.has(id));
+    if (ids.length === 0) return;
+    onAdd(ids);
+    setSelected(new Map());
+    setQuery("");
+    setResults([]);
+  }
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -358,33 +388,77 @@ function QboProductSearch({
             )}
             {results.map((item) => {
               const alreadyAdded = existingIds.has(item.id);
+              const checked = selected.has(item.id);
               return (
-                <div
+                <label
                   key={item.id}
-                  className="flex items-center gap-2 px-3 py-2 hover:bg-elevated"
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 px-3 py-2 hover:bg-elevated",
+                    alreadyAdded && "cursor-default opacity-60",
+                  )}
                 >
+                  <input
+                    type="checkbox"
+                    className="size-4 shrink-0 accent-accent-primary"
+                    checked={alreadyAdded || checked}
+                    disabled={alreadyAdded || isAdding}
+                    onChange={() => toggle(item)}
+                  />
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium">{item.sku ?? item.id}</span>
                     <span className="ml-2 text-sm text-secondary">{item.name}</span>
                   </div>
-                  {alreadyAdded ? (
+                  {alreadyAdded && (
                     <span className="text-xs text-muted shrink-0">Added</span>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={isAdding}
-                      onClick={() => { onAdd(item.id); setQuery(""); setResults([]); }}
-                      className="shrink-0 rounded border border-accent-primary/30 bg-accent-primary/10 px-2 py-0.5 text-xs text-accent-primary hover:bg-accent-primary/20 disabled:opacity-50"
-                    >
-                      + Add
-                    </button>
                   )}
-                </div>
+                </label>
               );
             })}
           </div>
         )}
       </div>
+
+      {/* Selection tray — persists across searches until added or cleared */}
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-accent-primary/30 bg-accent-primary/5 px-2 py-1.5">
+          {Array.from(selected.values()).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              title="Remove from selection"
+              onClick={() => toggle(item)}
+              className="inline-flex items-center gap-1 rounded bg-base px-1.5 py-0.5 text-xs font-mono text-primary ring-1 ring-default hover:text-accent-danger"
+            >
+              {item.sku ?? item.id} <span aria-hidden="true">×</span>
+            </button>
+          ))}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              disabled={isAdding}
+              onClick={() => setSelected(new Map())}
+              className="text-xs text-muted hover:text-primary disabled:opacity-50"
+            >
+              Clear
+            </button>
+            <Button size="sm" disabled={isAdding} loading={isAdding} onClick={addSelected}>
+              Add {selected.size} selected
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {lastResult && selected.size === 0 && !addError && (
+        <div className="text-xs text-secondary">
+          Added {lastResult.added.length}
+          {lastResult.skipped > 0 && `, ${lastResult.skipped} already in season`}
+          {lastResult.failed.length > 0 && (
+            <span className="ml-1 text-accent-danger">
+              ({lastResult.failed.length} failed: {lastResult.failed.map((f) => f.reason).join("; ")})
+            </span>
+          )}
+        </div>
+      )}
       {addError && (
         <div className="flex items-center gap-1 text-xs text-accent-danger">
           <AlertCircle className="size-3 shrink-0" />

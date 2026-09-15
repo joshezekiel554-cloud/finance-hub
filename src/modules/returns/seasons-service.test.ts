@@ -98,6 +98,7 @@ import {
   listSeasonProducts,
   addSeasonProduct,
   bulkAddSeasonProductsBySku,
+  bulkAddSeasonProductsByQbItemId,
   removeSeasonProduct,
   importSeasonProductsCsv,
   exportSeasonProductsCsv,
@@ -413,5 +414,41 @@ describe("duplicateSeason", () => {
     // Only the season insert — no product inserts
     expect(insertCalls).toHaveLength(1);
     expect(result.name).toBe("Empty Copy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bulkAddSeasonProductsByQbItemId — the search picker's multi-select
+// ---------------------------------------------------------------------------
+
+describe("bulkAddSeasonProductsByQbItemId", () => {
+  beforeEach(() => {
+    resetMocks();
+    mockGetItemById.mockReset();
+  });
+
+  it("adds new items, skips ones already in the season, and reports ids QBO doesn't know", async () => {
+    // listSeasonProducts → one existing product ("a")
+    setSelectResults([[{ id: "sp-1", seasonId: SEASON.id, qbItemId: "a", sku: "A-1", name: "Ay" }]]);
+    mockGetItemById.mockImplementation(async (id: string) =>
+      id === "b" ? { Id: "b", Name: "Bee", Sku: "B-1" } : null,
+    );
+
+    const result = await bulkAddSeasonProductsByQbItemId({
+      seasonId: SEASON.id,
+      qbItemIds: ["a", "b", "c", "b"],
+    });
+
+    expect(result.skipped).toBe(1);
+    expect(result.added.map((p) => p.qbItemId)).toEqual(["b"]);
+    expect(result.failed).toEqual([{ qbItemId: "c", reason: "Item not found in QBO" }]);
+    expect(insertCalls).toHaveLength(1);
+    expect((insertCalls[0]!.values as { qbItemId: string; sku: string; name: string })).toMatchObject({
+      qbItemId: "b",
+      sku: "B-1",
+      name: "Bee",
+    });
+    // QBO looked up only once per new id — the duplicate "b" was collapsed.
+    expect(mockGetItemById).toHaveBeenCalledTimes(2);
   });
 });
