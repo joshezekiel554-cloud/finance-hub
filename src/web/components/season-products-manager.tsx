@@ -371,6 +371,37 @@ function QboProductSearch({
 
   return (
     <div className="space-y-1">
+      {/* Selection tray — ABOVE the search box so the open results dropdown
+          (absolute, below the input) never covers it. Persists across
+          searches until added or cleared. */}
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-accent-primary/30 bg-accent-primary/5 px-2 py-1.5">
+          {Array.from(selected.values()).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              title="Remove from selection"
+              onClick={() => toggle(item)}
+              className="inline-flex items-center gap-1 rounded bg-base px-1.5 py-0.5 text-xs font-mono text-primary ring-1 ring-default hover:text-accent-danger"
+            >
+              {item.sku ?? item.id} <span aria-hidden="true">×</span>
+            </button>
+          ))}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              disabled={isAdding}
+              onClick={() => setSelected(new Map())}
+              className="text-xs text-muted hover:text-primary disabled:opacity-50"
+            >
+              Clear
+            </button>
+            <Button size="sm" disabled={isAdding} loading={isAdding} onClick={addSelected}>
+              Add {selected.size} selected
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="relative">
         <input
           type="text"
@@ -417,36 +448,6 @@ function QboProductSearch({
           </div>
         )}
       </div>
-
-      {/* Selection tray — persists across searches until added or cleared */}
-      {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-accent-primary/30 bg-accent-primary/5 px-2 py-1.5">
-          {Array.from(selected.values()).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              title="Remove from selection"
-              onClick={() => toggle(item)}
-              className="inline-flex items-center gap-1 rounded bg-base px-1.5 py-0.5 text-xs font-mono text-primary ring-1 ring-default hover:text-accent-danger"
-            >
-              {item.sku ?? item.id} <span aria-hidden="true">×</span>
-            </button>
-          ))}
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
-              disabled={isAdding}
-              onClick={() => setSelected(new Map())}
-              className="text-xs text-muted hover:text-primary disabled:opacity-50"
-            >
-              Clear
-            </button>
-            <Button size="sm" disabled={isAdding} loading={isAdding} onClick={addSelected}>
-              Add {selected.size} selected
-            </Button>
-          </div>
-        </div>
-      )}
 
       {lastResult && selected.size === 0 && !addError && (
         <div className="text-xs text-secondary">
