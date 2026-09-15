@@ -210,6 +210,9 @@ function ReportsCard() {
             <span className="uppercase text-muted">{r.kind}</span>
             <a
               href={`/api/agent/reports/${r.id}/download`}
+              download
+              target="_blank"
+              rel="noopener"
               className="rounded p-1 text-muted hover:bg-subtle hover:text-primary"
               title="Download"
               aria-label={`Download ${r.title}`}
