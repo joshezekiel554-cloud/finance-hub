@@ -417,6 +417,24 @@ function QboProductSearch({
             {!loading && results.length === 0 && (
               <div className="px-3 py-2 text-xs text-muted">No matches.</div>
             )}
+            {!loading && results.some((r) => !existingIds.has(r.id)) && (
+              <div className="flex items-center justify-between border-b border-default bg-subtle px-3 py-1.5 text-xs text-muted">
+                <span>{results.length} match{results.length === 1 ? "" : "es"}</span>
+                <button
+                  type="button"
+                  className="font-medium text-accent-primary hover:underline"
+                  onClick={() =>
+                    setSelected((prev) => {
+                      const next = new Map(prev);
+                      for (const r of results) if (!existingIds.has(r.id)) next.set(r.id, r);
+                      return next;
+                    })
+                  }
+                >
+                  Select all {results.filter((r) => !existingIds.has(r.id)).length}
+                </button>
+              </div>
+            )}
             {results.map((item) => {
               const alreadyAdded = existingIds.has(item.id);
               const checked = selected.has(item.id);
