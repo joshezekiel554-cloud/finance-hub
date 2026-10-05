@@ -196,6 +196,8 @@ import {
 describe("getDriveClient credential selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Drop any queued *Once refresh outcomes a failing test left behind.
+    oauthGetAccessTokenMock.mockReset().mockResolvedValue({ token: "tok" });
     driveFilesCreateMock.mockResolvedValue({
       data: { id: "file-1", mimeType: "image/jpeg", size: "1" },
     });
@@ -246,6 +248,49 @@ describe("getDriveClient credential selection", () => {
       expect.objectContaining({ access_token: "staff-access", refresh_token: "staff-refresh" }),
     );
     expect(oauth2CtorArgs()[0]).toBe("test-auth-client-id");
+  });
+
+  it("falls back to the next staff grant when the caller's refresh token is revoked (invalid_grant)", async () => {
+    // Regression 2026-10-05: Google revoked the operator's stored refresh
+    // token, so their own (expired, drive-scoped) row kept being picked and
+    // every upload 502'd with invalid_grant while a teammate's grant worked.
+    const expired = Math.floor(Date.now() / 1000) - 3600;
+    const own = accountRow({ userId: "user-2", providerAccountId: "sub-2", access_token: "dead-access", refresh_token: "dead-refresh", expires_at: expired });
+    const staff = accountRow({ userId: "user-1", providerAccountId: "sub-1", access_token: "staff-access", refresh_token: "staff-refresh", expires_at: expired });
+    // Staff query returns both rows — the caller's own must not be retried.
+    setupSelectSequence([[own], [own, staff]]);
+    oauthGetAccessTokenMock
+      .mockRejectedValueOnce(Object.assign(new Error("invalid_grant"), { response: { data: { error: "invalid_grant" } } }))
+      .mockResolvedValueOnce({ token: "fresh" });
+
+    await upload("user-2");
+
+    expect(oauthGetAccessTokenMock).toHaveBeenCalledTimes(2);
+    expect(oauthSetCredentialsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ access_token: "staff-access", refresh_token: "staff-refresh" }),
+    );
+    expect(driveFilesCreateMock).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces the error when every grant is revoked", async () => {
+    const expired = Math.floor(Date.now() / 1000) - 3600;
+    const own = accountRow({ expires_at: expired });
+    setupSelectSequence([[own], [own], []]);
+    oauthGetAccessTokenMock.mockRejectedValueOnce(new Error("invalid_grant"));
+
+    await expect(upload()).rejects.toThrow("invalid_grant");
+    expect(driveFilesCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not swallow non-invalid_grant refresh errors", async () => {
+    const expired = Math.floor(Date.now() / 1000) - 3600;
+    const own = accountRow({ expires_at: expired });
+    const staff = accountRow({ userId: "user-9", providerAccountId: "sub-9", expires_at: expired });
+    setupSelectSequence([[own], [own, staff]]);
+    oauthGetAccessTokenMock.mockRejectedValueOnce(new Error("socket hang up"));
+
+    await expect(upload()).rejects.toThrow("socket hang up");
+    expect(oauthGetAccessTokenMock).toHaveBeenCalledOnce();
   });
 
   it("persists refreshed tokens back onto the account row", async () => {

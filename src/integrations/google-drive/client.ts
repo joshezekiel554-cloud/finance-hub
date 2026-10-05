@@ -128,10 +128,13 @@ function storedTokenFromAccountRow(
   };
 }
 
-async function loadStoredToken(userId?: string): Promise<StoredToken | null> {
+// Credentials to try, best first. Lazy so the common case (the caller's own
+// grant works) costs one query.
+async function* candidateTokens(userId?: string): AsyncGenerator<StoredToken> {
   // 1. The signed-in user's own Auth.js `account` row (provider=google).
   //    Signing in grants the full drive scope (see plugins/auth.ts), so
   //    this is the normal source.
+  const tried = new Set<string>();
   if (userId) {
     const rows = await db
       .select()
@@ -140,25 +143,33 @@ async function loadStoredToken(userId?: string): Promise<StoredToken | null> {
       .limit(1);
     const own = rows[0];
     if (own && accountRowUsableForDrive(own)) {
-      return storedTokenFromAccountRow(own);
+      tried.add(own.providerAccountId);
+      yield storedTokenFromAccountRow(own);
     }
   }
 
   // 2. Any staff member's Drive grant. The returns photo tree is one shared
   //    folder, so whose token performs the upload doesn't matter — this
   //    keeps uploads working for teammates whose own sign-in predates the
-  //    drive scope, instead of bouncing them to "sign out and back in".
+  //    drive scope, or whose grant Google has since revoked, instead of
+  //    bouncing them to "sign out and back in".
   const staffRows = await db
     .select()
     .from(accounts)
     .where(eq(accounts.provider, "google"))
     .limit(50);
-  const staff = staffRows.find(accountRowUsableForDrive);
-  if (staff) {
-    return storedTokenFromAccountRow(staff);
+  for (const staff of staffRows) {
+    if (!accountRowUsableForDrive(staff) || tried.has(staff.providerAccountId)) continue;
+    tried.add(staff.providerAccountId);
+    yield storedTokenFromAccountRow(staff);
   }
 
   // 3. Legacy oauth_tokens row (used by Gmail polling).
+  const legacy = await loadLegacyToken();
+  if (legacy) yield legacy;
+}
+
+async function loadLegacyToken(): Promise<StoredToken | null> {
   const rows = await db
     .select()
     .from(oauthTokens)
@@ -215,13 +226,36 @@ async function persistToken(stored: StoredToken, tokens: TokenSet): Promise<void
 // Build an authenticated OAuth2Client for Drive calls
 // ---------------------------------------------------------------------------
 
+// Google answers `invalid_grant` when a refresh token is dead (revoked,
+// password change, superseded). That's specific to the grant, so the next
+// candidate may still work; any other failure is not ours to paper over.
+function isInvalidGrant(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const data = (err as { response?: { data?: { error?: unknown } } }).response?.data;
+  return err.message === "invalid_grant" || data?.error === "invalid_grant";
+}
+
 async function getDriveClient(userId?: string): Promise<ReturnType<typeof google.drive>> {
-  const stored = await loadStoredToken(userId);
-  if (!stored) {
-    throw new Error(
-      "Drive not authenticated. Sign out and sign back in via Google to grant photo upload permission.",
-    );
+  let revoked: unknown = null;
+  for await (const stored of candidateTokens(userId)) {
+    try {
+      return await buildDriveClient(stored);
+    } catch (err) {
+      if (!isInvalidGrant(err)) throw err;
+      log.warn(
+        { source: stored.source, externalAccountId: stored.externalAccountId },
+        "drive grant revoked (invalid_grant); trying next credential",
+      );
+      revoked = err;
+    }
   }
+  if (revoked) throw revoked;
+  throw new Error(
+    "Drive not authenticated. Sign out and sign back in via Google to grant photo upload permission.",
+  );
+}
+
+async function buildDriveClient(stored: StoredToken): Promise<ReturnType<typeof google.drive>> {
   if (!stored.tokens.refreshToken) {
     throw new Error(
       "Drive token has no refresh_token — re-auth required to obtain offline access.",
