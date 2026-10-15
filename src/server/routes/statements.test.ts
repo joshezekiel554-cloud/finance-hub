@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { sendBodySchema } from "./statements.js";
+import {
+  attachmentDisposition,
+  downloadBodySchema as downloadStatementBodySchema,
+  sendBodySchema,
+  statementDownloadFilename,
+} from "./statements.js";
 import { batchBodySchema, downloadBodySchema } from "./chase.js";
 
 // Schema-level route tests (no Fastify harness in repo — the handlers
@@ -96,5 +101,39 @@ describe("chase download-statements body schema (POST /download-statements)", ()
     expect(
       downloadBodySchema.safeParse({ customerIds: [], origin: "feldart" }).success,
     ).toBe(false);
+  });
+});
+
+describe("statement download (POST /:id/statement-download)", () => {
+  it("requires a valid origin", () => {
+    expect(downloadStatementBodySchema.safeParse({}).success).toBe(false);
+    expect(
+      downloadStatementBodySchema.safeParse({ origin: "blended" }).success,
+    ).toBe(false);
+    for (const origin of ["feldart", "tj", "both"]) {
+      expect(downloadStatementBodySchema.safeParse({ origin }).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it("names the file '<customer>, <statement number>.pdf'", () => {
+    expect(statementDownloadFilename("Acme Judaica", 2051)).toBe(
+      "Acme Judaica, 2051.pdf",
+    );
+  });
+
+  it("strips characters Windows rejects in filenames", () => {
+    expect(statementDownloadFilename('A/B: "Shop" <NY>?', 7)).toBe(
+      "AB Shop NY, 7.pdf",
+    );
+    expect(statementDownloadFilename("  ", 7)).toBe("Customer, 7.pdf");
+  });
+
+  it("sends an ASCII fallback plus the exact UTF-8 name", () => {
+    const cd = attachmentDisposition("Café (NY), 12.pdf");
+    expect(cd).toBe(
+      `attachment; filename="Caf_ (NY), 12.pdf"; filename*=UTF-8''Caf%C3%A9%20%28NY%29%2C%2012.pdf`,
+    );
   });
 });

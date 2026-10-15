@@ -13,18 +13,60 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
+import { db } from "../../db/index.js";
+import { customers } from "../../db/schema/customers.js";
+import { auditLog } from "../../db/schema/audit.js";
 import { requireAuth } from "../lib/auth.js";
 import { createLogger } from "../../lib/logger.js";
 import {
   sendStatement,
   SendStatementError,
 } from "../../modules/statements/index.js";
+import { buildStatementPdfAttachment } from "../../modules/statements/send.js";
 
 const log = createLogger({ component: "routes.statements" });
 
 const paramsSchema = z.object({
   id: z.string().min(1).max(64),
 });
+
+const originSchema = z.enum(["feldart", "tj", "both"], {
+  errorMap: () => ({
+    message: "origin is required and must be 'feldart', 'tj' or 'both'",
+  }),
+});
+
+// POST /:id/statement-download body. Exported for schema-level tests.
+export const downloadBodySchema = z.object({ origin: originSchema });
+
+// Download filename the operator asked for (2026-10-15):
+// "<customer name>, <statement number>.pdf". Strips the characters
+// Windows refuses in a filename so the browser never mangles it.
+export function statementDownloadFilename(
+  displayName: string,
+  statementNumber: number,
+): string {
+  const name =
+    displayName
+      .replace(/[\\/:*?"<>|\x00-\x1f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim() || "Customer";
+  return `${name}, ${statementNumber}.pdf`;
+}
+
+// RFC 6266 attachment header: an ASCII fallback plus the exact UTF-8
+// name via filename* (RFC 5987 — encodeURIComponent leaves ' ( ) *
+// unescaped, which attr-char forbids).
+export function attachmentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "");
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
 
 // Optional overrides from the operator's edits in the send dialog.
 // When unset, the module falls back to the rendered template +
@@ -36,11 +78,7 @@ export const sendBodySchema = z.object({
   // Which book the statement covers. Required. "both" renders the
   // combined two-box statement (Feldart box + Torah Judaica box +
   // overall totals) — reinstated by operator request 2026-07-14.
-  origin: z.enum(["feldart", "tj", "both"], {
-    errorMap: () => ({
-      message: "origin is required and must be 'feldart', 'tj' or 'both'",
-    }),
-  }),
+  origin: originSchema,
   subject: z.string().min(1).max(998).optional(),
   body: z.string().min(1).max(200_000).optional(),
   to: z.string().max(2000).optional(),
@@ -105,6 +143,93 @@ const statementsRoute: FastifyPluginAsync = async (app) => {
       const message = err instanceof Error ? err.message : "send failed";
       return reply.code(500).send({ error: message });
     }
+  });
+
+  // POST /:id/statement-download — the customer page's one-click
+  // "Download" (replaces Invoices → Statement → Preview → Save). Builds
+  // the SAME PDF a send would attach (incl. the TJ-balance auto-upgrade
+  // to combined) and returns it as an attachment. Nothing is emailed and
+  // no statement_sends row is written, but a real statement number IS
+  // allocated (it's printed on the PDF), so — like the chase zip
+  // download — the allocation gets an audit row. POST, not GET, because
+  // it consumes a number.
+  app.post("/:id/statement-download", async (req, reply) => {
+    const user = await requireAuth(req);
+    const parse = paramsSchema.safeParse(req.params);
+    if (!parse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid params", details: parse.error.flatten() });
+    }
+    const bodyParse = downloadBodySchema.safeParse(req.body ?? {});
+    if (!bodyParse.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid body", details: bodyParse.error.flatten() });
+    }
+    const { id: customerId } = parse.data;
+    const { origin } = bodyParse.data;
+
+    let built: Awaited<ReturnType<typeof buildStatementPdfAttachment>>;
+    try {
+      built = await buildStatementPdfAttachment(customerId, origin);
+    } catch (err) {
+      if (err instanceof SendStatementError) {
+        log.warn(
+          { err, customerId, userId: user.id, code: err.code },
+          "statement download rejected",
+        );
+        return reply
+          .code(mapErrorToStatus(err.code))
+          .send({ error: err.message, code: err.code });
+      }
+      log.error(
+        { err, customerId, userId: user.id },
+        "statement download failed unexpectedly",
+      );
+      const message = err instanceof Error ? err.message : "build failed";
+      return reply.code(500).send({ error: message });
+    }
+
+    const customerRows = await db
+      .select({ displayName: customers.displayName })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .limit(1);
+    const filename = statementDownloadFilename(
+      customerRows[0]?.displayName ?? "",
+      built.statementNumber,
+    );
+
+    await db.insert(auditLog).values({
+      id: nanoid(24),
+      userId: user.id,
+      action: "statement.download",
+      entityType: "customer",
+      entityId: customerId,
+      before: null,
+      after: {
+        origin,
+        statementNumber: built.statementNumber,
+        bytes: built.buffer.byteLength,
+      },
+    });
+    log.info(
+      {
+        customerId,
+        userId: user.id,
+        origin,
+        statementNumber: built.statementNumber,
+      },
+      "statement downloaded",
+    );
+
+    return reply
+      .code(200)
+      .header("Content-Type", "application/pdf")
+      .header("Content-Length", built.buffer.byteLength.toString())
+      .header("Content-Disposition", attachmentDisposition(filename))
+      .send(built.buffer);
   });
 };
 

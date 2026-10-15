@@ -22,6 +22,7 @@ import {
   PackageCheck,
   ShoppingBag,
   AlertTriangle,
+  Download,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -80,6 +81,7 @@ import {
   type Book,
 } from "../components/book-sections/book-section-header";
 import { cn } from "../lib/cn";
+import { filenameFromContentDisposition } from "../lib/content-disposition";
 
 const customerDetailRouteApi = getRouteApi("/customers/$customerId");
 
@@ -3176,6 +3178,10 @@ function InvoicesPanel({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkPdfPending, setBulkPdfPending] = useState<boolean>(false);
   const [bulkPdfError, setBulkPdfError] = useState<string | null>(null);
+  const [statementDlPending, setStatementDlPending] = useState(false);
+  const [statementDlError, setStatementDlError] = useState<string | null>(
+    null,
+  );
 
   function toggleRow(r: InvoiceRow) {
     setSelected((prev) => {
@@ -3308,6 +3314,51 @@ function InvoicesPanel({
     [allRows, selected],
   );
 
+  // One-click statement download (operator ask 2026-10-15 — replaces
+  // Statement → Preview → Save). The server allocates a real statement
+  // number and names the file "<customer>, <number>.pdf".
+  async function downloadStatement(
+    origin: "feldart" | "tj" | "both",
+  ): Promise<void> {
+    setStatementDlPending(true);
+    setStatementDlError(null);
+    try {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customerId)}/statement-download`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ origin }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const filename = filenameFromContentDisposition(
+        res.headers.get("Content-Disposition"),
+        `${customerName}, statement.pdf`,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setStatementDlError(
+        err instanceof Error ? err.message : "statement download failed",
+      );
+    } finally {
+      setStatementDlPending(false);
+    }
+  }
+
   async function downloadSelectedPdfs(): Promise<void> {
     if (selectedRows.length === 0) return;
     setBulkPdfPending(true);
@@ -3382,9 +3433,39 @@ function InvoicesPanel({
   // wind-down complete), keep the panel so that history stays
   // browsable under the Paid/Void filters.
   const showTjPanel = hasTjHistory || tjDocCount > 0;
+  // Download covers whatever's open: combined when both books carry a
+  // balance (the server applies the same auto-upgrade), else the one
+  // book that does. null = nothing open, button disabled.
+  const statementDlOrigin: "feldart" | "tj" | "both" | null =
+    feldartBalance > 0
+      ? tjBalance > 0
+        ? "both"
+        : "feldart"
+      : tjBalance > 0
+        ? "tj"
+        : null;
 
   return (
     <div className="space-y-3">
+      {statementDlError ? (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-md border border-accent-danger/30 bg-accent-danger/10 px-3 py-2 text-sm text-accent-danger"
+        >
+          <AlertTriangle className="size-4" />
+          <span className="flex-1">
+            Statement download failed: {statementDlError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setStatementDlError(null)}
+            aria-label="Dismiss"
+            className="text-accent-danger/70 hover:text-accent-danger"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ) : null}
       {sentSuccess ? (
         <div
           role="status"
@@ -3628,6 +3709,29 @@ function InvoicesPanel({
               >
                 <FileText className="size-3.5" />
                 Statement
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  if (statementDlOrigin) void downloadStatement(statementDlOrigin);
+                }}
+                disabled={statementDlOrigin === null || statementDlPending}
+                loading={statementDlPending}
+                title={
+                  statementDlOrigin === null
+                    ? "No open balance — nothing to put on a statement"
+                    : `Download the statement PDF (${
+                        statementDlOrigin === "both"
+                          ? "both books, combined"
+                          : statementDlOrigin === "tj"
+                            ? "Torah Judaica"
+                            : "Feldart"
+                      }) as "${customerName}, <statement no>.pdf" — nothing is emailed`
+                }
+              >
+                <Download className="size-3.5" />
+                Download statement
               </Button>
             </>
           }
