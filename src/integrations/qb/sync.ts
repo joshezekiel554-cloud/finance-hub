@@ -713,6 +713,13 @@ async function loadItemSkuMap(qb: QboClient): Promise<Map<string, string> | null
     const items = await qb.getAllItems();
     const map = new Map<string, string>();
     for (const it of items) if (it.Id && it.Sku?.trim()) map.set(it.Id, it.Sku.trim());
+    // A realm with ~1.3k items never really has zero SKUs: treat an empty
+    // answer as a failed fetch, so free-text lines stay NULL (healable)
+    // rather than being written as a permanent "none".
+    if (map.size === 0) {
+      log.warn({ items: items.length }, "QBO item catalogue returned no SKUs; treating as unavailable");
+      return null;
+    }
     itemSkuCache = { at: Date.now(), map };
     return map;
   } catch (err) {
@@ -727,7 +734,11 @@ async function loadItemSkuMap(qb: QboClient): Promise<Map<string, string> | null
 // Invoices whose lines predate sku_source (or were written while the item
 // catalogue was unavailable). Rewritten on the next healthy sync even when
 // the invoice itself is unchanged. Empty when the catalogue is unavailable,
-// so a degraded run never "heals" rows with fallback SKUs.
+// so a degraded run never "heals" rows with fallback SKUs. Known limits:
+// lines already marked item/none are not re-resolved if an Item's SKU is
+// edited later (only when the invoice itself changes), and invoices QBO no
+// longer returns (deleted, or on an unsynced customer) keep NULL forever —
+// readers must keep treating sku_source NULL as legacy (title-in-sku) data.
 async function buildLineSyncContext(qb: QboClient): Promise<LineSyncContext> {
   const itemSkus = await loadItemSkuMap(qb);
   if (itemSkus === null) return { itemSkus, healInvoiceIds: new Set() };
