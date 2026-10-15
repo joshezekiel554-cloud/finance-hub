@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSeasonSales, salesWindow, type SalesLineRow } from "./sales.js";
+import { buildSeasonSales, isPlaceholderCustomer, salesWindow, type SalesLineRow } from "./sales.js";
 import {
   customerHistoryQuerySchema,
   seasonSalesQuerySchema,
@@ -81,6 +81,35 @@ describe("season sales", () => {
     const t = buildSeasonSales({ ...base, view: "skus", lines: [] });
     expect(t.rows).toEqual([]);
     expect(t.warnings).toEqual(["No sales of this season's products in that window."]);
+  });
+});
+
+describe("season sales exclusions", () => {
+  it("leaves out $0 lines and test/placeholder accounts, and says so", () => {
+    const t = buildSeasonSales({
+      ...base,
+      view: "skus",
+      customers: new Map([...base.customers, ["c9", { name: "PLEASE CHECK ITEMS 111", email: null }]]),
+      lines: [
+        line({}),
+        line({ qty: "4", lineTotal: "0" }),
+        line({ customerId: "c9", qty: "3", lineTotal: "45" }),
+      ],
+    });
+    expect(t.totals).toEqual({ qty: 2, value: 20, lines: 1 });
+    expect(t.warnings).toEqual([
+      "1 $0 line (unfulfilled pre-orders / no-charge) left out.",
+      "Test/placeholder accounts left out (PLEASE CHECK ITEMS 111): 1 lines, $45.00.",
+    ]);
+  });
+
+  it("recognises the prod placeholder/test accounts but not real stores", () => {
+    for (const n of ["PLEASE CHECK ITEMS 111", "test order", "test123", "Joshua dropshipping test", "ZZ TEST — Inbox Integration"]) {
+      expect(isPlaceholderCustomer(n)).toBe(true);
+    }
+    for (const n of ["Bais Hasforim", "Testament Books", "Contest Judaica", "Lazzaro Gifts"]) {
+      expect(isPlaceholderCustomer(n)).toBe(false);
+    }
   });
 });
 

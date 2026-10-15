@@ -249,6 +249,14 @@ export const SEASON_LINE_COLUMNS: ReportColumn[] = [
   { key: "lastBought", label: "Last bought", type: "date" },
 ];
 
+// Non-store accounts that would skew a season's figures: the
+// "PLEASE CHECK ITEMS" holding account and test customers (prod has
+// "test order", "test123", "Joshua dropshipping test", "ZZ TEST — …").
+const PLACEHOLDER_CUSTOMER = /please check items|\btest(\d+)?\b|^zz\b/i;
+export function isPlaceholderCustomer(name: string): boolean {
+  return PLACEHOLDER_CUSTOMER.test(name);
+}
+
 export function buildSeasonSales(input: {
   seasonName: string;
   from: string;
@@ -261,9 +269,13 @@ export function buildSeasonSales(input: {
   now: Date;
   customerUrl: (id: string) => string;
 }): ReportTable {
-  const usable = input.lines.filter((l) => l.skuSource !== null && l.sku);
   const name = (sku: string, fallback: string | null) => input.productNames.get(sku) ?? fallback;
   const cust = (id: string) => input.customers.get(id) ?? { name: id, email: null };
+  const known = input.lines.filter((l) => l.skuSource !== null && l.sku);
+  // $0 lines are unfulfilled pre-orders / no-charge lines, not sales.
+  const zero = known.filter((l) => num(l.lineTotal) === 0);
+  const placeholder = known.filter((l) => num(l.lineTotal) !== 0 && isPlaceholderCustomer(cust(l.customerId).name));
+  const usable = known.filter((l) => num(l.lineTotal) !== 0 && !isPlaceholderCustomer(cust(l.customerId).name));
 
   let columns: ReportColumn[];
   let rows: ReportRow[];
@@ -312,7 +324,15 @@ export function buildSeasonSales(input: {
   }
 
   const shaped = shapeRows(columns, rows);
-  const warnings = pendingWarning(input.lines.length - usable.length, input.lines.length);
+  const warnings = pendingWarning(input.lines.length - known.length, input.lines.length);
+  if (zero.length > 0) {
+    warnings.push(`${zero.length} $0 line${zero.length === 1 ? "" : "s"} (unfulfilled pre-orders / no-charge) left out.`);
+  }
+  if (placeholder.length > 0) {
+    const value = placeholder.reduce((sum, l) => sum + num(l.lineTotal), 0);
+    const names = [...new Set(placeholder.map((l) => cust(l.customerId).name))].join(", ");
+    warnings.push(`Test/placeholder accounts left out (${names}): ${placeholder.length} lines, $${money(value).toFixed(2)}.`);
+  }
   if (shaped.length === 0) warnings.push("No sales of this season's products in that window.");
   const scope = input.books.length === 2 ? "" : ` (${BOOK_LABEL[input.books[0]!]})`;
   return {
