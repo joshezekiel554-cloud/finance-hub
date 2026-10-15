@@ -323,7 +323,9 @@ export async function syncInvoices(client?: QboClient): Promise<SyncStats> {
   ]);
   stats.fetched = qboInvoices.length;
   const healPending = lineCtx.healInvoiceIds.size;
-  log.info({ count: stats.fetched, linesToHeal: healPending }, "fetched QB invoices");
+  // Includes invoices QBO no longer returns (deleted upstream), which can
+  // never heal — so this is an upper bound, not a to-do count.
+  log.info({ count: stats.fetched, invoicesWithLegacyLines: healPending }, "fetched QB invoices");
 
   for (const qboInvoice of qboInvoices) {
     try {

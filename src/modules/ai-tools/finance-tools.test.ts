@@ -48,6 +48,7 @@ describe("tool input validation (rejected before any DB access)", () => {
     await expect(run("returns", { from: "2026-10-02", to: "2026-10-01" })).rejects.toThrow(/on or before/);
     await expect(run("aged_debtors", { top: 0 })).rejects.toBeInstanceOf(ToolInputError);
     await expect(run("customer_history", { customerId: "c1", from: "15/10/2026" })).rejects.toThrow(/YYYY-MM-DD/);
+    await expect(run("customer_history", { customerId: "c1", from: "2026-10-02", to: "2026-10-01" })).rejects.toThrow(/on or before/);
   });
 
   it("every tool is registered once", () => {

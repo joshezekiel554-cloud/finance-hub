@@ -101,6 +101,12 @@ const CUSTOMER_ID_PROP = {
   description: "Finance customer id, from find_customer.",
 };
 
+const HOLD_LABEL: Record<string, string> = {
+  active: "Active",
+  hold: "On hold",
+  payment_upfront: "Payment upfront",
+};
+
 const OPEN_RMA_STATUSES = ["approved", "awaiting_warehouse_number", "sent_to_warehouse", "received"] as const;
 
 // ---------------------------------------------------------------------------
@@ -132,6 +138,7 @@ const findCustomer: ToolDef = {
     return {
       customers: found.map((c) => ({
         ...c,
+        holdStatus: HOLD_LABEL[c.holdStatus] ?? c.holdStatus,
         openBalance: balances.get(c.id) ?? { feldart: 0, tj: 0 },
         url: `${ctx.baseUrl}/customers/${c.id}`,
       })),
@@ -231,7 +238,7 @@ const customerSummary: ToolDef = {
     });
 
     return {
-      customer: { id, ...c, url: `${ctx.baseUrl}/customers/${id}` },
+      customer: { id, ...c, holdStatus: HOLD_LABEL[c.holdStatus] ?? c.holdStatus, url: `${ctx.baseUrl}/customers/${id}` },
       asOf: ctx.now.toISOString(),
       currency: "USD",
       books: { feldart: round(books.feldart), tj: round(books.tj) },
@@ -393,7 +400,12 @@ const customerHistory: ToolDef = {
   },
   async run(input, ctx) {
     const today = isoDay(ctx.now);
-    const p = parse(z.object({ customerId, from: isoDate.optional(), to: isoDate.optional() }), input);
+    const p = parse(
+      z
+        .object({ customerId, from: isoDate.optional(), to: isoDate.optional() })
+        .refine((v) => !v.from || !v.to || v.from <= v.to, { message: "from must be on or before to", path: ["from"] }),
+      input,
+    );
     const to = p.to && p.to < today ? p.to : today; // future-dated invoices are QBO placeholders
     const [c] = await db.select({ name: customers.displayName }).from(customers).where(eq(customers.id, p.customerId)).limit(1);
     if (!c) throw new ToolInputError("customerId: no such customer. Use find_customer first.");
