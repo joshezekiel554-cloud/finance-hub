@@ -280,32 +280,47 @@ const openInvoicesTool: ToolDef = {
   },
 };
 
+/** Debtor rows by total open (desc) or by 90+ exposure then total (desc). */
+export function sortDebtorRows<R extends Record<string, unknown>>(rows: R[], by: "total" | "over90"): R[] {
+  const n = (v: unknown) => (typeof v === "number" ? v : 0);
+  return [...rows].sort((a, b) =>
+    by === "total"
+      ? n(b.total) - n(a.total)
+      : n(b.d90plus) - n(a.d90plus) || n(b.total) - n(a.total),
+  );
+}
+
 const agedDebtorsTool: ToolDef = {
   name: "aged_debtors",
   description:
-    "Who owes Feldart money, worst first: one row per customer and book with the open balance split into current / 1-30 / 31-60 / 61-90 / 90+ days past due, unapplied credits, net owed and account status. Use for \"who owes us the most\", \"who is over 90 days\", collections questions. `top` limits the number of customers (default 25).",
+    "Who owes Feldart money: one row per customer and book with the open balance split into current / 1-30 / 31-60 / 61-90 / 90+ days past due, unapplied credits, net owed and account status. `sort`: \"total\" (default — biggest total open balance first, for \"who owes us the most\") or \"over90\" (most 90+ day debt first, for collections / \"who is most overdue\"). `top` limits the number of rows (default 25); totals always cover everyone.",
   input_schema: {
     type: "object",
     properties: {
       book: BOOK_PROP,
-      top: { type: "integer", minimum: 1, maximum: 200, description: "How many customers to return, worst first. Default 25." },
+      top: { type: "integer", minimum: 1, maximum: 200, description: "How many rows to return after sorting. Default 25." },
+      sort: { type: "string", enum: ["total", "over90"], description: "total = biggest open balance first (default); over90 = most 90+ day debt first." },
     },
     additionalProperties: false,
   },
   async run(input, ctx) {
-    const p = parse(z.object({ book, top: z.number().int().min(1).max(200).default(25) }), input);
+    const p = parse(
+      z.object({ book, top: z.number().int().min(1).max(200).default(25), sort: z.enum(["total", "over90"]).default("total") }),
+      input,
+    );
     const t = await loadAgedDebtors({
       book: p.book,
       now: ctx.now,
       customerUrl: (id) => `${ctx.baseUrl}/customers/${id}`,
     });
     const total = t.rows.length;
-    const result = tableResult({ ...t, rows: t.rows.slice(0, p.top) });
+    const sorted = sortDebtorRows(t.rows, p.sort);
+    const result = tableResult({ ...t, rows: sorted.slice(0, p.top) });
     return {
       ...result,
       warnings:
         total > p.top
-          ? [...result.warnings, `Top ${p.top} of ${total} debtors shown; totals cover all ${total}.`]
+          ? [...result.warnings, `Top ${p.top} of ${total} rows shown (sorted by ${p.sort === "total" ? "total open balance" : "90+ day debt"}); totals cover all ${total}.`]
           : result.warnings,
     };
   },
