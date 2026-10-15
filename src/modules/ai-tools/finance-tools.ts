@@ -20,6 +20,7 @@ import { loadAgedDebtors } from "../reports/aged-debtors.js";
 import { loadOpenInvoices } from "../reports/open-invoices.js";
 import { loadReturnsReport } from "../reports/returns.js";
 import { likePattern } from "../reports/customers.js";
+import { buildCustomerHistory } from "../reports/sales.js";
 import { dayOf, isoDay, money, num, type ReportTable } from "../reports/table.js";
 
 export type ToolContext = { now: Date; baseUrl: string };
@@ -354,50 +355,9 @@ const returnsTool: ToolDef = {
   },
 };
 
-// Customer purchase history from invoice lines, grouped by SKU. Relies on
-// the 2026-10-15 sync fix (invoice_lines.sku = the real code); rows still
-// awaiting the one-off rewrite are reported, not guessed.
-export type HistoryLineInput = {
-  sku: string | null;
-  itemName: string | null;
-  description: string | null;
-  qty: string | number | null;
-  unitPrice: string | number | null;
-  lineTotal: string | number | null;
-  issueDate: Date | string | null;
-  origin: "feldart" | "tj";
-};
-
-export function buildCustomerHistory(lines: HistoryLineInput[]) {
-  type Acc = { sku: string | null; product: string | null; qty: number; value: number; invoices: number; lastDate: string | null; lastUnitPrice: number | null; books: Set<string> };
-  const by = new Map<string, Acc>();
-  for (const l of lines) {
-    const key = l.sku ?? `name:${l.itemName ?? l.description ?? "?"}`;
-    const a = by.get(key) ?? { sku: l.sku, product: l.itemName ?? l.description, qty: 0, value: 0, invoices: 0, lastDate: null, lastUnitPrice: null, books: new Set<string>() };
-    a.qty += num(l.qty);
-    a.value += num(l.lineTotal);
-    a.invoices += 1;
-    a.books.add(l.origin);
-    const d = dayOf(l.issueDate);
-    if (d && (!a.lastDate || d >= a.lastDate)) {
-      a.lastDate = d;
-      a.lastUnitPrice = l.unitPrice === null ? null : money(num(l.unitPrice));
-    }
-    by.set(key, a);
-  }
-  return [...by.values()]
-    .sort((x, y) => y.value - x.value)
-    .map((a) => ({
-      sku: a.sku,
-      product: a.product,
-      qty: Math.round(a.qty * 1000) / 1000,
-      value: money(a.value),
-      lines: a.invoices,
-      lastBought: a.lastDate,
-      lastUnitPrice: a.lastUnitPrice,
-      books: [...a.books].sort().join("+"),
-    }));
-}
+// Customer purchase history: the grouping lives with the sheet report
+// (reports/sales.ts) so the chat answer and the sheet always agree.
+export { buildCustomerHistory };
 
 const customerHistory: ToolDef = {
   name: "customer_history",

@@ -8,6 +8,9 @@
 //   returns?from&to[&customerId][&view=rmas|lines]
 //   open-invoices?customerId[&book=feldart|tj|both]
 //   aged-debtors[?book=feldart|tj|both]
+//   seasons                           → {seasons:[{id,name,startDate,endDate,products}]}
+//   season-sales?seasonId[&from&to][&view=skus|customers|lines][&book]
+//   customer-history?customerId[&from&to]
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
@@ -21,6 +24,11 @@ import {
 } from "../../modules/reports/open-invoices.js";
 import { loadReturnsReport } from "../../modules/reports/returns.js";
 import { searchCustomerOptions } from "../../modules/reports/customers.js";
+import {
+  listSeasons,
+  loadCustomerHistory,
+  loadSeasonSales,
+} from "../../modules/reports/sales.js";
 
 const log = createLogger({ component: "routes.ext-reports" });
 
@@ -49,6 +57,22 @@ export const openInvoicesQuerySchema = z.object({
   book,
 });
 export const agedDebtorsQuerySchema = z.object({ book });
+const optionalRange = {
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+};
+const rangeOrdered = (v: { from?: string; to?: string }) => !v.from || !v.to || v.from <= v.to;
+export const seasonSalesQuerySchema = z
+  .object({
+    seasonId: z.string().min(1).max(64),
+    ...optionalRange,
+    view: z.enum(["skus", "customers", "lines"]).default("skus"),
+    book,
+  })
+  .refine(rangeOrdered, { message: "from must be on or before to", path: ["from"] });
+export const customerHistoryQuerySchema = z
+  .object({ customerId: z.string().min(1).max(64), ...optionalRange })
+  .refine(rangeOrdered, { message: "from must be on or before to", path: ["from"] });
 
 const base = () => env.PUBLIC_URL.replace(/\/$/, "");
 const customerUrl = (id: string) => `${base()}/customers/${id}`;
@@ -118,6 +142,48 @@ const extReportsRoute: FastifyPluginAsync = async (app) => {
       return reply.send(table);
     } catch (err) {
       log.error({ err, email: claims.email }, "aged-debtors report failed");
+      return reply.code(500).send({ error: "report failed" });
+    }
+  });
+
+  app.get("/reports/seasons", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    return reply.send({ seasons: await listSeasons() });
+  });
+
+  app.get("/reports/season-sales", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    const parse = seasonSalesQuerySchema.safeParse(req.query ?? {});
+    if (!parse.success) {
+      return reply.code(400).send({ error: "invalid query", details: parse.error.flatten() });
+    }
+    try {
+      const table = await loadSeasonSales({ ...parse.data, now: new Date(), customerUrl });
+      log.info({ email: claims.email, report: "season-sales", rows: table.rows.length }, "report served");
+      return reply.send(table);
+    } catch (err) {
+      if (err instanceof ReportNotFoundError) return reply.code(404).send({ error: err.message });
+      log.error({ err, email: claims.email }, "season-sales report failed");
+      return reply.code(500).send({ error: "report failed" });
+    }
+  });
+
+  app.get("/reports/customer-history", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    const parse = customerHistoryQuerySchema.safeParse(req.query ?? {});
+    if (!parse.success) {
+      return reply.code(400).send({ error: "invalid query", details: parse.error.flatten() });
+    }
+    try {
+      const table = await loadCustomerHistory({ ...parse.data, now: new Date() });
+      log.info({ email: claims.email, report: "customer-history", rows: table.rows.length }, "report served");
+      return reply.send(table);
+    } catch (err) {
+      if (err instanceof ReportNotFoundError) return reply.code(404).send({ error: err.message });
+      log.error({ err, email: claims.email }, "customer-history report failed");
       return reply.code(500).send({ error: "report failed" });
     }
   });
