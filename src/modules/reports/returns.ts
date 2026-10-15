@@ -27,7 +27,9 @@ export type ReturnsView = "rmas" | "lines";
 export type ReturnsRmaInput = {
   id: string;
   rmaNumber: string | null;
+  customerId: string;
   customerName: string;
+  customerEmail: string | null;
   status: string;
   returnType: string;
   resolutionType: string | null;
@@ -71,12 +73,15 @@ const CLASS_LABEL: Record<string, string> = {
   non_seasonal: "Non-seasonal",
   damage: "Damage",
 };
+const EXCLUDED_FROM_TOTALS = new Set(["denied", "cancelled"]);
+
 const label = (map: Record<string, string>, v: string | null): string | null =>
   v === null ? null : (map[v] ?? v);
 
 export const RETURNS_RMA_COLUMNS: ReportColumn[] = [
   { key: "rma", label: "RMA", type: "text" },
   { key: "customer", label: "Customer", type: "text" },
+  { key: "email", label: "Customer email", type: "text" },
   { key: "created", label: "Created", type: "date" },
   { key: "status", label: "Status", type: "text" },
   { key: "type", label: "Return type", type: "text" },
@@ -87,11 +92,13 @@ export const RETURNS_RMA_COLUMNS: ReportColumn[] = [
   { key: "creditMemo", label: "Credit memo", type: "text" },
   { key: "completed", label: "Completed", type: "date" },
   { key: "url", label: "Finance link", type: "url" },
+  { key: "customerId", label: "Finance customer ID", type: "text" },
 ];
 
 export const RETURNS_LINE_COLUMNS: ReportColumn[] = [
   { key: "rma", label: "RMA", type: "text" },
   { key: "customer", label: "Customer", type: "text" },
+  { key: "email", label: "Customer email", type: "text" },
   { key: "created", label: "Created", type: "date" },
   { key: "status", label: "Status", type: "text" },
   { key: "sku", label: "SKU", type: "text" },
@@ -105,6 +112,7 @@ export const RETURNS_LINE_COLUMNS: ReportColumn[] = [
   { key: "invoice", label: "Original invoice", type: "text" },
   { key: "invoiceDate", label: "Invoice date", type: "date" },
   { key: "url", label: "Finance link", type: "url" },
+  { key: "customerId", label: "Finance customer ID", type: "text" },
 ];
 
 export function buildReturnsReport(input: {
@@ -129,15 +137,19 @@ export function buildReturnsReport(input: {
 
   let columns: ReportColumn[];
   let records: ReportRow[];
+  let recordRmaIds: string[];
   let totalKeys: string[];
   if (input.view === "rmas") {
     columns = RETURNS_RMA_COLUMNS;
     totalKeys = ["lines", "qty", "value"];
+    recordRmaIds = input.rmas.map((r) => r.id);
     records = input.rmas.map((r) => {
       const lines = linesByRma.get(r.id) ?? [];
       return {
         rma: rmaRef(r),
         customer: r.customerName,
+        email: r.customerEmail,
+        customerId: r.customerId,
         created: isoDay(r.createdAt),
         status: label(STATUS_LABEL, r.status),
         type: label(TYPE_LABEL, r.returnType),
@@ -153,10 +165,13 @@ export function buildReturnsReport(input: {
   } else {
     columns = RETURNS_LINE_COLUMNS;
     totalKeys = ["qty", "received", "lineTotal"];
+    recordRmaIds = input.rmas.flatMap((r) => (linesByRma.get(r.id) ?? []).map(() => r.id));
     records = input.rmas.flatMap((r) =>
       (linesByRma.get(r.id) ?? []).map((l) => ({
         rma: rmaRef(r),
         customer: r.customerName,
+        email: r.customerEmail,
+        customerId: r.customerId,
         created: isoDay(r.createdAt),
         status: label(STATUS_LABEL, r.status),
         sku: l.sku,
@@ -175,14 +190,30 @@ export function buildReturnsReport(input: {
   }
 
   const rows = shapeRows(columns, records);
+  // Denied/cancelled RMAs stay listed (the sheet shows the whole range) but
+  // never count toward what actually came back.
+  const excluded = new Set(
+    input.rmas.filter((r) => EXCLUDED_FROM_TOTALS.has(r.status)).map((r) => r.id),
+  );
+  const counted = rows.filter((_, i) => !excluded.has(recordRmaIds[i]!));
+  const warnings: string[] = [];
+  if (rows.length === 0) warnings.push("No returns in this date range.");
+  if (excluded.size > 0) {
+    const value = input.rmas
+      .filter((r) => excluded.has(r.id))
+      .reduce((sum, r) => sum + num(r.totalValue), 0);
+    warnings.push(
+      `${excluded.size} denied/cancelled RMA${excluded.size === 1 ? " is" : "s are"} listed but left out of the totals ($${money(value).toFixed(2)}).`,
+    );
+  }
   const who = input.customerName ? ` — ${input.customerName}` : "";
   return {
     title: `Returns ${input.from} to ${input.to}${who}`,
     asOf: input.now.toISOString(),
     columns,
     rows,
-    totals: sumKeys(rows, totalKeys),
-    warnings: rows.length === 0 ? ["No returns in this date range."] : [],
+    totals: sumKeys(counted, totalKeys),
+    warnings,
   };
 }
 
@@ -214,7 +245,9 @@ export async function loadReturnsReport(input: {
     .select({
       id: rmas.id,
       rmaNumber: rmas.rmaNumber,
+      customerId: rmas.customerId,
       customerName: customers.displayName,
+      customerEmail: customers.primaryEmail,
       status: rmas.status,
       returnType: rmas.returnType,
       resolutionType: rmas.resolutionType,

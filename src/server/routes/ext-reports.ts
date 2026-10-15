@@ -27,7 +27,11 @@ const log = createLogger({ component: "routes.ext-reports" });
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
-  .refine((s) => !Number.isNaN(Date.parse(`${s}T00:00:00Z`)), "invalid date");
+  // Round-trip, not Date.parse: V8 rolls 2026-02-31 over to 3 March.
+  .refine((s) => {
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }, "invalid date");
 const book = z.enum(["feldart", "tj", "both"]).default("both");
 
 // Exported for schema-level tests (no Fastify harness in repo).

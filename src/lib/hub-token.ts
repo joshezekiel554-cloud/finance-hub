@@ -5,8 +5,8 @@
 //   seg1  = base64url(JSON{ email, exp, aud, jti, scope? })   (no padding)
 //   sig   = base64url(HMAC-SHA256(HUB_SSO_SECRET, seg1))       (no padding)
 //
-// The hub mints one per iframe mount (TTL 300 s, scope "user") and one per
-// Home-tile fetch (scope "service"). Each app verifies with the shared
+// The hub mints one per iframe mount (TTL 60 s, no scope → "user") and one
+// per server-to-server call (TTL 60 s, scope "service"). Each app verifies with the shared
 // secret, checks `aud` is itself, then applies its OWN allow-list — the hub
 // never grants access an app would refuse. Verification never throws.
 

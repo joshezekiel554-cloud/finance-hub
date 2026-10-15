@@ -104,7 +104,9 @@ describe("aged debtors", () => {
       customerUrl: (id) => id,
     });
     expect(t.rows[0]).toMatchObject({ current: 5 });
-    expect(t.warnings[0]).toMatch(/1 open invoice is dated in the future/);
+    expect(t.warnings[0]).toBe(
+      "1 open invoice is dated in the future (likely placeholders): $5.00 counted as current and included in the totals.",
+    );
   });
 });
 
@@ -143,7 +145,9 @@ describe("returns report", () => {
     {
       id: "r1abcdefgh",
       rmaNumber: "DC00123",
+      customerId: "c1",
       customerName: "Acme Judaica",
+      customerEmail: "a@x.com",
       status: "completed",
       returnType: "damage",
       resolutionType: "credit",
@@ -155,7 +159,9 @@ describe("returns report", () => {
     {
       id: "r2abcdefgh",
       rmaNumber: null,
+      customerId: "c2",
       customerName: "Beth Books",
+      customerEmail: null,
       status: "approved",
       returnType: "seasonal",
       resolutionType: null,
@@ -176,12 +182,38 @@ describe("returns report", () => {
       rmaUrl: (id) => `https://f/returns/${id}`,
     });
     expect(t.rows[0]).toMatchObject({
-      rma: "DC00123", created: "2026-10-01", status: "Completed", type: "Damage",
+      rma: "DC00123", email: "a@x.com", customerId: "c1", created: "2026-10-01", status: "Completed", type: "Damage",
       resolution: "Credit", lines: 2, qty: 3, value: 45.5, creditMemo: "CM-9", completed: "2026-10-05",
     });
     expect(t.rows[1]).toMatchObject({ rma: null, lines: 0, qty: 0, resolution: null });
     expect(t.totals).toEqual({ lines: 2, qty: 3, value: 45.5 });
     expect(t.title).toBe("Returns 2026-10-01 to 2026-10-31");
+    expect(t.warnings).toEqual([]);
+  });
+
+  it("lists denied/cancelled RMAs but leaves them out of the totals", () => {
+    const denied = { ...rmas[0]!, id: "r3", rmaNumber: "DC00124", status: "denied", totalValue: "100" };
+    const t = buildReturnsReport({
+      view: "rmas", from: "2026-10-01", to: "2026-10-31", customerName: null,
+      rmas: [...rmas, denied],
+      lines: [...lines, { ...lines[0]!, rmaId: "r3" }],
+      now: NOW, rmaUrl: (id) => id,
+    });
+    expect(t.rows).toHaveLength(3);
+    expect(t.rows[2]).toMatchObject({ rma: "DC00124", status: "Denied", value: 100 });
+    expect(t.totals).toEqual({ lines: 2, qty: 3, value: 45.5 });
+    expect(t.warnings).toEqual([
+      "1 denied/cancelled RMA is listed but left out of the totals ($100.00).",
+    ]);
+
+    const byLine = buildReturnsReport({
+      view: "lines", from: "2026-10-01", to: "2026-10-31", customerName: null,
+      rmas: [...rmas, denied],
+      lines: [...lines, { ...lines[0]!, rmaId: "r3" }],
+      now: NOW, rmaUrl: (id) => id,
+    });
+    expect(byLine.rows).toHaveLength(3);
+    expect(byLine.totals).toEqual({ qty: 3, received: 2, lineTotal: 45.5 });
   });
 
   it("one row per line in the lines view", () => {

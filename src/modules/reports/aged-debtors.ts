@@ -56,7 +56,7 @@ export const AGED_DEBTOR_COLUMNS: ReportColumn[] = [
   usd("d61_90", "61-90 days"),
   usd("d90plus", "90+ days"),
   usd("total", "Total open"),
-  usd("credits", "Unapplied credits"),
+  usd("credits", "Unapplied credits (on debtor accounts)"),
   usd("net", "Net owed"),
   { key: "oldestDue", label: "Oldest due date", type: "date" },
   { key: "invoices", label: "Open invoices", type: "number" },
@@ -129,6 +129,7 @@ export function buildAgedDebtors(input: {
   };
 
   let futureDated = 0;
+  let futureAmount = 0;
   for (const inv of input.invoices) {
     if (!books.has(inv.origin)) continue;
     const bal = num(inv.balance);
@@ -139,7 +140,10 @@ export function buildAgedDebtors(input: {
     const due = dayOf(inv.dueDate);
     if (due && (!a.oldestDue || due < a.oldestDue)) a.oldestDue = due;
     const issued = dayOf(inv.issueDate);
-    if (issued && issued > today) futureDated += 1;
+    if (issued && issued > today) {
+      futureDated += 1;
+      futureAmount += bal;
+    }
   }
   // Credits only attach to customers who still owe on that book — a
   // credit-only customer isn't a debtor.
@@ -179,7 +183,7 @@ export function buildAgedDebtors(input: {
   const warnings: string[] = [];
   if (futureDated > 0) {
     warnings.push(
-      `${futureDated} open invoice${futureDated === 1 ? " is" : "s are"} dated in the future (likely placeholders) and counted as current.`,
+      `${futureDated} open invoice${futureDated === 1 ? " is" : "s are"} dated in the future (likely placeholders): $${money(futureAmount).toFixed(2)} counted as current and included in the totals.`,
     );
   }
   const scope = input.books.length === 2 ? "both books" : BOOK_LABEL[input.books[0]!];

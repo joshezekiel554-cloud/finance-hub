@@ -17,6 +17,8 @@ describe("ext reports query schemas", () => {
     expect(ok.success && ok.data.view).toBe("rmas");
     expect(returnsQuerySchema.safeParse({ from: "2026-10-02", to: "2026-10-01" }).success).toBe(false);
     expect(returnsQuerySchema.safeParse({ from: "2026-13-40", to: "2026-10-01" }).success).toBe(false);
+    // V8's Date.parse rolls Feb 31 into March; the round-trip check refuses it.
+    expect(returnsQuerySchema.safeParse({ from: "2026-02-31", to: "2026-03-05" }).success).toBe(false);
     expect(returnsQuerySchema.safeParse({ from: "1/10/2026", to: "2026-10-01" }).success).toBe(false);
     expect(returnsQuerySchema.safeParse({ to: "2026-10-01" }).success).toBe(false);
     expect(
