@@ -179,7 +179,7 @@ describe("returns report", () => {
       rma: "DC00123", created: "2026-10-01", status: "Completed", type: "Damage",
       resolution: "Credit", lines: 2, qty: 3, value: 45.5, creditMemo: "CM-9", completed: "2026-10-05",
     });
-    expect(t.rows[1]).toMatchObject({ rma: "(unnumbered r2abcd)", lines: 0, qty: 0, resolution: null });
+    expect(t.rows[1]).toMatchObject({ rma: null, lines: 0, qty: 0, resolution: null });
     expect(t.totals).toEqual({ lines: 2, qty: 3, value: 45.5 });
     expect(t.title).toBe("Returns 2026-10-01 to 2026-10-31");
   });

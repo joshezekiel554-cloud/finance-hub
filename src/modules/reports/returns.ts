@@ -123,7 +123,9 @@ export function buildReturnsReport(input: {
     list.push(l);
     linesByRma.set(l.rmaId, list);
   }
-  const rmaRef = (r: ReturnsRmaInput) => r.rmaNumber ?? `(unnumbered ${r.id.slice(0, 6)})`;
+  // null (not a placeholder) when the warehouse number isn't set yet: the
+  // hub joins these rows to inbox return requests on this key.
+  const rmaRef = (r: ReturnsRmaInput) => r.rmaNumber;
 
   let columns: ReportColumn[];
   let records: ReportRow[];
