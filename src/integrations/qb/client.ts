@@ -904,6 +904,16 @@ export class QboClient {
     return out;
   }
 
+  // The whole Item catalogue, INCLUDING inactive items — old invoices still
+  // reference retired products, and QBO's default Item query returns active
+  // ones only. Used by the invoice sync to resolve ItemRef.value → Sku.
+  async getAllItems(): Promise<QboItem[]> {
+    return this.queryAll<QboItem>(
+      "SELECT * FROM Item WHERE Active IN (true, false)",
+      (r) => r.QueryResponse.Item,
+    );
+  }
+
   async getQboItemBySku(sku: string): Promise<QboItem | null> {
     const data = await this.query<QboItem>(
       `SELECT * FROM Item WHERE Sku = '${escapeQboLiteral(sku)}'`,

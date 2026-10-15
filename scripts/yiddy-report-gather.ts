@@ -118,6 +118,8 @@ async function main(): Promise<void> {
             invoiceId: invoiceLines.invoiceId,
             sku: invoiceLines.sku,
             description: invoiceLines.description,
+            itemName: invoiceLines.itemName,
+            skuSource: invoiceLines.skuSource,
             qty: invoiceLines.qty,
             lineTotal: invoiceLines.lineTotal,
           })
@@ -263,6 +265,12 @@ async function main(): Promise<void> {
     ) {
       sku = rawDesc;
       name = rawSku;
+    }
+    // Rows written since the 2026-10-15 sync fix already carry the code in
+    // sku and the title in item_name — no guessing needed.
+    if (l.skuSource !== null) {
+      sku = l.sku;
+      name = l.itemName ?? l.description;
     }
     arr.push({
       sku,
