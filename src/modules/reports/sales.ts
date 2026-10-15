@@ -334,6 +334,7 @@ export function buildSeasonSales(input: {
     warnings.push(`Test/placeholder accounts left out (${names}): ${placeholder.length} lines, $${money(value).toFixed(2)}.`);
   }
   if (shaped.length === 0) warnings.push("No sales of this season's products in that window.");
+  warnings.push("Gross invoiced sales: returns and credit memos are not deducted (see the Returns report).");
   const scope = input.books.length === 2 ? "" : ` (${BOOK_LABEL[input.books[0]!]})`;
   return {
     title: `${input.seasonName} sales ${input.from} to ${input.to}${scope}`,

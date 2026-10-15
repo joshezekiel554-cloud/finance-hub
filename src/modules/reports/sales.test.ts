@@ -6,6 +6,7 @@ import {
 } from "../../server/routes/ext-reports.js";
 
 const NOW = new Date("2026-10-15T12:00:00Z");
+const GROSS = "Gross invoiced sales: returns and credit memos are not deducted (see the Returns report).";
 
 const line = (over: Partial<SalesLineRow>): SalesLineRow => ({
   sku: "STBN01",
@@ -53,6 +54,7 @@ describe("season sales", () => {
     expect(t.totals).toEqual({ qty: 8, value: 100, lines: 3 });
     expect(t.warnings).toEqual([
       "1 of 4 invoice lines predate the SKU rebuild (invoices deleted in QuickBooks) and are left out.",
+      GROSS,
     ]);
     expect(t.title).toBe("Rosh Hashanah 2026 sales 2026-04-01 to 2026-09-30");
     expect(t.columns.find((c) => c.key === "value")).toMatchObject({ type: "money", currency: "USD" });
@@ -80,7 +82,7 @@ describe("season sales", () => {
   it("says so when nothing sold", () => {
     const t = buildSeasonSales({ ...base, view: "skus", lines: [] });
     expect(t.rows).toEqual([]);
-    expect(t.warnings).toEqual(["No sales of this season's products in that window."]);
+    expect(t.warnings).toEqual(["No sales of this season's products in that window.", GROSS]);
   });
 });
 
@@ -100,6 +102,7 @@ describe("season sales exclusions", () => {
     expect(t.warnings).toEqual([
       "1 $0 line (unfulfilled pre-orders / no-charge) left out.",
       "Test/placeholder accounts left out (PLEASE CHECK ITEMS 111): 1 lines, $45.00.",
+      GROSS,
     ]);
   });
 
