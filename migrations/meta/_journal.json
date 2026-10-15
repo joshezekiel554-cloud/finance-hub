@@ -421,6 +421,13 @@
       "when": 1789404279184,
       "tag": "0059_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "5",
+      "when": 1792082002512,
+      "tag": "0060_invoice_lines_item_sku",
+      "breakpoints": true
     }
   ]
 }

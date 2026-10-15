@@ -8,7 +8,7 @@
 // are logged at warn and skipped (so one bad invoice doesn't fail the whole
 // sync). Caller (BullMQ worker job) handles top-level errors.
 
-import { and, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
 import { BUSINESS_EMAILS } from "../gmail/business-emails.js";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
@@ -316,16 +316,18 @@ export async function syncInvoices(client?: QboClient): Promise<SyncStats> {
   const stats = emptyStats();
   log.info("starting QB invoice sync");
 
-  const [qboInvoices, customerIdMap] = await Promise.all([
+  const [qboInvoices, customerIdMap, lineCtx] = await Promise.all([
     qb.getInvoices(),
     loadCustomerIdMap(),
+    buildLineSyncContext(qb),
   ]);
   stats.fetched = qboInvoices.length;
-  log.info({ count: stats.fetched }, "fetched QB invoices");
+  const healPending = lineCtx.healInvoiceIds.size;
+  log.info({ count: stats.fetched, linesToHeal: healPending }, "fetched QB invoices");
 
   for (const qboInvoice of qboInvoices) {
     try {
-      const result = await upsertInvoice(qboInvoice, customerIdMap);
+      const result = await upsertInvoice(qboInvoice, customerIdMap, lineCtx);
       if (result === "created") stats.created++;
       else if (result === "updated") stats.updated++;
       else stats.skipped++;
@@ -364,7 +366,10 @@ export async function syncInvoices(client?: QboClient): Promise<SyncStats> {
   // sync end-time bounded as the customer count grows.
   await recomputeOverdueBalances();
 
-  log.info({ stats }, "QB invoice sync complete");
+  log.info(
+    { stats, linesHealed: healPending - lineCtx.healInvoiceIds.size },
+    "QB invoice sync complete",
+  );
   return stats;
 }
 
@@ -475,6 +480,7 @@ export function planInvoiceUpdate(
 async function upsertInvoice(
   qboInvoice: QboInvoice,
   customerIdMap: Map<string, string>,
+  lineCtx: LineSyncContext,
 ): Promise<UpsertResult> {
   const invoiceLog = log.child({ qb_invoice_id: qboInvoice.Id });
   const customerId = customerIdMap.get(qboInvoice.CustomerRef.value);
@@ -545,7 +551,7 @@ async function upsertInvoice(
           lastSyncedAt: desired.lastSyncedAt,
         },
       });
-    await syncInvoiceLines(id, qboInvoice.Line ?? []);
+    await syncInvoiceLines(id, qboInvoice.Line ?? [], lineCtx);
 
     // Activity: qbo_invoice_sent — emit when QBO indicates this invoice has
     // been sent (EmailStatus === 'EmailSent'). Only on the create path; the
@@ -596,23 +602,59 @@ async function upsertInvoice(
       .update(invoices)
       .set({ lastSyncedAt: desired.lastSyncedAt })
       .where(eq(invoices.id, before.id));
+    // Unchanged invoice whose lines predate the SKU fix: rewrite them once.
+    if (lineCtx.healInvoiceIds.has(before.id)) {
+      await syncInvoiceLines(before.id, qboInvoice.Line ?? [], lineCtx);
+    }
     return "noop";
   }
 
   await db.update(invoices).set(updateSet).where(eq(invoices.id, before.id));
 
-  await syncInvoiceLines(before.id, qboInvoice.Line ?? []);
+  await syncInvoiceLines(before.id, qboInvoice.Line ?? [], lineCtx);
   return "updated";
 }
 
-// Pure row-mapping, split out for testability. sku is clamped to the
-// invoice_lines.sku varchar(64) width — a truncated SKU is strictly better
-// than losing the whole insert to ER_DATA_TOO_LONG (see syncInvoiceLines).
-// description is a text column so it needs no clamp. The sku/name swap some
-// rows carry from upstream is a known separate bug — not touched here.
+// Feldart's QBO items are NAMED by product title (ItemRef.name); the code
+// lives in the line Description (what the invoice actually says — set from
+// the Shopify order) and in the Item catalogue (Item.Sku). Checked against
+// prod 2026-10-15: they agree on ~96% of lines, and where both are codes
+// but differ the catalogue is the one that's wrong (e.g. the silver sand
+// timer's item carries the gold SKU). So: a code-like Description wins; the catalogue SKU covers free-text lines
+// ("MHGB01 (5% discount)"). Before 2026-10-15 the title went into `sku` —
+// rows written then have sku_source NULL and are rewritten once by the
+// sync (see LineSyncContext.healInvoiceIds).
+// One token with both a letter and a digit: digits alone are reference
+// numbers ("Services" lines carry e.g. "25781"), never a Feldart SKU.
+const CODE_LIKE = /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._/-]{2,39}$/;
+
+export function resolveLineSku(
+  itemId: string | undefined,
+  description: string | undefined,
+  itemSkus: Map<string, string> | null,
+): { sku: string | null; source: "item" | "description" | "none" } {
+  const desc = description?.trim();
+  if (desc && CODE_LIKE.test(desc)) return { sku: desc, source: "description" };
+  const fromItem = itemId ? itemSkus?.get(itemId)?.trim() : undefined;
+  if (fromItem) return { sku: fromItem, source: "item" };
+  return { sku: null, source: "none" };
+}
+
+// Per-run context for line writes. itemSkus = QBO Item.Id → Item.Sku, or
+// null when the catalogue couldn't be fetched this run: rows then get
+// sku_source NULL so the next healthy run rewrites them with the real SKU.
+export type LineSyncContext = {
+  itemSkus: Map<string, string> | null;
+  healInvoiceIds: Set<string>;
+};
+
+// Pure row-mapping, split out for testability. sku/item_name are clamped
+// to their varchar widths — a truncated value is strictly better than
+// losing the whole insert to ER_DATA_TOO_LONG (see syncInvoiceLines).
 export function buildInvoiceLineRows(
   invoiceId: string,
   qboLines: QboInvoiceLine[],
+  itemSkus: Map<string, string> | null = null,
 ): NewInvoiceLine[] {
   const rows: NewInvoiceLine[] = [];
   for (const line of qboLines) {
@@ -620,11 +662,15 @@ export function buildInvoiceLineRows(
     const detail = line.SalesItemLineDetail;
     const qty = detail?.Qty ?? null;
     const unitPrice = detail?.UnitPrice ?? null;
+    const resolved = resolveLineSku(detail?.ItemRef?.value, line.Description, itemSkus);
     rows.push({
       id: nanoid(24),
       invoiceId,
-      sku: clampQboString(detail?.ItemRef?.name, 64),
+      sku: clampQboString(resolved.sku, 64),
       description: line.Description ?? null,
+      qbItemId: clampQboString(detail?.ItemRef?.value, 64),
+      itemName: clampQboString(detail?.ItemRef?.name, 255),
+      skuSource: itemSkus === null ? null : resolved.source,
       qty: qty !== null ? qty.toString() : null,
       unitPrice: unitPrice !== null ? unitPrice.toString() : null,
       lineTotal: line.Amount !== undefined ? formatMoney(line.Amount) : null,
@@ -643,14 +689,53 @@ export function buildInvoiceLineRows(
 async function syncInvoiceLines(
   invoiceId: string,
   qboLines: QboInvoiceLine[],
+  ctx: LineSyncContext,
 ): Promise<void> {
-  const rows = buildInvoiceLineRows(invoiceId, qboLines);
+  const rows = buildInvoiceLineRows(invoiceId, qboLines, ctx.itemSkus);
   await db.transaction(async (tx) => {
     await tx.delete(invoiceLines).where(eq(invoiceLines.invoiceId, invoiceId));
     if (rows.length > 0) {
       await tx.insert(invoiceLines).values(rows);
     }
   });
+  ctx.healInvoiceIds.delete(invoiceId);
+}
+
+// QBO Item catalogue as Id → Sku, cached briefly so a burst of per-customer
+// "Refresh from QB" clicks doesn't refetch ~1k items each time. null on
+// failure (logged): the caller then writes lines without catalogue SKUs.
+const ITEM_SKU_TTL_MS = 10 * 60 * 1000;
+let itemSkuCache: { at: number; map: Map<string, string> } | null = null;
+
+async function loadItemSkuMap(qb: QboClient): Promise<Map<string, string> | null> {
+  if (itemSkuCache && Date.now() - itemSkuCache.at < ITEM_SKU_TTL_MS) return itemSkuCache.map;
+  try {
+    const items = await qb.getAllItems();
+    const map = new Map<string, string>();
+    for (const it of items) if (it.Id && it.Sku?.trim()) map.set(it.Id, it.Sku.trim());
+    itemSkuCache = { at: Date.now(), map };
+    return map;
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      "QBO item catalogue fetch failed; line SKUs fall back to Description",
+    );
+    return null;
+  }
+}
+
+// Invoices whose lines predate sku_source (or were written while the item
+// catalogue was unavailable). Rewritten on the next healthy sync even when
+// the invoice itself is unchanged. Empty when the catalogue is unavailable,
+// so a degraded run never "heals" rows with fallback SKUs.
+async function buildLineSyncContext(qb: QboClient): Promise<LineSyncContext> {
+  const itemSkus = await loadItemSkuMap(qb);
+  if (itemSkus === null) return { itemSkus, healInvoiceIds: new Set() };
+  const rows = await db
+    .selectDistinct({ invoiceId: invoiceLines.invoiceId })
+    .from(invoiceLines)
+    .where(isNull(invoiceLines.skuSource));
+  return { itemSkus, healInvoiceIds: new Set(rows.map((r) => r.invoiceId)) };
 }
 
 // -------- deletion reconciliation --------
@@ -1080,11 +1165,14 @@ export async function syncOneCustomer(
   const customerIdMap = await loadCustomerIdMap();
 
   // 2. Invoices for this customer
-  const qboInvoices = await qb.findInvoicesForCustomer(qbCustomerId);
+  const [qboInvoices, lineCtx] = await Promise.all([
+    qb.findInvoicesForCustomer(qbCustomerId),
+    buildLineSyncContext(qb),
+  ]);
   invoiceStats.fetched = qboInvoices.length;
   for (const qboInvoice of qboInvoices) {
     try {
-      const r = await upsertInvoice(qboInvoice, customerIdMap);
+      const r = await upsertInvoice(qboInvoice, customerIdMap, lineCtx);
       if (r === "created") invoiceStats.created++;
       else if (r === "updated") invoiceStats.updated++;
       else invoiceStats.skipped++;

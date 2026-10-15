@@ -112,8 +112,20 @@ export const invoiceLines = mysqlTable(
     invoiceId: varchar("invoice_id", { length: 24 })
       .notNull()
       .references(() => invoices.id, { onDelete: "cascade" }),
+    // The product SKU, resolved from the QBO Item catalogue (Item.Sku via
+    // ItemRef.value). Feldart's QBO items are NAMED by product title and
+    // the line Description usually carries the code, so before 2026-10-15
+    // this column held the title. See sku_source.
     sku: varchar("sku", { length: 64 }),
+    // Line.Description as QBO has it (usually the SKU code, sometimes free text).
     description: text("description"),
+    // QBO ItemRef.value / ItemRef.name (the product title).
+    qbItemId: varchar("qb_item_id", { length: 64 }),
+    itemName: varchar("item_name", { length: 255 }),
+    // Where `sku` came from: the Item catalogue, a code-like Description,
+    // or nowhere. NULL = a row written before the fix; the sync rewrites
+    // those invoices' lines once (self-healing backfill).
+    skuSource: mysqlEnum("sku_source", ["item", "description", "none"]),
     qty: decimal("qty", { precision: 12, scale: 4 }),
     unitPrice: decimal("unit_price", { precision: 12, scale: 4 }),
     lineTotal: decimal("line_total", { precision: 12, scale: 2 }),
