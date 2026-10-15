@@ -331,7 +331,7 @@ export function buildSeasonSales(input: {
   if (placeholder.length > 0) {
     const value = placeholder.reduce((sum, l) => sum + num(l.lineTotal), 0);
     const names = [...new Set(placeholder.map((l) => cust(l.customerId).name))].join(", ");
-    warnings.push(`Test/placeholder accounts left out (${names}): ${placeholder.length} lines, $${money(value).toFixed(2)}.`);
+    warnings.push(`Test/placeholder accounts left out (${names}): ${placeholder.length} line${placeholder.length === 1 ? "" : "s"}, $${money(value).toFixed(2)}.`);
   }
   if (shaped.length === 0) warnings.push("No sales of this season's products in that window.");
   warnings.push("Gross invoiced sales: returns and credit memos are not deducted (see the Returns report).");

@@ -101,7 +101,7 @@ describe("season sales exclusions", () => {
     expect(t.totals).toEqual({ qty: 2, value: 20, lines: 1 });
     expect(t.warnings).toEqual([
       "1 $0 line (unfulfilled pre-orders / no-charge) left out.",
-      "Test/placeholder accounts left out (PLEASE CHECK ITEMS 111): 1 lines, $45.00.",
+      "Test/placeholder accounts left out (PLEASE CHECK ITEMS 111): 1 line, $45.00.",
       GROSS,
     ]);
   });
