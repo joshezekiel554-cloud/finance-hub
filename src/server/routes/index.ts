@@ -44,6 +44,7 @@ import extRoute from "./ext.js";
 import extActionsRoute from "./ext-actions.js";
 import extHubRoute from "./ext-hub.js";
 import extReportsRoute from "./ext-reports.js";
+import extToolsRoute from "./ext-tools.js";
 import hubAuthRoute from "./hub-auth.js";
 import ordersRoute from "./orders.js";
 import teamActivityRoute from "./team-activity.js";
@@ -120,6 +121,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // the hub's iframe lands on (/auth/hub?ht=…). See routes/hub-auth.ts.
   await app.register(extHubRoute, { prefix: "/api/ext" });
   await app.register(extReportsRoute, { prefix: "/api/ext" });
+  await app.register(extToolsRoute, { prefix: "/api/ext" });
   await app.register(hubAuthRoute, { prefix: "/auth" });
   // Team Activity report + the app-wide heartbeat sink. Mounted at /api so the
   // plugin owns both /api/heartbeat and /api/team-activity/*.
