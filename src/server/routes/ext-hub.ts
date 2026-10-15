@@ -25,7 +25,6 @@ import { invoices } from "../../db/schema/invoices.js";
 import { invoiceEmailDismissals } from "../../db/schema/invoice-email-dismissals.js";
 import { rmas } from "../../db/schema/returns.js";
 import { env } from "../../lib/env.js";
-import { verifyHubToken } from "../../lib/hub-token.js";
 import { createLogger } from "../../lib/logger.js";
 import {
   emailReviewWindowStart,
@@ -34,7 +33,7 @@ import {
 import { listHoldableHoldOrders } from "../../modules/orders/hold-alerts.js";
 import type { MoneySummary } from "../../modules/dashboard/money.js";
 import { getMoneySummaryCached } from "./dashboard-money.js";
-import { isEmailAllowed } from "../lib/hub-handoff.js";
+import { requireHubService } from "../lib/hub-service-auth.js";
 
 const log = createLogger({ component: "routes.ext-hub" });
 
@@ -266,22 +265,8 @@ async function buildSummary(now: Date): Promise<HubSummary> {
 
 const extHubRoute: FastifyPluginAsync = async (app) => {
   app.get("/hub-summary", async (req, reply) => {
-    const secret = env.HUB_SSO_SECRET;
-    if (!secret) return reply.code(503).send({ error: "hub not configured" });
-
-    const header = req.headers.authorization ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-    const claims = verifyHubToken(token, {
-      secret,
-      aud: "finance",
-      nowSeconds: Math.floor(Date.now() / 1000),
-    });
-    if (!claims || claims.scope !== "service") {
-      return reply.code(401).send({ error: "invalid hub service token" });
-    }
-    if (!isEmailAllowed(claims.email, env.ALLOWED_EMAILS)) {
-      return reply.code(403).send({ error: "not allowed" });
-    }
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
 
     try {
       const summary = await buildSummary(new Date());
