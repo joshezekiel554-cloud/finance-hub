@@ -3,6 +3,7 @@ import {
   buildCustomerHistory,
   FINANCE_TOOLS,
   fitRows,
+  sortDebtorRows,
   toolByName,
   toolManifest,
   ToolInputError,
@@ -84,5 +85,19 @@ describe("buildCustomerHistory", () => {
       { sku: "OJL03G", product: "Oil Jug - Gold", qty: 5, value: 48.5, lines: 2, lastBought: "2026-09-01", lastUnitPrice: 9.5, books: "feldart" },
       { sku: null, product: "Shipping per item", qty: 1, value: 5, lines: 1, lastBought: "2026-09-01", lastUnitPrice: 5, books: "feldart" },
     ]);
+  });
+});
+
+describe("sortDebtorRows", () => {
+  const rows = [
+    { customer: "Old small", total: 100, d90plus: 100 },
+    { customer: "Big recent", total: 5000, d90plus: 0 },
+    { customer: "Mid", total: 900, d90plus: 100 },
+  ];
+  it("sorts by total open balance by default", () => {
+    expect(sortDebtorRows(rows, "total").map((r) => r.customer)).toEqual(["Big recent", "Mid", "Old small"]);
+  });
+  it("sorts by 90+ debt, then total, for collections", () => {
+    expect(sortDebtorRows(rows, "over90").map((r) => r.customer)).toEqual(["Mid", "Old small", "Big recent"]);
   });
 });
