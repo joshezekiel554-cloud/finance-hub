@@ -4,7 +4,7 @@
 // HMAC-signed with a key derived from HUB_SSO_SECRET (domain-separated, so a
 // link signature can never double as a hub token and vice versa).
 //
-//   /api/ext/files/qb-pdf/{kind}/{qbId}?exp={unix}&name={file name}&sig={b64url}
+//   /api/files/qb-pdf/{kind}/{qbId}?exp={unix}&name={file name}&sig={b64url}
 //
 // Verification never throws; any mismatch, tamper or expiry → null.
 
@@ -13,7 +13,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export type QbPdfKind = "invoice" | "creditmemo";
 
 export const FILE_LINK_TTL_SECONDS = 15 * 60;
-export const FILE_LINK_PATH = "/api/ext/files/qb-pdf";
+// Not under /api/ext: nginx keeps /api/ext server-to-server only, and these
+// links are opened by browsers.
+export const FILE_LINK_PATH = "/api/files/qb-pdf";
 
 function linkKey(secret: string): Buffer {
   return createHmac("sha256", secret).update("finance:file-link:v1").digest();

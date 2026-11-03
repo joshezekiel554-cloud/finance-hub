@@ -1,4 +1,4 @@
-// GET /api/ext/files/qb-pdf/:kind/:qbId?exp&name&sig — the signed, short-lived
+// GET /api/files/qb-pdf/:kind/:qbId?exp&name&sig — the signed, short-lived
 // PDF links the Feldart AI ops tools hand out (see lib/file-link.ts). No
 // session: the signature IS the authorisation, minted only for ops members
 // and only for the one document the tool returned. Streams QBO's rendered PDF.

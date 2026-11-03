@@ -18,7 +18,7 @@ function sign(over: Partial<Parameters<typeof signQbPdfLink>[0]> = {}) {
 
 function parts(url: string) {
   const u = new URL(url);
-  const [, , , , , kind, qbId] = u.pathname.split("/");
+  const [, , , , kind, qbId] = u.pathname.split("/");
   return { kind: kind!, qbId: qbId!, exp: u.searchParams.get("exp"), name: u.searchParams.get("name"), sig: u.searchParams.get("sig") };
 }
 
@@ -26,7 +26,7 @@ describe("signed qb pdf links", () => {
   it("round-trips and carries the file shape the hub renders", () => {
     const f = sign();
     expect(f).toMatchObject({ name: "Invoice 10234 - Acme Judaica.pdf", mime: "application/pdf" });
-    expect(f.url.startsWith("https://finance.feldart.com/api/ext/files/qb-pdf/invoice/4512?")).toBe(true);
+    expect(f.url.startsWith("https://finance.feldart.com/api/files/qb-pdf/invoice/4512?")).toBe(true);
     expect(f.expiresAt).toBe(new Date((NOW + 900) * 1000).toISOString());
     expect(verifyQbPdfLink({ secret: SECRET, ...parts(f.url), nowSeconds: NOW + 60 })).toEqual({
       kind: "invoice",
