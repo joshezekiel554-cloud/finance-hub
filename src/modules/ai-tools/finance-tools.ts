@@ -23,10 +23,19 @@ import { likePattern } from "../reports/customers.js";
 import { buildCustomerHistory } from "../reports/sales.js";
 import { dayOf, isoDay, money, num, type ReportTable } from "../reports/table.js";
 
-export type ToolContext = { now: Date; baseUrl: string };
+export type PdfLink = { url: string; name: string; mime: "application/pdf"; expiresAt: string };
+
+export type ToolContext = {
+  now: Date;
+  baseUrl: string;
+  /** Signed short-lived PDF link (ops tools only; absent when unconfigured). */
+  signPdf?: (kind: "invoice" | "creditmemo", qbId: string, name: string) => PdfLink;
+};
 
 export type ToolDef = {
   name: string;
+  /** Ops tool: only for hub ops:true members on FINANCE_AI_OPS_EMAILS. */
+  ops?: boolean;
   description: string;
   input_schema: Record<string, unknown>;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;
@@ -71,7 +80,7 @@ function tableResult(t: ReportTable, budget = RESULT_BUDGET_BYTES - 4_000) {
   };
 }
 
-function parse<S extends z.ZodTypeAny>(schema: S, input: unknown): z.output<S> {
+export function parse<S extends z.ZodTypeAny>(schema: S, input: unknown): z.output<S> {
   const r = schema.safeParse(input ?? {});
   if (!r.success) {
     const issue = r.error.issues[0];
@@ -82,33 +91,33 @@ function parse<S extends z.ZodTypeAny>(schema: S, input: unknown): z.output<S> {
   return r.data;
 }
 
-const isoDate = z
+export const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
   .refine((s) => {
     const d = new Date(`${s}T00:00:00Z`);
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }, "not a real date");
-const customerId = z.string().min(1).max(64);
+export const customerId = z.string().min(1).max(64);
 const book = z.enum(["feldart", "tj", "both"]).default("both");
 
-const BOOK_PROP = {
+export const BOOK_PROP = {
   type: "string",
   enum: ["feldart", "tj", "both"],
   description: 'Which books: "feldart" (the live business), "tj" (Torah Judaica, legacy wind-down book) or "both". Default both.',
 };
-const CUSTOMER_ID_PROP = {
+export const CUSTOMER_ID_PROP = {
   type: "string",
   description: "Finance customer id, from find_customer.",
 };
 
-const HOLD_LABEL: Record<string, string> = {
+export const HOLD_LABEL: Record<string, string> = {
   active: "Active",
   hold: "On hold",
   payment_upfront: "Payment upfront",
 };
 
-const OPEN_RMA_STATUSES = ["approved", "awaiting_warehouse_number", "sent_to_warehouse", "received"] as const;
+export const OPEN_RMA_STATUSES = ["approved", "awaiting_warehouse_number", "sent_to_warehouse", "received"] as const;
 
 // ---------------------------------------------------------------------------
 
