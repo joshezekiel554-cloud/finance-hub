@@ -40,7 +40,8 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
     const claims = requireHubService(req, reply);
     if (!claims) return reply;
     const tools = toolsFor(hasOpsAccess(claims, env.FINANCE_AI_OPS_EMAILS));
-    reply.header("cache-control", "private, max-age=60");
+    // The list differs per caller (ops vs not) — never let a cache share it.
+    reply.header("cache-control", "no-store").header("vary", "Authorization");
     return reply.send({ tools: tools.map(({ name, description, input_schema }) => ({ name, description, input_schema })) });
   });
 

@@ -2,6 +2,8 @@
 // PDF links the Feldart AI ops tools hand out (see lib/file-link.ts). No
 // session: the signature IS the authorisation, minted only for ops members
 // and only for the one document the tool returned. Streams QBO's rendered PDF.
+// One QBO company holds both books (Torah Judaica is an origin inside the
+// Feldart realm, split by doc-number prefix), so a qbId is unambiguous.
 
 import type { FastifyPluginAsync } from "fastify";
 import { env } from "../../lib/env.js";

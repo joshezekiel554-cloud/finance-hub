@@ -548,6 +548,8 @@ const openRmas: ToolDef = {
   },
 };
 
+const RECEIPT_CAP = 50;
+
 const openReturns: ToolDef = {
   name: "open_returns",
   ops: true,
@@ -584,9 +586,10 @@ const openReturns: ToolDef = {
           .leftJoin(rmas, eq(rmas.id, extensivReceipts.rmaId))
           .where(and(isNull(extensivReceipts.dismissedAt), isNull(extensivReceipts.confirmedAt)))
           .orderBy(asc(extensivReceipts.classifiedAt))
-          .limit(50);
+          .limit(RECEIPT_CAP + 1);
 
-    const receiptRows = receipts.map((r) => ({
+    const receiptsCapped = receipts.length > RECEIPT_CAP;
+    const receiptRows = receipts.slice(0, RECEIPT_CAP).map((r) => ({
       warehouseTx: r.txNumber,
       ref: r.ref,
       customerGuess: r.customerGuess,
@@ -600,12 +603,13 @@ const openReturns: ToolDef = {
       currency: "USD",
       receivedNotClosed: { count: received.length, value: money(received.reduce((s, r) => s + r.value, 0)), rmas: rows },
       warehouseReceiptsToReview: {
-        count: receiptRows.length,
+        count: receiptsCapped ? `more than ${RECEIPT_CAP}` : receiptRows.length,
         receipts: receiptRows,
         reviewUrl: `${ctx.baseUrl}/returns`,
       },
       warnings: [
         ...(note ? [note] : []),
+        ...(receiptsCapped ? [`Showing the oldest ${RECEIPT_CAP} warehouse receipts to review; there are more. Open the Returns page for the full queue.`] : []),
         ...(p.customerId ? ["Warehouse receipts aren't filtered by customer, so they're left out when a customer is given."] : []),
         ...(received.length === 0 && receiptRows.length === 0 ? ["Nothing waiting to be processed."] : []),
       ],
