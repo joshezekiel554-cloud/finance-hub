@@ -20,6 +20,9 @@ export type HubTokenClaims = {
   aud: HubAudience;
   jti: string;
   scope: HubTokenScope;
+  // `ops: true` — the hub vouches this member is on its OPS_AGENT_EMAILS list
+  // (Feldart AI ops tools + proposal confirm). Anything else → false.
+  ops: boolean;
 };
 
 function sign(seg1: string, secret: string): string {
@@ -34,6 +37,7 @@ export function mintHubToken(input: {
   nowSeconds?: number;
   scope?: HubTokenScope;
   jti?: string;
+  ops?: boolean;
 }): string {
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   const payload: Record<string, unknown> = {
@@ -43,6 +47,7 @@ export function mintHubToken(input: {
     jti: input.jti ?? randomUUID(),
   };
   if (input.scope) payload.scope = input.scope;
+  if (input.ops) payload.ops = true;
   const seg1 = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${seg1}.${sign(seg1, input.secret)}`;
 }
@@ -86,5 +91,6 @@ export function verifyHubToken(
     aud: opts.aud,
     jti: typeof p.jti === "string" ? p.jti : "",
     scope,
+    ops: p.ops === true,
   };
 }

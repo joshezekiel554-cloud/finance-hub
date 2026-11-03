@@ -166,6 +166,20 @@ const schema = z.object({
   // /auth/hub) and Home-tile service tokens (GET /api/ext/hub-summary).
   // Source of truth on the VPS: ~/.hub-sso-secret. Unset → both routes 503.
   HUB_SSO_SECRET: optionalSecret(32),
+  // Feldart AI ops tools (invoice lookup + PDF, payments, RMA status) are
+  // for these members only — finance's own copy of the hub's
+  // OPS_AGENT_EMAILS. A call needs the hub token's ops:true claim AND an
+  // email on this list. Empty = nobody.
+  FINANCE_AI_OPS_EMAILS: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .join(","),
+    ),
   // Origin allowed to frame finance, added to the frame-ancestors CSP next
   // to 'self'. The hub loads finance in an iframe.
   HUB_PARENT_ORIGIN: z.string().url().default("https://hub.feldart.com"),

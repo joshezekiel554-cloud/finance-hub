@@ -17,6 +17,7 @@ describe("verifyHubToken", () => {
       email: "leibel@feldart.com",
       aud: "finance",
       scope: "user",
+      ops: false,
       jti: expect.any(String),
     });
   });

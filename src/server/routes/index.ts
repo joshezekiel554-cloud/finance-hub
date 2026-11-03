@@ -45,6 +45,7 @@ import extActionsRoute from "./ext-actions.js";
 import extHubRoute from "./ext-hub.js";
 import extReportsRoute from "./ext-reports.js";
 import extToolsRoute from "./ext-tools.js";
+import extFilesRoute from "./ext-files.js";
 import hubAuthRoute from "./hub-auth.js";
 import ordersRoute from "./orders.js";
 import teamActivityRoute from "./team-activity.js";
@@ -122,6 +123,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(extHubRoute, { prefix: "/api/ext" });
   await app.register(extReportsRoute, { prefix: "/api/ext" });
   await app.register(extToolsRoute, { prefix: "/api/ext" });
+  // Signed short-lived PDF links handed out by the Feldart AI ops tools.
+  await app.register(extFilesRoute, { prefix: "/api/ext" });
   await app.register(hubAuthRoute, { prefix: "/auth" });
   // Team Activity report + the app-wide heartbeat sink. Mounted at /api so the
   // plugin owns both /api/heartbeat and /api/team-activity/*.
