@@ -44,7 +44,7 @@ import extRoute from "./ext.js";
 import extActionsRoute from "./ext-actions.js";
 import extHubRoute from "./ext-hub.js";
 import extReportsRoute from "./ext-reports.js";
-import extToolsRoute, { proposalsRoute } from "./ext-tools.js";
+import extToolsRoute, { alertsRoute, proposalsRoute } from "./ext-tools.js";
 import extFilesRoute from "./ext-files.js";
 import hubAuthRoute from "./hub-auth.js";
 import ordersRoute from "./orders.js";
@@ -125,6 +125,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(extToolsRoute, { prefix: "/api/ext" });
   // Feldart AI Confirm-card settle (hub → finance, ops token).
   await app.register(proposalsRoute, { prefix: "/api/ext" });
+  // Feldart AI scheduler checks (hub polls every 15 min).
+  await app.register(alertsRoute, { prefix: "/api/ext" });
   // Signed short-lived PDF links handed out by the Feldart AI ops tools.
   // Browser-facing, so NOT under /api/ext (nginx 404s that publicly).
   await app.register(extFilesRoute, { prefix: "/api" });

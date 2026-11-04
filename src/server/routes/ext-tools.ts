@@ -26,6 +26,7 @@ import { OPS_FINANCE_READS } from "../../modules/ai-tools/ops-finance-reads.js";
 import { financeUserIdFor, OPS_FINANCE_WRITES } from "../../modules/ai-tools/ops-finance-writes.js";
 import { settleHubProposal } from "../../modules/ai-tools/ops-proposals.js";
 import { OPS_QBO_TOOLS } from "../../modules/ai-tools/qbo-tools.js";
+import { loadFinanceAlerts } from "../../modules/ai-tools/alerts.js";
 import { OPS_TOOLS as OPS_CORE } from "../../modules/ai-tools/ops-tools.js";
 
 export const OPS_TOOLS: ToolDef[] = [...OPS_CORE, ...OPS_FINANCE_READS, ...OPS_QBO_TOOLS, ...OPS_FINANCE_WRITES];
@@ -115,3 +116,18 @@ export const proposalsRoute: FastifyPluginAsync = async (app) => {
 };
 
 export default extToolsRoute;
+
+// GET /api/ext/alerts — finance's checks for the hub scheduler (ops only).
+export const alertsRoute: FastifyPluginAsync = async (app) => {
+  app.get("/alerts", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    if (!hasOpsAccess(claims, env.FINANCE_AI_OPS_EMAILS)) {
+      return reply.code(403).send({ error: "Not available for this user." });
+    }
+    const started = Date.now();
+    const res = await loadFinanceAlerts({ now: new Date(), baseUrl: env.PUBLIC_URL.replace(/\/$/, "") });
+    log.info({ email: claims.email, alerts: res.alerts.length, ms: Date.now() - started }, "alerts served");
+    return reply.header("cache-control", "no-store").send(res);
+  });
+};
