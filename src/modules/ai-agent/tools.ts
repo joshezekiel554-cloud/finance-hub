@@ -1146,15 +1146,23 @@ const sendInvoiceQboTool: Tool<SendInvoiceQboArgsT> = {
       if (!customer) return { ok: false, error: "customer not found" };
       const { sendInvoiceViaQbo } = await import("../invoice-send/send-via-qbo.js");
       const res = await sendInvoiceViaQbo({ customer, invoice, userId: ctx.userId });
-      await db.insert(auditLog).values({
-        id: nanoid(24),
-        userId: ctx.userId,
-        action: "invoice.sent_via_qbo",
-        entityType: "invoice",
-        entityId: invoice.id,
-        before: { sentAt: invoice.sentAt, emailStatus: invoice.emailStatus, deliveryError: invoice.deliveryError },
-        after: { to: res.to, cc: res.cc, bcc: res.bcc, sentAt: res.sentAt.toISOString(), aiProposalId: ctx.proposalId },
-      });
+      // QBO's send isn't idempotent: once it has gone out, nothing after it
+      // may turn this into a failure (a "retry" would email the customer
+      // twice). The audit write is best-effort with a loud log.
+      try {
+        await db.insert(auditLog).values({
+          id: nanoid(24),
+          userId: ctx.userId,
+          action: "invoice.sent_via_qbo",
+          entityType: "invoice",
+          entityId: invoice.id,
+          before: { sentAt: invoice.sentAt, emailStatus: invoice.emailStatus, deliveryError: invoice.deliveryError },
+          after: { to: res.to, cc: res.cc, bcc: res.bcc, sentAt: res.sentAt.toISOString(), aiProposalId: ctx.proposalId },
+        });
+      } catch (auditErr) {
+        log.error({ err: auditErr, proposalId: ctx.proposalId, invoiceId: invoice.id }, "send_invoice_qbo: SENT but audit insert failed");
+        return { ok: true, note: "sent; audit row failed to write" };
+      }
       return { ok: true };
     } catch (err) {
       log.error({ err, proposalId: ctx.proposalId }, "send_invoice_qbo failed");
