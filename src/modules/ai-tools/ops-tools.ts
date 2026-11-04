@@ -465,7 +465,7 @@ export function rmaRow(r: RmaQueryRow, today: string, baseUrl: string) {
   };
 }
 
-async function loadRmas(statuses: readonly RmaStatus[], opts: { customerId?: string; returnType?: string }) {
+export async function loadRmas(statuses: readonly RmaStatus[], opts: { customerId?: string; returnType?: string }) {
   const conds = [inArray(rmas.status, [...statuses])];
   if (opts.customerId) conds.push(eq(rmas.customerId, opts.customerId));
   if (opts.returnType) conds.push(eq(rmas.returnType, opts.returnType as RmaQueryRow["returnType"]));
