@@ -14,6 +14,30 @@ const log = createLogger({ component: "ai-tools.qbo" });
 
 export const QBO_MAX_RESULTS = 100;
 
+// QBO allows ~500 calls/min per company and the 30-min sync shares that
+// budget. One hub answer can fan out to ~60 calls, so cap each member at
+// 30 qbo_query/qbo_report calls per rolling minute (model-readable error).
+export const QBO_CALLS_PER_MINUTE = 30;
+const recentCalls = new Map<string, number[]>();
+
+/** Records the call and returns true, or false if the member is over the cap. */
+export function takeQboSlot(member: string, nowMs: number, seen: Map<string, number[]> = recentCalls): boolean {
+  const window = (seen.get(member) ?? []).filter((t) => nowMs - t < 60_000);
+  if (window.length >= QBO_CALLS_PER_MINUTE) {
+    seen.set(member, window);
+    return false;
+  }
+  window.push(nowMs);
+  seen.set(member, window);
+  return true;
+}
+
+function throttle(ctx: { actorEmail?: string; now: Date }) {
+  if (!takeQboSlot(ctx.actorEmail ?? "anonymous", ctx.now.getTime())) {
+    throw new ToolInputError(`Slow down: more than ${QBO_CALLS_PER_MINUTE} QuickBooks calls in the last minute. Combine queries (select more fields, page less) or wait a minute.`);
+  }
+}
+
 /** Validate + normalise a model-written QBO query. Throws ToolInputError. */
 export function normalizeQboQuery(raw: string): string {
   const q = raw.trim().replace(/\s+/g, " ");
@@ -52,6 +76,7 @@ const qboQuery: ToolDef = {
   async run(input, ctx) {
     const { query } = parse(z.object({ query: z.string() }), input);
     const q = normalizeQboQuery(query);
+    throttle(ctx);
     let resp: Record<string, unknown>;
     try {
       resp = await new QboClient().runReadQuery(q);
@@ -170,6 +195,7 @@ const qboReport: ToolDef = {
       }),
       input,
     );
+    throttle(ctx);
     const params: Record<string, string> = {};
     if (p.startDate) params.start_date = p.startDate;
     if (p.endDate) params.end_date = p.endDate;

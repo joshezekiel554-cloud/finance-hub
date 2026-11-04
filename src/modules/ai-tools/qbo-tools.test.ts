@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { flattenReport, normalizeQboQuery } from "./qbo-tools.js";
+import { flattenReport, normalizeQboQuery, QBO_CALLS_PER_MINUTE, takeQboSlot } from "./qbo-tools.js";
 
 describe("qbo_query validation", () => {
   it("accepts one SELECT and caps MAXRESULTS at 100", () => {
@@ -37,5 +37,15 @@ describe("qbo_report flattening", () => {
     expect(flat.title).toBe("ProfitAndLoss 2026-10-01 to 2026-10-31 (Accrual)");
     expect(flat.columns).toEqual(["", "Total"]);
     expect(flat.lines).toEqual(["Income", "  Sales | 1000.00", "Total Income | 1000.00", "Net Income | 400.00"]);
+  });
+});
+
+describe("qbo per-member limiter", () => {
+  it("allows 30 calls a rolling minute per member", () => {
+    const seen = new Map<string, number[]>();
+    for (let i = 0; i < QBO_CALLS_PER_MINUTE; i++) expect(takeQboSlot("josh", 1_000 + i, seen)).toBe(true);
+    expect(takeQboSlot("josh", 2_000, seen)).toBe(false);
+    expect(takeQboSlot("leibel", 2_000, seen)).toBe(true);
+    expect(takeQboSlot("josh", 61_001, seen)).toBe(true);
   });
 });
