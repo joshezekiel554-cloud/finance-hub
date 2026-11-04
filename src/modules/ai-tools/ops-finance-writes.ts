@@ -1,0 +1,265 @@
+// Feldart AI ops tools, wave 2: finance CHANGES through the hub's Confirm
+// card. A tool call never acts — it validates, builds a plain-words preview
+// and stores an ai_proposals row (source chat, via "hub", 15-min TTL). The
+// hub shows the card; Confirm arrives at POST /api/ext/proposals/:id/confirm
+// (routes/ext-tools.ts), which claims the row and runs it through the SAME
+// BullMQ executor + audit trail as the in-app agent's approve queue
+// (ai-agent/tools.ts). Voiding in QuickBooks is never offered from chat.
+
+import { eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
+import { db } from "../../db/index.js";
+import { users } from "../../db/schema/auth.js";
+import { customers } from "../../db/schema/customers.js";
+import { invoices } from "../../db/schema/invoices.js";
+import { rmas } from "../../db/schema/returns.js";
+import { buildAgentWriteToolDeclarations } from "../agent/tools/write-tools.js";
+import { createChatProposal, validateEntityRefs } from "../agent/chat-proposals.js";
+import { getToolByName } from "../ai-agent/tools.js";
+import { resolveRecipients } from "../customer-emails/recipients.js";
+import { HOLD_LABEL, ToolInputError, type ToolContext, type ToolDef } from "./finance-tools.js";
+
+export const HUB_PROPOSAL_TTL_MS = 15 * 60 * 1000;
+const CONFIRM_NOTE = " Nothing happens until the user presses Confirm on the card the hub shows.";
+
+/** Tools offered (in-app agent declarations + save_rma_tracking). create_task is the inbox's. */
+export const HUB_WRITE_TOOLS = [
+  "send_chase_email",
+  "send_statement",
+  "send_check_in_email",
+  "send_bookkeeper_email",
+  "nudge_warehouse_email",
+  "set_hold_status",
+  "set_payment_terms",
+  "update_customer_context",
+  "record_interaction",
+  "dispute_transition",
+  "create_admin_notification",
+] as const;
+
+const TITLES: Record<string, string> = {
+  send_chase_email: "Send payment chase email",
+  send_statement: "Send statement",
+  send_check_in_email: "Send check-in email",
+  send_bookkeeper_email: "Email the Torah Judaica bookkeeper",
+  nudge_warehouse_email: "Email the warehouse about an RMA",
+  set_hold_status: "Change account status",
+  set_payment_terms: "Change payment terms",
+  update_customer_context: "Add to customer's AI notes",
+  record_interaction: "Log an interaction",
+  dispute_transition: "Move a Torah Judaica dispute",
+  create_admin_notification: "Raise a team notification",
+  save_rma_tracking: "Save return tracking on RMA",
+};
+
+const SAVE_RMA_TRACKING_SCHEMA = {
+  type: "object",
+  properties: {
+    rmaId: { type: "string", description: "Finance RMA id (from open_rmas / rma_tracking_status / get_rmas url)." },
+    trackingNumber: { type: "string", description: "The customer's return tracking number." },
+    trackingCarrier: { type: "string", description: "Carrier if known, e.g. UPS, FedEx, USPS." },
+  },
+  required: ["rmaId", "trackingNumber"],
+  additionalProperties: false,
+};
+
+export type PreviewRow = { field: string; value: string };
+
+async function customerFor(id: string) {
+  const [c] = await db.select().from(customers).where(eq(customers.id, id)).limit(1);
+  return c ?? null;
+}
+
+async function recipientsLine(c: NonNullable<Awaited<ReturnType<typeof customerFor>>>): Promise<string> {
+  const r = await resolveRecipients("statement", {
+    primaryEmail: c.primaryEmail,
+    billingEmails: c.billingEmails as string[] | null,
+    invoiceToEmails: c.invoiceToEmails as string[] | null,
+    invoiceCcEmails: c.invoiceCcEmails as string[] | null,
+    invoiceBccEmails: c.invoiceBccEmails as string[] | null,
+    statementToEmails: c.statementToEmails as string[] | null,
+    statementCcEmails: c.statementCcEmails as string[] | null,
+    statementBccEmails: c.statementBccEmails as string[] | null,
+    tags: c.tags as string[] | null,
+  });
+  const to = r.to.length ? r.to.join(", ") : c.primaryEmail ?? "(no address on file — the send will fail)";
+  return r.cc.length ? `${to} (cc ${r.cc.join(", ")})` : to;
+}
+
+/** Plain-words What/Value rows for the card. Throws ToolInputError on bad refs. */
+export async function buildPreview(tool: string, args: Record<string, unknown>): Promise<PreviewRow[]> {
+  const rows: PreviewRow[] = [];
+  const push = (field: string, value: unknown) => {
+    if (value === undefined || value === null || value === "") return;
+    rows.push({ field, value: Array.isArray(value) ? value.join(", ") : String(value) });
+  };
+  const cid = typeof args.customerId === "string" ? args.customerId : null;
+  const c = cid ? await customerFor(cid) : null;
+  if (cid && !c) throw new ToolInputError(`customerId "${cid}" does not exist — look it up with find_customer.`);
+  if (c) push("Customer", c.displayName);
+
+  switch (tool) {
+    case "send_chase_email":
+    case "send_check_in_email":
+      push("To", await recipientsLine(c!));
+      if (tool === "send_chase_email") push("Tone", { MEDIUM: "1 — gentle", HIGH: "2 — firmer", CRITICAL: "3 — firm" }[String(args.tier)] ?? args.tier);
+      push("Book", args.origin === "tj" ? "Torah Judaica" : args.origin === "feldart" ? "Feldart" : undefined);
+      push("Subject", args.subject);
+      push("Message", args.body);
+      push("Attach invoices", args.attachInvoiceDocNumbers);
+      if (args.attachStatement) push("Attach statement", "Yes — open-items statement PDF");
+      break;
+    case "send_statement":
+      push("To", await recipientsLine(c!));
+      push("Book", args.origin === "tj" ? "Torah Judaica" : "Feldart");
+      push("Cover note", args.coverNote);
+      break;
+    case "set_hold_status":
+      push("Status now", HOLD_LABEL[c!.holdStatus] ?? c!.holdStatus);
+      push("Change to", HOLD_LABEL[String(args.targetState)] ?? args.targetState);
+      push("Also", "Updates the customer's Shopify tags (ordering is blocked while on hold)");
+      break;
+    case "set_payment_terms":
+      push("Terms now", c!.paymentTerms ?? "(none)");
+      push("Change to", args.terms);
+      break;
+    case "update_customer_context":
+      push("Add note", args.append);
+      break;
+    case "record_interaction":
+      push("Channel", args.channel);
+      push("When", args.occurredAtIso ?? "now");
+      push("Summary", args.summary);
+      break;
+    case "send_bookkeeper_email":
+    case "dispute_transition": {
+      const [inv] = await db
+        .select({ docNumber: invoices.docNumber, customer: customers.displayName, balance: invoices.balance, origin: invoices.origin })
+        .from(invoices)
+        .innerJoin(customers, eq(customers.id, invoices.customerId))
+        .where(eq(invoices.id, String(args.invoiceId)))
+        .limit(1);
+      if (!inv) throw new ToolInputError(`invoiceId "${String(args.invoiceId)}" does not exist — look it up first.`);
+      push("Invoice", `${inv.docNumber ?? "?"} — ${inv.customer} — balance $${inv.balance}`);
+      if (tool === "send_bookkeeper_email") {
+        push("To", "Torah Judaica bookkeeper (from finance settings)");
+        push("Subject", args.subject);
+        push("Message", args.body);
+      } else {
+        push("Change", { claims_paid: "Customer says it's paid — park it while we verify", not_paid: "Confirmed NOT paid — resume chasing" }[String(args.action)] ?? args.action);
+        push("Note", args.note);
+      }
+      break;
+    }
+    case "nudge_warehouse_email":
+    case "save_rma_tracking": {
+      const [r] = await db
+        .select({ rmaNumber: rmas.rmaNumber, status: rmas.status, customer: customers.displayName, tracking: rmas.trackingNumber })
+        .from(rmas)
+        .innerJoin(customers, eq(customers.id, rmas.customerId))
+        .where(eq(rmas.id, String(args.rmaId)))
+        .limit(1);
+      if (!r) throw new ToolInputError(`rmaId "${String(args.rmaId)}" does not exist — look it up with open_rmas or get_rmas.`);
+      push("RMA", `${r.rmaNumber ?? "(unnumbered)"} — ${r.customer} — ${r.status.replace(/_/g, " ")}`);
+      if (tool === "save_rma_tracking") {
+        if (r.status !== "sent_to_warehouse" && r.status !== "awaiting_warehouse_number") {
+          throw new ToolInputError(`RMA ${r.rmaNumber ?? ""} is "${r.status}" — tracking can only be saved while it's awaiting the return.`);
+        }
+        push("Tracking now", r.tracking ?? "(none)");
+        push("Save", `${args.trackingCarrier ? `${String(args.trackingCarrier)} ` : ""}${String(args.trackingNumber)}`);
+        push("Also", "Emails the warehouse team to expect the parcel");
+      } else {
+        push("To", "Warehouse team (from finance settings)");
+        push("Subject", args.subject);
+        push("Message", args.body);
+      }
+      break;
+    }
+    case "create_admin_notification":
+      push("Title", args.title);
+      push("Message", args.message);
+      push("Severity", args.severity ?? "info");
+      break;
+  }
+  return rows;
+}
+
+/** Map the hub member to their finance user row (the executor needs a real actor). */
+export async function financeUserIdFor(email: string): Promise<string | null> {
+  const [u] = await db.select({ id: users.id }).from(users).where(eq(users.email, email.trim().toLowerCase())).limit(1);
+  return u?.id ?? null;
+}
+
+function hubWriteTool(name: string, description: string, input_schema: Record<string, unknown>): ToolDef {
+  return {
+    name,
+    ops: true,
+    write: true,
+    description: description + CONFIRM_NOTE,
+    input_schema,
+    async run(input, ctx: ToolContext) {
+      if (!ctx.actorEmail) throw new ToolInputError("This change needs a signed-in member.");
+      const args = (input ?? {}) as Record<string, unknown>;
+      const exec = getToolByName(name);
+      if (!exec) throw new ToolInputError(`"${name}" isn't available.`);
+      const parsed = exec.argsSchema.safeParse(args);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        throw new ToolInputError(issue ? `${issue.path.join(".") || "input"}: ${issue.message}` : "invalid input");
+      }
+      if (name === "dispute_transition" && args.action === "paid_void") {
+        throw new ToolInputError("Voiding an invoice in QuickBooks can't be done from chat — do it on the invoice in finance.feldart.com (it needs a typed confirmation).");
+      }
+      const refs = await validateEntityRefs(args);
+      if (!refs.ok) throw new ToolInputError(refs.error);
+      const userId = await financeUserIdFor(ctx.actorEmail);
+      if (!userId) throw new ToolInputError("You don't have a finance login yet, so finance can't record this change under your name. Sign in to finance.feldart.com once, then ask again.");
+
+      const preview = await buildPreview(name, args);
+      const created = await createChatProposal({
+        tool: name,
+        args,
+        userId,
+        conversationId: nanoid(24),
+        ttlMs: HUB_PROPOSAL_TTL_MS,
+        extraSummary: { via: "hub", hubActor: ctx.actorEmail.toLowerCase() },
+      });
+      return {
+        proposal: {
+          id: created.proposalId,
+          title: TITLES[name] ?? name,
+          summary: preview.map((r) => `${r.field}: ${r.value}`).join(" · ").slice(0, 300),
+          preview: { columns: [{ key: "field", label: "What" }, { key: "value", label: "Value" }], rows: preview },
+          expiresAt: created.expiresAt.toISOString(),
+        },
+      };
+    },
+  };
+}
+
+const declarations = new Map(buildAgentWriteToolDeclarations().map((d) => [d.name, d]));
+
+export const OPS_FINANCE_WRITES: ToolDef[] = [
+  ...HUB_WRITE_TOOLS.map((n) => {
+    const d = declarations.get(n);
+    if (!d) throw new Error(`missing write declaration ${n}`);
+    const schema =
+      n === "dispute_transition"
+        ? {
+            ...d.inputSchema,
+            properties: {
+              ...(d.inputSchema.properties as Record<string, unknown>),
+              action: { type: "string", enum: ["claims_paid", "not_paid"], description: "claims_paid = customer says paid, park it; not_paid = confirmed unpaid, resume chasing. (Voids aren't possible from chat.)" },
+            },
+          }
+        : d.inputSchema;
+    const description = n === "dispute_transition" ? "Propose moving a Torah Judaica invoice through the dispute flow: claims_paid (park while we verify) or not_paid (resume chasing)." : d.description;
+    return hubWriteTool(n, description, schema as Record<string, unknown>);
+  }),
+  hubWriteTool(
+    "save_rma_tracking",
+    "Propose saving the customer's return tracking number on an RMA that's awaiting the parcel (status sent to warehouse / awaiting warehouse number). Saving also emails the warehouse team so they expect it. Use rma_tracking_status to find RMAs missing tracking.",
+    SAVE_RMA_TRACKING_SCHEMA,
+  ),
+];
+

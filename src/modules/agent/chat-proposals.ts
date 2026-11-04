@@ -117,6 +117,10 @@ export type CreateChatProposalInput = {
   args: Record<string, unknown>;
   userId: string;
   conversationId: string;
+  // Hub (Feldart AI) proposals live for minutes, not days, and carry who
+  // asked + where from so confirm can check the creator.
+  ttlMs?: number;
+  extraSummary?: Record<string, unknown>;
 };
 
 export type ChatProposalDeps = {
@@ -127,7 +131,7 @@ export type ChatProposalDeps = {
 export async function createChatProposal(
   input: CreateChatProposalInput,
   deps: ChatProposalDeps = {},
-): Promise<{ proposalId: string; dangerous: boolean; summary: string }> {
+): Promise<{ proposalId: string; dangerous: boolean; summary: string; expiresAt: Date }> {
   const now = (deps.now ?? (() => new Date()))();
   const id = nanoid(24);
   const { entityType, entityId } = deriveEntity(input.tool, input.args);
@@ -149,6 +153,7 @@ export async function createChatProposal(
       summary,
       dangerous,
       requestedByUserId: input.userId,
+      ...input.extraSummary,
     },
     draftedAction: { tool: input.tool, args: input.args },
     draftedPreview: JSON.stringify(input.args).slice(0, 2000),
@@ -158,11 +163,11 @@ export async function createChatProposal(
     // scanId is NOT NULL for scanner provenance; chat proposals carry the
     // conversation id here (both are nanoid(24)) — documented overload.
     scanId: input.conversationId,
-    expiresAt: new Date(now.getTime() + CHAT_PROPOSAL_TTL_MS),
+    expiresAt: new Date(now.getTime() + (input.ttlMs ?? CHAT_PROPOSAL_TTL_MS)),
   };
 
   if (deps.insert) await deps.insert(row);
   else await db.insert(aiProposals).values(row);
 
-  return { proposalId: id, dangerous, summary };
+  return { proposalId: id, dangerous, summary, expiresAt: row.expiresAt };
 }

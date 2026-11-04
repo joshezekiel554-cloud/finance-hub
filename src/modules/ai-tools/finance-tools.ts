@@ -28,6 +28,8 @@ export type PdfLink = { url: string; name: string; mime: "application/pdf"; expi
 export type ToolContext = {
   now: Date;
   baseUrl: string;
+  /** Hub member making the call (lowercased email from the hub token). */
+  actorEmail?: string;
   /** Signed short-lived PDF link (ops tools only; absent when unconfigured). */
   signPdf?: (kind: "invoice" | "creditmemo", qbId: string, name: string) => PdfLink;
 };
@@ -36,6 +38,8 @@ export type ToolDef = {
   name: string;
   /** Ops tool: only for hub ops:true members on FINANCE_AI_OPS_EMAILS. */
   ops?: boolean;
+  /** Returns a {proposal} for the hub's Confirm card instead of acting. */
+  write?: boolean;
   description: string;
   input_schema: Record<string, unknown>;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;

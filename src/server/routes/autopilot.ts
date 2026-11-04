@@ -155,6 +155,9 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
             sql`${aiProposals.snoozedUntil} <= NOW()`,
           ),
           sql`${aiProposals.expiresAt} > NOW()`,
+          // Feldart AI (hub) proposals are settled on the hub's Confirm card
+          // by the member who asked — never from this queue.
+          sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${aiProposals.candidateSummary}, '$.via')), '') <> 'hub'`,
         ),
       )
       .orderBy(desc(aiProposals.createdAt))

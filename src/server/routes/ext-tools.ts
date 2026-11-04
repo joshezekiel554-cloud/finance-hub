@@ -23,9 +23,11 @@ import {
   type ToolDef,
 } from "../../modules/ai-tools/finance-tools.js";
 import { OPS_FINANCE_READS } from "../../modules/ai-tools/ops-finance-reads.js";
+import { financeUserIdFor, OPS_FINANCE_WRITES } from "../../modules/ai-tools/ops-finance-writes.js";
+import { settleHubProposal } from "../../modules/ai-tools/ops-proposals.js";
 import { OPS_TOOLS as OPS_CORE } from "../../modules/ai-tools/ops-tools.js";
 
-export const OPS_TOOLS: ToolDef[] = [...OPS_CORE, ...OPS_FINANCE_READS];
+export const OPS_TOOLS: ToolDef[] = [...OPS_CORE, ...OPS_FINANCE_READS, ...OPS_FINANCE_WRITES];
 
 const log = createLogger({ component: "routes.ext-tools" });
 
@@ -64,6 +66,7 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
     const ctx: ToolContext = {
       now: new Date(),
       baseUrl,
+      actorEmail: claims.email,
       ...(tool.ops && secret
         ? {
             signPdf: (kind, qbId, name) =>
@@ -83,6 +86,30 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
       log.error({ err, email: claims.email, tool: tool.name }, "tool failed");
       return reply.code(500).send({ error: "tool failed" });
     }
+  });
+};
+
+// POST /api/ext/proposals/:id/confirm|cancel — the hub forwards a Confirm /
+// Cancel click with a fresh ops token. Body is ignored.
+export const proposalsRoute: FastifyPluginAsync = async (app) => {
+  app.post<{ Params: { id: string; action: string } }>("/proposals/:id/:action", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    if (!hasOpsAccess(claims, env.FINANCE_AI_OPS_EMAILS)) {
+      return reply.code(403).send({ error: "Not available for this user.", code: "forbidden" });
+    }
+    const { id, action } = req.params;
+    if ((action !== "confirm" && action !== "cancel") || !/^[A-Za-z0-9_-]{1,80}$/.test(id)) {
+      return reply.code(404).send({ error: "unknown proposal action", code: "expired" });
+    }
+    const res = await settleHubProposal({
+      id,
+      action,
+      actorEmail: claims.email,
+      userId: await financeUserIdFor(claims.email),
+    });
+    log.info({ email: claims.email, proposalId: id, action, http: res.http }, "hub proposal settled");
+    return reply.code(res.http).header("cache-control", "no-store").send(res.body);
   });
 };
 
