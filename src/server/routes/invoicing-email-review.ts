@@ -17,26 +17,19 @@
 // cheap superset pre-filter and MUST use the same window floor.
 
 import type { FastifyPluginAsync } from "fastify";
-import { and, asc, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import { auditLog } from "../../db/schema/audit.js";
-import { users } from "../../db/schema/auth.js";
-import { customers } from "../../db/schema/customers.js";
 import {
   EMAIL_REVIEW_DISMISS_REASONS,
   invoiceEmailDismissals,
 } from "../../db/schema/invoice-email-dismissals.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { createLogger } from "../../lib/logger.js";
-import {
-  bucketEmailReviewRows,
-  emailReviewWindowStart,
-  isDismissalActive,
-  iso,
-  NOT_EMAILED_STATUSES,
-} from "../../modules/invoice-email-review/index.js";
+import { isDismissalActive } from "../../modules/invoice-email-review/index.js";
+import { loadEmailReview } from "../../modules/invoice-email-review/load.js";
 import { requireAuth } from "../lib/auth.js";
 
 export type {
@@ -64,61 +57,7 @@ export const restoreBodySchema = z.object({
 const emailReviewRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req, reply) => {
     await requireAuth(req);
-    const now = new Date();
-    // Same floor the classifier uses — never CURDATE(), which would be
-    // evaluated in the MySQL server timezone.
-    const windowStartDay = emailReviewWindowStart(now);
-
-    const rows = await db
-      .select({
-        invoiceId: invoices.id,
-        qbInvoiceId: invoices.qbInvoiceId,
-        docNumber: invoices.docNumber,
-        customerId: invoices.customerId,
-        customerName: customers.displayName,
-        origin: invoices.origin,
-        // DATE_FORMAT → plain 'YYYY-MM-DD'. mysql2 hands DATE columns back as
-        // local-midnight Date objects, which would shift the day on a
-        // non-UTC host; the classifier's contract is a string day.
-        issueDate: sql<string | null>`DATE_FORMAT(${invoices.issueDate}, '%Y-%m-%d')`,
-        createdAt: invoices.createdAt,
-        total: invoices.total,
-        balance: invoices.balance,
-        status: invoices.status,
-        emailStatus: invoices.emailStatus,
-        deliveryTime: invoices.deliveryTime,
-        deliveryError: invoices.deliveryError,
-        invoiceToEmails: customers.invoiceToEmails,
-        invoiceCcEmails: customers.invoiceCcEmails,
-        dismissReason: invoiceEmailDismissals.reason,
-        dismissNote: invoiceEmailDismissals.reasonNote,
-        dismissedAt: invoiceEmailDismissals.dismissedAt,
-        dismissedBy: users.name,
-      })
-      .from(invoices)
-      .innerJoin(customers, eq(customers.id, invoices.customerId))
-      .leftJoin(invoiceEmailDismissals, eq(invoiceEmailDismissals.invoiceId, invoices.id))
-      .leftJoin(users, eq(users.id, invoiceEmailDismissals.dismissedByUserId))
-      .where(
-        and(
-          sql`${invoices.issueDate} >= ${windowStartDay}`,
-          or(
-            inArray(invoices.emailStatus, [...NOT_EMAILED_STATUSES]),
-            isNotNull(invoices.deliveryError),
-          ),
-        ),
-      )
-      .orderBy(asc(invoices.issueDate), desc(invoices.balance));
-
-    const syncedRows = await db
-      .select({ syncedAt: sql<string | Date | null>`MAX(${invoices.lastSyncedAt})` })
-      .from(invoices);
-
-    const buckets = bucketEmailReviewRows(rows, now);
-    return reply.send({
-      ...buckets,
-      syncedAt: iso(syncedRows[0]?.syncedAt ?? null),
-    });
+    return reply.send(await loadEmailReview(new Date()));
   });
 
   app.post("/dismiss", async (req, reply) => {

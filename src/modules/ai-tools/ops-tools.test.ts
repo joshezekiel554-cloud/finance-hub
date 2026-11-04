@@ -4,11 +4,10 @@ import {
   invoiceState,
   linkedInvoicesByPayment,
   normalizeDocNumber,
-  OPS_TOOLS,
   rmaRow,
 } from "./ops-tools.js";
 import { FINANCE_TOOLS } from "./finance-tools.js";
-import { hasOpsAccess, toolsFor } from "../../server/routes/ext-tools.js";
+import { hasOpsAccess, OPS_TOOLS, toolsFor } from "../../server/routes/ext-tools.js";
 import { mintHubToken, verifyHubToken } from "../../lib/hub-token.js";
 
 const OPS = "josh@feldart.com,joshezekiel554@gmail.com,info@feldartcollection.co.uk";
