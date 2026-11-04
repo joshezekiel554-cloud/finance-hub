@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adaptAgentTool, emailIssueRow, OPS_FINANCE_READS } from "./ops-finance-reads.js";
+import { adaptAgentTool, emailIssueRow, OPS_FINANCE_READS, refreshCooldown } from "./ops-finance-reads.js";
 import { ToolInputError } from "./finance-tools.js";
 
 describe("wave-1 ops reads", () => {
@@ -90,5 +90,13 @@ describe("wave-1 ops reads", () => {
       sendsTo: ["a@x.com"],
       url: "https://f/customers/c1",
     });
+  });
+
+  it("cools down QuickBooks refreshes per customer for 60s", () => {
+    const seen = new Map<string, number>();
+    expect(refreshCooldown("c1", 1_000, seen)).toBeNull();
+    expect(refreshCooldown("c1", 31_000, seen)).toBe(30);
+    expect(refreshCooldown("c2", 31_000, seen)).toBeNull();
+    expect(refreshCooldown("c1", 61_001, seen)).toBeNull();
   });
 });

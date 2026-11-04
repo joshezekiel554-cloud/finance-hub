@@ -352,6 +352,19 @@ const ADAPTED: Record<string, string> = {
     "Re-pull one customer's record, invoices and payments from QuickBooks right now (a few seconds). Only updates finance's copy of QuickBooks data — changes nothing in QuickBooks. Use when the user says a payment or invoice is missing or the data looks stale.",
 };
 
+// QBO rate-limits per realm and rotates its refresh token on every refresh,
+// so a model loop must not hammer the one tool that calls QBO on demand.
+export const REFRESH_COOLDOWN_MS = 60_000;
+const lastRefresh = new Map<string, number>();
+
+/** Null when a refresh may run now, else seconds since the last one. */
+export function refreshCooldown(customerId: string, nowMs: number, seen: Map<string, number> = lastRefresh): number | null {
+  const last = seen.get(customerId);
+  if (last !== undefined && nowMs - last < REFRESH_COOLDOWN_MS) return Math.round((nowMs - last) / 1000);
+  seen.set(customerId, nowMs);
+  return null;
+}
+
 export function adaptAgentTool(def: ToolDefinition<never>): ToolDef {
   const description = ADAPTED[def.name];
   if (!description) throw new Error(`no ops description for ${def.name}`);
@@ -360,7 +373,12 @@ export function adaptAgentTool(def: ToolDefinition<never>): ToolDef {
     ops: true,
     description,
     input_schema: def.inputSchema as Record<string, unknown>,
-    async run(input) {
+    async run(input, ctx) {
+      if (def.name === "refresh_customer_from_qb") {
+        const id = String((input as { customerId?: unknown } | null)?.customerId ?? "");
+        const ago = refreshCooldown(id, ctx.now.getTime());
+        if (ago !== null) return { text: `Already refreshed from QuickBooks ${ago}s ago — the data is current; don't refresh again.` };
+      }
       const res = await def.handler(input as never, { userId: null });
       if (!res.ok) throw new ToolInputError(res.error);
       return { text: res.output };
