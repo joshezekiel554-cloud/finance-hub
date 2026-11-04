@@ -7,11 +7,11 @@
 // a quiet book returns an empty list. Each check is isolated — one failing
 // query degrades to a "check failed" info alert instead of a 500.
 
-import { and, asc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
+import { syncRuns } from "../../db/schema/audit.js";
 import { orders } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
-import { invoices } from "../../db/schema/invoices.js";
 import { extensivReceipts } from "../../db/schema/returns.js";
 import { getOverdueCustomers } from "../chase/lookups.js";
 import { loadEmailReview } from "../invoice-email-review/load.js";
@@ -177,21 +177,68 @@ async function newHeldOrders({ now, baseUrl }: Ctx): Promise<Alert | null> {
   };
 }
 
+type SyncRunRow = { status: string; startedAt: Date | string; completedAt: Date | string | null; errorMessage: string | null };
+
+/**
+ * QuickBooks sync health from sync_runs (NOT invoice timestamps — a quiet
+ * run touches no invoice, which isn't a problem). HIGH when the latest run
+ * failed or there's been no successful run for qbSyncStaleHours; MEDIUM when
+ * a run has been "running" for over an hour. Pure, so it's easy to pin.
+ */
+export function syncHealthAlert(latest: SyncRunRow | null, lastOk: SyncRunRow | null, now: Date, baseUrl: string): Alert | null {
+  const link = `${baseUrl}/settings`;
+  if (!latest) {
+    return { id: "finance.qb-sync-stale", severity: "high", title: "QuickBooks sync has never run", count: 1, items: [{ label: "No sync recorded" }], link };
+  }
+  if (latest.status === "failed") {
+    return {
+      id: "finance.qb-sync-failed",
+      severity: "high",
+      title: "The last QuickBooks sync failed — finance figures may be stale",
+      count: 1,
+      items: [{ label: `Started ${new Date(latest.startedAt).toISOString()}`, detail: (latest.errorMessage ?? "no error message").slice(0, 200) }],
+      link,
+    };
+  }
+  const okAt = lastOk ? new Date(lastOk.completedAt ?? lastOk.startedAt) : null;
+  const hours = okAt ? (now.getTime() - okAt.getTime()) / 3_600_000 : Infinity;
+  if (hours >= ALERT_RULES.qbSyncStaleHours) {
+    return {
+      id: "finance.qb-sync-stale",
+      severity: "high",
+      title: okAt ? `No successful QuickBooks sync for ${Math.floor(hours)}h — finance figures may be stale` : "No successful QuickBooks sync on record",
+      count: 1,
+      items: [{ label: okAt ? `Last good sync ${okAt.toISOString()}` : "No successful run", detail: `Latest run: ${latest.status}` }],
+      link,
+    };
+  }
+  if (latest.status === "running" && now.getTime() - new Date(latest.startedAt).getTime() > 3_600_000) {
+    return {
+      id: "finance.qb-sync-stuck",
+      severity: "medium",
+      title: "A QuickBooks sync has been running for over an hour",
+      count: 1,
+      items: [{ label: `Started ${new Date(latest.startedAt).toISOString()}` }],
+      link,
+    };
+  }
+  return null;
+}
+
+const QB_KINDS = ["qb_full", "qb_incremental"] as const;
+
 async function qbSyncHealth({ now, baseUrl }: Ctx): Promise<Alert | null> {
-  const [r] = await db.select({ last: sql<Date | string | null>`MAX(${invoices.lastSyncedAt})` }).from(invoices);
-  const last = r?.last ? new Date(r.last) : null;
-  const hours = last ? (now.getTime() - last.getTime()) / 3_600_000 : Infinity;
-  if (hours < ALERT_RULES.qbSyncStaleHours) return null;
-  return {
-    id: "finance.qb-sync-stale",
-    severity: "high",
-    title: last
-      ? `QuickBooks sync hasn't run for ${Math.floor(hours)}h — finance figures may be stale`
-      : "QuickBooks sync has never run",
-    count: 1,
-    items: [{ label: last ? `Last invoice sync ${last.toISOString()}` : "No sync recorded" }],
-    link: `${baseUrl}/settings`,
-  };
+  const cols = { status: syncRuns.status, startedAt: syncRuns.startedAt, completedAt: syncRuns.completedAt, errorMessage: syncRuns.errorMessage };
+  const [[latest], [lastOk]] = await Promise.all([
+    db.select(cols).from(syncRuns).where(inArray(syncRuns.kind, [...QB_KINDS])).orderBy(desc(syncRuns.startedAt)).limit(1),
+    db
+      .select(cols)
+      .from(syncRuns)
+      .where(and(inArray(syncRuns.kind, [...QB_KINDS]), inArray(syncRuns.status, ["ok", "partial"])))
+      .orderBy(desc(syncRuns.startedAt))
+      .limit(1),
+  ]);
+  return syncHealthAlert(latest ?? null, lastOk ?? null, now, baseUrl);
 }
 
 const CHECKS: Array<{ name: string; run: (c: Ctx) => Promise<Alert | Alert[] | null> }> = [

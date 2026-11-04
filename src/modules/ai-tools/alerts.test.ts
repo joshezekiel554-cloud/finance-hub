@@ -22,14 +22,14 @@ vi.mock("./ops-tools.js", () => ({
 vi.mock("../../db/index.js", () => {
   const chain = () => {
     const c: Record<string, unknown> = {};
-    for (const k of ["from", "where", "orderBy", "leftJoin", "innerJoin"]) c[k] = () => c;
+    for (const k of ["from", "where", "orderBy", "leftJoin", "innerJoin", "limit"]) c[k] = () => c;
     c.then = (res: (v: unknown) => unknown) => res(m.dbRows.shift() ?? []);
     return c;
   };
   return { db: { select: () => chain() } };
 });
 
-import { loadFinanceAlerts } from "./alerts.js";
+import { loadFinanceAlerts, syncHealthAlert } from "./alerts.js";
 
 const NOW = new Date("2026-11-04T12:00:00Z");
 const ctx = { now: NOW, baseUrl: "https://f" };
@@ -39,8 +39,9 @@ beforeEach(() => {
   m.review = { neverEmailed: [], deliveryFailed: [], dismissed: [], syncedAt: null };
   m.rmas = new Map();
   m.failChase = false;
-  // db select order: qb-sync (MAX lastSyncedAt), receipts, held orders
-  m.dbRows = [[{ last: new Date(NOW.getTime() - 10 * 60_000) }], [], []];
+  // db select order: sync_runs latest, sync_runs last ok, receipts, held orders
+  const okRun = { status: "ok", startedAt: new Date(NOW.getTime() - 20 * 60_000), completedAt: new Date(NOW.getTime() - 15 * 60_000), errorMessage: null };
+  m.dbRows = [[okRun], [okRun], [], []];
 });
 
 describe("finance alerts", () => {
@@ -69,10 +70,13 @@ describe("finance alerts", () => {
     expect(alerts[2]!.items[0]!.label).toBe("RMA DC1 — Acme");
   });
 
-  it("a stale QuickBooks sync is a high alert", async () => {
-    m.dbRows = [[{ last: new Date(NOW.getTime() - 5 * 3_600_000) }], [], []];
+  it("a failed latest QuickBooks run is a high alert", async () => {
+    const failed = { status: "failed", startedAt: new Date(NOW.getTime() - 5 * 60_000), completedAt: null, errorMessage: "401 invalid_grant" };
+    const ok = { status: "ok", startedAt: new Date(NOW.getTime() - 40 * 60_000), completedAt: new Date(NOW.getTime() - 35 * 60_000), errorMessage: null };
+    m.dbRows = [[failed], [ok], [], []];
     const { alerts } = await loadFinanceAlerts(ctx);
-    expect(alerts[0]).toMatchObject({ id: "finance.qb-sync-stale", severity: "high" });
+    expect(alerts[0]).toMatchObject({ id: "finance.qb-sync-failed", severity: "high" });
+    expect(alerts[0]!.items[0]!.detail).toBe("401 invalid_grant");
   });
 
   it("one failing check degrades to an info alert, the rest still run", async () => {
@@ -80,5 +84,23 @@ describe("finance alerts", () => {
     m.review.neverEmailed = [{ docNumber: "1", customerName: "X", customerId: "c9", deliveryError: null, emailStatus: "NeedToSend" }];
     const { alerts } = await loadFinanceAlerts(ctx);
     expect(alerts.map((a) => a.id)).toEqual(["finance.invoice-never-emailed", "finance.check-failed.chase"]);
+  });
+});
+
+describe("QuickBooks sync health (sync_runs)", () => {
+  const run = (status: string, minsAgo: number, doneMinsAgo: number | null = minsAgo - 2) => ({
+    status,
+    startedAt: new Date(NOW.getTime() - minsAgo * 60_000),
+    completedAt: doneMinsAgo === null ? null : new Date(NOW.getTime() - doneMinsAgo * 60_000),
+    errorMessage: null,
+  });
+  it("quiet but healthy runs raise nothing (the old invoice-timestamp false alarm)", () => {
+    expect(syncHealthAlert(run("ok", 25), run("ok", 25), NOW, "https://f")).toBeNull();
+  });
+  it("stale, never-run and stuck runs", () => {
+    expect(syncHealthAlert(run("ok", 200), run("ok", 200), NOW, "https://f")?.id).toBe("finance.qb-sync-stale");
+    expect(syncHealthAlert(null, null, NOW, "https://f")?.id).toBe("finance.qb-sync-stale");
+    expect(syncHealthAlert(run("running", 70, null), run("ok", 90), NOW, "https://f")).toMatchObject({ id: "finance.qb-sync-stuck", severity: "medium" });
+    expect(syncHealthAlert(run("partial", 25), run("partial", 25), NOW, "https://f")).toBeNull();
   });
 });
