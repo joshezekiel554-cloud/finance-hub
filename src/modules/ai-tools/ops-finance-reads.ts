@@ -14,6 +14,8 @@ import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
 import type { ToolDefinition } from "../../integrations/anthropic/tool-registry.js";
 import { buildAgentReadTools } from "../agent/tools/read-tools.js";
+import { pdfFileName } from "../../lib/file-link.js";
+import { financeUserIdFor } from "./ops-finance-writes.js";
 import { loadRecentHumanContact } from "../chase/chased-tracker.js";
 import { getOverdueCustomers } from "../chase/lookups.js";
 import { loadMoneySummary } from "../dashboard/money.js";
@@ -391,7 +393,39 @@ const adapted = buildAgentReadTools()
   .filter((t) => t.name in ADAPTED)
   .map(adaptAgentTool);
 
+const statementPdf: ToolDef = {
+  name: "statement_pdf",
+  ops: true,
+  description:
+    "Get a customer's open-items statement as a PDF download link (valid 15 minutes) — the same PDF as the Download statement button on their finance page, for the Feldart book, the Torah Judaica book, or both in one. Opening the link builds it and gives it the NEXT statement number (each open takes a new number), so only open it when it's needed. To EMAIL the statement to the customer, use send_statement instead.",
+  input_schema: {
+    type: "object",
+    properties: {
+      customerId: CUSTOMER_ID_PROP,
+      book: { type: "string", enum: ["feldart", "tj", "both"], description: "Which book(s). Default both." },
+    },
+    required: ["customerId"],
+    additionalProperties: false,
+  },
+  async run(input, ctx) {
+    const p = parse(z.object({ customerId, book: z.enum(["feldart", "tj", "both"]).default("both") }), input);
+    const [c] = await db.select({ name: customers.displayName }).from(customers).where(eq(customers.id, p.customerId)).limit(1);
+    if (!c) throw new ToolInputError("customerId: no such customer. Use find_customer first.");
+    if (!ctx.signStatement || !ctx.actorEmail) throw new ToolInputError("Statement links are unavailable right now.");
+    const userId = await financeUserIdFor(ctx.actorEmail);
+    if (!userId) throw new ToolInputError("You need to sign in to finance.feldart.com once before finance can issue a statement under your name.");
+    const file = ctx.signStatement(p.customerId, p.book, userId, pdfFileName(`Statement - ${c.name}`));
+    return {
+      customer: { id: p.customerId, name: c.name, url: `${ctx.baseUrl}/customers/${p.customerId}` },
+      book: p.book,
+      file,
+      note: "Opening the link generates the statement and assigns the next statement number.",
+    };
+  },
+};
+
 export const OPS_FINANCE_READS: ToolDef[] = [
+  statementPdf,
   moneySummary,
   chaseList,
   accountsOnHold,

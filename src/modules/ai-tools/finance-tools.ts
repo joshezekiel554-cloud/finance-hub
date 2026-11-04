@@ -32,6 +32,8 @@ export type ToolContext = {
   actorEmail?: string;
   /** Signed short-lived PDF link (ops tools only; absent when unconfigured). */
   signPdf?: (kind: "invoice" | "creditmemo", qbId: string, name: string) => PdfLink;
+  /** Signed statement link, built + numbered when opened (ops tools only). */
+  signStatement?: (customerId: string, origin: "feldart" | "tj" | "both", byUserId: string, name: string) => PdfLink;
 };
 
 export type ToolDef = {

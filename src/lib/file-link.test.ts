@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pdfFileName, signQbPdfLink, verifyQbPdfLink } from "./file-link.js";
+import { pdfFileName, signQbPdfLink, signStatementLink, verifyQbPdfLink, verifyStatementLink } from "./file-link.js";
 
 const SECRET = "s".repeat(40);
 const NOW = 1_800_000_000;
@@ -54,5 +54,31 @@ describe("signed qb pdf links", () => {
   it("makes OS-safe download names", () => {
     expect(pdfFileName('Invoice 1/2 - "A:B" <C>')).toBe("Invoice 12 - AB C.pdf");
     expect(pdfFileName("   ")).toBe("document.pdf");
+  });
+});
+
+describe("signed statement links", () => {
+  const link = () =>
+    signStatementLink({ baseUrl: "https://f", secret: SECRET, customerId: "cust_1", origin: "both", byUserId: "u-josh", name: "Statement - Acme.pdf", nowSeconds: NOW });
+  const parts = (url: string) => {
+    const u = new URL(url);
+    const [, , , , customerId, origin] = u.pathname.split("/");
+    return { customerId: customerId!, origin: origin!, exp: u.searchParams.get("exp"), by: u.searchParams.get("by"), sig: u.searchParams.get("sig") };
+  };
+  it("round-trips with the asker bound in", () => {
+    const l = link();
+    expect(l.url.startsWith("https://f/api/files/statement/cust_1/both?")).toBe(true);
+    expect(verifyStatementLink({ secret: [SECRET], ...parts(l.url), nowSeconds: NOW + 1 })).toEqual({ customerId: "cust_1", origin: "both", byUserId: "u-josh" });
+  });
+  it("refuses tampering (other customer, book, asker), expiry and a qb-pdf signature", () => {
+    const p = parts(link().url);
+    const ok = (over: Partial<typeof p>, now = NOW) => verifyStatementLink({ secret: SECRET, ...p, ...over, nowSeconds: now }) !== null;
+    expect(ok({ customerId: "cust_2" })).toBe(false);
+    expect(ok({ origin: "feldart" })).toBe(false);
+    expect(ok({ by: "u-esti" })).toBe(false);
+    expect(ok({}, NOW + 901)).toBe(false);
+    expect(ok({ origin: "nope" })).toBe(false);
+    const qb = new URL(sign().url).searchParams.get("sig");
+    expect(ok({ sig: qb })).toBe(false);
   });
 });

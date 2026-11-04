@@ -11,7 +11,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { env } from "../../lib/env.js";
-import { signQbPdfLink } from "../../lib/file-link.js";
+import { signQbPdfLink, signStatementLink } from "../../lib/file-link.js";
 import type { HubTokenClaims } from "../../lib/hub-token.js";
 import { createLogger } from "../../lib/logger.js";
 import { isEmailAllowed } from "../lib/hub-handoff.js";
@@ -74,6 +74,8 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
         ? {
             signPdf: (kind, qbId, name) =>
               signQbPdfLink({ baseUrl, secret, kind, qbId, name, nowSeconds: Math.floor(Date.now() / 1000) }),
+            signStatement: (customerId, origin, byUserId, name) =>
+              signStatementLink({ baseUrl, secret, customerId, origin, byUserId, name, nowSeconds: Math.floor(Date.now() / 1000) }),
           }
         : {}),
     };

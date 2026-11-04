@@ -6,6 +6,7 @@ describe("wave-1 ops reads", () => {
   it("ships every adapted in-app agent tool, all ops-gated (no email-attachment fetch)", () => {
     const names = OPS_FINANCE_READS.map((t) => t.name);
     expect(names).toEqual([
+      "statement_pdf",
       "money_summary",
       "chase_list",
       "accounts_on_hold",
