@@ -50,7 +50,7 @@ describe("hub proposal settle rules", () => {
 
 describe("hub write tools", () => {
   it("every one is ops + write, has an executor, and says nothing happens until Confirm", () => {
-    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "update_customer_emails", "send_invoice_qbo", "dismiss_email_review", "save_rma_tracking"]);
+    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "update_customer_emails", "send_invoice_qbo", "dismiss_email_review", "rma_set_warehouse_number", "rma_mark_received", "rma_cancel", "receipt_confirm", "receipt_dismiss", "save_rma_tracking"]);
     for (const t of OPS_FINANCE_WRITES) {
       expect(t.ops && t.write).toBe(true);
       expect(getToolByName(t.name)).not.toBeNull();
@@ -140,5 +140,13 @@ describe("invoice-redirect (BEC) guard", () => {
     expect(isFinanceAdmin("JoshEzekiel554@gmail.com", admins)).toBe(true);
     expect(isFinanceAdmin("customprints@feldartcollection.co.uk", admins)).toBe(false);
     expect(isFinanceAdmin(undefined, admins)).toBe(false);
+  });
+});
+
+describe("warehouse number format", () => {
+  it("accepts warehouse-style tokens only (it renames the RMA + Drive folder)", async () => {
+    const { WAREHOUSE_TX } = await import("../ai-agent/tools.js");
+    for (const ok of ["100175", "RA-20341", "abc"]) expect(WAREHOUSE_TX.test(ok), ok).toBe(true);
+    for (const bad of ["", "12", "the number is 100175", "10/0175", "-123", "x".repeat(33)]) expect(WAREHOUSE_TX.test(bad), bad).toBe(false);
   });
 });
