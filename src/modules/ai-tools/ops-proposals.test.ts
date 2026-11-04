@@ -118,3 +118,18 @@ describe("customer email changes", () => {
     expect(ok.success && ok.data.invoiceTo).toEqual(["a@keter.com"]);
   });
 });
+
+describe("invoice-redirect (BEC) guard", () => {
+  it("a new-domain address change needs a finance admin; same-domain fixes don't", async () => {
+    const { needsAdmin, isFinanceAdmin, NEW_DOMAIN_ROW } = await import("./ops-finance-writes.js");
+    const newDomainCard = [{ field: NEW_DOMAIN_ROW, value: "gmail.com — …" }, { field: "Invoice To", value: "a@keter.com  →  x@gmail.com" }];
+    const sameDomainCard = [{ field: "Invoice To", value: "a@keter.com  →  b@keter.com" }];
+    expect(needsAdmin("update_customer_emails", newDomainCard)).toBe(true);
+    expect(needsAdmin("update_customer_emails", sameDomainCard)).toBe(false);
+    expect(needsAdmin("send_statement", newDomainCard)).toBe(false);
+    const admins = "joshezekiel554@gmail.com,shaya@feldart.com";
+    expect(isFinanceAdmin("JoshEzekiel554@gmail.com", admins)).toBe(true);
+    expect(isFinanceAdmin("customprints@feldartcollection.co.uk", admins)).toBe(false);
+    expect(isFinanceAdmin(undefined, admins)).toBe(false);
+  });
+});

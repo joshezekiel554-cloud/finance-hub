@@ -17,6 +17,8 @@ import { buildAgentWriteToolDeclarations } from "../agent/tools/write-tools.js";
 import { createChatProposal, validateEntityRefs } from "../agent/chat-proposals.js";
 import { getToolByName } from "../ai-agent/tools.js";
 import { resolveRecipients } from "../customer-emails/recipients.js";
+import { env } from "../../lib/env.js";
+import { isEmailAllowed } from "../../server/lib/hub-handoff.js";
 import { HOLD_LABEL, ToolInputError, type ToolContext, type ToolDef } from "./finance-tools.js";
 
 export const HUB_PROPOSAL_TTL_MS = 15 * 60 * 1000;
@@ -116,6 +118,19 @@ const EMAIL_LIST_LABEL: Record<string, string> = {
   statementCc: "Statement Cc",
   statementBcc: "Statement Bcc",
 };
+
+export const NEW_DOMAIN_ROW = "⚠ New domain";
+export const NEW_DOMAIN_ADMIN_ONLY =
+  "Sending this customer's invoices or statements to an email domain they've never used is a classic invoice-redirect fraud, so only a finance admin (Josh or Shaya) can make that change from chat. Fixing an address at the customer's existing domain is fine.";
+
+/** Business-email-compromise guard: card rows that need a finance admin to confirm. */
+export function needsAdmin(tool: string, preview: PreviewRow[]): boolean {
+  return tool === "update_customer_emails" && preview.some((r) => r.field === NEW_DOMAIN_ROW);
+}
+
+export function isFinanceAdmin(email: string | undefined, adminCsv: string = env.ADMIN_EMAILS): boolean {
+  return !!email && isEmailAllowed(email, adminCsv);
+}
 
 /** Domains in `next` that none of the customer's current addresses use. */
 export function newDomains(current: string[], next: string[]): string[] {
@@ -310,7 +325,7 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
         push(EMAIL_LIST_LABEL[key]!, `${asList(cols[key]).join(", ") || "(none)"}  →  ${list.join(", ") || "(none — cleared)"}`);
       }
       const fresh = newDomains(allCurrent, allNext);
-      if (fresh.length) rows.unshift({ field: "⚠ New domain", value: `${fresh.join(", ")} — no current address for this customer uses it. Check it's really theirs before confirming.` });
+      if (fresh.length) rows.unshift({ field: NEW_DOMAIN_ROW, value: `${fresh.join(", ")} — no current address for this customer uses it. Check it's really theirs before confirming.` });
       if (args.invoiceTo !== undefined) push("Also", "Updates the customer's email in QuickBooks (invoices QuickBooks sends on its own)");
       break;
     }
@@ -355,6 +370,9 @@ function hubWriteTool(name: string, description: string, input_schema: Record<st
       if (!userId) throw new ToolInputError("You don't have a finance login yet, so finance can't record this change under your name. Sign in to finance.feldart.com once, then ask again.");
 
       const preview = await buildPreview(name, args);
+      if (needsAdmin(name, preview) && !isFinanceAdmin(ctx.actorEmail)) {
+        throw new ToolInputError(NEW_DOMAIN_ADMIN_ONLY);
+      }
       const created = await createChatProposal({
         tool: name,
         args,

@@ -45,6 +45,7 @@ import {
   InboxApiError,
 } from "../../integrations/inbox/client.js";
 import { createLogger } from "../../lib/logger.js";
+import { env } from "../../lib/env.js";
 
 const log = createLogger({ module: "ai-agent.tools" });
 
@@ -1259,6 +1260,40 @@ const updateCustomerEmailsTool: Tool<UpdateCustomerEmailsArgsT> = {
         before: Object.fromEntries(Object.keys(set).map((k) => [k, (before as Record<string, unknown>)[k] ?? null])),
         after: { ...set, aiProposalId: ctx.proposalId },
       });
+      // A second human sees every address change (invoice-redirect fraud
+      // guard): a timeline note on the customer + a bell for the other admins.
+      const changes = Object.keys(set)
+        .map((col) => `${col}: ${((before as Record<string, unknown>)[col] as string[] | null)?.join(", ") || "(none)"} → ${set[col]?.join(", ") || "(none)"}`)
+        .join("; ");
+      try {
+        await recordActivity({
+          customerId: args.customerId,
+          kind: "manual_note",
+          source: "ai_agent",
+          userId: ctx.userId,
+          subject: "Email addresses changed via Feldart AI",
+          body: changes,
+          meta: { aiProposalId: ctx.proposalId, kind: "customer_emails_changed" },
+        });
+        const adminEmails = env.ADMIN_EMAILS.split(",").filter(Boolean);
+        if (adminEmails.length) {
+          const admins = await db.select({ id: users.id, email: users.email }).from(users).where(inArray(users.email, adminEmails));
+          const { recordNotification } = await import("../notifications/index.js");
+          for (const a of admins) {
+            if (a.id === ctx.userId) continue;
+            await recordNotification({
+              userId: a.id,
+              kind: "system",
+              customerId: args.customerId,
+              refType: "customer",
+              refId: args.customerId,
+              payload: { title: `Invoice/statement addresses changed for ${before.displayName} via Feldart AI`, changes: changes.slice(0, 400) },
+            });
+          }
+        }
+      } catch (noteErr) {
+        log.error({ err: noteErr, proposalId: ctx.proposalId }, "update_customer_emails: change saved but note/notification failed");
+      }
       if (args.invoiceTo !== undefined && after?.qbCustomerId) {
         const { pushCustomerInvoiceEmailsToQbo } = await import("../customer-emails/push-to-qbo.js");
         void pushCustomerInvoiceEmailsToQbo({

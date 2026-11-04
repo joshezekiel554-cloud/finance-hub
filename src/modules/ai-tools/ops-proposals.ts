@@ -13,7 +13,15 @@ import { aiProposals, type AiProposal } from "../../db/schema/ai-proposals.js";
 import { AUTOPILOT_EXECUTE_JOB, getQueues } from "../../jobs/queues.js";
 import type { AutopilotExecuteJobData } from "../../jobs/definitions/autopilot-execute.js";
 import { isDangerousAction } from "../agent/chat-proposals.js";
-import { buildPreview, HUB_PROPOSAL_TTL_MS, previewDrift, type PreviewRow } from "./ops-finance-writes.js";
+import {
+  buildPreview,
+  HUB_PROPOSAL_TTL_MS,
+  isFinanceAdmin,
+  NEW_DOMAIN_ADMIN_ONLY,
+  needsAdmin,
+  previewDrift,
+  type PreviewRow,
+} from "./ops-finance-writes.js";
 
 export type SettleReply =
   | { http: 200; body: { status: "applied" | "cancelled"; message: string; link?: string } }
@@ -143,6 +151,10 @@ export async function settleHubProposal(input: {
     if (!input.userId) return refuse(403, "forbidden", "You need a finance login to confirm finance changes.");
     const stale = await staleness(p!);
     if (stale) return refuse(409, "stale", `Things changed since the card was shown (${stale}). Ask again so it's re-checked.`);
+    const shown = (p!.candidateSummary as { preview?: PreviewRow[] }).preview ?? [];
+    if (p!.draftedAction && needsAdmin(p!.draftedAction.tool, shown) && !isFinanceAdmin(input.actorEmail)) {
+      return refuse(403, "forbidden", NEW_DOMAIN_ADMIN_ONLY);
+    }
     if (await claim(input.id, "approved", input.userId)) {
       try {
         await getQueues().autopilotExecute.add(AUTOPILOT_EXECUTE_JOB, {
