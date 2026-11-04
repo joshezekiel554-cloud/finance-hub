@@ -448,6 +448,12 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
         added.push(...v!.added);
         push(EMAIL_LIST_LABEL[key]!, `${v!.before.join(", ") || "(none)"}  →  ${v!.after.join(", ") || "(none — cleared)"}`);
       }
+      for (const [key, label] of [["statementTo", "statements and chase emails"], ["invoiceTo", "invoices"]] as const) {
+        const v = changed[key];
+        if (v && v.after.length === 0) {
+          rows.unshift({ field: `⚠ No ${key === "invoiceTo" ? "invoice" : "statement"} recipients left`, value: `${label[0]!.toUpperCase()}${label.slice(1)} to this customer won't be emailed${key === "invoiceTo" ? " (finance falls back to their main email only if one is set)" : ""}.` });
+        }
+      }
       const fresh = newDomains(allCurrent, added);
       if (fresh.length) rows.unshift({ field: NEW_DOMAIN_ROW, value: `${fresh.join(", ")} — this customer has never used it (free-mail addresses count one by one). Check it's really theirs before confirming.` });
       if (changed.invoiceTo) push("Also", "Updates the customer's email in QuickBooks (invoices QuickBooks sends on its own)");
@@ -541,7 +547,7 @@ export const OPS_FINANCE_WRITES: ToolDef[] = [
   }),
   hubWriteTool(
     "update_customer_emails",
-    "Propose changing where a customer's invoices and statements/chase emails go: add and/or remove addresses on the invoice To/Cc/Bcc and statement To/Cc/Bcc lists (lists you don't mention stay as they are). Use get_customer first to see the current lists. Use to fix a bounced address before resending: remove the bad one, add the right one. An added address must be one the person typed themselves — if they haven't, ask them to type it. The card warns if a new address uses a domain the customer has never used.",
+    "Propose changing where a customer's invoices and statements/chase emails go: add and/or remove addresses on the invoice To/Cc/Bcc and statement To/Cc/Bcc lists (lists you don't mention stay as they are). Use get_customer first to see the current lists. Use to fix a bounced address before resending: remove the bad one, add the right one. An added address must be one the person typed themselves — if they haven't, ask them to type it (this includes MOVING an existing address to another list, e.g. Cc → To: that counts as adding it, so ask them to type it rather than retrying). The card warns if a new address uses a domain the customer has never used.",
     UPDATE_EMAILS_SCHEMA,
   ),
   hubWriteTool(

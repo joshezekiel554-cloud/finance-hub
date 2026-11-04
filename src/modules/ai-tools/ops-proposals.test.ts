@@ -146,6 +146,11 @@ describe("customer email changes", () => {
     expect(applyEmailListChanges({ invoiceTo: ["a@x.com"] }, {})).toEqual({});
   });
 
+  it("the description tells the model a move between lists counts as an add", async () => {
+    const { OPS_FINANCE_WRITES } = await import("./ops-finance-writes.js");
+    expect(OPS_FINANCE_WRITES.find((x) => x.name === "update_customer_emails")!.description).toMatch(/MOVING an existing address/);
+  });
+
   it("marks only the ADD lists x-feldart-typed for the hub's typed guard", async () => {
     const { OPS_FINANCE_WRITES } = await import("./ops-finance-writes.js");
     const t = OPS_FINANCE_WRITES.find((x) => x.name === "update_customer_emails")!;
