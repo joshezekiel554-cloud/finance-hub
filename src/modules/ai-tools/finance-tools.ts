@@ -32,8 +32,8 @@ export type ToolContext = {
   actorEmail?: string;
   /** Signed short-lived PDF link (ops tools only; absent when unconfigured). */
   signPdf?: (kind: "invoice" | "creditmemo", qbId: string, name: string) => PdfLink;
-  /** Signed statement link, built + numbered when opened (ops tools only). */
-  signStatement?: (customerId: string, origin: "feldart" | "tj" | "both", byUserId: string, name: string) => PdfLink;
+  /** Signed link to a file the tool just generated and stored (ops tools only). */
+  signStoredFile?: (fileId: string, name: string) => PdfLink;
 };
 
 export type ToolDef = {
@@ -42,6 +42,8 @@ export type ToolDef = {
   ops?: boolean;
   /** Returns a {proposal} for the hub's Confirm card instead of acting. */
   write?: boolean;
+  /** Acts directly when called (e.g. allocates a statement number). Never run unattended. */
+  sideEffect?: boolean;
   description: string;
   input_schema: Record<string, unknown>;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;

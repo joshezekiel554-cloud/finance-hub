@@ -14,7 +14,12 @@ import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
 import type { ToolDefinition } from "../../integrations/anthropic/tool-registry.js";
 import { buildAgentReadTools } from "../agent/tools/read-tools.js";
-import { pdfFileName } from "../../lib/file-link.js";
+import { nanoid } from "nanoid";
+import { auditLog as auditLogTable } from "../../db/schema/audit.js";
+import { storeAiFile } from "../../lib/ai-file-store.js";
+import { SendStatementError } from "../statements/index.js";
+import { buildStatementPdfAttachment } from "../statements/send.js";
+import { statementDownloadFilename } from "../../server/routes/statements.js";
 import { financeUserIdFor } from "./ops-finance-writes.js";
 import { loadRecentHumanContact } from "../chase/chased-tracker.js";
 import { getOverdueCustomers } from "../chase/lookups.js";
@@ -396,8 +401,9 @@ const adapted = buildAgentReadTools()
 const statementPdf: ToolDef = {
   name: "statement_pdf",
   ops: true,
+  sideEffect: true,
   description:
-    "Get a customer's open-items statement as a PDF download link (valid 15 minutes) — the same PDF as the Download statement button on their finance page, for the Feldart book, the Torah Judaica book, or both in one. Opening the link builds it and gives it the NEXT statement number (each open takes a new number), so only open it when it's needed. To EMAIL the statement to the customer, use send_statement instead.",
+    "Make a customer's open-items statement PDF now and get a download link (valid 15 minutes) — the same PDF as the Download statement button on their finance page, for the Feldart book, the Torah Judaica book, or both in one. Each call issues the NEXT statement number (like pressing Download), so call it once per statement you actually need. To EMAIL the statement to the customer, use send_statement instead.",
   input_schema: {
     type: "object",
     properties: {
@@ -411,15 +417,36 @@ const statementPdf: ToolDef = {
     const p = parse(z.object({ customerId, book: z.enum(["feldart", "tj", "both"]).default("both") }), input);
     const [c] = await db.select({ name: customers.displayName }).from(customers).where(eq(customers.id, p.customerId)).limit(1);
     if (!c) throw new ToolInputError("customerId: no such customer. Use find_customer first.");
-    if (!ctx.signStatement || !ctx.actorEmail) throw new ToolInputError("Statement links are unavailable right now.");
+    if (!ctx.signStoredFile || !ctx.actorEmail) throw new ToolInputError("Statement downloads are unavailable right now.");
     const userId = await financeUserIdFor(ctx.actorEmail);
     if (!userId) throw new ToolInputError("You need to sign in to finance.feldart.com once before finance can issue a statement under your name.");
-    const file = ctx.signStatement(p.customerId, p.book, userId, pdfFileName(`Statement - ${c.name}`));
+    let built: Awaited<ReturnType<typeof buildStatementPdfAttachment>>;
+    try {
+      built = await buildStatementPdfAttachment(p.customerId, p.book);
+    } catch (err) {
+      if (err instanceof SendStatementError) throw new ToolInputError(`No statement: ${err.message}`);
+      throw err;
+    }
+    const fileId = await storeAiFile(built.buffer);
+    const name = statementDownloadFilename(c.name, built.statementNumber);
+    try {
+      await db.insert(auditLogTable).values({
+        id: nanoid(24),
+        userId,
+        action: "statement.download",
+        entityType: "customer",
+        entityId: p.customerId,
+        before: null,
+        after: { origin: p.book, statementNumber: built.statementNumber, bytes: built.buffer.byteLength, via: "feldart_ai" },
+      });
+    } catch {
+      /* the statement exists either way; audit is best-effort here as on the page */
+    }
     return {
       customer: { id: p.customerId, name: c.name, url: `${ctx.baseUrl}/customers/${p.customerId}` },
       book: p.book,
-      file,
-      note: "Opening the link generates the statement and assigns the next statement number.",
+      statementNumber: built.statementNumber,
+      file: ctx.signStoredFile(fileId, name),
     };
   },
 };

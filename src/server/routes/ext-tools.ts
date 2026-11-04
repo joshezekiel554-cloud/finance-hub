@@ -11,7 +11,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { env } from "../../lib/env.js";
-import { signQbPdfLink, signStatementLink } from "../../lib/file-link.js";
+import { signQbPdfLink, signStoredFileLink } from "../../lib/file-link.js";
 import type { HubTokenClaims } from "../../lib/hub-token.js";
 import { createLogger } from "../../lib/logger.js";
 import { isEmailAllowed } from "../lib/hub-handoff.js";
@@ -48,7 +48,7 @@ export function manifestEntry(t: ToolDef) {
     name: t.name,
     description: t.description,
     input_schema: t.input_schema,
-    "x-feldart-effect": t.write ? ("propose" as const) : ("read" as const),
+    "x-feldart-effect": t.write ? ("propose" as const) : t.sideEffect ? ("write" as const) : ("read" as const),
   };
 }
 
@@ -88,8 +88,8 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
         ? {
             signPdf: (kind, qbId, name) =>
               signQbPdfLink({ baseUrl, secret, kind, qbId, name, nowSeconds: Math.floor(Date.now() / 1000) }),
-            signStatement: (customerId, origin, byUserId, name) =>
-              signStatementLink({ baseUrl, secret, customerId, origin, byUserId, name, nowSeconds: Math.floor(Date.now() / 1000) }),
+            signStoredFile: (fileId, name) =>
+              signStoredFileLink({ baseUrl, secret, fileId, name, mime: "application/pdf", nowSeconds: Math.floor(Date.now() / 1000) }),
           }
         : {}),
     };

@@ -51,10 +51,12 @@ describe("ops gate", () => {
 
   it("declares each tool's effect for the hub (writes = propose, everything else read)", () => {
     for (const t of [...FINANCE_TOOLS, ...OPS_TOOLS]) {
-      expect(manifestEntry(t)["x-feldart-effect"], t.name).toBe(t.write ? "propose" : "read");
+      expect(manifestEntry(t)["x-feldart-effect"], t.name).toBe(t.write ? "propose" : t.sideEffect ? "write" : "read");
     }
     expect(manifestEntry(OPS_TOOLS.find((t) => t.name === "send_statement")!)["x-feldart-effect"]).toBe("propose");
     expect(manifestEntry(OPS_TOOLS.find((t) => t.name === "find_invoice")!)["x-feldart-effect"]).toBe("read");
+    // statement_pdf issues a statement number when called → never in scheduled runs
+    expect(manifestEntry(OPS_TOOLS.find((t) => t.name === "statement_pdf")!)["x-feldart-effect"]).toBe("write");
   });
 
   it("every ops tool has a closed schema and a model-facing description", () => {
