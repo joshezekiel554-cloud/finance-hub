@@ -50,7 +50,7 @@ describe("hub proposal settle rules", () => {
 
 describe("hub write tools", () => {
   it("every one is ops + write, has an executor, and says nothing happens until Confirm", () => {
-    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "send_invoice_qbo", "dismiss_email_review", "save_rma_tracking"]);
+    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "update_customer_emails", "send_invoice_qbo", "dismiss_email_review", "save_rma_tracking"]);
     for (const t of OPS_FINANCE_WRITES) {
       expect(t.ops && t.write).toBe(true);
       expect(getToolByName(t.name)).not.toBeNull();
@@ -99,5 +99,22 @@ describe("hub-only guard + stale check", () => {
       'Overdue now: "Feldart $500.00 · Torah Judaica $0.00" → "Feldart $0.00 · Torah Judaica $0.00"',
     );
     expect(previewDrift(shown, [shown[0]!])).toMatch(/^Overdue now: .* → "—"$/);
+  });
+});
+
+describe("customer email changes", () => {
+  it("flags domains the customer has never used (invoice-redirect guard)", async () => {
+    const { newDomains } = await import("./ops-finance-writes.js");
+    expect(newDomains(["a@keterjudaica.com", "b@yefenofbooks.com"], ["c@keterjudaica.com"])).toEqual([]);
+    expect(newDomains(["a@keterjudaica.com"], ["x@gmail.com", "y@Gmail.com", "z@keterjudaica.com"])).toEqual(["gmail.com"]);
+    expect(newDomains([], ["x@new.com"])).toEqual(["new.com"]);
+  });
+
+  it("validates addresses and needs at least one list", async () => {
+    const { UpdateCustomerEmailsArgs } = await import("../ai-agent/tools.js");
+    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1" }).success).toBe(false);
+    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceTo: ["not-an-email"] }).success).toBe(false);
+    const ok = UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceTo: [" A@Keter.com "], statementCc: [] });
+    expect(ok.success && ok.data.invoiceTo).toEqual(["a@keter.com"]);
   });
 });

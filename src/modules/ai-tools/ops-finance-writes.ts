@@ -52,7 +52,10 @@ const TITLES: Record<string, string> = {
   save_rma_tracking: "Save return tracking on RMA",
   send_invoice_qbo: "Email invoice from QuickBooks",
   dismiss_email_review: "Dismiss from Email review",
+  update_customer_emails: "Change customer email addresses",
 };
+
+const CUSTOMER_ID_PROP_W = { type: "string", description: "Finance customer id from find_customer." };
 
 const SAVE_RMA_TRACKING_SCHEMA = {
   type: "object",
@@ -84,6 +87,42 @@ const DISMISS_REVIEW_SCHEMA = {
   required: ["invoiceId", "reason"],
   additionalProperties: false,
 };
+
+const EMAIL_LIST_PROP = (what: string) => ({
+  type: "array",
+  items: { type: "string" },
+  description: `The FULL new ${what} list (replaces it). Omit to leave unchanged; [] clears it.`,
+});
+const UPDATE_EMAILS_SCHEMA = {
+  type: "object",
+  properties: {
+    customerId: CUSTOMER_ID_PROP_W,
+    invoiceTo: EMAIL_LIST_PROP("invoice To"),
+    invoiceCc: EMAIL_LIST_PROP("invoice Cc"),
+    invoiceBcc: EMAIL_LIST_PROP("invoice Bcc"),
+    statementTo: EMAIL_LIST_PROP("statement/chase To"),
+    statementCc: EMAIL_LIST_PROP("statement/chase Cc"),
+    statementBcc: EMAIL_LIST_PROP("statement/chase Bcc"),
+  },
+  required: ["customerId"],
+  additionalProperties: false,
+};
+
+const EMAIL_LIST_LABEL: Record<string, string> = {
+  invoiceTo: "Invoice To",
+  invoiceCc: "Invoice Cc",
+  invoiceBcc: "Invoice Bcc",
+  statementTo: "Statement To",
+  statementCc: "Statement Cc",
+  statementBcc: "Statement Bcc",
+};
+
+/** Domains in `next` that none of the customer's current addresses use. */
+export function newDomains(current: string[], next: string[]): string[] {
+  const dom = (e: string) => e.split("@")[1]?.toLowerCase() ?? "";
+  const known = new Set(current.map(dom).filter(Boolean));
+  return [...new Set(next.map(dom).filter((d) => d && !known.has(d)))];
+}
 
 export type PreviewRow = { field: string; value: string };
 
@@ -258,6 +297,23 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
       }
       break;
     }
+    case "update_customer_emails": {
+      const cols = { invoiceTo: c!.invoiceToEmails, invoiceCc: c!.invoiceCcEmails, invoiceBcc: c!.invoiceBccEmails, statementTo: c!.statementToEmails, statementCc: c!.statementCcEmails, statementBcc: c!.statementBccEmails } as Record<string, unknown>;
+      const asList = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
+      const allCurrent = [c!.primaryEmail ?? "", ...asList(c!.billingEmails), ...Object.values(cols).flatMap(asList)].filter(Boolean);
+      const allNext: string[] = [];
+      for (const key of Object.keys(EMAIL_LIST_LABEL)) {
+        const next = args[key];
+        if (next === undefined) continue;
+        const list = (next as string[]).map((e) => e.trim().toLowerCase());
+        allNext.push(...list);
+        push(EMAIL_LIST_LABEL[key]!, `${asList(cols[key]).join(", ") || "(none)"}  →  ${list.join(", ") || "(none — cleared)"}`);
+      }
+      const fresh = newDomains(allCurrent, allNext);
+      if (fresh.length) rows.unshift({ field: "⚠ New domain", value: `${fresh.join(", ")} — no current address for this customer uses it. Check it's really theirs before confirming.` });
+      if (args.invoiceTo !== undefined) push("Also", "Updates the customer's email in QuickBooks (invoices QuickBooks sends on its own)");
+      break;
+    }
     case "create_admin_notification":
       push("Title", args.title);
       push("Message", args.message);
@@ -341,6 +397,11 @@ export const OPS_FINANCE_WRITES: ToolDef[] = [
     const description = n === "dispute_transition" ? "Propose moving a Torah Judaica invoice through the dispute flow: claims_paid (park while we verify) or not_paid (resume chasing)." : d.description;
     return hubWriteTool(n, description, schema as Record<string, unknown>);
   }),
+  hubWriteTool(
+    "update_customer_emails",
+    "Propose changing where a customer's invoices and statements/chase emails go: replace any of the invoice To/Cc/Bcc and statement To/Cc/Bcc address lists (give the FULL new list; omitted lists stay as they are). Use get_customer first to see the current lists. Use to fix a bounced address before resending. The card warns if a new address uses a domain the customer has never used.",
+    UPDATE_EMAILS_SCHEMA,
+  ),
   hubWriteTool(
     "send_invoice_qbo",
     "Propose (re)sending one invoice to the customer from QuickBooks, to the customer's invoice email addresses on file. Use for invoices that bounced or were never emailed (invoice_email_issues) or when a customer says they didn't get it. If the address is wrong, fix the customer's email first.",
