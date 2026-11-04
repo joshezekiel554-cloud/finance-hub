@@ -50,6 +50,8 @@ const TITLES: Record<string, string> = {
   dispute_transition: "Move a Torah Judaica dispute",
   create_admin_notification: "Raise a team notification",
   save_rma_tracking: "Save return tracking on RMA",
+  send_invoice_qbo: "Email invoice from QuickBooks",
+  dismiss_email_review: "Dismiss from Email review",
 };
 
 const SAVE_RMA_TRACKING_SCHEMA = {
@@ -60,6 +62,26 @@ const SAVE_RMA_TRACKING_SCHEMA = {
     trackingCarrier: { type: "string", description: "Carrier if known, e.g. UPS, FedEx, USPS." },
   },
   required: ["rmaId", "trackingNumber"],
+  additionalProperties: false,
+};
+
+const SEND_INVOICE_SCHEMA = {
+  type: "object",
+  properties: {
+    invoiceId: { type: "string", description: "Finance invoice id — the `id` from invoice_email_issues or find_invoice (not the QuickBooks number)." },
+  },
+  required: ["invoiceId"],
+  additionalProperties: false,
+};
+
+const DISMISS_REVIEW_SCHEMA = {
+  type: "object",
+  properties: {
+    invoiceId: { type: "string", description: "Finance invoice id from invoice_email_issues." },
+    reason: { type: "string", enum: ["sent_elsewhere", "no_invoice_needed", "other"], description: "sent_elsewhere = the customer got it another way; no_invoice_needed = e.g. paid upfront / internal; other = explain in reasonNote." },
+    reasonNote: { type: "string", description: "Short note; required when reason is other." },
+  },
+  required: ["invoiceId", "reason"],
   additionalProperties: false,
 };
 
@@ -205,6 +227,37 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
       }
       break;
     }
+    case "send_invoice_qbo":
+    case "dismiss_email_review": {
+      const [inv] = await db.select().from(invoices).where(eq(invoices.id, String(args.invoiceId))).limit(1);
+      if (!inv) throw new ToolInputError(`invoiceId "${String(args.invoiceId)}" does not exist — use the id from invoice_email_issues or find_invoice.`);
+      const ic = await customerFor(inv.customerId);
+      push("Invoice", `${inv.docNumber ?? "?"} — ${ic?.displayName ?? "?"} — total $${inv.total}, balance $${inv.balance}`);
+      push("QuickBooks email status", inv.deliveryError ? `bounced (${inv.deliveryError})` : inv.emailStatus ?? "not emailed");
+      if (tool === "send_invoice_qbo") {
+        if (inv.status === "void") throw new ToolInputError("That invoice is void — nothing to send.");
+        if (ic) {
+          const r = await resolveRecipients("invoice", {
+            primaryEmail: ic.primaryEmail,
+            billingEmails: ic.billingEmails as string[] | null,
+            invoiceToEmails: ic.invoiceToEmails as string[] | null,
+            invoiceCcEmails: ic.invoiceCcEmails as string[] | null,
+            invoiceBccEmails: ic.invoiceBccEmails as string[] | null,
+            statementToEmails: ic.statementToEmails as string[] | null,
+            statementCcEmails: ic.statementCcEmails as string[] | null,
+            statementBccEmails: ic.statementBccEmails as string[] | null,
+            tags: ic.tags as string[] | null,
+          });
+          if (r.to.length === 0) throw new ToolInputError("This customer has no invoice email address on file — add one on their finance record first.");
+          push("Sends to", r.cc.length ? `${r.to.join(", ")} (cc ${r.cc.join(", ")})` : r.to.join(", "));
+        }
+        push("Also", "QuickBooks emails it from its own system; this goes out as soon as you Confirm");
+      } else {
+        push("Reason", { sent_elsewhere: "Customer got it another way", no_invoice_needed: "No invoice email needed", other: "Other" }[String(args.reason)] ?? args.reason);
+        push("Note", args.reasonNote);
+      }
+      break;
+    }
     case "create_admin_notification":
       push("Title", args.title);
       push("Message", args.message);
@@ -288,6 +341,16 @@ export const OPS_FINANCE_WRITES: ToolDef[] = [
     const description = n === "dispute_transition" ? "Propose moving a Torah Judaica invoice through the dispute flow: claims_paid (park while we verify) or not_paid (resume chasing)." : d.description;
     return hubWriteTool(n, description, schema as Record<string, unknown>);
   }),
+  hubWriteTool(
+    "send_invoice_qbo",
+    "Propose (re)sending one invoice to the customer from QuickBooks, to the customer's invoice email addresses on file. Use for invoices that bounced or were never emailed (invoice_email_issues) or when a customer says they didn't get it. If the address is wrong, fix the customer's email first.",
+    SEND_INVOICE_SCHEMA,
+  ),
+  hubWriteTool(
+    "dismiss_email_review",
+    "Propose hiding an invoice from finance's Email review lists (bounced / never emailed) when it doesn't need sending — e.g. the customer got it another way or no invoice email is needed.",
+    DISMISS_REVIEW_SCHEMA,
+  ),
   hubWriteTool(
     "save_rma_tracking",
     "Propose saving the customer's return tracking number on an RMA that's awaiting the parcel (status sent to warehouse / awaiting warehouse number). Saving also emails the warehouse team so they expect it. Use rma_tracking_status to find RMAs missing tracking.",

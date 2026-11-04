@@ -30,6 +30,7 @@ import { invoices } from "../../db/schema/invoices.js";
 import { createLogger } from "../../lib/logger.js";
 import { isDismissalActive } from "../../modules/invoice-email-review/index.js";
 import { loadEmailReview } from "../../modules/invoice-email-review/load.js";
+import { dismissEmailReview } from "../../modules/invoice-email-review/dismiss.js";
 import { requireAuth } from "../lib/auth.js";
 
 export type {
@@ -69,59 +70,9 @@ const emailReviewRoutes: FastifyPluginAsync = async (app) => {
     const { invoiceId, reason } = parse.data;
     const reasonNote = parse.data.reasonNote?.trim() || null;
 
-    // deliveryTime/deliveryError come back with the existence check so the
-    // response can tell the operator whether the dismissal actually hides
-    // the row (an undated bounce never can).
-    const invoiceRows = await db
-      .select({
-        id: invoices.id,
-        deliveryTime: invoices.deliveryTime,
-        deliveryError: invoices.deliveryError,
-      })
-      .from(invoices)
-      .where(eq(invoices.id, invoiceId))
-      .limit(1);
-    const invoice = invoiceRows[0];
-    if (!invoice) return reply.code(404).send({ error: "invoice not found" });
-
-    const dismissedAt = new Date();
-    await db.transaction(async (tx) => {
-      const beforeRows = await tx
-        .select()
-        .from(invoiceEmailDismissals)
-        .where(eq(invoiceEmailDismissals.invoiceId, invoiceId))
-        .limit(1);
-      const before = beforeRows[0] ?? null;
-
-      await tx
-        .insert(invoiceEmailDismissals)
-        .values({ invoiceId, reason, reasonNote, dismissedAt, dismissedByUserId: user.id })
-        .onDuplicateKeyUpdate({
-          set: { reason, reasonNote, dismissedAt, dismissedByUserId: user.id },
-        });
-
-      await tx.insert(auditLog).values({
-        id: nanoid(24),
-        userId: user.id,
-        action: "invoice_email_review.dismiss",
-        entityType: "invoice",
-        entityId: invoiceId,
-        before: before ? ({ ...before } as Record<string, unknown>) : null,
-        after: {
-          invoiceId,
-          reason,
-          reasonNote,
-          dismissedAt: dismissedAt.toISOString(),
-          dismissedByUserId: user.id,
-        },
-      });
-    });
-
-    const hidden = isDismissalActive(
-      dismissedAt,
-      invoice.deliveryTime,
-      invoice.deliveryError,
-    );
+    const res = await dismissEmailReview({ invoiceId, reason, reasonNote, userId: user.id });
+    if (!res.ok) return reply.code(404).send({ error: "invoice not found" });
+    const hidden = res.hidden;
     log.info({ invoiceId, reason, hidden, userId: user.id }, "email-review dismissed");
     return reply.send({ ok: true, hidden });
   });

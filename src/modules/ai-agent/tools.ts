@@ -1127,6 +1127,77 @@ const saveRmaTrackingTool: Tool<SaveRmaTrackingArgsT> = {
   },
 };
 
+// Feldart AI (hub) ops: (re)send one invoice from QuickBooks to the
+// customer's resolved invoice recipients — same path as the customer page's
+// "Send via QBO" (send-via-qbo.ts), plus an audit row.
+const SendInvoiceQboArgs = z.object({ invoiceId: z.string().max(64) });
+type SendInvoiceQboArgsT = z.infer<typeof SendInvoiceQboArgs>;
+
+const sendInvoiceQboTool: Tool<SendInvoiceQboArgsT> = {
+  name: "send_invoice_qbo",
+  description: "Email one invoice to the customer from QuickBooks (resolved invoice recipients).",
+  argsSchema: SendInvoiceQboArgs,
+  execute: async (args, ctx) => {
+    try {
+      const [invoice] = await db.select().from(invoices).where(eq(invoices.id, args.invoiceId)).limit(1);
+      if (!invoice) return { ok: false, error: "invoice not found" };
+      if (invoice.status === "void") return { ok: false, error: "invoice is void" };
+      const [customer] = await db.select().from(customers).where(eq(customers.id, invoice.customerId)).limit(1);
+      if (!customer) return { ok: false, error: "customer not found" };
+      const { sendInvoiceViaQbo } = await import("../invoice-send/send-via-qbo.js");
+      const res = await sendInvoiceViaQbo({ customer, invoice, userId: ctx.userId });
+      await db.insert(auditLog).values({
+        id: nanoid(24),
+        userId: ctx.userId,
+        action: "invoice.sent_via_qbo",
+        entityType: "invoice",
+        entityId: invoice.id,
+        before: { sentAt: invoice.sentAt, emailStatus: invoice.emailStatus, deliveryError: invoice.deliveryError },
+        after: { to: res.to, cc: res.cc, bcc: res.bcc, sentAt: res.sentAt.toISOString(), aiProposalId: ctx.proposalId },
+      });
+      return { ok: true };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "send_invoice_qbo failed");
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
+const DismissEmailReviewArgs = z
+  .object({
+    invoiceId: z.string().max(64),
+    reason: z.enum(["sent_elsewhere", "no_invoice_needed", "other"]),
+    reasonNote: z.string().trim().max(500).optional(),
+  })
+  .refine((a) => a.reason !== "other" || (a.reasonNote ?? "").length > 0, {
+    message: "a note is required when reason is 'other'",
+    path: ["reasonNote"],
+  });
+type DismissEmailReviewArgsT = z.infer<typeof DismissEmailReviewArgs>;
+
+const dismissEmailReviewTool: Tool<DismissEmailReviewArgsT> = {
+  name: "dismiss_email_review",
+  description: "Hide an invoice from finance's Email review lists, with a reason.",
+  argsSchema: DismissEmailReviewArgs,
+  execute: async (args, ctx) => {
+    try {
+      const { dismissEmailReview } = await import("../invoice-email-review/dismiss.js");
+      const res = await dismissEmailReview({
+        invoiceId: args.invoiceId,
+        reason: args.reason,
+        reasonNote: args.reasonNote || null,
+        userId: ctx.userId,
+        aiProposalId: ctx.proposalId,
+      });
+      if (!res.ok) return { ok: false, error: "invoice not found" };
+      return res.hidden ? { ok: true } : { ok: true, note: "dismissed, but an undated bounce stays listed until QuickBooks dates it" };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "dismiss_email_review failed");
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
 const TOOLS: Record<string, Tool> = {
   send_chase_email: sendChaseEmailTool as Tool,
   send_statement: sendStatementTool as Tool,
@@ -1141,6 +1212,8 @@ const TOOLS: Record<string, Tool> = {
   set_payment_terms: setPaymentTermsTool as Tool,
   dispute_transition: disputeTransitionTool as Tool,
   save_rma_tracking: saveRmaTrackingTool as Tool,
+  send_invoice_qbo: sendInvoiceQboTool as Tool,
+  dismiss_email_review: dismissEmailReviewTool as Tool,
 };
 
 export function getToolByName(name: string): Tool | null {

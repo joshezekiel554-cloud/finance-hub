@@ -66,6 +66,8 @@ export function invoiceState(
 
 type DocRow = {
   type: "invoice" | "credit_memo";
+  /** Finance id — pass to send_invoice_qbo / dismiss_email_review. */
+  invoiceId?: string;
   number: string | null;
   book: string;
   customer: string;
@@ -125,6 +127,7 @@ const findInvoice: ToolDef = {
 
     const invRows = await db
       .select({
+        id: invoices.id,
         qbId: invoices.qbInvoiceId,
         number: invoices.docNumber,
         origin: invoices.origin,
@@ -174,6 +177,7 @@ const findInvoice: ToolDef = {
         const due = dayOf(r.dueDate);
         return {
           type: "invoice",
+          invoiceId: r.id,
           number: r.number,
           book: BOOK_LABEL[r.origin],
           customer: r.customer,
