@@ -58,7 +58,8 @@ export function signQbPdfLink(input: {
 }
 
 export function verifyQbPdfLink(input: {
-  secret: string | undefined;
+  // Any of these (finance-only secret, or the shared one during cutover).
+  secret: string | readonly string[] | undefined;
   kind: string;
   qbId: string;
   exp: unknown;
@@ -66,7 +67,8 @@ export function verifyQbPdfLink(input: {
   sig: unknown;
   nowSeconds: number;
 }): { kind: QbPdfKind; qbId: string; name: string } | null {
-  if (!input.secret) return null;
+  const secrets = (typeof input.secret === "string" ? [input.secret] : input.secret ?? []).filter(Boolean);
+  if (secrets.length === 0) return null;
   if (input.kind !== "invoice" && input.kind !== "creditmemo") return null;
   if (!/^\d{1,32}$/.test(input.qbId)) return null;
   if (typeof input.exp !== "string" || !/^\d{1,12}$/.test(input.exp)) return null;
@@ -74,8 +76,13 @@ export function verifyQbPdfLink(input: {
   if (typeof input.sig !== "string" || input.sig.length === 0) return null;
   const exp = Number(input.exp);
   if (exp < input.nowSeconds) return null;
-  const want = Buffer.from(signature(input.secret, input.kind, input.qbId, exp, input.name));
   const got = Buffer.from(input.sig);
-  if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
+  const kind: QbPdfKind = input.kind;
+  const name = input.name;
+  const ok = secrets.some((secret) => {
+    const want = Buffer.from(signature(secret, kind, input.qbId, exp, name));
+    return want.length === got.length && timingSafeEqual(want, got);
+  });
+  if (!ok) return null;
   return { kind: input.kind, qbId: input.qbId, name: input.name };
 }

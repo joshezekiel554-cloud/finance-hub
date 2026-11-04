@@ -14,6 +14,7 @@ import { db } from "../../db/index.js";
 import { sessions, users } from "../../db/schema/auth.js";
 import { env } from "../../lib/env.js";
 import { verifyHubToken } from "../../lib/hub-token.js";
+import { hubSecrets } from "../lib/hub-service-auth.js";
 import { createLogger } from "../../lib/logger.js";
 import { getSession } from "../lib/auth.js";
 import {
@@ -44,14 +45,14 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
         .header("content-type", "text/html; charset=utf-8")
         .send(renderHandoffErrorPage({ reason, publicUrl: env.PUBLIC_URL }));
 
-    const secret = env.HUB_SSO_SECRET;
-    if (!secret) {
+    const secrets = hubSecrets();
+    if (secrets.length === 0) {
       return refuse(503, "Hub sign-in is not configured on this app.");
     }
 
     const nowSeconds = Math.floor(Date.now() / 1000);
     const claims = verifyHubToken(req.query.ht ?? "", {
-      secret,
+      secret: secrets,
       aud: "finance",
       nowSeconds,
     });

@@ -13,7 +13,8 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 export type HubAudience = "inbox" | "finance" | "internal";
-export type HubTokenScope = "user" | "service";
+// confirm = one Confirm/Cancel click on one proposal (pid), 60 s.
+export type HubTokenScope = "user" | "service" | "confirm";
 
 export type HubTokenClaims = {
   email: string;
@@ -23,6 +24,8 @@ export type HubTokenClaims = {
   // `ops: true` — the hub vouches this member is on its OPS_AGENT_EMAILS list
   // (Feldart AI ops tools + proposal confirm). Anything else → false.
   ops: boolean;
+  // Proposal id a scope:"confirm" token is bound to ("" otherwise).
+  pid: string;
 };
 
 function sign(seg1: string, secret: string): string {
@@ -38,6 +41,7 @@ export function mintHubToken(input: {
   scope?: HubTokenScope;
   jti?: string;
   ops?: boolean;
+  pid?: string;
 }): string {
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   const payload: Record<string, unknown> = {
@@ -48,15 +52,18 @@ export function mintHubToken(input: {
   };
   if (input.scope) payload.scope = input.scope;
   if (input.ops) payload.ops = true;
+  if (input.pid) payload.pid = input.pid;
   const seg1 = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${seg1}.${sign(seg1, input.secret)}`;
 }
 
 export function verifyHubToken(
   token: string,
-  opts: { secret: string; aud: HubAudience; nowSeconds: number },
+  // One secret, or several during a secret cutover (any one may match).
+  opts: { secret: string | readonly string[]; aud: HubAudience; nowSeconds: number },
 ): HubTokenClaims | null {
-  if (!opts.secret || !token) return null;
+  const secrets = (typeof opts.secret === "string" ? [opts.secret] : opts.secret).filter(Boolean);
+  if (secrets.length === 0 || !token) return null;
   const dot = token.indexOf(".");
   if (dot === -1) return null;
   const seg1 = token.slice(0, dot);
@@ -64,8 +71,11 @@ export function verifyHubToken(
   if (!seg1 || !providedSig) return null;
 
   const a = Buffer.from(providedSig);
-  const b = Buffer.from(sign(seg1, opts.secret));
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  const matches = secrets.some((secret) => {
+    const b = Buffer.from(sign(seg1, secret));
+    return a.length === b.length && timingSafeEqual(a, b);
+  });
+  if (!matches) return null;
 
   let payload: unknown;
   try {
@@ -82,7 +92,7 @@ export function verifyHubToken(
 
   let scope: HubTokenScope = "user";
   if (p.scope !== undefined) {
-    if (p.scope !== "user" && p.scope !== "service") return null;
+    if (p.scope !== "user" && p.scope !== "service" && p.scope !== "confirm") return null;
     scope = p.scope;
   }
 
@@ -92,5 +102,6 @@ export function verifyHubToken(
     jti: typeof p.jti === "string" ? p.jti : "",
     scope,
     ops: p.ops === true,
+    pid: typeof p.pid === "string" ? p.pid : "",
   };
 }

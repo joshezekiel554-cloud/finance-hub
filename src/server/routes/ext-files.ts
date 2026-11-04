@@ -6,7 +6,7 @@
 // Feldart realm, split by doc-number prefix), so a qbId is unambiguous.
 
 import type { FastifyPluginAsync } from "fastify";
-import { env } from "../../lib/env.js";
+import { hubSecrets } from "../lib/hub-service-auth.js";
 import { verifyQbPdfLink } from "../../lib/file-link.js";
 import { createLogger } from "../../lib/logger.js";
 import { QboClient } from "../../integrations/qb/client.js";
@@ -20,7 +20,7 @@ const extFilesRoute: FastifyPluginAsync = async (app) => {
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (req, reply) => {
       const link = verifyQbPdfLink({
-        secret: env.HUB_SSO_SECRET,
+        secret: hubSecrets(),
         kind: req.params.kind,
         qbId: req.params.qbId,
         exp: req.query.exp,
