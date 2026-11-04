@@ -1207,48 +1207,58 @@ const dismissEmailReviewTool: Tool<DismissEmailReviewArgsT> = {
   },
 };
 
-// Feldart AI (hub) ops: replace a customer's invoice / statement recipient
-// lists (same columns + audit + QBO PrimaryEmailAddr push as the customer
-// page's PATCH). Omitted = unchanged; [] = clear that list.
+// Feldart AI (hub) ops: add/remove addresses on a customer's invoice /
+// statement recipient lists (same columns + audit + QBO PrimaryEmailAddr push
+// as the customer page's PATCH). See customer-emails/list-changes.ts.
 const emailList = z.array(z.string().trim().toLowerCase().email().max(255)).max(20);
 export const UpdateCustomerEmailsArgs = z
   .object({
     customerId: z.string().max(64),
-    invoiceTo: emailList.optional(),
-    invoiceCc: emailList.optional(),
-    invoiceBcc: emailList.optional(),
-    statementTo: emailList.optional(),
-    statementCc: emailList.optional(),
-    statementBcc: emailList.optional(),
+    invoiceToAdd: emailList.optional(),
+    invoiceToRemove: emailList.optional(),
+    invoiceCcAdd: emailList.optional(),
+    invoiceCcRemove: emailList.optional(),
+    invoiceBccAdd: emailList.optional(),
+    invoiceBccRemove: emailList.optional(),
+    statementToAdd: emailList.optional(),
+    statementToRemove: emailList.optional(),
+    statementCcAdd: emailList.optional(),
+    statementCcRemove: emailList.optional(),
+    statementBccAdd: emailList.optional(),
+    statementBccRemove: emailList.optional(),
   })
-  .refine(
-    (a) => ["invoiceTo", "invoiceCc", "invoiceBcc", "statementTo", "statementCc", "statementBcc"].some((k) => a[k as keyof typeof a] !== undefined),
-    { message: "change at least one list", path: ["invoiceTo"] },
-  );
+  .refine((a) => Object.entries(a).some(([k, v]) => k !== "customerId" && Array.isArray(v) && v.length > 0), {
+    message: "add or remove at least one address",
+    path: ["invoiceToAdd"],
+  });
 type UpdateCustomerEmailsArgsT = z.infer<typeof UpdateCustomerEmailsArgs>;
-
-export const EMAIL_LIST_COLUMNS = {
-  invoiceTo: "invoiceToEmails",
-  invoiceCc: "invoiceCcEmails",
-  invoiceBcc: "invoiceBccEmails",
-  statementTo: "statementToEmails",
-  statementCc: "statementCcEmails",
-  statementBcc: "statementBccEmails",
-} as const;
 
 const updateCustomerEmailsTool: Tool<UpdateCustomerEmailsArgsT> = {
   name: "update_customer_emails",
-  description: "Replace a customer's invoice/statement To/Cc/Bcc address lists.",
+  description: "Add/remove addresses on a customer's invoice/statement To/Cc/Bcc lists.",
   argsSchema: UpdateCustomerEmailsArgs,
   execute: async (args, ctx) => {
     try {
       const [before] = await db.select().from(customers).where(eq(customers.id, args.customerId)).limit(1);
       if (!before) return { ok: false, error: "customer not found" };
+      const { applyEmailListChanges, EMAIL_LIST_COLUMNS } = await import("../customer-emails/list-changes.js");
+      const asList = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
+      const changed = applyEmailListChanges(
+        {
+          invoiceTo: asList(before.invoiceToEmails),
+          invoiceCc: asList(before.invoiceCcEmails),
+          invoiceBcc: asList(before.invoiceBccEmails),
+          statementTo: asList(before.statementToEmails),
+          statementCc: asList(before.statementCcEmails),
+          statementBcc: asList(before.statementBccEmails),
+        },
+        args,
+      );
       const set: Record<string, string[] | null> = {};
-      for (const [arg, col] of Object.entries(EMAIL_LIST_COLUMNS)) {
-        const v = args[arg as keyof typeof EMAIL_LIST_COLUMNS];
-        if (v !== undefined) set[col] = v.length ? Array.from(new Set(v)) : null;
+      for (const [key, v] of Object.entries(changed)) {
+        set[EMAIL_LIST_COLUMNS[key as keyof typeof EMAIL_LIST_COLUMNS]] = v!.after.length ? v!.after : null;
       }
+      if (Object.keys(set).length === 0) return { ok: false, error: "nothing to change" };
       await db.update(customers).set(set).where(eq(customers.id, args.customerId));
       const [after] = await db.select().from(customers).where(eq(customers.id, args.customerId)).limit(1);
       await db.insert(auditLog).values({
@@ -1294,7 +1304,7 @@ const updateCustomerEmailsTool: Tool<UpdateCustomerEmailsArgsT> = {
       } catch (noteErr) {
         log.error({ err: noteErr, proposalId: ctx.proposalId }, "update_customer_emails: change saved but note/notification failed");
       }
-      if (args.invoiceTo !== undefined && after?.qbCustomerId) {
+      if (changed.invoiceTo && after?.qbCustomerId) {
         const { pushCustomerInvoiceEmailsToQbo } = await import("../customer-emails/push-to-qbo.js");
         void pushCustomerInvoiceEmailsToQbo({
           qbCustomerId: after.qbCustomerId,

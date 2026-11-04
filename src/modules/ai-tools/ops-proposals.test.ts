@@ -119,12 +119,40 @@ describe("customer email changes", () => {
     expect(isFreeMailDomain("keterjudaica.com")).toBe(false);
   });
 
-  it("validates addresses and needs at least one list", async () => {
+  it("validates addresses and needs at least one add/remove", async () => {
     const { UpdateCustomerEmailsArgs } = await import("../ai-agent/tools.js");
     expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1" }).success).toBe(false);
-    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceTo: ["not-an-email"] }).success).toBe(false);
-    const ok = UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceTo: [" A@Keter.com "], statementCc: [] });
-    expect(ok.success && ok.data.invoiceTo).toEqual(["a@keter.com"]);
+    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceToAdd: [] }).success).toBe(false);
+    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceToAdd: ["not-an-email"] }).success).toBe(false);
+    const ok = UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceToAdd: [" A@Keter.com "] });
+    expect(ok.success && ok.data.invoiceToAdd).toEqual(["a@keter.com"]);
+    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceTo: ["a@keter.com"] }).success).toBe(false); // old replace-style key: stripped, so nothing to change
+  });
+
+  it("add/remove keeps existing addresses and reports only true additions", async () => {
+    const { applyEmailListChanges } = await import("../customer-emails/list-changes.js");
+    const r = applyEmailListChanges(
+      { invoiceTo: ["williamsburg@keterjudaica.com", "old@keterjudaica.com"], statementTo: ["a@x.com"] },
+      { invoiceToAdd: ["Accounts@KeterJudaica.com", "williamsburg@keterjudaica.com"], invoiceToRemove: ["old@keterjudaica.com"] },
+    );
+    expect(r).toEqual({
+      invoiceTo: {
+        before: ["williamsburg@keterjudaica.com", "old@keterjudaica.com"],
+        after: ["williamsburg@keterjudaica.com", "accounts@keterjudaica.com"],
+        added: ["accounts@keterjudaica.com"],
+      },
+    });
+    expect(applyEmailListChanges({ invoiceTo: ["a@x.com"] }, { invoiceToRemove: ["a@x.com"] }).invoiceTo?.after).toEqual([]);
+    expect(applyEmailListChanges({ invoiceTo: ["a@x.com"] }, {})).toEqual({});
+  });
+
+  it("marks only the ADD lists x-feldart-typed for the hub's typed guard", async () => {
+    const { OPS_FINANCE_WRITES } = await import("./ops-finance-writes.js");
+    const t = OPS_FINANCE_WRITES.find((x) => x.name === "update_customer_emails")!;
+    const props = t.input_schema.properties as Record<string, Record<string, unknown>>;
+    for (const [k, v] of Object.entries(props)) {
+      expect(v["x-feldart-typed"] === true, k).toBe(k.endsWith("Add"));
+    }
   });
 });
 
