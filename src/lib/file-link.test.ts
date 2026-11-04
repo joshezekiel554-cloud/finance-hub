@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pdfFileName, signQbPdfLink, verifyQbPdfLink } from "./file-link.js";
+import { pdfFileName, signQbPdfLink, signStoredFileLink, verifyQbPdfLink, verifyStoredFileLink } from "./file-link.js";
 
 const SECRET = "s".repeat(40);
 const NOW = 1_800_000_000;
@@ -54,5 +54,29 @@ describe("signed qb pdf links", () => {
   it("makes OS-safe download names", () => {
     expect(pdfFileName('Invoice 1/2 - "A:B" <C>')).toBe("Invoice 12 - AB C.pdf");
     expect(pdfFileName("   ")).toBe("document.pdf");
+  });
+});
+
+describe("signed stored-file links", () => {
+  const FILE = "A".repeat(32);
+  const link = () => signStoredFileLink({ baseUrl: "https://f", secret: SECRET, fileId: FILE, name: "Acme, 7105.pdf", mime: "application/pdf", nowSeconds: NOW });
+  const parts = (url: string) => {
+    const u = new URL(url);
+    const fileId = u.pathname.split("/").pop()!;
+    return { fileId, exp: u.searchParams.get("exp"), name: u.searchParams.get("name"), sig: u.searchParams.get("sig") };
+  };
+  it("round-trips", () => {
+    const l = link();
+    expect(l.url.startsWith(`https://f/api/files/stored/${FILE}?`)).toBe(true);
+    expect(verifyStoredFileLink({ secret: [SECRET], ...parts(l.url), nowSeconds: NOW + 1 })).toEqual({ fileId: FILE, name: "Acme, 7105.pdf" });
+  });
+  it("refuses another file, a renamed download, expiry and a qb-pdf signature", () => {
+    const p = parts(link().url);
+    const ok = (over: Partial<typeof p>, now = NOW) => verifyStoredFileLink({ secret: SECRET, ...p, ...over, nowSeconds: now }) !== null;
+    expect(ok({ fileId: "B".repeat(32) })).toBe(false);
+    expect(ok({ name: "Other.pdf" })).toBe(false);
+    expect(ok({}, NOW + 901)).toBe(false);
+    expect(ok({ fileId: "../etc/passwd" })).toBe(false);
+    expect(ok({ sig: new URL(sign().url).searchParams.get("sig") })).toBe(false);
   });
 });

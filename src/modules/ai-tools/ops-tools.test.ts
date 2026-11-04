@@ -7,7 +7,7 @@ import {
   rmaRow,
 } from "./ops-tools.js";
 import { FINANCE_TOOLS } from "./finance-tools.js";
-import { hasOpsAccess, OPS_TOOLS, toolsFor } from "../../server/routes/ext-tools.js";
+import { hasOpsAccess, manifestEntry, OPS_TOOLS, toolsFor } from "../../server/routes/ext-tools.js";
 import { mintHubToken, verifyHubToken } from "../../lib/hub-token.js";
 
 const OPS = "josh@feldart.com,joshezekiel554@gmail.com,info@feldartcollection.co.uk";
@@ -47,6 +47,16 @@ describe("ops gate", () => {
     expect(read(1)?.ops).toBe(false);
     const minted = mintHubToken({ email: "a@b.c", aud: "finance", ttlSeconds: 60, secret, nowSeconds: now, ops: true });
     expect(verifyHubToken(minted, { secret, aud: "finance", nowSeconds: now })?.ops).toBe(true);
+  });
+
+  it("declares each tool's effect for the hub (writes = propose, everything else read)", () => {
+    for (const t of [...FINANCE_TOOLS, ...OPS_TOOLS]) {
+      expect(manifestEntry(t)["x-feldart-effect"], t.name).toBe(t.write ? "propose" : t.sideEffect ? "write" : "read");
+    }
+    expect(manifestEntry(OPS_TOOLS.find((t) => t.name === "send_statement")!)["x-feldart-effect"]).toBe("propose");
+    expect(manifestEntry(OPS_TOOLS.find((t) => t.name === "find_invoice")!)["x-feldart-effect"]).toBe("read");
+    // statement_pdf issues a statement number when called → never in scheduled runs
+    expect(manifestEntry(OPS_TOOLS.find((t) => t.name === "statement_pdf")!)["x-feldart-effect"]).toBe("write");
   });
 
   it("every ops tool has a closed schema and a model-facing description", () => {

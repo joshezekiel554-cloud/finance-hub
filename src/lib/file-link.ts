@@ -86,3 +86,60 @@ export function verifyQbPdfLink(input: {
   if (!ok) return null;
   return { kind: input.kind, qbId: input.qbId, name: input.name };
 }
+
+// ---------------------------------------------------------------------------
+// Stored generated files (lib/ai-file-store.ts). The tool did the work once;
+// this link only streams the stored bytes, so opening it is idempotent.
+//
+//   /api/files/stored/{fileId}?exp={unix}&name={file name}&sig={b64url}
+
+export const STORED_FILE_PATH = "/api/files/stored";
+
+function storedSignature(secret: string, fileId: string, exp: number, name: string): string {
+  return createHmac("sha256", linkKey(secret)).update(`stored\n${fileId}\n${exp}\n${name}`).digest("base64url");
+}
+
+export function signStoredFileLink(input: {
+  baseUrl: string;
+  secret: string;
+  fileId: string;
+  name: string;
+  mime: "application/pdf";
+  nowSeconds: number;
+  ttlSeconds?: number;
+}): { url: string; name: string; mime: "application/pdf"; expiresAt: string } {
+  const exp = input.nowSeconds + (input.ttlSeconds ?? FILE_LINK_TTL_SECONDS);
+  const sig = storedSignature(input.secret, input.fileId, exp, input.name);
+  const qs = new URLSearchParams({ exp: String(exp), name: input.name, sig });
+  return {
+    url: `${input.baseUrl}${STORED_FILE_PATH}/${encodeURIComponent(input.fileId)}?${qs.toString()}`,
+    name: input.name,
+    mime: input.mime,
+    expiresAt: new Date(exp * 1000).toISOString(),
+  };
+}
+
+export function verifyStoredFileLink(input: {
+  secret: string | readonly string[] | undefined;
+  fileId: string;
+  exp: unknown;
+  name: unknown;
+  sig: unknown;
+  nowSeconds: number;
+}): { fileId: string; name: string } | null {
+  const secrets = (typeof input.secret === "string" ? [input.secret] : input.secret ?? []).filter(Boolean);
+  if (secrets.length === 0) return null;
+  if (!/^[A-Za-z0-9_-]{32}$/.test(input.fileId)) return null;
+  if (typeof input.exp !== "string" || !/^\d{1,12}$/.test(input.exp)) return null;
+  if (typeof input.name !== "string" || input.name.length === 0 || input.name.length > 200) return null;
+  if (typeof input.sig !== "string" || input.sig.length === 0) return null;
+  const exp = Number(input.exp);
+  if (exp < input.nowSeconds) return null;
+  const name = input.name;
+  const got = Buffer.from(input.sig);
+  const ok = secrets.some((secret) => {
+    const want = Buffer.from(storedSignature(secret, input.fileId, exp, name));
+    return want.length === got.length && timingSafeEqual(want, got);
+  });
+  return ok ? { fileId: input.fileId, name } : null;
+}

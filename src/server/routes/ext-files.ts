@@ -7,7 +7,8 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { hubSecrets } from "../lib/hub-service-auth.js";
-import { verifyQbPdfLink } from "../../lib/file-link.js";
+import { readAiFile } from "../../lib/ai-file-store.js";
+import { verifyQbPdfLink, verifyStoredFileLink } from "../../lib/file-link.js";
 import { createLogger } from "../../lib/logger.js";
 import { QboClient } from "../../integrations/qb/client.js";
 import { attachmentDisposition } from "./statements.js";
@@ -51,3 +52,35 @@ const extFilesRoute: FastifyPluginAsync = async (app) => {
 };
 
 export default extFilesRoute;
+
+// GET /api/files/stored/:fileId?exp&name&sig — a file a Feldart AI tool
+// already generated (e.g. a numbered statement). Streams the stored bytes
+// only — no side effects, so prefetch / link scanners / double taps are safe.
+export const storedFileRoute: FastifyPluginAsync = async (app) => {
+  app.get<{ Params: { fileId: string }; Querystring: Record<string, unknown> }>(
+    "/files/stored/:fileId",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (req, reply) => {
+      const link = verifyStoredFileLink({
+        secret: hubSecrets(),
+        fileId: req.params.fileId,
+        exp: req.query.exp,
+        name: req.query.name,
+        sig: req.query.sig,
+        nowSeconds: Math.floor(Date.now() / 1000),
+      });
+      const bytes = link ? await readAiFile(link.fileId) : null;
+      if (!link || !bytes) {
+        return reply.code(403).type("text/plain").send("This link has expired or is not valid. Ask Feldart AI for a fresh one.");
+      }
+      return reply
+        .code(200)
+        .header("Content-Type", "application/pdf")
+        .header("Content-Length", bytes.byteLength.toString())
+        .header("Content-Disposition", attachmentDisposition(link.name))
+        .header("Cache-Control", "private, no-store")
+        .header("Referrer-Policy", "no-referrer")
+        .send(bytes);
+    },
+  );
+};

@@ -11,7 +11,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { env } from "../../lib/env.js";
-import { signQbPdfLink } from "../../lib/file-link.js";
+import { signQbPdfLink, signStoredFileLink } from "../../lib/file-link.js";
 import type { HubTokenClaims } from "../../lib/hub-token.js";
 import { createLogger } from "../../lib/logger.js";
 import { isEmailAllowed } from "../lib/hub-handoff.js";
@@ -38,6 +38,20 @@ export function hasOpsAccess(claims: Pick<HubTokenClaims, "email" | "ops">, opsE
   return claims.ops === true && isEmailAllowed(claims.email, opsEmailsCsv);
 }
 
+/**
+ * Manifest entry. "x-feldart-effect" (tool level, hub-only — never sent to
+ * the model) tells the hub what a call does: scheduled/unattended runs only
+ * ever call "read" tools; "propose" tools return a Confirm card.
+ */
+export function manifestEntry(t: ToolDef) {
+  return {
+    name: t.name,
+    description: t.description,
+    input_schema: t.input_schema,
+    "x-feldart-effect": t.write ? ("propose" as const) : t.sideEffect ? ("write" as const) : ("read" as const),
+  };
+}
+
 /** The tools this caller may see, staff tools first. */
 export function toolsFor(opsAccess: boolean): ToolDef[] {
   return opsAccess ? [...FINANCE_TOOLS, ...OPS_TOOLS] : FINANCE_TOOLS;
@@ -50,7 +64,7 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
     const tools = toolsFor(hasOpsAccess(claims, env.FINANCE_AI_OPS_EMAILS));
     // The list differs per caller (ops vs not) — never let a cache share it.
     reply.header("cache-control", "no-store").header("vary", "Authorization");
-    return reply.send({ tools: tools.map(({ name, description, input_schema }) => ({ name, description, input_schema })) });
+    return reply.send({ tools: tools.map(manifestEntry) });
   });
 
   app.post<{ Params: { name: string } }>("/tools/:name", async (req, reply) => {
@@ -74,6 +88,8 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
         ? {
             signPdf: (kind, qbId, name) =>
               signQbPdfLink({ baseUrl, secret, kind, qbId, name, nowSeconds: Math.floor(Date.now() / 1000) }),
+            signStoredFile: (fileId, name) =>
+              signStoredFileLink({ baseUrl, secret, fileId, name, mime: "application/pdf", nowSeconds: Math.floor(Date.now() / 1000) }),
           }
         : {}),
     };

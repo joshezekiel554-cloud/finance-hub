@@ -14,6 +14,13 @@ import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
 import type { ToolDefinition } from "../../integrations/anthropic/tool-registry.js";
 import { buildAgentReadTools } from "../agent/tools/read-tools.js";
+import { nanoid } from "nanoid";
+import { auditLog as auditLogTable } from "../../db/schema/audit.js";
+import { storeAiFile } from "../../lib/ai-file-store.js";
+import { SendStatementError } from "../statements/index.js";
+import { buildStatementPdfAttachment } from "../statements/send.js";
+import { statementDownloadFilename } from "../../server/routes/statements.js";
+import { financeUserIdFor } from "./ops-finance-writes.js";
 import { loadRecentHumanContact } from "../chase/chased-tracker.js";
 import { getOverdueCustomers } from "../chase/lookups.js";
 import { loadMoneySummary } from "../dashboard/money.js";
@@ -391,7 +398,61 @@ const adapted = buildAgentReadTools()
   .filter((t) => t.name in ADAPTED)
   .map(adaptAgentTool);
 
+const statementPdf: ToolDef = {
+  name: "statement_pdf",
+  ops: true,
+  sideEffect: true,
+  description:
+    "Make a customer's open-items statement PDF now and get a download link (valid 15 minutes) — the same PDF as the Download statement button on their finance page, for the Feldart book, the Torah Judaica book, or both in one. Each call issues the NEXT statement number (like pressing Download), so call it once per statement you actually need. To EMAIL the statement to the customer, use send_statement instead.",
+  input_schema: {
+    type: "object",
+    properties: {
+      customerId: CUSTOMER_ID_PROP,
+      book: { type: "string", enum: ["feldart", "tj", "both"], description: "Which book(s). Default both." },
+    },
+    required: ["customerId"],
+    additionalProperties: false,
+  },
+  async run(input, ctx) {
+    const p = parse(z.object({ customerId, book: z.enum(["feldart", "tj", "both"]).default("both") }), input);
+    const [c] = await db.select({ name: customers.displayName }).from(customers).where(eq(customers.id, p.customerId)).limit(1);
+    if (!c) throw new ToolInputError("customerId: no such customer. Use find_customer first.");
+    if (!ctx.signStoredFile || !ctx.actorEmail) throw new ToolInputError("Statement downloads are unavailable right now.");
+    const userId = await financeUserIdFor(ctx.actorEmail);
+    if (!userId) throw new ToolInputError("You need to sign in to finance.feldart.com once before finance can issue a statement under your name.");
+    let built: Awaited<ReturnType<typeof buildStatementPdfAttachment>>;
+    try {
+      built = await buildStatementPdfAttachment(p.customerId, p.book);
+    } catch (err) {
+      if (err instanceof SendStatementError) throw new ToolInputError(`No statement: ${err.message}`);
+      throw err;
+    }
+    const fileId = await storeAiFile(built.buffer);
+    const name = statementDownloadFilename(c.name, built.statementNumber);
+    try {
+      await db.insert(auditLogTable).values({
+        id: nanoid(24),
+        userId,
+        action: "statement.download",
+        entityType: "customer",
+        entityId: p.customerId,
+        before: null,
+        after: { origin: p.book, statementNumber: built.statementNumber, bytes: built.buffer.byteLength, via: "feldart_ai" },
+      });
+    } catch {
+      /* the statement exists either way; audit is best-effort here as on the page */
+    }
+    return {
+      customer: { id: p.customerId, name: c.name, url: `${ctx.baseUrl}/customers/${p.customerId}` },
+      book: p.book,
+      statementNumber: built.statementNumber,
+      file: ctx.signStoredFile(fileId, name),
+    };
+  },
+};
+
 export const OPS_FINANCE_READS: ToolDef[] = [
+  statementPdf,
   moneySummary,
   chaseList,
   accountsOnHold,
