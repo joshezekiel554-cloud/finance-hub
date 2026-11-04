@@ -25,9 +25,10 @@ import {
 import { OPS_FINANCE_READS } from "../../modules/ai-tools/ops-finance-reads.js";
 import { financeUserIdFor, OPS_FINANCE_WRITES } from "../../modules/ai-tools/ops-finance-writes.js";
 import { settleHubProposal } from "../../modules/ai-tools/ops-proposals.js";
+import { OPS_QBO_TOOLS } from "../../modules/ai-tools/qbo-tools.js";
 import { OPS_TOOLS as OPS_CORE } from "../../modules/ai-tools/ops-tools.js";
 
-export const OPS_TOOLS: ToolDef[] = [...OPS_CORE, ...OPS_FINANCE_READS, ...OPS_FINANCE_WRITES];
+export const OPS_TOOLS: ToolDef[] = [...OPS_CORE, ...OPS_FINANCE_READS, ...OPS_QBO_TOOLS, ...OPS_FINANCE_WRITES];
 
 const log = createLogger({ component: "routes.ext-tools" });
 

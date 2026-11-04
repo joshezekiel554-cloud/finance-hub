@@ -221,6 +221,42 @@ export class QboClient {
     throw new Error("QBO query exhausted retries");
   }
 
+  // Feldart AI qbo_query: one caller-supplied SELECT, already validated by
+  // modules/ai-tools/qbo-tools.ts. The query endpoint is GET-only, so it
+  // can't change anything in QuickBooks.
+  async runReadQuery(query: string): Promise<Record<string, unknown>> {
+    const data = await this.query<unknown>(query);
+    return (data.QueryResponse ?? {}) as Record<string, unknown>;
+  }
+
+  // Feldart AI qbo_report: a named QBO report (ProfitAndLoss, AgedReceivables…)
+  // with its query params. Read-only GET, same 401/429 handling as query().
+  async getReport(name: string, params: Record<string, string>): Promise<unknown> {
+    const url = `${this.baseUrl}/v3/company/${this.config.realmId}/reports/${encodeURIComponent(name)}`;
+    let accessToken = await this.getAccessToken();
+    for (let attempt = 0; attempt <= 3; attempt++) {
+      try {
+        const res = await this.http.get<unknown>(url, {
+          params: { ...params, minorversion: QBO_MINOR_VERSION },
+          headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+        });
+        return res.data;
+      } catch (err) {
+        const status = (err as AxiosError).response?.status;
+        if (status === 401) {
+          accessToken = await this.forceRefresh();
+          continue;
+        }
+        if (status === 429 && attempt < 3) {
+          await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("QBO report exhausted retries");
+  }
+
   // Generic paginated query — STARTPOSITION + MAXRESULTS pattern from 1.0.
   private async queryAll<T>(
     selectFromWhere: string,
