@@ -15,7 +15,7 @@ import { signQbPdfLink } from "../../lib/file-link.js";
 import type { HubTokenClaims } from "../../lib/hub-token.js";
 import { createLogger } from "../../lib/logger.js";
 import { isEmailAllowed } from "../lib/hub-handoff.js";
-import { requireHubService } from "../lib/hub-service-auth.js";
+import { financeLinkSecret, requireHubService } from "../lib/hub-service-auth.js";
 import {
   FINANCE_TOOLS,
   ToolInputError,
@@ -63,7 +63,7 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
     }
     const body = (req.body ?? {}) as { input?: unknown };
     const baseUrl = env.PUBLIC_URL.replace(/\/$/, "");
-    const secret = env.HUB_SSO_SECRET;
+    const secret = financeLinkSecret();
     const ctx: ToolContext = {
       now: new Date(),
       baseUrl,
@@ -94,7 +94,13 @@ const extToolsRoute: FastifyPluginAsync = async (app) => {
 // Cancel click with a fresh ops token. Body is ignored.
 export const proposalsRoute: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string; action: string } }>("/proposals/:id/:action", async (req, reply) => {
-    const claims = requireHubService(req, reply);
+    // A confirm-scoped token must be bound to THIS proposal; plain service
+    // tokens stop working here once HUB_CONFIRM_TOKENS_REQUIRED is set.
+    const claims = requireHubService(req, reply, {
+      kind: "settle",
+      proposalId: req.params.id,
+      confirmRequired: env.HUB_CONFIRM_TOKENS_REQUIRED,
+    });
     if (!claims) return reply;
     if (!hasOpsAccess(claims, env.FINANCE_AI_OPS_EMAILS)) {
       return reply.code(403).send({ error: "Not available for this user.", code: "forbidden" });

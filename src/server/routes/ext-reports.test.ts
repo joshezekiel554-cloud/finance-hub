@@ -48,7 +48,7 @@ describe("ext reports query schemas", () => {
 describe("hub service auth", () => {
   const secret = "s3cret";
   const now = 1_800_000_000;
-  const opts = { secret, allowedEmails: "staff@feldart.com, boss@feldart.com", nowSeconds: now };
+  const opts = { secrets: [secret], allowedEmails: "staff@feldart.com, boss@feldart.com", nowSeconds: now };
   const mint = (over: Partial<Parameters<typeof mintHubToken>[0]> = {}) =>
     `Bearer ${mintHubToken({ email: "Staff@Feldart.com", aud: "finance", ttlSeconds: 60, secret, nowSeconds: now, scope: "service", ...over })}`;
 
@@ -74,7 +74,7 @@ describe("hub service auth", () => {
       ok: false,
       status: 403,
     });
-    expect(checkHubServiceAuth(mint(), { ...opts, secret: undefined })).toMatchObject({
+    expect(checkHubServiceAuth(mint(), { ...opts, secrets: [] })).toMatchObject({
       ok: false,
       status: 503,
     });

@@ -18,6 +18,7 @@ describe("verifyHubToken", () => {
       aud: "finance",
       scope: "user",
       ops: false,
+      pid: "",
       jti: expect.any(String),
     });
   });

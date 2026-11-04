@@ -166,6 +166,21 @@ const schema = z.object({
   // /auth/hub) and Home-tile service tokens (GET /api/ext/hub-summary).
   // Source of truth on the VPS: ~/.hub-sso-secret. Unset → both routes 503.
   HUB_SSO_SECRET: optionalSecret(32),
+  // Per-app hub secret (roadmap #3, 2026-11-04): only the hub and finance
+  // hold it, so another app holding the shared secret can't mint finance
+  // tokens. Cutover: set this, keep the shared one; when the hub signs with
+  // it, set HUB_SHARED_SECRET_RETIRED=1 to stop accepting HUB_SSO_SECRET.
+  HUB_SECRET_FINANCE: optionalSecret(32),
+  HUB_SHARED_SECRET_RETIRED: z
+    .string()
+    .default("")
+    .transform((v) => v === "1" || v.toLowerCase() === "true"),
+  // When set, POST /api/ext/proposals/:id/confirm|cancel accepts ONLY
+  // confirm-scoped tokens bound to that proposal (hub HUB_CONFIRM_TOKENS=1).
+  HUB_CONFIRM_TOKENS_REQUIRED: z
+    .string()
+    .default("")
+    .transform((v) => v === "1" || v.toLowerCase() === "true"),
   // Feldart AI ops tools (invoice lookup + PDF, payments, RMA status) are
   // for these members only — finance's own copy of the hub's
   // OPS_AGENT_EMAILS. A call needs the hub token's ops:true claim AND an
