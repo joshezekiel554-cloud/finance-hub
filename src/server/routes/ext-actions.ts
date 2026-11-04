@@ -141,7 +141,7 @@ export async function dispatchTaskCardAction(
     const r = await approveProposalAndEnqueue(id, userId as string);
     if (!r.ok) {
       return {
-        status: r.reason === "not_found" ? 404 : 409,
+        status: r.reason === "not_found" ? 404 : r.reason === "hub_only" ? 403 : 409,
         body: errBody(r.reason, r.status ? { status: r.status } : undefined),
       };
     }
@@ -149,7 +149,7 @@ export async function dispatchTaskCardAction(
   }
   if (type === "ai_proposal" && action === "reject") {
     const r = await rejectProposal(id, userId);
-    if (!r.ok) return { status: r.reason === "not_found" ? 404 : 409, body: errBody(r.reason) };
+    if (!r.ok) return { status: r.reason === "not_found" ? 404 : r.reason === "hub_only" ? 403 : 409, body: errBody(r.reason) };
     return { status: 200, body: { ok: true } };
   }
   return { status: 400, body: errBody("unhandled action") };

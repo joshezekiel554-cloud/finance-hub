@@ -1081,6 +1081,52 @@ const disputeTransitionTool: Tool<DisputeTransitionArgsT> = {
 
 
 // ── Registry ───────────────────────────────────────────────────────────
+// Feldart AI (hub) ops: save the customer's return tracking on an RMA. Same
+// service call as the Returns page — records the activity and emails the
+// warehouse so they expect the parcel.
+const SaveRmaTrackingArgs = z.object({
+  rmaId: z.string().max(64),
+  trackingNumber: z.string().trim().min(4).max(128),
+  trackingCarrier: z.string().trim().max(64).optional(),
+});
+type SaveRmaTrackingArgsT = z.infer<typeof SaveRmaTrackingArgs>;
+
+const saveRmaTrackingTool: Tool<SaveRmaTrackingArgsT> = {
+  name: "save_rma_tracking",
+  description: "Save the customer's return tracking number on an RMA and tell the warehouse to expect it.",
+  argsSchema: SaveRmaTrackingArgs,
+  execute: async (args, ctx) => {
+    try {
+      const { setTracking } = await import("../returns/rma-service.js");
+      const res = await setTracking(args.rmaId, {
+        userId: ctx.userId,
+        trackingNumber: args.trackingNumber,
+        trackingCarrier: args.trackingCarrier ?? null,
+      });
+      if (!res) return { ok: false, error: "RMA not found" };
+      if (!res.ok) return { ok: false, error: res.reason };
+      await db.insert(auditLog).values({
+        id: nanoid(24),
+        userId: ctx.userId,
+        action: "rma.tracking_set",
+        entityType: "rma",
+        entityId: args.rmaId,
+        before: null,
+        after: {
+          trackingNumber: args.trackingNumber,
+          trackingCarrier: args.trackingCarrier ?? null,
+          warehouseEmailedTo: res.emailedTo,
+          aiProposalId: ctx.proposalId,
+        },
+      });
+      return res.emailedTo ? { ok: true } : { ok: true, note: "saved; no warehouse email configured" };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "save_rma_tracking failed");
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
 const TOOLS: Record<string, Tool> = {
   send_chase_email: sendChaseEmailTool as Tool,
   send_statement: sendStatementTool as Tool,
@@ -1094,6 +1140,7 @@ const TOOLS: Record<string, Tool> = {
   set_hold_status: setHoldStatusTool as Tool,
   set_payment_terms: setPaymentTermsTool as Tool,
   dispute_transition: disputeTransitionTool as Tool,
+  save_rma_tracking: saveRmaTrackingTool as Tool,
 };
 
 export function getToolByName(name: string): Tool | null {
