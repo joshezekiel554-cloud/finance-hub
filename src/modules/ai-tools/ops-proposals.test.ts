@@ -50,7 +50,7 @@ describe("hub proposal settle rules", () => {
 
 describe("hub write tools", () => {
   it("every one is ops + write, has an executor, and says nothing happens until Confirm", () => {
-    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "update_customer_emails", "send_invoice_qbo", "dismiss_email_review", "save_rma_tracking"]);
+    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "update_customer_emails", "send_invoice_qbo", "dismiss_email_review", "rma_set_warehouse_number", "rma_mark_received", "rma_cancel", "receipt_confirm", "receipt_dismiss", "save_rma_tracking"]);
     for (const t of OPS_FINANCE_WRITES) {
       expect(t.ops && t.write).toBe(true);
       expect(getToolByName(t.name)).not.toBeNull();

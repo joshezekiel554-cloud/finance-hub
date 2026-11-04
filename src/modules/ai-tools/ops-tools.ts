@@ -449,6 +449,7 @@ export function rmaRow(r: RmaQueryRow, today: string, baseUrl: string) {
   const approved = dayOf(r.approvedAt);
   const received = dayOf(r.receivedAtWarehouseAt);
   return {
+    rmaId: r.id,
     rma: r.rmaNumber,
     customer: r.customer,
     customerEmail: r.email,
@@ -578,6 +579,7 @@ const openReturns: ToolDef = {
       ? []
       : await db
           .select({
+            receiptId: extensivReceipts.id,
             txNumber: extensivReceipts.txNumber,
             ref: extensivReceipts.refString,
             customerGuess: extensivReceipts.inferredCustomerName,
@@ -594,6 +596,7 @@ const openReturns: ToolDef = {
 
     const receiptsCapped = receipts.length > RECEIPT_CAP;
     const receiptRows = receipts.slice(0, RECEIPT_CAP).map((r) => ({
+      receiptId: r.receiptId,
       warehouseTx: r.txNumber,
       ref: r.ref,
       customerGuess: r.customerGuess,

@@ -12,7 +12,7 @@ import { db } from "../../db/index.js";
 import { users } from "../../db/schema/auth.js";
 import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
-import { rmas } from "../../db/schema/returns.js";
+import { extensivReceipts, rmas } from "../../db/schema/returns.js";
 import { buildAgentWriteToolDeclarations } from "../agent/tools/write-tools.js";
 import { createChatProposal, validateEntityRefs } from "../agent/chat-proposals.js";
 import { getToolByName } from "../ai-agent/tools.js";
@@ -55,6 +55,11 @@ const TITLES: Record<string, string> = {
   send_invoice_qbo: "Email invoice from QuickBooks",
   dismiss_email_review: "Dismiss from Email review",
   update_customer_emails: "Change customer email addresses",
+  rma_set_warehouse_number: "Record warehouse return number",
+  rma_mark_received: "Mark return received at warehouse",
+  rma_cancel: "Cancel RMA",
+  receipt_confirm: "Confirm warehouse receipt → RMA",
+  receipt_dismiss: "Dismiss warehouse receipt",
 };
 
 const CUSTOMER_ID_PROP_W = { type: "string", description: "Finance customer id from find_customer." };
@@ -162,6 +167,33 @@ export function newDomains(current: string[], next: string[]): string[] {
   }
   return [...out];
 }
+
+const RMA_ID_PROP = { type: "string", description: "Finance RMA id (rmaId from open_rmas / open_returns / rma_tracking_status)." };
+const RECEIPT_ID_PROP = { type: "string", description: "receiptId from open_returns.warehouseReceiptsToReview." };
+const RMA_WAREHOUSE_SCHEMA = {
+  type: "object",
+  properties: { rmaId: RMA_ID_PROP, txNumber: { type: "string", description: "The warehouse's (Extensiv) return/receiver number." } },
+  required: ["rmaId", "txNumber"],
+  additionalProperties: false,
+};
+const RMA_ONLY_SCHEMA = { type: "object", properties: { rmaId: RMA_ID_PROP }, required: ["rmaId"], additionalProperties: false };
+const RMA_CANCEL_SCHEMA = {
+  type: "object",
+  properties: { rmaId: RMA_ID_PROP, reason: { type: "string", description: "Why it's being cancelled (kept on the RMA)." } },
+  required: ["rmaId", "reason"],
+  additionalProperties: false,
+};
+const RECEIPT_ONLY_SCHEMA = { type: "object", properties: { receiptId: RECEIPT_ID_PROP }, required: ["receiptId"], additionalProperties: false };
+const RECEIPT_DISMISS_SCHEMA = {
+  type: "object",
+  properties: {
+    receiptId: RECEIPT_ID_PROP,
+    reason: { type: "string", enum: ["done", "not_return", "other"], description: "done = already dealt with; not_return = it isn't a customer return; other = explain in reasonText." },
+    reasonText: { type: "string", description: "Up to 50 chars; required for other." },
+  },
+  required: ["receiptId", "reason"],
+  additionalProperties: false,
+};
 
 export type PreviewRow = { field: string; value: string };
 
@@ -278,6 +310,49 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
       } else {
         push("Change", { claims_paid: "Customer says it's paid — park it while we verify", not_paid: "Confirmed NOT paid — resume chasing" }[String(args.action)] ?? args.action);
         push("Note", args.note);
+      }
+      break;
+    }
+    case "rma_set_warehouse_number":
+    case "rma_mark_received":
+    case "rma_cancel": {
+      const [r] = await db
+        .select({ rmaNumber: rmas.rmaNumber, status: rmas.status, customer: customers.displayName, value: rmas.totalValue, extensivTx: rmas.extensivTxNumber })
+        .from(rmas)
+        .innerJoin(customers, eq(customers.id, rmas.customerId))
+        .where(eq(rmas.id, String(args.rmaId)))
+        .limit(1);
+      if (!r) throw new ToolInputError(`rmaId "${String(args.rmaId)}" does not exist — look it up with open_rmas or get_rmas.`);
+      push("RMA", `${r.rmaNumber ?? "(unnumbered)"} — ${r.customer} — $${r.value}`);
+      push("Status now", r.status.replace(/_/g, " "));
+      if (tool === "rma_set_warehouse_number") {
+        push("Warehouse number now", r.extensivTx ?? "(none)");
+        push("Set to", args.txNumber);
+      } else if (tool === "rma_mark_received") {
+        push("Change", "Goods received at the warehouse — ready for credit / closing");
+      } else {
+        push("Change", "Cancel this RMA (it stays on record, marked cancelled)");
+        push("Reason", args.reason);
+      }
+      break;
+    }
+    case "receipt_confirm":
+    case "receipt_dismiss": {
+      const [rc] = await db
+        .select({ tx: extensivReceipts.txNumber, ref: extensivReceipts.refString, who: extensivReceipts.inferredCustomerName, rmaId: extensivReceipts.rmaId, rmaNumber: rmas.rmaNumber, dismissedAt: extensivReceipts.dismissedAt, confirmedAt: extensivReceipts.confirmedAt })
+        .from(extensivReceipts)
+        .leftJoin(rmas, eq(rmas.id, extensivReceipts.rmaId))
+        .where(eq(extensivReceipts.id, String(args.receiptId)))
+        .limit(1);
+      if (!rc) throw new ToolInputError(`receiptId "${String(args.receiptId)}" does not exist — use open_returns.`);
+      if (rc.dismissedAt || rc.confirmedAt) throw new ToolInputError("That receipt has already been confirmed or dismissed.");
+      push("Warehouse receipt", `tx ${rc.tx ?? "?"}${rc.who ? ` — ${rc.who}` : ""}${rc.ref ? ` — ref ${rc.ref}` : ""}`);
+      push("Matched RMA", rc.rmaId ? rc.rmaNumber ?? "(unnumbered)" : "none");
+      if (tool === "receipt_confirm") {
+        if (!rc.rmaId) throw new ToolInputError("That receipt isn't matched to an RMA yet — it can only be dismissed, or matched on the Returns page.");
+        push("Change", "Confirm the match — the RMA moves to received at warehouse");
+      } else {
+        push("Reason", { done: "Already dealt with", not_return: "Not a customer return", other: `Other: ${String(args.reasonText ?? "")}` }[String(args.reason)] ?? args.reason);
       }
       break;
     }
@@ -453,6 +528,27 @@ export const OPS_FINANCE_WRITES: ToolDef[] = [
     "dismiss_email_review",
     "Propose hiding an invoice from finance's Email review lists (bounced / never emailed) when it doesn't need sending — e.g. the customer got it another way or no invoice email is needed.",
     DISMISS_REVIEW_SCHEMA,
+  ),
+  hubWriteTool(
+    "rma_set_warehouse_number",
+    "Propose recording the warehouse's return (receiver) number on an RMA that's waiting for one.",
+    RMA_WAREHOUSE_SCHEMA,
+  ),
+  hubWriteTool(
+    "rma_mark_received",
+    "Propose marking an RMA's goods as received at the warehouse (when the warehouse confirmed it some other way than a matched receipt). After this the RMA is ready for its credit.",
+    RMA_ONLY_SCHEMA,
+  ),
+  hubWriteTool("rma_cancel", "Propose cancelling an in-flight RMA, with the reason.", RMA_CANCEL_SCHEMA),
+  hubWriteTool(
+    "receipt_confirm",
+    "Propose confirming that a warehouse return receipt (open_returns.warehouseReceiptsToReview, already matched to an RMA) is that RMA's parcel — moves the RMA to received.",
+    RECEIPT_ONLY_SCHEMA,
+  ),
+  hubWriteTool(
+    "receipt_dismiss",
+    "Propose dismissing a warehouse return receipt from the review queue (already dealt with / not a customer return / other).",
+    RECEIPT_DISMISS_SCHEMA,
   ),
   hubWriteTool(
     "save_rma_tracking",

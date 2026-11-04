@@ -1319,6 +1319,121 @@ const updateCustomerEmailsTool: Tool<UpdateCustomerEmailsArgsT> = {
   },
 };
 
+// Feldart AI (hub) ops — returns lifecycle. Each wraps the same
+// rma-service call the Returns page uses, plus an audit row.
+async function auditRma(ctx: ToolContext, action: string, entityType: string, entityId: string, after: Record<string, unknown>) {
+  try {
+    await db.insert(auditLog).values({
+      id: nanoid(24),
+      userId: ctx.userId,
+      action,
+      entityType,
+      entityId,
+      before: null,
+      after: { ...after, aiProposalId: ctx.proposalId },
+    });
+  } catch (err) {
+    log.error({ err, proposalId: ctx.proposalId, action }, "rma action done but audit insert failed");
+  }
+}
+
+// A throw inside execute would leave the proposal 'approved' with no
+// outcome — always turn it into { ok:false } so the row is marked failed.
+function safeExecute<A>(name: string, fn: (args: A, ctx: ToolContext) => Promise<ToolResult>) {
+  return async (args: A, ctx: ToolContext): Promise<ToolResult> => {
+    try {
+      return await fn(args, ctx);
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, `${name} failed`);
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  };
+}
+
+const RmaSetWarehouseNumberArgs = z.object({ rmaId: z.string().max(64), txNumber: z.string().trim().min(1).max(64) });
+const rmaSetWarehouseNumberTool: Tool<z.infer<typeof RmaSetWarehouseNumberArgs>> = {
+  name: "rma_set_warehouse_number",
+  description: "Record the warehouse's return number on an RMA.",
+  argsSchema: RmaSetWarehouseNumberArgs,
+  execute: safeExecute("rma_set_warehouse_number", async (args, ctx) => {
+    const { setWarehouseNumber } = await import("../returns/rma-service.js");
+    const r = await setWarehouseNumber({ rmaId: args.rmaId, userId: ctx.userId, txNumber: args.txNumber });
+    if (!r) return { ok: false, error: "RMA not found" };
+    if (!r.ok) return { ok: false, error: r.reason };
+    await auditRma(ctx, "rma.warehouse_number_set", "rma", args.rmaId, { txNumber: args.txNumber, status: r.rma.status });
+    return { ok: true };
+  }),
+};
+
+const RmaIdArgs = z.object({ rmaId: z.string().max(64) });
+const rmaMarkReceivedTool: Tool<z.infer<typeof RmaIdArgs>> = {
+  name: "rma_mark_received",
+  description: "Mark an RMA's goods as received at the warehouse.",
+  argsSchema: RmaIdArgs,
+  execute: safeExecute("rma_mark_received", async (args, ctx) => {
+    const { manualMarkReceived } = await import("../returns/rma-service.js");
+    const r = await manualMarkReceived({ rmaId: args.rmaId, userId: ctx.userId });
+    if (!r) return { ok: false, error: "RMA not found" };
+    if (!r.ok) return { ok: false, error: r.reason };
+    await auditRma(ctx, "rma.marked_received", "rma", args.rmaId, { status: r.rma.status });
+    return { ok: true };
+  }),
+};
+
+const RmaCancelArgs = z.object({ rmaId: z.string().max(64), reason: z.string().trim().min(3).max(2000) });
+const rmaCancelTool: Tool<z.infer<typeof RmaCancelArgs>> = {
+  name: "rma_cancel",
+  description: "Cancel an in-flight RMA.",
+  argsSchema: RmaCancelArgs,
+  execute: safeExecute("rma_cancel", async (args, ctx) => {
+    const { cancelRma } = await import("../returns/rma-service.js");
+    const r = await cancelRma({ rmaId: args.rmaId, userId: ctx.userId, reason: args.reason });
+    if (!r) return { ok: false, error: "RMA not found" };
+    if (!r.ok) return { ok: false, error: r.reason };
+    await auditRma(ctx, "rma.cancelled", "rma", args.rmaId, { reason: args.reason });
+    return { ok: true };
+  }),
+};
+
+const ReceiptIdArgs = z.object({ receiptId: z.string().max(64) });
+const receiptConfirmTool: Tool<z.infer<typeof ReceiptIdArgs>> = {
+  name: "receipt_confirm",
+  description: "Confirm a warehouse return receipt's match to its RMA (moves the RMA to received).",
+  argsSchema: ReceiptIdArgs,
+  execute: async (args, ctx) => {
+    const { confirmExtensivReceipt } = await import("../returns/rma-service.js");
+    try {
+      const r = (await confirmExtensivReceipt({ receiptId: args.receiptId, userId: ctx.userId })) as { ok?: boolean; reason?: string };
+      if (r && r.ok === false) return { ok: false, error: r.reason ?? "confirm refused" };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    await auditRma(ctx, "extensiv_receipt.confirmed", "extensiv_receipt", args.receiptId, {});
+    return { ok: true };
+  },
+};
+
+const ReceiptDismissArgs = z
+  .object({ receiptId: z.string().max(64), reason: z.enum(["done", "not_return", "other"]), reasonText: z.string().trim().max(50).optional() })
+  .refine((a) => a.reason !== "other" || (a.reasonText ?? "").length > 0, { message: "reasonText is required when reason is 'other'", path: ["reasonText"] });
+const receiptDismissTool: Tool<z.infer<typeof ReceiptDismissArgs>> = {
+  name: "receipt_dismiss",
+  description: "Dismiss a warehouse return receipt from the review queue, with a reason.",
+  argsSchema: ReceiptDismissArgs,
+  execute: safeExecute("receipt_dismiss", async (args, ctx) => {
+    const reason = args.reason === "other" && args.reasonText ? `other: ${args.reasonText}` : args.reason;
+    const { extensivReceipts } = await import("../../db/schema/returns.js");
+    const res = await db
+      .update(extensivReceipts)
+      .set({ dismissedAt: new Date(), dismissedReason: reason, dismissedByUserId: ctx.userId })
+      .where(and(eq(extensivReceipts.id, args.receiptId), sql`${extensivReceipts.dismissedAt} IS NULL`, sql`${extensivReceipts.confirmedAt} IS NULL`));
+    const affected = (res as unknown as [{ affectedRows: number }])[0]?.affectedRows ?? 0;
+    if (affected !== 1) return { ok: false, error: "receipt not found, or already confirmed/dismissed" };
+    await auditRma(ctx, "extensiv_receipt.dismissed", "extensiv_receipt", args.receiptId, { reason });
+    return { ok: true };
+  }),
+};
+
 const TOOLS: Record<string, Tool> = {
   send_chase_email: sendChaseEmailTool as Tool,
   send_statement: sendStatementTool as Tool,
@@ -1336,6 +1451,11 @@ const TOOLS: Record<string, Tool> = {
   send_invoice_qbo: sendInvoiceQboTool as Tool,
   dismiss_email_review: dismissEmailReviewTool as Tool,
   update_customer_emails: updateCustomerEmailsTool as Tool,
+  rma_set_warehouse_number: rmaSetWarehouseNumberTool as Tool,
+  rma_mark_received: rmaMarkReceivedTool as Tool,
+  rma_cancel: rmaCancelTool as Tool,
+  receipt_confirm: receiptConfirmTool as Tool,
+  receipt_dismiss: receiptDismissTool as Tool,
 };
 
 export function getToolByName(name: string): Tool | null {
