@@ -106,8 +106,17 @@ describe("customer email changes", () => {
   it("flags domains the customer has never used (invoice-redirect guard)", async () => {
     const { newDomains } = await import("./ops-finance-writes.js");
     expect(newDomains(["a@keterjudaica.com", "b@yefenofbooks.com"], ["c@keterjudaica.com"])).toEqual([]);
-    expect(newDomains(["a@keterjudaica.com"], ["x@gmail.com", "y@Gmail.com", "z@keterjudaica.com"])).toEqual(["gmail.com"]);
+    expect(newDomains(["a@keterjudaica.com"], ["x@gmail.com", "y@Gmail.com", "z@keterjudaica.com"])).toEqual(["x@gmail.com", "y@gmail.com"]);
     expect(newDomains([], ["x@new.com"])).toEqual(["new.com"]);
+  });
+
+  it("free-mail domains compare the full address (gmail customer, fraudster's gmail)", async () => {
+    const { newDomains, isFreeMailDomain } = await import("./ops-finance-writes.js");
+    expect(newDomains(["keterjudaica@gmail.com"], ["keterbilling@gmail.com"])).toEqual(["keterbilling@gmail.com"]);
+    expect(newDomains(["keterjudaica@gmail.com"], [" KeterJudaica@Gmail.com "])).toEqual([]);
+    expect(newDomains(["a@yahoo.com"], ["b@yahoo.co.uk"])).toEqual(["b@yahoo.co.uk"]);
+    expect(isFreeMailDomain("outlook.com") && isFreeMailDomain("hotmail.co.uk") && isFreeMailDomain("icloud.com")).toBe(true);
+    expect(isFreeMailDomain("keterjudaica.com")).toBe(false);
   });
 
   it("validates addresses and needs at least one list", async () => {

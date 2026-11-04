@@ -133,10 +133,34 @@ export function isFinanceAdmin(email: string | undefined, adminCsv: string = env
 }
 
 /** Domains in `next` that none of the customer's current addresses use. */
+// Free-mail providers: sharing "@gmail.com" proves nothing, so for these
+// the FULL address must already be on the customer to count as known.
+const FREE_MAIL = /^(gmail\.com|googlemail\.com|yahoo\.[a-z.]+|ymail\.com|hotmail\.[a-z.]+|outlook\.[a-z.]+|live\.[a-z.]+|msn\.com|aol\.com|icloud\.com|me\.com|mac\.com|protonmail\.com|proton\.me|gmx\.[a-z.]+|zoho\.com|mail\.com)$/;
+
+export function isFreeMailDomain(domain: string): boolean {
+  return FREE_MAIL.test(domain.toLowerCase());
+}
+
+/**
+ * Destinations in `next` the customer has never used: a new company domain,
+ * or — on free-mail providers — any address not already on the customer.
+ */
 export function newDomains(current: string[], next: string[]): string[] {
-  const dom = (e: string) => e.split("@")[1]?.toLowerCase() ?? "";
-  const known = new Set(current.map(dom).filter(Boolean));
-  return [...new Set(next.map(dom).filter((d) => d && !known.has(d)))];
+  const norm = (e: string) => e.trim().toLowerCase();
+  const dom = (e: string) => norm(e).split("@")[1] ?? "";
+  const knownDomains = new Set(current.map(dom).filter(Boolean));
+  const knownAddresses = new Set(current.map(norm));
+  const out = new Set<string>();
+  for (const e of next) {
+    const d = dom(e);
+    if (!d) continue;
+    if (isFreeMailDomain(d)) {
+      if (!knownAddresses.has(norm(e))) out.add(norm(e));
+    } else if (!knownDomains.has(d)) {
+      out.add(d);
+    }
+  }
+  return [...out];
 }
 
 export type PreviewRow = { field: string; value: string };
@@ -325,7 +349,7 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
         push(EMAIL_LIST_LABEL[key]!, `${asList(cols[key]).join(", ") || "(none)"}  →  ${list.join(", ") || "(none — cleared)"}`);
       }
       const fresh = newDomains(allCurrent, allNext);
-      if (fresh.length) rows.unshift({ field: NEW_DOMAIN_ROW, value: `${fresh.join(", ")} — no current address for this customer uses it. Check it's really theirs before confirming.` });
+      if (fresh.length) rows.unshift({ field: NEW_DOMAIN_ROW, value: `${fresh.join(", ")} — this customer has never used it (free-mail addresses count one by one). Check it's really theirs before confirming.` });
       if (args.invoiceTo !== undefined) push("Also", "Updates the customer's email in QuickBooks (invoices QuickBooks sends on its own)");
       break;
     }
