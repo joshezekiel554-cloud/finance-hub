@@ -142,3 +142,11 @@ describe("invoice-redirect (BEC) guard", () => {
     expect(isFinanceAdmin(undefined, admins)).toBe(false);
   });
 });
+
+describe("warehouse number format", () => {
+  it("accepts warehouse-style tokens only (it renames the RMA + Drive folder)", async () => {
+    const { WAREHOUSE_TX } = await import("../ai-agent/tools.js");
+    for (const ok of ["100175", "RA-20341", "abc"]) expect(WAREHOUSE_TX.test(ok), ok).toBe(true);
+    for (const bad of ["", "12", "the number is 100175", "10/0175", "-123", "x".repeat(33)]) expect(WAREHOUSE_TX.test(bad), bad).toBe(false);
+  });
+});

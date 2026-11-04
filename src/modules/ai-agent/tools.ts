@@ -1350,7 +1350,13 @@ function safeExecute<A>(name: string, fn: (args: A, ctx: ToolContext) => Promise
   };
 }
 
-const RmaSetWarehouseNumberArgs = z.object({ rmaId: z.string().max(64), txNumber: z.string().trim().min(1).max(64) });
+// The tx becomes the RMA number AND the Drive folder/file names, so only a
+// sane warehouse-style token is accepted (no spaces/slashes/typos-as-prose).
+export const WAREHOUSE_TX = /^[A-Za-z0-9][A-Za-z0-9-]{2,31}$/;
+const RmaSetWarehouseNumberArgs = z.object({
+  rmaId: z.string().max(64),
+  txNumber: z.string().trim().regex(WAREHOUSE_TX, "txNumber: 3–32 letters/digits/dashes, like the warehouse's receiver number"),
+});
 const rmaSetWarehouseNumberTool: Tool<z.infer<typeof RmaSetWarehouseNumberArgs>> = {
   name: "rma_set_warehouse_number",
   description: "Record the warehouse's return number on an RMA.",

@@ -328,6 +328,7 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
       if (tool === "rma_set_warehouse_number") {
         push("Warehouse number now", r.extensivTx ?? "(none)");
         push("Set to", args.txNumber);
+        push("Also", `The RMA number becomes ${String(args.txNumber)} (was ${r.rmaNumber ?? "unnumbered"}), the RMA moves to "sent to warehouse", and its Drive folder and photo files are renamed to ${String(args.txNumber)}`);
       } else if (tool === "rma_mark_received") {
         push("Change", "Goods received at the warehouse — ready for credit / closing");
       } else {
@@ -531,7 +532,7 @@ export const OPS_FINANCE_WRITES: ToolDef[] = [
   ),
   hubWriteTool(
     "rma_set_warehouse_number",
-    "Propose recording the warehouse's return (receiver) number on an RMA that's waiting for one.",
+    "Propose recording the warehouse's return (receiver) number on an RMA that's waiting for one. This also renames the RMA to that number (and its Drive folder/files) and moves it to sent-to-warehouse.",
     RMA_WAREHOUSE_SCHEMA,
   ),
   hubWriteTool(
