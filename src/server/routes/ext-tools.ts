@@ -22,7 +22,10 @@ import {
   type ToolContext,
   type ToolDef,
 } from "../../modules/ai-tools/finance-tools.js";
-import { OPS_TOOLS } from "../../modules/ai-tools/ops-tools.js";
+import { OPS_FINANCE_READS } from "../../modules/ai-tools/ops-finance-reads.js";
+import { OPS_TOOLS as OPS_CORE } from "../../modules/ai-tools/ops-tools.js";
+
+export const OPS_TOOLS: ToolDef[] = [...OPS_CORE, ...OPS_FINANCE_READS];
 
 const log = createLogger({ component: "routes.ext-tools" });
 
