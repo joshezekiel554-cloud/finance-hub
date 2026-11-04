@@ -50,7 +50,7 @@ describe("hub proposal settle rules", () => {
 
 describe("hub write tools", () => {
   it("every one is ops + write, has an executor, and says nothing happens until Confirm", () => {
-    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "send_invoice_qbo", "dismiss_email_review", "save_rma_tracking"]);
+    expect(OPS_FINANCE_WRITES.map((t) => t.name)).toEqual([...HUB_WRITE_TOOLS, "update_customer_emails", "send_invoice_qbo", "dismiss_email_review", "save_rma_tracking"]);
     for (const t of OPS_FINANCE_WRITES) {
       expect(t.ops && t.write).toBe(true);
       expect(getToolByName(t.name)).not.toBeNull();
@@ -99,5 +99,46 @@ describe("hub-only guard + stale check", () => {
       'Overdue now: "Feldart $500.00 · Torah Judaica $0.00" → "Feldart $0.00 · Torah Judaica $0.00"',
     );
     expect(previewDrift(shown, [shown[0]!])).toMatch(/^Overdue now: .* → "—"$/);
+  });
+});
+
+describe("customer email changes", () => {
+  it("flags domains the customer has never used (invoice-redirect guard)", async () => {
+    const { newDomains } = await import("./ops-finance-writes.js");
+    expect(newDomains(["a@keterjudaica.com", "b@yefenofbooks.com"], ["c@keterjudaica.com"])).toEqual([]);
+    expect(newDomains(["a@keterjudaica.com"], ["x@gmail.com", "y@Gmail.com", "z@keterjudaica.com"])).toEqual(["x@gmail.com", "y@gmail.com"]);
+    expect(newDomains([], ["x@new.com"])).toEqual(["new.com"]);
+  });
+
+  it("free-mail domains compare the full address (gmail customer, fraudster's gmail)", async () => {
+    const { newDomains, isFreeMailDomain } = await import("./ops-finance-writes.js");
+    expect(newDomains(["keterjudaica@gmail.com"], ["keterbilling@gmail.com"])).toEqual(["keterbilling@gmail.com"]);
+    expect(newDomains(["keterjudaica@gmail.com"], [" KeterJudaica@Gmail.com "])).toEqual([]);
+    expect(newDomains(["a@yahoo.com"], ["b@yahoo.co.uk"])).toEqual(["b@yahoo.co.uk"]);
+    expect(isFreeMailDomain("outlook.com") && isFreeMailDomain("hotmail.co.uk") && isFreeMailDomain("icloud.com")).toBe(true);
+    expect(isFreeMailDomain("keterjudaica.com")).toBe(false);
+  });
+
+  it("validates addresses and needs at least one list", async () => {
+    const { UpdateCustomerEmailsArgs } = await import("../ai-agent/tools.js");
+    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1" }).success).toBe(false);
+    expect(UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceTo: ["not-an-email"] }).success).toBe(false);
+    const ok = UpdateCustomerEmailsArgs.safeParse({ customerId: "c1", invoiceTo: [" A@Keter.com "], statementCc: [] });
+    expect(ok.success && ok.data.invoiceTo).toEqual(["a@keter.com"]);
+  });
+});
+
+describe("invoice-redirect (BEC) guard", () => {
+  it("a new-domain address change needs a finance admin; same-domain fixes don't", async () => {
+    const { needsAdmin, isFinanceAdmin, NEW_DOMAIN_ROW } = await import("./ops-finance-writes.js");
+    const newDomainCard = [{ field: NEW_DOMAIN_ROW, value: "gmail.com — …" }, { field: "Invoice To", value: "a@keter.com  →  x@gmail.com" }];
+    const sameDomainCard = [{ field: "Invoice To", value: "a@keter.com  →  b@keter.com" }];
+    expect(needsAdmin("update_customer_emails", newDomainCard)).toBe(true);
+    expect(needsAdmin("update_customer_emails", sameDomainCard)).toBe(false);
+    expect(needsAdmin("send_statement", newDomainCard)).toBe(false);
+    const admins = "joshezekiel554@gmail.com,shaya@feldart.com";
+    expect(isFinanceAdmin("JoshEzekiel554@gmail.com", admins)).toBe(true);
+    expect(isFinanceAdmin("customprints@feldartcollection.co.uk", admins)).toBe(false);
+    expect(isFinanceAdmin(undefined, admins)).toBe(false);
   });
 });

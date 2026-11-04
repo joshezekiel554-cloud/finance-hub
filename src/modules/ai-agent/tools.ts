@@ -45,6 +45,7 @@ import {
   InboxApiError,
 } from "../../integrations/inbox/client.js";
 import { createLogger } from "../../lib/logger.js";
+import { env } from "../../lib/env.js";
 
 const log = createLogger({ module: "ai-agent.tools" });
 
@@ -1206,6 +1207,118 @@ const dismissEmailReviewTool: Tool<DismissEmailReviewArgsT> = {
   },
 };
 
+// Feldart AI (hub) ops: replace a customer's invoice / statement recipient
+// lists (same columns + audit + QBO PrimaryEmailAddr push as the customer
+// page's PATCH). Omitted = unchanged; [] = clear that list.
+const emailList = z.array(z.string().trim().toLowerCase().email().max(255)).max(20);
+export const UpdateCustomerEmailsArgs = z
+  .object({
+    customerId: z.string().max(64),
+    invoiceTo: emailList.optional(),
+    invoiceCc: emailList.optional(),
+    invoiceBcc: emailList.optional(),
+    statementTo: emailList.optional(),
+    statementCc: emailList.optional(),
+    statementBcc: emailList.optional(),
+  })
+  .refine(
+    (a) => ["invoiceTo", "invoiceCc", "invoiceBcc", "statementTo", "statementCc", "statementBcc"].some((k) => a[k as keyof typeof a] !== undefined),
+    { message: "change at least one list", path: ["invoiceTo"] },
+  );
+type UpdateCustomerEmailsArgsT = z.infer<typeof UpdateCustomerEmailsArgs>;
+
+export const EMAIL_LIST_COLUMNS = {
+  invoiceTo: "invoiceToEmails",
+  invoiceCc: "invoiceCcEmails",
+  invoiceBcc: "invoiceBccEmails",
+  statementTo: "statementToEmails",
+  statementCc: "statementCcEmails",
+  statementBcc: "statementBccEmails",
+} as const;
+
+const updateCustomerEmailsTool: Tool<UpdateCustomerEmailsArgsT> = {
+  name: "update_customer_emails",
+  description: "Replace a customer's invoice/statement To/Cc/Bcc address lists.",
+  argsSchema: UpdateCustomerEmailsArgs,
+  execute: async (args, ctx) => {
+    try {
+      const [before] = await db.select().from(customers).where(eq(customers.id, args.customerId)).limit(1);
+      if (!before) return { ok: false, error: "customer not found" };
+      const set: Record<string, string[] | null> = {};
+      for (const [arg, col] of Object.entries(EMAIL_LIST_COLUMNS)) {
+        const v = args[arg as keyof typeof EMAIL_LIST_COLUMNS];
+        if (v !== undefined) set[col] = v.length ? Array.from(new Set(v)) : null;
+      }
+      await db.update(customers).set(set).where(eq(customers.id, args.customerId));
+      const [after] = await db.select().from(customers).where(eq(customers.id, args.customerId)).limit(1);
+      await db.insert(auditLog).values({
+        id: nanoid(24),
+        userId: ctx.userId,
+        action: "customer.update",
+        entityType: "customer",
+        entityId: args.customerId,
+        before: Object.fromEntries(Object.keys(set).map((k) => [k, (before as Record<string, unknown>)[k] ?? null])),
+        after: { ...set, aiProposalId: ctx.proposalId },
+      });
+      // A second human sees every address change (invoice-redirect fraud
+      // guard): a timeline note on the customer + a bell for the other admins.
+      const changes = Object.keys(set)
+        .map((col) => `${col}: ${((before as Record<string, unknown>)[col] as string[] | null)?.join(", ") || "(none)"} → ${set[col]?.join(", ") || "(none)"}`)
+        .join("; ");
+      try {
+        await recordActivity({
+          customerId: args.customerId,
+          kind: "manual_note",
+          source: "ai_agent",
+          userId: ctx.userId,
+          subject: "Email addresses changed via Feldart AI",
+          body: changes,
+          meta: { aiProposalId: ctx.proposalId, kind: "customer_emails_changed" },
+        });
+        const adminEmails = env.ADMIN_EMAILS.split(",").filter(Boolean);
+        if (adminEmails.length) {
+          const admins = await db.select({ id: users.id, email: users.email }).from(users).where(inArray(users.email, adminEmails));
+          const { recordNotification } = await import("../notifications/index.js");
+          for (const a of admins) {
+            if (a.id === ctx.userId) continue;
+            await recordNotification({
+              userId: a.id,
+              kind: "system",
+              customerId: args.customerId,
+              refType: "customer",
+              refId: args.customerId,
+              payload: { title: `Invoice/statement addresses changed for ${before.displayName} via Feldart AI`, changes: changes.slice(0, 400) },
+            });
+          }
+        }
+      } catch (noteErr) {
+        log.error({ err: noteErr, proposalId: ctx.proposalId }, "update_customer_emails: change saved but note/notification failed");
+      }
+      if (args.invoiceTo !== undefined && after?.qbCustomerId) {
+        const { pushCustomerInvoiceEmailsToQbo } = await import("../customer-emails/push-to-qbo.js");
+        void pushCustomerInvoiceEmailsToQbo({
+          qbCustomerId: after.qbCustomerId,
+          customer: {
+            primaryEmail: after.primaryEmail,
+            billingEmails: after.billingEmails,
+            invoiceToEmails: after.invoiceToEmails,
+            invoiceCcEmails: after.invoiceCcEmails,
+            invoiceBccEmails: after.invoiceBccEmails,
+            statementToEmails: after.statementToEmails,
+            statementCcEmails: after.statementCcEmails,
+            statementBccEmails: after.statementBccEmails,
+            tags: after.tags,
+          },
+        }).catch((err: unknown) => log.warn({ err, customerId: args.customerId }, "qbo email push failed (local write succeeded)"));
+      }
+      return { ok: true };
+    } catch (err) {
+      log.error({ err, proposalId: ctx.proposalId }, "update_customer_emails failed");
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+};
+
 const TOOLS: Record<string, Tool> = {
   send_chase_email: sendChaseEmailTool as Tool,
   send_statement: sendStatementTool as Tool,
@@ -1222,6 +1335,7 @@ const TOOLS: Record<string, Tool> = {
   save_rma_tracking: saveRmaTrackingTool as Tool,
   send_invoice_qbo: sendInvoiceQboTool as Tool,
   dismiss_email_review: dismissEmailReviewTool as Tool,
+  update_customer_emails: updateCustomerEmailsTool as Tool,
 };
 
 export function getToolByName(name: string): Tool | null {

@@ -17,6 +17,8 @@ import { buildAgentWriteToolDeclarations } from "../agent/tools/write-tools.js";
 import { createChatProposal, validateEntityRefs } from "../agent/chat-proposals.js";
 import { getToolByName } from "../ai-agent/tools.js";
 import { resolveRecipients } from "../customer-emails/recipients.js";
+import { env } from "../../lib/env.js";
+import { isEmailAllowed } from "../../server/lib/hub-handoff.js";
 import { HOLD_LABEL, ToolInputError, type ToolContext, type ToolDef } from "./finance-tools.js";
 
 export const HUB_PROPOSAL_TTL_MS = 15 * 60 * 1000;
@@ -52,7 +54,10 @@ const TITLES: Record<string, string> = {
   save_rma_tracking: "Save return tracking on RMA",
   send_invoice_qbo: "Email invoice from QuickBooks",
   dismiss_email_review: "Dismiss from Email review",
+  update_customer_emails: "Change customer email addresses",
 };
+
+const CUSTOMER_ID_PROP_W = { type: "string", description: "Finance customer id from find_customer." };
 
 const SAVE_RMA_TRACKING_SCHEMA = {
   type: "object",
@@ -84,6 +89,79 @@ const DISMISS_REVIEW_SCHEMA = {
   required: ["invoiceId", "reason"],
   additionalProperties: false,
 };
+
+const EMAIL_LIST_PROP = (what: string) => ({
+  type: "array",
+  items: { type: "string" },
+  description: `The FULL new ${what} list (replaces it). Omit to leave unchanged; [] clears it.`,
+});
+const UPDATE_EMAILS_SCHEMA = {
+  type: "object",
+  properties: {
+    customerId: CUSTOMER_ID_PROP_W,
+    invoiceTo: EMAIL_LIST_PROP("invoice To"),
+    invoiceCc: EMAIL_LIST_PROP("invoice Cc"),
+    invoiceBcc: EMAIL_LIST_PROP("invoice Bcc"),
+    statementTo: EMAIL_LIST_PROP("statement/chase To"),
+    statementCc: EMAIL_LIST_PROP("statement/chase Cc"),
+    statementBcc: EMAIL_LIST_PROP("statement/chase Bcc"),
+  },
+  required: ["customerId"],
+  additionalProperties: false,
+};
+
+const EMAIL_LIST_LABEL: Record<string, string> = {
+  invoiceTo: "Invoice To",
+  invoiceCc: "Invoice Cc",
+  invoiceBcc: "Invoice Bcc",
+  statementTo: "Statement To",
+  statementCc: "Statement Cc",
+  statementBcc: "Statement Bcc",
+};
+
+export const NEW_DOMAIN_ROW = "⚠ New domain";
+export const NEW_DOMAIN_ADMIN_ONLY =
+  "Sending this customer's invoices or statements to an email domain they've never used is a classic invoice-redirect fraud, so only a finance admin (Josh or Shaya) can make that change from chat. Fixing an address at the customer's existing domain is fine.";
+
+/** Business-email-compromise guard: card rows that need a finance admin to confirm. */
+export function needsAdmin(tool: string, preview: PreviewRow[]): boolean {
+  return tool === "update_customer_emails" && preview.some((r) => r.field === NEW_DOMAIN_ROW);
+}
+
+export function isFinanceAdmin(email: string | undefined, adminCsv: string = env.ADMIN_EMAILS): boolean {
+  return !!email && isEmailAllowed(email, adminCsv);
+}
+
+/** Domains in `next` that none of the customer's current addresses use. */
+// Free-mail providers: sharing "@gmail.com" proves nothing, so for these
+// the FULL address must already be on the customer to count as known.
+const FREE_MAIL = /^(gmail\.com|googlemail\.com|yahoo\.[a-z.]+|ymail\.com|hotmail\.[a-z.]+|outlook\.[a-z.]+|live\.[a-z.]+|msn\.com|aol\.com|icloud\.com|me\.com|mac\.com|protonmail\.com|proton\.me|gmx\.[a-z.]+|zoho\.com|mail\.com)$/;
+
+export function isFreeMailDomain(domain: string): boolean {
+  return FREE_MAIL.test(domain.toLowerCase());
+}
+
+/**
+ * Destinations in `next` the customer has never used: a new company domain,
+ * or — on free-mail providers — any address not already on the customer.
+ */
+export function newDomains(current: string[], next: string[]): string[] {
+  const norm = (e: string) => e.trim().toLowerCase();
+  const dom = (e: string) => norm(e).split("@")[1] ?? "";
+  const knownDomains = new Set(current.map(dom).filter(Boolean));
+  const knownAddresses = new Set(current.map(norm));
+  const out = new Set<string>();
+  for (const e of next) {
+    const d = dom(e);
+    if (!d) continue;
+    if (isFreeMailDomain(d)) {
+      if (!knownAddresses.has(norm(e))) out.add(norm(e));
+    } else if (!knownDomains.has(d)) {
+      out.add(d);
+    }
+  }
+  return [...out];
+}
 
 export type PreviewRow = { field: string; value: string };
 
@@ -258,6 +336,23 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
       }
       break;
     }
+    case "update_customer_emails": {
+      const cols = { invoiceTo: c!.invoiceToEmails, invoiceCc: c!.invoiceCcEmails, invoiceBcc: c!.invoiceBccEmails, statementTo: c!.statementToEmails, statementCc: c!.statementCcEmails, statementBcc: c!.statementBccEmails } as Record<string, unknown>;
+      const asList = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
+      const allCurrent = [c!.primaryEmail ?? "", ...asList(c!.billingEmails), ...Object.values(cols).flatMap(asList)].filter(Boolean);
+      const allNext: string[] = [];
+      for (const key of Object.keys(EMAIL_LIST_LABEL)) {
+        const next = args[key];
+        if (next === undefined) continue;
+        const list = (next as string[]).map((e) => e.trim().toLowerCase());
+        allNext.push(...list);
+        push(EMAIL_LIST_LABEL[key]!, `${asList(cols[key]).join(", ") || "(none)"}  →  ${list.join(", ") || "(none — cleared)"}`);
+      }
+      const fresh = newDomains(allCurrent, allNext);
+      if (fresh.length) rows.unshift({ field: NEW_DOMAIN_ROW, value: `${fresh.join(", ")} — this customer has never used it (free-mail addresses count one by one). Check it's really theirs before confirming.` });
+      if (args.invoiceTo !== undefined) push("Also", "Updates the customer's email in QuickBooks (invoices QuickBooks sends on its own)");
+      break;
+    }
     case "create_admin_notification":
       push("Title", args.title);
       push("Message", args.message);
@@ -299,6 +394,9 @@ function hubWriteTool(name: string, description: string, input_schema: Record<st
       if (!userId) throw new ToolInputError("You don't have a finance login yet, so finance can't record this change under your name. Sign in to finance.feldart.com once, then ask again.");
 
       const preview = await buildPreview(name, args);
+      if (needsAdmin(name, preview) && !isFinanceAdmin(ctx.actorEmail)) {
+        throw new ToolInputError(NEW_DOMAIN_ADMIN_ONLY);
+      }
       const created = await createChatProposal({
         tool: name,
         args,
@@ -341,6 +439,11 @@ export const OPS_FINANCE_WRITES: ToolDef[] = [
     const description = n === "dispute_transition" ? "Propose moving a Torah Judaica invoice through the dispute flow: claims_paid (park while we verify) or not_paid (resume chasing)." : d.description;
     return hubWriteTool(n, description, schema as Record<string, unknown>);
   }),
+  hubWriteTool(
+    "update_customer_emails",
+    "Propose changing where a customer's invoices and statements/chase emails go: replace any of the invoice To/Cc/Bcc and statement To/Cc/Bcc address lists (give the FULL new list; omitted lists stay as they are). Use get_customer first to see the current lists. Use to fix a bounced address before resending. The card warns if a new address uses a domain the customer has never used.",
+    UPDATE_EMAILS_SCHEMA,
+  ),
   hubWriteTool(
     "send_invoice_qbo",
     "Propose (re)sending one invoice to the customer from QuickBooks, to the customer's invoice email addresses on file. Use for invoices that bounced or were never emailed (invoice_email_issues) or when a customer says they didn't get it. If the address is wrong, fix the customer's email first.",
