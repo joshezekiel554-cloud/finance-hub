@@ -121,8 +121,14 @@ export function weekBuckets(rows: Array<{ balance: number; dueDate: string | nul
   }
   let overdue = 0;
   let overdueCount = 0;
+  let noDue = 0;
+  let noDueCount = 0;
   for (const r of rows) {
-    if (!r.dueDate) continue;
+    if (!r.dueDate) {
+      noDue += r.balance;
+      noDueCount += 1;
+      continue;
+    }
     if (r.dueDate < today) {
       overdue += r.balance;
       overdueCount += 1;
@@ -134,7 +140,13 @@ export function weekBuckets(rows: Array<{ balance: number; dueDate: string | nul
       b.invoices += 1;
     }
   }
-  return { buckets: buckets.map((b) => ({ ...b, due: money(b.due) })), overdue: money(overdue), overdueInvoices: overdueCount };
+  return {
+    buckets: buckets.map((b) => ({ ...b, due: money(b.due) })),
+    overdue: money(overdue),
+    overdueInvoices: overdueCount,
+    noDueDate: money(noDue),
+    noDueDateInvoices: noDueCount,
+  };
 }
 
 const cashOutlook: ToolDef = {
@@ -176,6 +188,7 @@ const cashOutlook: ToolDef = {
             weeks: w.buckets,
             alreadyOverdue: w.overdue,
             overdueInvoices: w.overdueInvoices,
+            ...(w.noDueDateInvoices ? { noDueDate: { amount: w.noDueDate, invoices: w.noDueDateInvoices } } : {}),
             receivedPerWeekLast8Weeks: money(recv8w / 8),
           },
         ];

@@ -46,6 +46,7 @@ describe("cash outlook buckets", () => {
     );
     expect(w.overdue).toBe(100);
     expect(w.overdueInvoices).toBe(1);
+    expect([w.noDueDate, w.noDueDateInvoices]).toEqual([7, 1]); // reported, not dropped
     expect(w.buckets).toEqual([
       { week: "this week", from: "2026-11-04", to: "2026-11-10", due: 75, invoices: 2 },
       { week: "in 1 week", from: "2026-11-11", to: "2026-11-17", due: 10, invoices: 1 },
