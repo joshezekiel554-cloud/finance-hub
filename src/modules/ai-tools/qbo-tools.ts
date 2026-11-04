@@ -32,10 +32,47 @@ export function takeQboSlot(member: string, nowMs: number, seen: Map<string, num
   return true;
 }
 
+// Process-wide: QBO also caps 10 concurrent requests per company, and the
+// sync must always keep headroom — so AI calls get at most 3 in flight and
+// 60/min in total. Over the limit we refuse (never queue).
+export const QBO_AI_MAX_IN_FLIGHT = 3;
+export const QBO_AI_CALLS_PER_MINUTE = 60;
+let inFlight = 0;
+const allCalls: number[] = [];
+
 function throttle(ctx: { actorEmail?: string; now: Date }) {
   if (!takeQboSlot(ctx.actorEmail ?? "anonymous", ctx.now.getTime())) {
     throw new ToolInputError(`Slow down: more than ${QBO_CALLS_PER_MINUTE} QuickBooks calls in the last minute. Combine queries (select more fields, page less) or wait a minute.`);
   }
+}
+
+/** Run one AI QuickBooks call under the shared limits. */
+async function withQboBudget<T>(nowMs: number, fn: () => Promise<T>): Promise<T> {
+  while (allCalls.length && nowMs - allCalls[0]! >= 60_000) allCalls.shift();
+  if (inFlight >= QBO_AI_MAX_IN_FLIGHT || allCalls.length >= QBO_AI_CALLS_PER_MINUTE) {
+    throw new ToolInputError("QuickBooks is busy, try again in a moment (keep QuickBooks calls few and combined).");
+  }
+  inFlight += 1;
+  allCalls.push(nowMs);
+  try {
+    return await fn();
+  } finally {
+    inFlight -= 1;
+  }
+}
+
+/** Remove fields the model must not see/paste (raw signed attachment links). */
+export function scrubQbo(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(scrubQbo);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k === "TempDownloadUri") continue;
+      out[k] = scrubQbo(v);
+    }
+    return out;
+  }
+  return value;
 }
 
 /** Validate + normalise a model-written QBO query. Throws ToolInputError. */
@@ -44,6 +81,9 @@ export function normalizeQboQuery(raw: string): string {
   if (q.length === 0 || q.length > 1500) throw new ToolInputError("query: 1–1500 characters");
   if (!/^select\s/i.test(q)) throw new ToolInputError("query: must be a single SELECT (QuickBooks queries are read-only)");
   if (q.includes(";")) throw new ToolInputError("query: one statement only, no ';'");
+  if (/\bfrom\s+(employee|preferences|companyinfo)\b/i.test(q)) {
+    throw new ToolInputError("query: Employee, Preferences and CompanyInfo aren't available to the assistant.");
+  }
   if (/\bcount\s*\(\s*\*\s*\)/i.test(q)) return q;
   const m = q.match(/\bmaxresults\s+(\d+)/i);
   if (m) {
@@ -79,13 +119,14 @@ const qboQuery: ToolDef = {
     throttle(ctx);
     let resp: Record<string, unknown>;
     try {
-      resp = await new QboClient().runReadQuery(q);
+      resp = await withQboBudget(ctx.now.getTime(), () => new QboClient().runReadQuery(q));
     } catch (err) {
+      if (err instanceof ToolInputError) throw err;
       log.warn({ err: qboError(err), q }, "qbo_query failed");
       throw new ToolInputError(`QuickBooks rejected the query: ${qboError(err)}`);
     }
     const entity = Object.keys(resp).find((k) => Array.isArray(resp[k]));
-    const rows = entity ? (resp[entity] as unknown[]) : [];
+    const rows = entity ? (scrubQbo(resp[entity]) as unknown[]) : [];
     const { rows: kept, note } = fitRows(rows, RESULT_BUDGET_BYTES - 2_000);
     return {
       asOf: ctx.now.toISOString(),
@@ -205,8 +246,9 @@ const qboReport: ToolDef = {
     if (p.customerQbId) params.customer = p.customerQbId;
     let raw: unknown;
     try {
-      raw = await new QboClient().getReport(p.report, params);
+      raw = await withQboBudget(ctx.now.getTime(), () => new QboClient().getReport(p.report, params));
     } catch (err) {
+      if (err instanceof ToolInputError) throw err;
       throw new ToolInputError(`QuickBooks couldn't run that report: ${qboError(err)}`);
     }
     const flat = flattenReport(raw);
