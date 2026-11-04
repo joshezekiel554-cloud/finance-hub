@@ -79,6 +79,7 @@ describe("wave-1 ops reads", () => {
         "https://f",
       ),
     ).toEqual({
+      invoiceId: "i1",
       invoice: "10234",
       customer: "Acme",
       book: "Torah Judaica",

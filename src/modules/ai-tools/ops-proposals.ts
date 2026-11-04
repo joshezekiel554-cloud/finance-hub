@@ -99,7 +99,10 @@ async function claim(id: string, next: "approved" | "rejected", userId: string |
   return ((res as unknown as [{ affectedRows: number }])[0]?.affectedRows ?? 0) === 1;
 }
 
-const WAIT_MS = 25_000;
+// Well under the hub's 25 s settle timeout (feldart-hub engine.ts REPORT_TIMEOUT_MS):
+// past this we answer "approved, still running" rather than let the hub
+// time out and show "failed" while the job finishes.
+const WAIT_MS = 15_000;
 const POLL_MS = 500;
 
 async function waitForOutcome(id: string, sleep: (ms: number) => Promise<void>): Promise<SettleReply> {

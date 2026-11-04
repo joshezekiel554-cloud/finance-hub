@@ -297,6 +297,7 @@ const financeOrders: ToolDef = {
 
 export function emailIssueRow(r: EmailReviewRow, baseUrl: string) {
   return {
+    invoiceId: r.invoiceId,
     invoice: r.docNumber,
     customer: r.customerName,
     book: BOOK_LABEL[r.origin],
