@@ -16,6 +16,7 @@ import { extensivReceipts, rmas } from "../../db/schema/returns.js";
 import { buildAgentWriteToolDeclarations } from "../agent/tools/write-tools.js";
 import { createChatProposal, validateEntityRefs } from "../agent/chat-proposals.js";
 import { getToolByName } from "../ai-agent/tools.js";
+import { applyEmailListChanges, type EmailListChanges } from "../customer-emails/list-changes.js";
 import { resolveRecipients } from "../customer-emails/recipients.js";
 import { env } from "../../lib/env.js";
 import { isEmailAllowed } from "../../server/lib/hub-handoff.js";
@@ -95,21 +96,38 @@ const DISMISS_REVIEW_SCHEMA = {
   additionalProperties: false,
 };
 
-const EMAIL_LIST_PROP = (what: string) => ({
+// "x-feldart-typed" on the ADD lists: the hub refuses the call unless every
+// added address is a whole token of what the person typed in this chat (not
+// something the model read in an email) — the invoice-redirect guard's front
+// door. Removals aren't marked (removing can't redirect anything). The hub
+// strips the key before the schema reaches the model.
+const ADD_PROP = (what: string) => ({
   type: "array",
   items: { type: "string" },
-  description: `The FULL new ${what} list (replaces it). Omit to leave unchanged; [] clears it.`,
+  "x-feldart-typed": true,
+  description: `Addresses to ADD to the ${what} list. Each must be one the person typed themselves in this chat.`,
+});
+const REMOVE_PROP = (what: string) => ({
+  type: "array",
+  items: { type: "string" },
+  description: `Addresses to REMOVE from the ${what} list (e.g. one that bounced).`,
 });
 const UPDATE_EMAILS_SCHEMA = {
   type: "object",
   properties: {
     customerId: CUSTOMER_ID_PROP_W,
-    invoiceTo: EMAIL_LIST_PROP("invoice To"),
-    invoiceCc: EMAIL_LIST_PROP("invoice Cc"),
-    invoiceBcc: EMAIL_LIST_PROP("invoice Bcc"),
-    statementTo: EMAIL_LIST_PROP("statement/chase To"),
-    statementCc: EMAIL_LIST_PROP("statement/chase Cc"),
-    statementBcc: EMAIL_LIST_PROP("statement/chase Bcc"),
+    invoiceToAdd: ADD_PROP("invoice To"),
+    invoiceToRemove: REMOVE_PROP("invoice To"),
+    invoiceCcAdd: ADD_PROP("invoice Cc"),
+    invoiceCcRemove: REMOVE_PROP("invoice Cc"),
+    invoiceBccAdd: ADD_PROP("invoice Bcc"),
+    invoiceBccRemove: REMOVE_PROP("invoice Bcc"),
+    statementToAdd: ADD_PROP("statement/chase To"),
+    statementToRemove: REMOVE_PROP("statement/chase To"),
+    statementCcAdd: ADD_PROP("statement/chase Cc"),
+    statementCcRemove: REMOVE_PROP("statement/chase Cc"),
+    statementBccAdd: ADD_PROP("statement/chase Bcc"),
+    statementBccRemove: REMOVE_PROP("statement/chase Bcc"),
   },
   required: ["customerId"],
   additionalProperties: false,
@@ -413,20 +431,32 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
       break;
     }
     case "update_customer_emails": {
-      const cols = { invoiceTo: c!.invoiceToEmails, invoiceCc: c!.invoiceCcEmails, invoiceBcc: c!.invoiceBccEmails, statementTo: c!.statementToEmails, statementCc: c!.statementCcEmails, statementBcc: c!.statementBccEmails } as Record<string, unknown>;
       const asList = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
-      const allCurrent = [c!.primaryEmail ?? "", ...asList(c!.billingEmails), ...Object.values(cols).flatMap(asList)].filter(Boolean);
-      const allNext: string[] = [];
-      for (const key of Object.keys(EMAIL_LIST_LABEL)) {
-        const next = args[key];
-        if (next === undefined) continue;
-        const list = (next as string[]).map((e) => e.trim().toLowerCase());
-        allNext.push(...list);
-        push(EMAIL_LIST_LABEL[key]!, `${asList(cols[key]).join(", ") || "(none)"}  →  ${list.join(", ") || "(none — cleared)"}`);
+      const current = {
+        invoiceTo: asList(c!.invoiceToEmails),
+        invoiceCc: asList(c!.invoiceCcEmails),
+        invoiceBcc: asList(c!.invoiceBccEmails),
+        statementTo: asList(c!.statementToEmails),
+        statementCc: asList(c!.statementCcEmails),
+        statementBcc: asList(c!.statementBccEmails),
+      };
+      const changed = applyEmailListChanges(current, args as EmailListChanges);
+      if (Object.keys(changed).length === 0) throw new ToolInputError("Nothing to change — give addresses to add or remove.");
+      const allCurrent = [c!.primaryEmail ?? "", ...asList(c!.billingEmails), ...Object.values(current).flat()].filter(Boolean);
+      const added: string[] = [];
+      for (const [key, v] of Object.entries(changed)) {
+        added.push(...v!.added);
+        push(EMAIL_LIST_LABEL[key]!, `${v!.before.join(", ") || "(none)"}  →  ${v!.after.join(", ") || "(none — cleared)"}`);
       }
-      const fresh = newDomains(allCurrent, allNext);
+      for (const [key, label] of [["statementTo", "statements and chase emails"], ["invoiceTo", "invoices"]] as const) {
+        const v = changed[key];
+        if (v && v.after.length === 0) {
+          rows.unshift({ field: `⚠ No ${key === "invoiceTo" ? "invoice" : "statement"} recipients left`, value: `${label[0]!.toUpperCase()}${label.slice(1)} to this customer won't be emailed${key === "invoiceTo" ? " (finance falls back to their main email only if one is set)" : ""}.` });
+        }
+      }
+      const fresh = newDomains(allCurrent, added);
       if (fresh.length) rows.unshift({ field: NEW_DOMAIN_ROW, value: `${fresh.join(", ")} — this customer has never used it (free-mail addresses count one by one). Check it's really theirs before confirming.` });
-      if (args.invoiceTo !== undefined) push("Also", "Updates the customer's email in QuickBooks (invoices QuickBooks sends on its own)");
+      if (changed.invoiceTo) push("Also", "Updates the customer's email in QuickBooks (invoices QuickBooks sends on its own)");
       break;
     }
     case "create_admin_notification":
@@ -517,7 +547,7 @@ export const OPS_FINANCE_WRITES: ToolDef[] = [
   }),
   hubWriteTool(
     "update_customer_emails",
-    "Propose changing where a customer's invoices and statements/chase emails go: replace any of the invoice To/Cc/Bcc and statement To/Cc/Bcc address lists (give the FULL new list; omitted lists stay as they are). Use get_customer first to see the current lists. Use to fix a bounced address before resending. The card warns if a new address uses a domain the customer has never used.",
+    "Propose changing where a customer's invoices and statements/chase emails go: add and/or remove addresses on the invoice To/Cc/Bcc and statement To/Cc/Bcc lists (lists you don't mention stay as they are). Use get_customer first to see the current lists. Use to fix a bounced address before resending: remove the bad one, add the right one. An added address must be one the person typed themselves — if they haven't, ask them to type it (this includes MOVING an existing address to another list, e.g. Cc → To: that counts as adding it, so ask them to type it rather than retrying). The card warns if a new address uses a domain the customer has never used.",
     UPDATE_EMAILS_SCHEMA,
   ),
   hubWriteTool(
