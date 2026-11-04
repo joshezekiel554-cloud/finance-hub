@@ -78,3 +78,26 @@ describe("hub write tools", () => {
     await expect(OPS_FINANCE_WRITES[0]!.run({}, { now: NOW, baseUrl: "https://f" })).rejects.toThrow(/signed-in member/);
   });
 });
+
+describe("hub-only guard + stale check", () => {
+  it("recognises hub proposals and nothing else", async () => {
+    const { isHubProposal } = await import("./hub-proposal-guard.js");
+    expect(isHubProposal({ candidateSummary: { via: "hub" } })).toBe(true);
+    expect(isHubProposal({ candidateSummary: { via: "scan" } })).toBe(false);
+    expect(isHubProposal({ candidateSummary: {} })).toBe(false);
+    expect(isHubProposal(null)).toBe(false);
+  });
+
+  it("names the first field that moved since the card was shown", async () => {
+    const { previewDrift } = await import("./ops-finance-writes.js");
+    const shown = [
+      { field: "Customer", value: "Acme" },
+      { field: "Overdue now", value: "Feldart $500.00 · Torah Judaica $0.00" },
+    ];
+    expect(previewDrift(shown, shown)).toBeNull();
+    expect(previewDrift(shown, [shown[0]!, { field: "Overdue now", value: "Feldart $0.00 · Torah Judaica $0.00" }])).toBe(
+      'Overdue now: "Feldart $500.00 · Torah Judaica $0.00" → "Feldart $0.00 · Torah Judaica $0.00"',
+    );
+    expect(previewDrift(shown, [shown[0]!])).toMatch(/^Overdue now: .* → "—"$/);
+  });
+});

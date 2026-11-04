@@ -74,6 +74,7 @@ import { isStillEligible as isStillEligibleRma } from "../../modules/ai-agent/ca
 import { isStillEligible as isStillEligibleCronFail } from "../../modules/ai-agent/candidates/ops-cron-fail.js";
 import { isStillEligible as isStillEligibleTjChase } from "../../modules/ai-agent/candidates/tj-chase.js";
 import { isStillEligible as isStillEligibleTjDisputeNudge } from "../../modules/ai-agent/candidates/tj-dispute-nudge.js";
+import { HUB_ONLY_MESSAGE, isHubProposal, notHubProposalSql } from "../../modules/ai-tools/hub-proposal-guard.js";
 
 const log = createLogger({ module: "routes.autopilot" });
 
@@ -129,6 +130,15 @@ const STILL_ELIGIBLE: Partial<
 const SONNET = "claude-sonnet-4-6";
 const DRAFT_CONCURRENCY = 4;
 
+async function isHubProposalId(id: string): Promise<boolean> {
+  const [p] = await db
+    .select({ candidateSummary: aiProposals.candidateSummary })
+    .from(aiProposals)
+    .where(eq(aiProposals.id, id))
+    .limit(1);
+  return isHubProposal(p);
+}
+
 const autopilotRoute: FastifyPluginAsync = async (app) => {
   // ── POST /scan ────────────────────────────────────────────────────────
   app.post("/scan", async (req, reply) => {
@@ -157,7 +167,7 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
           sql`${aiProposals.expiresAt} > NOW()`,
           // Feldart AI (hub) proposals are settled on the hub's Confirm card
           // by the member who asked — never from this queue.
-          sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${aiProposals.candidateSummary}, '$.via')), '') <> 'hub'`,
+          notHubProposalSql,
         ),
       )
       .orderBy(desc(aiProposals.createdAt))
@@ -379,6 +389,7 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
         .limit(1);
       const p = rows[0];
       if (!p) return reply.code(404).send({ error: "not found" });
+      if (isHubProposal(p)) return reply.code(403).send({ error: HUB_ONLY_MESSAGE });
       if (p.status !== "drafted" && p.status !== "pending") {
         return reply
           .code(409)
@@ -473,6 +484,7 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
         .limit(1);
       const p = rows[0];
       if (!p) return reply.code(404).send({ error: "not found" });
+      if (isHubProposal(p)) return reply.code(403).send({ error: HUB_ONLY_MESSAGE });
 
       await db.transaction(async (tx) => {
         await tx
@@ -523,6 +535,7 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
     "/proposals/:id/dismiss",
     async (req, reply) => {
       const user = await requireAuth(req);
+      if (await isHubProposalId(req.params.id)) return reply.code(403).send({ error: HUB_ONLY_MESSAGE });
       const result = await db
         .update(aiProposals)
         .set({
@@ -530,7 +543,7 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
           decidedAt: sql`CURRENT_TIMESTAMP`,
           decidedByUserId: user.id,
         })
-        .where(eq(aiProposals.id, req.params.id));
+        .where(and(eq(aiProposals.id, req.params.id), notHubProposalSql));
       void result;
       return reply.send({ ok: true });
     },
@@ -546,6 +559,7 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
       if (!parse.success) {
         return reply.code(400).send({ error: "invalid body" });
       }
+      if (await isHubProposalId(req.params.id)) return reply.code(403).send({ error: HUB_ONLY_MESSAGE });
       await db
         .update(aiProposals)
         .set({
@@ -554,7 +568,7 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
           decidedByUserId: user.id,
           snoozedUntil: sql`NOW() + INTERVAL ${parse.data.hours} HOUR`,
         })
-        .where(eq(aiProposals.id, req.params.id));
+        .where(and(eq(aiProposals.id, req.params.id), notHubProposalSql));
       return reply.send({ ok: true });
     },
   );
@@ -568,11 +582,11 @@ const autopilotRoute: FastifyPluginAsync = async (app) => {
     const counted = await db
       .select({ n: sql<number>`COUNT(*)` })
       .from(aiProposals)
-      .where(sql`${aiProposals.status} <> 'executed'`);
+      .where(and(sql`${aiProposals.status} <> 'executed'`, notHubProposalSql));
     const deleted = Number(counted[0]?.n ?? 0);
     await db
       .delete(aiProposals)
-      .where(sql`${aiProposals.status} <> 'executed'`);
+      .where(and(sql`${aiProposals.status} <> 'executed'`, notHubProposalSql));
     await db.insert(auditLog).values({
       id: nanoid(24),
       userId: user.id,

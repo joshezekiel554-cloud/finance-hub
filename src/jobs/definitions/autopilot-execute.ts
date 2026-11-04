@@ -13,6 +13,8 @@ import {
   markProposalExecutionFailed,
 } from "../../modules/ai-agent/proposal-store.js";
 import { createLogger } from "../../lib/logger.js";
+import { isHubProposal } from "../../modules/ai-tools/hub-proposal-guard.js";
+import { recordNotification } from "../../modules/notifications/index.js";
 
 const log = createLogger({ component: "jobs.autopilot-execute" });
 
@@ -79,6 +81,19 @@ export async function autopilotExecuteHandler(
     return { ok: true };
   } else {
     await markProposalExecutionFailed(proposalId, result.error);
+    if (isHubProposal(proposal)) {
+      // The hub card may already have said "still running" — tell the asker.
+      await recordNotification({
+        userId,
+        kind: "system",
+        refType: "ai_proposal",
+        refId: proposalId,
+        payload: {
+          title: `Feldart AI change failed: ${String((proposal.candidateSummary as { summary?: unknown }).summary ?? action.tool)}`,
+          error: result.error.slice(0, 300),
+        },
+      }).catch((err: unknown) => log.error({ err, proposalId }, "hub failure notification failed"));
+    }
     log.error(
       { proposalId, tool: action.tool, err: result.error },
       "autopilot execute failed",

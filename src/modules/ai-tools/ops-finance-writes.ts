@@ -6,7 +6,7 @@
 // BullMQ executor + audit trail as the in-app agent's approve queue
 // (ai-agent/tools.ts). Voiding in QuickBooks is never offered from chat.
 
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/auth.js";
@@ -86,6 +86,33 @@ async function recipientsLine(c: NonNullable<Awaited<ReturnType<typeof customerF
   return r.cc.length ? `${to} (cc ${r.cc.join(", ")})` : to;
 }
 
+async function overdueLine(customerId: string): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = await db
+    .select({ origin: invoices.origin, balance: invoices.balance, dueDate: invoices.dueDate })
+    .from(invoices)
+    .where(and(eq(invoices.customerId, customerId), sql`${invoices.balance} > 0`, sql`${invoices.status} <> 'void'`));
+  const sum = { feldart: 0, tj: 0 };
+  for (const r of rows) {
+    const due = r.dueDate ? new Date(r.dueDate).toISOString().slice(0, 10) : null;
+    if (due && due < today) sum[r.origin] += Number(r.balance);
+  }
+  const fmt = (n: number) => `$${n.toFixed(2)}`;
+  return `Feldart ${fmt(sum.feldart)} · Torah Judaica ${fmt(sum.tj)}`;
+}
+
+/** First field that differs between the card the user saw and the data now. */
+export function previewDrift(shown: PreviewRow[], now: PreviewRow[]): string | null {
+  const before = new Map(shown.map((r) => [r.field, r.value]));
+  const after = new Map(now.map((r) => [r.field, r.value]));
+  for (const field of new Set([...before.keys(), ...after.keys()])) {
+    if (before.get(field) !== after.get(field)) {
+      return `${field}: "${before.get(field) ?? "—"}" → "${after.get(field) ?? "—"}"`;
+    }
+  }
+  return null;
+}
+
 /** Plain-words What/Value rows for the card. Throws ToolInputError on bad refs. */
 export async function buildPreview(tool: string, args: Record<string, unknown>): Promise<PreviewRow[]> {
   const rows: PreviewRow[] = [];
@@ -102,7 +129,10 @@ export async function buildPreview(tool: string, args: Record<string, unknown>):
     case "send_chase_email":
     case "send_check_in_email":
       push("To", await recipientsLine(c!));
-      if (tool === "send_chase_email") push("Tone", { MEDIUM: "1 — gentle", HIGH: "2 — firmer", CRITICAL: "3 — firm" }[String(args.tier)] ?? args.tier);
+      if (tool === "send_chase_email") {
+        push("Tone", { MEDIUM: "1 — gentle", HIGH: "2 — firmer", CRITICAL: "3 — firm" }[String(args.tier)] ?? args.tier);
+        push("Overdue now", await overdueLine(c!.id));
+      }
       push("Book", args.origin === "tj" ? "Torah Judaica" : args.origin === "feldart" ? "Feldart" : undefined);
       push("Subject", args.subject);
       push("Message", args.body);
@@ -222,7 +252,9 @@ function hubWriteTool(name: string, description: string, input_schema: Record<st
         userId,
         conversationId: nanoid(24),
         ttlMs: HUB_PROPOSAL_TTL_MS,
-        extraSummary: { via: "hub", hubActor: ctx.actorEmail.toLowerCase() },
+        // preview = what the card showed; confirm re-builds it and refuses
+        // if anything moved (paid since, hold changed, recipients edited).
+        extraSummary: { via: "hub", hubActor: ctx.actorEmail.toLowerCase(), preview },
       });
       return {
         proposal: {

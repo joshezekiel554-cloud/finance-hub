@@ -13,7 +13,7 @@ import { aiProposals, type AiProposal } from "../../db/schema/ai-proposals.js";
 import { AUTOPILOT_EXECUTE_JOB, getQueues } from "../../jobs/queues.js";
 import type { AutopilotExecuteJobData } from "../../jobs/definitions/autopilot-execute.js";
 import { isDangerousAction } from "../agent/chat-proposals.js";
-import { HUB_PROPOSAL_TTL_MS } from "./ops-finance-writes.js";
+import { buildPreview, HUB_PROPOSAL_TTL_MS, previewDrift, type PreviewRow } from "./ops-finance-writes.js";
 
 export type SettleReply =
   | { http: 200; body: { status: "applied" | "cancelled"; message: string; link?: string } }
@@ -74,6 +74,17 @@ export function decideSettle(
   return { kind: "proceed" };
 }
 
+/** Re-build the card from live data; a difference means "ask again". */
+async function staleness(p: AiProposal): Promise<string | null> {
+  const shown = (p.candidateSummary as { preview?: PreviewRow[] }).preview;
+  if (!p.draftedAction || !Array.isArray(shown)) return null;
+  try {
+    return previewDrift(shown, await buildPreview(p.draftedAction.tool, p.draftedAction.args));
+  } catch (err) {
+    return err instanceof Error ? err.message : "the record is gone";
+  }
+}
+
 async function load(id: string): Promise<AiProposal | null> {
   const [p] = await db.select().from(aiProposals).where(eq(aiProposals.id, id)).limit(1);
   return p ?? null;
@@ -127,11 +138,20 @@ export async function settleHubProposal(input: {
     }
   } else {
     if (!input.userId) return refuse(403, "forbidden", "You need a finance login to confirm finance changes.");
+    const stale = await staleness(p!);
+    if (stale) return refuse(409, "stale", `Things changed since the card was shown (${stale}). Ask again so it's re-checked.`);
     if (await claim(input.id, "approved", input.userId)) {
-      await getQueues().autopilotExecute.add(AUTOPILOT_EXECUTE_JOB, {
-        proposalId: input.id,
-        userId: input.userId,
-      } as AutopilotExecuteJobData);
+      try {
+        await getQueues().autopilotExecute.add(AUTOPILOT_EXECUTE_JOB, {
+          proposalId: input.id,
+          userId: input.userId,
+        } as AutopilotExecuteJobData);
+      } catch (err) {
+        // Never leave a claimed row stuck in 'approved' with nothing running.
+        const msg = `couldn't start: ${err instanceof Error ? err.message : String(err)}`;
+        await db.update(aiProposals).set({ status: "execution_failed", executionError: msg }).where(eq(aiProposals.id, input.id));
+        return refuse(502, "failed", `It couldn't start (${msg}). Nothing was changed; ask again.`);
+      }
       return waitForOutcome(input.id, sleep);
     }
   }

@@ -7,12 +7,13 @@ import {
 } from "../../jobs/queues.js";
 import type { AutopilotExecuteJobData } from "../../jobs/definitions/autopilot-execute.js";
 import { isDangerousAction } from "../agent/chat-proposals.js";
+import { isHubProposal } from "../ai-tools/hub-proposal-guard.js";
 
 export type ProposalActionResult =
   | { ok: true }
   | {
       ok: false;
-      reason: "not_found" | "wrong_status" | "confirmation_required";
+      reason: "not_found" | "wrong_status" | "confirmation_required" | "hub_only";
       status?: string;
     };
 
@@ -36,6 +37,8 @@ export async function approveProposalAndEnqueue(
     .limit(1);
   const p: AiProposal | undefined = rows[0];
   if (!p) return { ok: false, reason: "not_found" };
+  // Hub proposals are confirmed only on the hub card by whoever asked.
+  if (isHubProposal(p)) return { ok: false, reason: "hub_only" };
   if (p.status !== "drafted" && p.status !== "pending") {
     return { ok: false, reason: "wrong_status", status: p.status };
   }
@@ -75,11 +78,12 @@ export async function rejectProposal(
   userId: string | null,
 ): Promise<ProposalActionResult> {
   const rows = await db
-    .select({ id: aiProposals.id })
+    .select({ id: aiProposals.id, candidateSummary: aiProposals.candidateSummary })
     .from(aiProposals)
     .where(eq(aiProposals.id, proposalId))
     .limit(1);
   if (!rows[0]) return { ok: false, reason: "not_found" };
+  if (isHubProposal(rows[0])) return { ok: false, reason: "hub_only" };
 
   await db
     .update(aiProposals)
