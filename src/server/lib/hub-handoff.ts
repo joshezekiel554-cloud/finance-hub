@@ -31,20 +31,22 @@ export function safeNextPath(next: string | undefined, origin: string = DEFAULT_
 
 /**
  * Where a handoff should land. Normally `next` on finance (the hub's frame).
- * But when the browser says the handoff is a TOP-LEVEL navigation
- * (Sec-Fetch-Dest: document) and came from the hub (hub=1), it's the
- * cookie-blocked recovery path (iOS Safari drops a cookie first set inside the
- * frame): the cookie has now been set first-party, so send the user back to
- * the hub's Finance tab at the same path instead of leaving them on bare
- * finance. The hub origin comes from config, never from the request.
+ * The hub's stuck-frame button (iOS Safari drops a cookie first set inside
+ * the frame) redoes the handoff at TOP level and asks for `return=hub`: the
+ * cookie has now been set first-party, so send the user back to the hub's
+ * Finance tab at the same path. Explicit opt-in only — any other top-level
+ * handoff lands on finance as before — and never when the browser says this
+ * is a frame load (that would nest the hub inside itself). The hub origin
+ * comes from config, never from the request.
  */
 export function handoffLandingUrl(input: {
   next: string;
   fromHub: boolean;
+  returnTo: unknown;
   fetchDest: string | string[] | undefined;
   hubOrigin: string;
 }): string {
-  if (input.fromHub && input.fetchDest === "document") {
+  if (input.fromHub && input.returnTo === "hub" && input.fetchDest !== "iframe") {
     return `${input.hubOrigin.replace(/\/$/, "")}/finance?${new URLSearchParams({ p: input.next }).toString()}`;
   }
   return input.next;

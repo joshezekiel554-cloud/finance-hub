@@ -1,4 +1,4 @@
-// GET /auth/hub?ht=<token>&next=<path>&hub=1 — sign-in handoff from
+// GET /auth/hub?ht=<token>&next=<path>&hub=1[&return=hub] — sign-in handoff from
 // hub.feldart.com (hub phase-1 spec §4).
 //
 // Google's consent screen won't render inside an iframe, so the hub does the
@@ -34,7 +34,7 @@ const log = createLogger({ component: "routes.hub-auth" });
 // hub's token TTL (60–300 s).
 const consumedJti = new ConsumedJtiGuard(600);
 
-type Query = { ht?: string; next?: string; hub?: string };
+type Query = { ht?: string; next?: string; hub?: string; return?: string };
 
 const hubAuthRoute: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: Query }>("/hub", async (req, reply) => {
@@ -74,6 +74,7 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
     const landing = handoffLandingUrl({
       next: safeNextPath(req.query.next, env.PUBLIC_URL),
       fromHub: req.query.hub === "1",
+      returnTo: req.query.return,
       fetchDest: req.headers["sec-fetch-dest"],
       hubOrigin: env.HUB_PARENT_ORIGIN,
     });

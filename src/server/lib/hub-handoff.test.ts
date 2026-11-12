@@ -113,20 +113,28 @@ describe("buildHubEmbeddedCookie", () => {
 });
 
 describe("handoffLandingUrl", () => {
-  const base = { next: "/customers/abc?tab=x", hubOrigin: "https://hub.feldart.com" };
+  const base = { next: "/customers/abc?tab=x", hubOrigin: "https://hub.feldart.com", fromHub: true };
 
   it("lands on finance inside the frame (the normal handoff)", () => {
-    expect(handoffLandingUrl({ ...base, fromHub: true, fetchDest: "iframe" })).toBe("/customers/abc?tab=x");
+    expect(handoffLandingUrl({ ...base, returnTo: undefined, fetchDest: "iframe" })).toBe("/customers/abc?tab=x");
   });
 
-  it("sends a TOP-LEVEL hub handoff back to the hub's Finance tab (iOS cookie recovery)", () => {
-    expect(handoffLandingUrl({ ...base, fromHub: true, fetchDest: "document" })).toBe(
+  it("sends the hub's top-level recovery handoff back to the hub's Finance tab (iOS cookie fix)", () => {
+    expect(handoffLandingUrl({ ...base, returnTo: "hub", fetchDest: "document" })).toBe(
+      "https://hub.feldart.com/finance?p=%2Fcustomers%2Fabc%3Ftab%3Dx",
+    );
+    expect(handoffLandingUrl({ ...base, returnTo: "hub", fetchDest: undefined })).toBe(
       "https://hub.feldart.com/finance?p=%2Fcustomers%2Fabc%3Ftab%3Dx",
     );
   });
 
-  it("keeps the old behaviour without the header or without hub=1", () => {
-    expect(handoffLandingUrl({ ...base, fromHub: true, fetchDest: undefined })).toBe("/customers/abc?tab=x");
-    expect(handoffLandingUrl({ ...base, fromHub: false, fetchDest: "document" })).toBe("/customers/abc?tab=x");
+  it("needs the explicit return=hub — other top-level handoffs land on finance", () => {
+    expect(handoffLandingUrl({ ...base, returnTo: undefined, fetchDest: "document" })).toBe("/customers/abc?tab=x");
+    expect(handoffLandingUrl({ ...base, returnTo: "evil", fetchDest: "document" })).toBe("/customers/abc?tab=x");
+    expect(handoffLandingUrl({ ...base, fromHub: false, returnTo: "hub", fetchDest: "document" })).toBe("/customers/abc?tab=x");
+  });
+
+  it("never returns to the hub from inside a frame (no hub-in-hub)", () => {
+    expect(handoffLandingUrl({ ...base, returnTo: "hub", fetchDest: "iframe" })).toBe("/customers/abc?tab=x");
   });
 });
