@@ -3,6 +3,7 @@ import {
   ConsumedJtiGuard,
   buildSessionCookie,
   buildHubEmbeddedCookie,
+  handoffLandingUrl,
   isEmailAllowed,
   renderHandoffErrorPage,
   safeNextPath,
@@ -108,5 +109,24 @@ describe("buildHubEmbeddedCookie", () => {
     expect(c).not.toContain("HttpOnly");
     expect(c).toContain("SameSite=Lax");
     expect(c).not.toContain("Expires=");
+  });
+});
+
+describe("handoffLandingUrl", () => {
+  const base = { next: "/customers/abc?tab=x", hubOrigin: "https://hub.feldart.com" };
+
+  it("lands on finance inside the frame (the normal handoff)", () => {
+    expect(handoffLandingUrl({ ...base, fromHub: true, fetchDest: "iframe" })).toBe("/customers/abc?tab=x");
+  });
+
+  it("sends a TOP-LEVEL hub handoff back to the hub's Finance tab (iOS cookie recovery)", () => {
+    expect(handoffLandingUrl({ ...base, fromHub: true, fetchDest: "document" })).toBe(
+      "https://hub.feldart.com/finance?p=%2Fcustomers%2Fabc%3Ftab%3Dx",
+    );
+  });
+
+  it("keeps the old behaviour without the header or without hub=1", () => {
+    expect(handoffLandingUrl({ ...base, fromHub: true, fetchDest: undefined })).toBe("/customers/abc?tab=x");
+    expect(handoffLandingUrl({ ...base, fromHub: false, fetchDest: "document" })).toBe("/customers/abc?tab=x");
   });
 });
