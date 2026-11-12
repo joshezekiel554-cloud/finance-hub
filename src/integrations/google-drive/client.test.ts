@@ -46,7 +46,10 @@ const driveFilesCreateMock = vi.hoisted(() => vi.fn());
 const driveFilesDeleteMock = vi.hoisted(() => vi.fn());
 const driveFilesListMock = vi.hoisted(() => vi.fn());
 const driveFilesUpdateMock = vi.hoisted(() => vi.fn());
-const driveFilesGetMock = vi.hoisted(() => vi.fn().mockResolvedValue({ data: { id: "reach" } }));
+const REACH_OK = vi.hoisted(() => ({
+  data: { id: "reach", capabilities: { canAddChildren: true, canEdit: true, canDelete: true, canShare: true } },
+}));
+const driveFilesGetMock = vi.hoisted(() => vi.fn().mockResolvedValue(REACH_OK));
 const drivePermissionsCreateMock = vi.hoisted(() => vi.fn());
 const oauthGetAccessTokenMock = vi.hoisted(() => vi.fn().mockResolvedValue({ token: "tok" }));
 const oauthOnMock = vi.hoisted(() => vi.fn());
@@ -188,6 +191,7 @@ import {
   deleteFile,
   ensureFolder,
   renameFolder,
+  moveFile,
   makeViewable,
 } from "./client.js";
 
@@ -200,7 +204,7 @@ describe("getDriveClient credential selection", () => {
     vi.clearAllMocks();
     // Drop any queued *Once refresh outcomes a failing test left behind.
     oauthGetAccessTokenMock.mockReset().mockResolvedValue({ token: "tok" });
-    driveFilesGetMock.mockReset().mockResolvedValue({ data: { id: "reach" } });
+    driveFilesGetMock.mockReset().mockResolvedValue(REACH_OK);
     driveFilesCreateMock.mockResolvedValue({
       data: { id: "file-1", mimeType: "image/jpeg", size: "1" },
     });
@@ -324,6 +328,55 @@ describe("getDriveClient credential selection", () => {
 
     await expect(deleteFile({ userId: "user-1", fileId: "gone" })).resolves.toBeUndefined();
     expect(driveFilesDeleteMock).toHaveBeenCalledOnce();
+  });
+
+  it("skips a grant that can see the folder but not add to it (viewer share)", async () => {
+    const own = accountRow({ userId: "user-2", providerAccountId: "sub-2", access_token: "viewer-access", refresh_token: "viewer-refresh" });
+    const staff = accountRow({ userId: "user-1", providerAccountId: "sub-1", access_token: "editor-access", refresh_token: "editor-refresh" });
+    setupSelectSequence([[own], [own, staff]]);
+    driveFilesGetMock.mockResolvedValueOnce({ data: { id: "folder-1", capabilities: { canAddChildren: false } } });
+
+    await upload("user-2");
+
+    expect(oauthSetCredentialsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ access_token: "editor-access" }),
+    );
+    expect(driveFilesCreateMock).toHaveBeenCalledOnce();
+  });
+
+  it("prefers a grant that can at least see the target when none can act on it", async () => {
+    const blind = accountRow({ userId: "user-2", providerAccountId: "sub-2", access_token: "blind-access" });
+    const viewer = accountRow({ userId: "user-1", providerAccountId: "sub-1", access_token: "viewer-access" });
+    setupSelectSequence([[blind], [blind, viewer], []]);
+    driveFilesGetMock
+      .mockRejectedValueOnce(Object.assign(new Error("File not found"), { code: 404 }))
+      .mockResolvedValueOnce({ data: { id: "folder-1", capabilities: { canAddChildren: false } } });
+
+    await upload("user-2");
+
+    // The upload itself runs on the viewer's client (it fails for real in prod
+    // with a 403 — the honest error — rather than a misleading 404).
+    expect(driveFilesCreateMock).toHaveBeenCalledOnce();
+    expect(oauthSetCredentialsMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ access_token: "viewer-access" }));
+  });
+
+  it("moveFile checks the destination folder too", async () => {
+    const own = accountRow({ userId: "user-2", providerAccountId: "sub-2", access_token: "a-access" });
+    const staff = accountRow({ userId: "user-1", providerAccountId: "sub-1", access_token: "b-access" });
+    setupSelectSequence([[own], [own, staff]]);
+    // Grant A sees the file but not the destination; grant B sees both.
+    driveFilesGetMock.mockImplementation(async ({ fileId }: { fileId: string }) => {
+      const calls = driveFilesGetMock.mock.calls.length;
+      if (fileId === "dest" && calls <= 2) throw Object.assign(new Error("File not found"), { code: 404 });
+      return REACH_OK;
+    });
+    driveFilesUpdateMock.mockResolvedValueOnce({ data: {} });
+
+    await moveFile({ userId: "user-2", fileId: "f1", fromFolderId: "src", toFolderId: "dest" });
+
+    expect(driveFilesGetMock).toHaveBeenCalledWith(expect.objectContaining({ fileId: "dest" }));
+    expect(oauthSetCredentialsMock).toHaveBeenLastCalledWith(expect.objectContaining({ access_token: "b-access" }));
+    expect(driveFilesUpdateMock).toHaveBeenCalledOnce();
   });
 
   it("does not swallow non-404 errors from the reachability check", async () => {

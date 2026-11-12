@@ -243,16 +243,42 @@ function isNotFound(err: unknown): boolean {
 
 type DriveClient = ReturnType<typeof google.drive>;
 
-// `reachId` is the file/folder the caller is about to touch. A live grant is
+// What the caller is about to do to a file/folder, as Drive's capability
+// flag. `null` = only needs to see it (download).
+type DriveCapability = "canAddChildren" | "canEdit" | "canDelete" | "canShare";
+type Reach = { id: string; cap: DriveCapability | null };
+
+// Probe one target: "ok" (visible + capability), "readonly" (visible, lacks
+// the capability — e.g. a viewer share) or "hidden" (404).
+async function probeReach(drive: DriveClient, reach: Reach): Promise<"ok" | "readonly" | "hidden"> {
+  try {
+    const res = await drive.files.get({
+      fileId: reach.id,
+      fields: "id,capabilities(canAddChildren,canEdit,canDelete,canShare)",
+      supportsAllDrives: true,
+    });
+    if (!reach.cap) return "ok";
+    const caps = (res.data as { capabilities?: Partial<Record<DriveCapability, boolean>> } | undefined)
+      ?.capabilities;
+    return caps?.[reach.cap] === true ? "ok" : "readonly";
+  } catch (err) {
+    if (isNotFound(err)) return "hidden";
+    throw err;
+  }
+}
+
+// `reach` lists what the caller is about to touch and how. A live grant is
 // not enough: the returns folder is shared with some staff accounts and not
 // others, and Drive answers "File not found" to an account that can't see it
 // (2026-11-12: Josh's grant was revoked and Shaya's could not see the folder,
 // so every upload failed while info@'s grant would have worked). So prefer
-// the first grant that can see `reachId`; if none can, fall back to the first
-// live grant and let the real call fail (or 404-tolerate) as before.
-async function getDriveClient(userId?: string, reachId?: string): Promise<DriveClient> {
+// the first grant that can do the job on every target; failing that, one
+// that can at least see them; failing that, the first live grant — and let
+// the real call fail (or 404-tolerate) as before.
+async function getDriveClient(userId?: string, ...reach: Reach[]): Promise<DriveClient> {
   let revoked: unknown = null;
   let firstLive: DriveClient | null = null;
+  let firstVisible: DriveClient | null = null;
   for await (const stored of candidateTokens(userId)) {
     let drive: DriveClient;
     try {
@@ -266,24 +292,28 @@ async function getDriveClient(userId?: string, reachId?: string): Promise<DriveC
       revoked = err;
       continue;
     }
-    if (!reachId) return drive;
+    if (reach.length === 0) return drive;
+    let results: Array<"ok" | "readonly" | "hidden">;
     try {
-      await drive.files.get({ fileId: reachId, fields: "id", supportsAllDrives: true });
-      return drive;
+      results = await Promise.all(reach.map((r) => probeReach(drive, r)));
     } catch (err) {
-      if (isInvalidGrant(err)) {
-        revoked = err;
-      } else if (!isNotFound(err)) {
-        throw err;
-      } else {
-        firstLive ??= drive;
-      }
+      if (!isInvalidGrant(err)) throw err;
+      revoked = err;
       log.warn(
-        { source: stored.source, externalAccountId: stored.externalAccountId, reachId },
-        "drive grant cannot reach the target; trying next credential",
+        { source: stored.source, externalAccountId: stored.externalAccountId },
+        "drive grant revoked (invalid_grant); trying next credential",
       );
+      continue;
     }
+    if (results.every((r) => r === "ok")) return drive;
+    firstLive ??= drive;
+    if (!results.includes("hidden")) firstVisible ??= drive;
+    log.warn(
+      { source: stored.source, externalAccountId: stored.externalAccountId, reach, results },
+      "drive grant cannot act on the target; trying next credential",
+    );
   }
+  if (firstVisible) return firstVisible;
   if (firstLive) return firstLive;
   if (revoked) throw revoked;
   throw new Error(
@@ -357,7 +387,7 @@ export async function uploadFile(input: {
   mimeType: string;
   content: Buffer | NodeJS.ReadableStream;
 }): Promise<DriveUploadResult> {
-  const drive = await getDriveClient(input.userId, input.folderId);
+  const drive = await getDriveClient(input.userId, { id: input.folderId, cap: "canAddChildren" });
   const { folderId, filename, mimeType, content } = input;
 
   // googleapis expects `media.body` to be a Readable stream (not a Buffer).
@@ -398,7 +428,7 @@ export async function deleteFile(input: {
   userId: string;
   fileId: string;
 }): Promise<void> {
-  const drive = await getDriveClient(input.userId, input.fileId);
+  const drive = await getDriveClient(input.userId, { id: input.fileId, cap: "canDelete" });
   try {
     await drive.files.delete({ fileId: input.fileId, supportsAllDrives: true });
   } catch (err) {
@@ -425,7 +455,7 @@ export async function deleteFolder(input: {
   userId: string;
   folderId: string;
 }): Promise<void> {
-  const drive = await getDriveClient(input.userId, input.folderId);
+  const drive = await getDriveClient(input.userId, { id: input.folderId, cap: "canDelete" });
   try {
     await drive.files.delete({ fileId: input.folderId, supportsAllDrives: true });
   } catch (err) {
@@ -448,7 +478,7 @@ export async function ensureFolder(input: {
   parentId: string;
   name: string;
 }): Promise<string> {
-  const drive = await getDriveClient(input.userId, input.parentId);
+  const drive = await getDriveClient(input.userId, { id: input.parentId, cap: "canAddChildren" });
   const { parentId, name } = input;
 
   // Search for an existing folder with this name under the parent.
@@ -491,7 +521,7 @@ export async function renameFolder(input: {
   folderId: string;
   newName: string;
 }): Promise<void> {
-  const drive = await getDriveClient(input.userId, input.folderId);
+  const drive = await getDriveClient(input.userId, { id: input.folderId, cap: "canEdit" });
   await drive.files.update({
     fileId: input.folderId,
     requestBody: { name: input.newName },
@@ -508,7 +538,7 @@ export async function renameFile(input: {
   fileId: string;
   newName: string;
 }): Promise<void> {
-  const drive = await getDriveClient(input.userId, input.fileId);
+  const drive = await getDriveClient(input.userId, { id: input.fileId, cap: "canEdit" });
   await drive.files.update({
     fileId: input.fileId,
     requestBody: { name: input.newName },
@@ -527,7 +557,11 @@ export async function moveFile(input: {
   fromFolderId: string;
   toFolderId: string;
 }): Promise<void> {
-  const drive = await getDriveClient(input.userId, input.fileId);
+  const drive = await getDriveClient(
+    input.userId,
+    { id: input.fileId, cap: "canEdit" },
+    { id: input.toFolderId, cap: "canAddChildren" },
+  );
   await drive.files.update({
     fileId: input.fileId,
     addParents: input.toFolderId,
@@ -548,7 +582,7 @@ export async function makeViewable(input: {
   userId: string;
   fileId: string;
 }): Promise<void> {
-  const drive = await getDriveClient(input.userId, input.fileId);
+  const drive = await getDriveClient(input.userId, { id: input.fileId, cap: "canShare" });
   await drive.permissions.create({
     fileId: input.fileId,
     requestBody: {
@@ -567,7 +601,7 @@ export async function downloadFileContent(input: {
   userId: string;
   fileId: string;
 }): Promise<Buffer> {
-  const drive = await getDriveClient(input.userId, input.fileId);
+  const drive = await getDriveClient(input.userId, { id: input.fileId, cap: null });
   const res = await drive.files.get(
     { fileId: input.fileId, alt: "media" },
     { responseType: "arraybuffer" },
