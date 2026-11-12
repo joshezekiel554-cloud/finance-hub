@@ -1,4 +1,4 @@
-// GET /auth/hub?ht=<token>&next=<path>&hub=1 — sign-in handoff from
+// GET /auth/hub?ht=<token>&next=<path>&hub=1[&return=hub] — sign-in handoff from
 // hub.feldart.com (hub phase-1 spec §4).
 //
 // Google's consent screen won't render inside an iframe, so the hub does the
@@ -21,6 +21,7 @@ import {
   ConsumedJtiGuard,
   buildHubEmbeddedCookie,
   buildSessionCookie,
+  handoffLandingUrl,
   isEmailAllowed,
   renderHandoffErrorPage,
   safeNextPath,
@@ -33,7 +34,7 @@ const log = createLogger({ component: "routes.hub-auth" });
 // hub's token TTL (60–300 s).
 const consumedJti = new ConsumedJtiGuard(600);
 
-type Query = { ht?: string; next?: string; hub?: string };
+type Query = { ht?: string; next?: string; hub?: string; return?: string };
 
 const hubAuthRoute: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: Query }>("/hub", async (req, reply) => {
@@ -70,6 +71,13 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
     }
 
     const secure = env.PUBLIC_URL.startsWith("https://");
+    const landing = handoffLandingUrl({
+      next: safeNextPath(req.query.next, env.PUBLIC_URL),
+      fromHub: req.query.hub === "1",
+      returnTo: req.query.return,
+      fetchDest: req.headers["sec-fetch-dest"],
+      hubOrigin: env.HUB_PARENT_ORIGIN,
+    });
 
     // Already signed in as this very user (the hub re-minted while our
     // cookie was fine, or the user clicked the rail twice)? Don't mint a
@@ -77,8 +85,8 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
     const current = await getSession(req);
     if (current && current.user.email?.toLowerCase() === claims.email) {
       if (req.query.hub === "1") reply.raw.setHeader("set-cookie", [buildHubEmbeddedCookie(secure)]);
-      log.info({ email: claims.email, jti: claims.jti }, "hub handoff reused existing session");
-      return reply.redirect(safeNextPath(req.query.next, env.PUBLIC_URL), 302);
+      log.info({ email: claims.email, jti: claims.jti, fetchDest: req.headers["sec-fetch-dest"] }, "hub handoff reused existing session");
+      return reply.redirect(landing, 302);
     }
 
     // Same identity rule as the Google flow: one user row per email.
@@ -102,8 +110,11 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
     if (req.query.hub === "1") cookies.push(buildHubEmbeddedCookie(secure));
     reply.raw.setHeader("set-cookie", cookies);
 
-    log.info({ email: claims.email, jti: claims.jti, embedded: req.query.hub === "1" }, "hub handoff session created");
-    return reply.redirect(safeNextPath(req.query.next, env.PUBLIC_URL), 302);
+    log.info(
+      { email: claims.email, jti: claims.jti, embedded: req.query.hub === "1", fetchDest: req.headers["sec-fetch-dest"] },
+      "hub handoff session created",
+    );
+    return reply.redirect(landing, 302);
   });
 
   // Convenience for the hub's "open in full tab" + a manual sanity check.

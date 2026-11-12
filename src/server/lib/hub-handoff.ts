@@ -29,6 +29,29 @@ export function safeNextPath(next: string | undefined, origin: string = DEFAULT_
   return path;
 }
 
+/**
+ * Where a handoff should land. Normally `next` on finance (the hub's frame).
+ * The hub's stuck-frame button (iOS Safari drops a cookie first set inside
+ * the frame) redoes the handoff at TOP level and asks for `return=hub`: the
+ * cookie has now been set first-party, so send the user back to the hub's
+ * Finance tab at the same path. Explicit opt-in only — any other top-level
+ * handoff lands on finance as before — and never when the browser says this
+ * is a frame load (that would nest the hub inside itself). The hub origin
+ * comes from config, never from the request.
+ */
+export function handoffLandingUrl(input: {
+  next: string;
+  fromHub: boolean;
+  returnTo: unknown;
+  fetchDest: string | string[] | undefined;
+  hubOrigin: string;
+}): string {
+  if (input.fromHub && input.returnTo === "hub" && input.fetchDest !== "iframe") {
+    return `${input.hubOrigin.replace(/\/$/, "")}/finance?${new URLSearchParams({ p: input.next }).toString()}`;
+  }
+  return input.next;
+}
+
 /** Case-insensitive membership in the comma-separated allow-list. Empty list → nobody. */
 export function isEmailAllowed(email: string, allowListCsv: string): boolean {
   const wanted = email.trim().toLowerCase();
