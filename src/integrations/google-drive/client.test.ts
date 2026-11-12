@@ -46,6 +46,7 @@ const driveFilesCreateMock = vi.hoisted(() => vi.fn());
 const driveFilesDeleteMock = vi.hoisted(() => vi.fn());
 const driveFilesListMock = vi.hoisted(() => vi.fn());
 const driveFilesUpdateMock = vi.hoisted(() => vi.fn());
+const driveFilesGetMock = vi.hoisted(() => vi.fn().mockResolvedValue({ data: { id: "reach" } }));
 const drivePermissionsCreateMock = vi.hoisted(() => vi.fn());
 const oauthGetAccessTokenMock = vi.hoisted(() => vi.fn().mockResolvedValue({ token: "tok" }));
 const oauthOnMock = vi.hoisted(() => vi.fn());
@@ -59,6 +60,7 @@ vi.mock("googleapis", () => {
       delete: driveFilesDeleteMock,
       list: driveFilesListMock,
       update: driveFilesUpdateMock,
+      get: driveFilesGetMock,
     },
     permissions: {
       create: drivePermissionsCreateMock,
@@ -198,6 +200,7 @@ describe("getDriveClient credential selection", () => {
     vi.clearAllMocks();
     // Drop any queued *Once refresh outcomes a failing test left behind.
     oauthGetAccessTokenMock.mockReset().mockResolvedValue({ token: "tok" });
+    driveFilesGetMock.mockReset().mockResolvedValue({ data: { id: "reach" } });
     driveFilesCreateMock.mockResolvedValue({
       data: { id: "file-1", mimeType: "image/jpeg", size: "1" },
     });
@@ -291,6 +294,46 @@ describe("getDriveClient credential selection", () => {
 
     await expect(upload()).rejects.toThrow("socket hang up");
     expect(oauthGetAccessTokenMock).toHaveBeenCalledOnce();
+  });
+
+  it("skips a live grant that cannot see the target folder and uses one that can", async () => {
+    // Regression 2026-11-12: Josh's grant was revoked and Shaya's was live
+    // but the returns folder isn't shared with her, so Drive said "File not
+    // found" and the upload failed while info@'s grant could see the folder.
+    const own = accountRow({ userId: "user-2", providerAccountId: "sub-2", access_token: "blind-access", refresh_token: "blind-refresh" });
+    const staff = accountRow({ userId: "user-1", providerAccountId: "sub-1", access_token: "owner-access", refresh_token: "owner-refresh" });
+    setupSelectSequence([[own], [own, staff]]);
+    driveFilesGetMock.mockRejectedValueOnce(Object.assign(new Error("File not found: folder-1."), { code: 404 }));
+
+    await upload("user-2");
+
+    expect(driveFilesGetMock).toHaveBeenCalledTimes(2);
+    expect(driveFilesGetMock).toHaveBeenCalledWith(expect.objectContaining({ fileId: "folder-1" }));
+    expect(oauthSetCredentialsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ access_token: "owner-access", refresh_token: "owner-refresh" }),
+    );
+    expect(driveFilesCreateMock).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the first live grant when no grant can see the target", async () => {
+    // deleteFile tolerates 404 (already gone) — that must still work.
+    const own = accountRow();
+    setupSelectSequence([[own], [own], []]);
+    driveFilesGetMock.mockRejectedValue(Object.assign(new Error("File not found"), { response: { status: 404 } }));
+    driveFilesDeleteMock.mockRejectedValueOnce(Object.assign(new Error("File not found"), { response: { status: 404 } }));
+
+    await expect(deleteFile({ userId: "user-1", fileId: "gone" })).resolves.toBeUndefined();
+    expect(driveFilesDeleteMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not swallow non-404 errors from the reachability check", async () => {
+    const own = accountRow();
+    const staff = accountRow({ userId: "user-9", providerAccountId: "sub-9" });
+    setupSelectSequence([[own], [own, staff]]);
+    driveFilesGetMock.mockRejectedValueOnce(Object.assign(new Error("Backend Error"), { code: 500 }));
+
+    await expect(upload()).rejects.toThrow("Backend Error");
+    expect(driveFilesCreateMock).not.toHaveBeenCalled();
   });
 
   it("persists refreshed tokens back onto the account row", async () => {
