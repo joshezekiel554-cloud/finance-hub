@@ -4,10 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Hoisted mock for QboClient — mock findInvoicesForCustomer
 // ---------------------------------------------------------------------------
 const findInvoicesForCustomerMock = vi.hoisted(() => vi.fn());
+const getItemByIdMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+const getItemsBySkuMock = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 
 vi.mock("../../integrations/qb/client.js", () => ({
   QboClient: vi.fn().mockImplementation(() => ({
     findInvoicesForCustomer: findInvoicesForCustomerMock,
+    getItemById: getItemByIdMock,
+    getItemsBySku: getItemsBySkuMock,
   })),
   configFromEnv: vi.fn().mockReturnValue({
     clientId: "test",
@@ -323,5 +327,119 @@ describe("findOriginalInvoiceForItem", () => {
     });
     expect(result!.qboInvoiceId).toBe("inv-new");
     expect(result!.docNumber).toBe("18500");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Duplicate QBO items sharing one SKU (2026-11-16: Menorah Judaica PHCR01G —
+// QBO has #1917 "Classic Round Pan Holder - Gold" and #1918 "... ( 1918 )",
+// both Sku PHCR01G; the form resolved #1917, invoice 110480 billed #1918, so
+// the lookup said "no matching invoice").
+// ---------------------------------------------------------------------------
+
+describe("SKU-sibling fallback", () => {
+  beforeEach(() => {
+    findInvoicesForCustomerMock.mockReset();
+    getItemByIdMock.mockReset().mockResolvedValue(null);
+    getItemsBySkuMock.mockReset().mockResolvedValue([]);
+  });
+
+  const billed = () =>
+    makeInvoice("inv-110480", "110480", "2026-10-20", [
+      makeSalesLine("OTHER", 48, 3),
+      makeSalesLine("1918", 38, 1),
+    ]);
+
+  it("matches an invoice that billed a different QBO item with the same SKU", async () => {
+    findInvoicesForCustomerMock.mockResolvedValue([billed()]);
+    getItemByIdMock.mockResolvedValue({ Id: "1917", Name: "Gold", Sku: "PHCR01G" });
+    getItemsBySkuMock.mockResolvedValue([
+      { Id: "1917", Name: "Gold", Sku: "PHCR01G" },
+      { Id: "1918", Name: "Gold ( 1918 )", Sku: "PHCR01G" },
+    ]);
+    const result = await lookupItemPriceForCustomer({
+      qboCustomerId: "48",
+      qbItemId: "1917",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.originalInvoiceDocNumber).toBe("110480");
+    expect(result!.unitPrice).toBe("38.0000");
+    expect(result!.matchedQbItemId).toBe("1918");
+    expect(getItemsBySkuMock).toHaveBeenCalledWith("PHCR01G");
+  });
+
+  it("uses the caller's SKU without fetching the item", async () => {
+    findInvoicesForCustomerMock.mockResolvedValue([billed()]);
+    getItemsBySkuMock.mockResolvedValue([
+      { Id: "1917", Name: "Gold", Sku: "PHCR01G" },
+      { Id: "1918", Name: "Gold ( 1918 )", Sku: "PHCR01G" },
+    ]);
+    const result = await findOriginalInvoiceForItem({
+      qboCustomerId: "48",
+      qbItemId: "1917",
+      sku: " PHCR01G ",
+    });
+    expect(result!.docNumber).toBe("110480");
+    expect(result!.matchedQbItemId).toBe("1918");
+    expect(getItemByIdMock).not.toHaveBeenCalled();
+    expect(getItemsBySkuMock).toHaveBeenCalledWith("PHCR01G");
+  });
+
+  it("matches a line whose Description is the SKU even if its item isn't a SKU sibling", async () => {
+    const inv = makeInvoice("inv-9", "110999", "2026-10-01", [
+      { ...makeSalesLine("5555", 30, 2), Description: "phcr01g" },
+    ]);
+    findInvoicesForCustomerMock.mockResolvedValue([inv]);
+    getItemByIdMock.mockResolvedValue({ Id: "1917", Name: "Gold", Sku: "PHCR01G" });
+    const result = await lookupItemPriceForCustomer({ qboCustomerId: "48", qbItemId: "1917" });
+    expect(result!.originalInvoiceDocNumber).toBe("110999");
+    expect(result!.matchedQbItemId).toBe("5555");
+  });
+
+  it("prefers an exact item match and skips the SKU lookups", async () => {
+    const exact = makeInvoice("inv-1", "100", "2026-01-01", [makeSalesLine("1917", 40, 1)]);
+    findInvoicesForCustomerMock.mockResolvedValue([billed(), exact]);
+    const result = await lookupItemPriceForCustomer({ qboCustomerId: "48", qbItemId: "1917" });
+    expect(result!.originalInvoiceDocNumber).toBe("100");
+    expect(result!.matchedQbItemId).toBe("1917");
+    expect(getItemByIdMock).not.toHaveBeenCalled();
+    expect(getItemsBySkuMock).not.toHaveBeenCalled();
+  });
+
+  it("still returns null when the item has no SKU", async () => {
+    findInvoicesForCustomerMock.mockResolvedValue([billed()]);
+    getItemByIdMock.mockResolvedValue({ Id: "1917", Name: "Gold" });
+    const result = await lookupItemPriceForCustomer({ qboCustomerId: "48", qbItemId: "1917" });
+    expect(result).toBeNull();
+    expect(getItemsBySkuMock).not.toHaveBeenCalled();
+  });
+
+  it("returns null (not a throw) when the QBO item fetch fails", async () => {
+    findInvoicesForCustomerMock.mockResolvedValue([billed()]);
+    getItemByIdMock.mockRejectedValue(new Error("QBO 500"));
+    const result = await lookupItemPriceForCustomer({ qboCustomerId: "48", qbItemId: "1917" });
+    expect(result).toBeNull();
+  });
+
+  it("still matches by Description when the sibling query fails", async () => {
+    const inv = makeInvoice("inv-9", "110999", "2026-10-01", [
+      { ...makeSalesLine("1918", 38, 1), Description: "PHCR01G" },
+    ]);
+    findInvoicesForCustomerMock.mockResolvedValue([inv]);
+    getItemsBySkuMock.mockRejectedValue(new Error("QBO 429"));
+    const result = await lookupItemPriceForCustomer({
+      qboCustomerId: "48",
+      qbItemId: "1917",
+      sku: "PHCR01G",
+    });
+    expect(result!.originalInvoiceDocNumber).toBe("110999");
+  });
+
+  it("returns null when no sibling or description match exists", async () => {
+    findInvoicesForCustomerMock.mockResolvedValue([billed()]);
+    getItemByIdMock.mockResolvedValue({ Id: "1917", Name: "Gold", Sku: "PHCR01G" });
+    getItemsBySkuMock.mockResolvedValue([{ Id: "1917", Name: "Gold", Sku: "PHCR01G" }]);
+    const result = await lookupItemPriceForCustomer({ qboCustomerId: "48", qbItemId: "1917" });
+    expect(result).toBeNull();
   });
 });

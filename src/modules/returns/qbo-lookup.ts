@@ -1,5 +1,5 @@
 import { QboClient } from "../../integrations/qb/client.js";
-import type { QboInvoice } from "../../integrations/qb/types.js";
+import type { QboInvoice, QboInvoiceLine } from "../../integrations/qb/types.js";
 
 // ---------------------------------------------------------------------------
 // Public input types
@@ -8,6 +8,10 @@ import type { QboInvoice } from "../../integrations/qb/types.js";
 export type LookupItemPriceInput = {
   qboCustomerId: string;
   qbItemId: string;
+  /** The row's product code, if the caller knows it. Used only when no
+   *  invoice billed `qbItemId` itself — see findMatchingInvoice. When omitted
+   *  it is read from the QBO item. */
+  sku?: string | null;
   /** Pass an already-constructed QboClient to avoid constructing one from env
    *  (useful for DI in tests via the optional second argument). */
   qbo?: QboClient;
@@ -24,11 +28,15 @@ export type LookupItemPriceResult = {
   originalInvoiceDocNumber: string;
   /** TxnDate of the matched invoice, YYYY-MM-DD */
   originalInvoiceDate: string;
+  /** The QBO item the matched invoice line actually billed. Differs from the
+   *  requested qbItemId when QBO holds duplicate items sharing one SKU. */
+  matchedQbItemId: string;
 };
 
 export type FindOriginalInvoiceInput = {
   qboCustomerId: string;
   qbItemId: string;
+  sku?: string | null;
   qbo?: QboClient;
 };
 
@@ -36,34 +44,83 @@ export type FindOriginalInvoiceResult = {
   qboInvoiceId: string;
   docNumber: string;
   txnDate: string;
+  matchedQbItemId: string;
 };
 
 // ---------------------------------------------------------------------------
 // Internal: find the most recent invoice that contains the given item
 // ---------------------------------------------------------------------------
 
+type InvoiceMatch = {
+  invoice: QboInvoice;
+  unitPrice: number;
+  matchedQbItemId: string;
+};
+
 /**
  * Searches `invoices` (expected in DESC TxnDate order from the client) for the
- * first invoice that has a SalesItemLineDetail line where ItemRef.value matches
- * `qbItemId`. Returns the invoice and matching line, or null.
+ * first invoice with a SalesItemLineDetail line accepted by `accept`.
  */
-function findMostRecentInvoiceWithItem(
+function findMostRecentInvoice(
   invoices: QboInvoice[],
-  qbItemId: string,
-): { invoice: QboInvoice; unitPrice: number } | null {
+  accept: (line: QboInvoiceLine) => boolean,
+): InvoiceMatch | null {
   for (const invoice of invoices) {
-    const lines = invoice.Line ?? [];
-    const matchingLine = lines.find(
-      (l) =>
-        l.DetailType === "SalesItemLineDetail" &&
-        l.SalesItemLineDetail?.ItemRef?.value === qbItemId,
+    const line = (invoice.Line ?? []).find(
+      (l) => l.DetailType === "SalesItemLineDetail" && accept(l),
     );
-    if (matchingLine) {
-      const unitPrice = matchingLine.SalesItemLineDetail?.UnitPrice ?? 0;
-      return { invoice, unitPrice };
+    if (line) {
+      return {
+        invoice,
+        unitPrice: line.SalesItemLineDetail?.UnitPrice ?? 0,
+        matchedQbItemId: line.SalesItemLineDetail?.ItemRef?.value ?? "",
+      };
     }
   }
   return null;
+}
+
+/**
+ * Most recent invoice for this customer that billed the item.
+ *
+ * 1. Exact QBO item id — the common case, no extra QBO calls.
+ * 2. Otherwise, by product code: QBO can hold several items with the same
+ *    Sku (e.g. #1917 "Classic Round Pan Holder - Gold" and #1918 "... ( 1918 )",
+ *    both PHCR01G). The picker resolves one of them, the invoice may have
+ *    billed the other. Accept a line whose item shares the SKU, or whose
+ *    Description is the SKU (Feldart invoices carry the code there).
+ */
+async function findMatchingInvoice(
+  qbo: QboClient,
+  invoices: QboInvoice[],
+  qbItemId: string,
+  skuHint: string | null | undefined,
+): Promise<InvoiceMatch | null> {
+  const exact = findMostRecentInvoice(
+    invoices,
+    (l) => l.SalesItemLineDetail?.ItemRef?.value === qbItemId,
+  );
+  if (exact || invoices.length === 0) return exact;
+
+  // Best-effort: if either QBO call fails, keep the old "no match" answer
+  // rather than turning a soft miss into a 500.
+  let sku = "";
+  const siblings = new Set<string>([qbItemId]);
+  try {
+    sku =
+      skuHint?.trim() || (await qbo.getItemById(qbItemId))?.Sku?.trim() || "";
+    if (!sku) return null;
+    for (const item of await qbo.getItemsBySku(sku)) siblings.add(item.Id);
+  } catch {
+    if (!sku) return null;
+  }
+  const skuUpper = sku.toUpperCase();
+
+  return findMostRecentInvoice(invoices, (l) => {
+    const ref = l.SalesItemLineDetail?.ItemRef?.value;
+    if (ref && siblings.has(ref)) return true;
+    return (l.Description ?? "").trim().toUpperCase() === skuUpper;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -122,10 +179,10 @@ export async function lookupItemPriceForCustomer(
   const qbo = input.qbo ?? qboOverride ?? new QboClient();
 
   const invoices = await qbo.findInvoicesForCustomer(input.qboCustomerId);
-  const match = findMostRecentInvoiceWithItem(invoices, input.qbItemId);
+  const match = await findMatchingInvoice(qbo, invoices, input.qbItemId, input.sku);
   if (!match) return null;
 
-  const { invoice, unitPrice: listUnitPrice } = match;
+  const { invoice, unitPrice: listUnitPrice, matchedQbItemId } = match;
 
   const discountPct = computeDiscountPct(invoice);
 
@@ -143,6 +200,7 @@ export async function lookupItemPriceForCustomer(
     invoiceDiscountPct: discountPct !== null ? discountPct.toFixed(4) : null,
     originalInvoiceDocNumber: invoice.DocNumber ?? "",
     originalInvoiceDate: invoice.TxnDate ?? "",
+    matchedQbItemId,
   };
 }
 
@@ -163,13 +221,14 @@ export async function findOriginalInvoiceForItem(
   const qbo = input.qbo ?? qboOverride ?? new QboClient();
 
   const invoices = await qbo.findInvoicesForCustomer(input.qboCustomerId);
-  const match = findMostRecentInvoiceWithItem(invoices, input.qbItemId);
+  const match = await findMatchingInvoice(qbo, invoices, input.qbItemId, input.sku);
   if (!match) return null;
 
-  const { invoice } = match;
+  const { invoice, matchedQbItemId } = match;
   return {
     qboInvoiceId: invoice.Id,
     docNumber: invoice.DocNumber ?? "",
     txnDate: invoice.TxnDate ?? "",
+    matchedQbItemId,
   };
 }
