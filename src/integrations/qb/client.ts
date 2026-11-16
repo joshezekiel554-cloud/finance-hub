@@ -957,6 +957,17 @@ export class QboClient {
     return data.QueryResponse.Item?.[0] ?? null;
   }
 
+  // Every Item (active AND inactive) carrying exactly this Sku. QBO allows
+  // duplicate Skus — e.g. "Classic Round Pan Holder - Gold" (#1917) and
+  // "... ( 1918 )" (#1918) are both PHCR01G — so the RMA invoice lookup uses
+  // this to treat them as one product.
+  async getItemsBySku(sku: string): Promise<QboItem[]> {
+    const data = await this.query<QboItem>(
+      `SELECT * FROM Item WHERE Sku = '${escapeQboLiteral(sku)}' AND Active IN (true, false) MAXRESULTS 50`,
+    );
+    return data.QueryResponse.Item ?? [];
+  }
+
   // Fetch a single Item by its QBO Id. Used when caller already has the
   // qbItemId (e.g. from a seasonal_product row) and doesn't need a query-by-SKU
   // round-trip. Falls back gracefully — returns null if the item doesn't exist.

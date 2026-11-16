@@ -35,6 +35,9 @@ type LookupResult = {
   invoiceDiscountPct: string | null;
   originalInvoiceDocNumber: string | null;
   originalInvoiceDate: string | null;
+  /** QBO item the matched invoice actually billed — differs from the row's
+   *  qbItemId when QBO has duplicate items sharing one SKU. */
+  matchedQbItemId?: string | null;
 };
 
 export type RmaItemsTableProps = {
@@ -213,8 +216,8 @@ export default function RmaItemsTable({
             ? `/api/rmas/${rmaId}/lookup-prices`
             : `/api/rmas/qbo-lookup-prices`;
           const body = rmaId
-            ? { qbItemId: r.qbItemId }
-            : { qbCustomerId, qbItemId: r.qbItemId };
+            ? { qbItemId: r.qbItemId, sku: r.sku }
+            : { qbCustomerId, qbItemId: r.qbItemId, sku: r.sku };
           const res = await fetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -244,6 +247,9 @@ export default function RmaItemsTable({
       if (!hit?.ok || !hit.data) return r;
       const merged: RmaItemRow = {
         ...r,
+        // Credit the QBO item that was actually sold (duplicate-SKU items) —
+        // also clears the wizard's "not on any prior invoice" warning.
+        qbItemId: hit.data.matchedQbItemId || r.qbItemId,
         unitPrice: hit.data.unitPrice ?? r.unitPrice,
         listUnitPrice: hit.data.listUnitPrice ?? r.listUnitPrice,
         invoiceDiscountPct:

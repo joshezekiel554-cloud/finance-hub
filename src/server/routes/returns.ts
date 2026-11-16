@@ -284,10 +284,16 @@ const updateItemBodySchema = z.object({
 
 const lookupPricesBodySchema = z.object({
   qbItemId: z.string().min(1).max(64),
+  // Optional product code — lets the lookup match a duplicate QBO item that
+  // shares this SKU (see modules/returns/qbo-lookup.ts findMatchingInvoice).
+  sku: z.string().max(100).nullish(),
 });
 
 const findOriginalInvoiceBodySchema = z.object({
   qbItemId: z.string().min(1).max(64),
+  // Optional product code — lets the lookup match a duplicate QBO item that
+  // shares this SKU (see modules/returns/qbo-lookup.ts findMatchingInvoice).
+  sku: z.string().max(100).nullish(),
 });
 
 // ---------------------------------------------------------------------------
@@ -1216,6 +1222,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     const schema = z.object({
       qbCustomerId: z.string().min(1),
       qbItemId: z.string().min(1),
+      sku: z.string().max(100).nullish(),
     });
     const parse = schema.safeParse(req.body);
     if (!parse.success) {
@@ -1225,6 +1232,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     const result = await lookupItemPriceForCustomer({
       qboCustomerId: parse.data.qbCustomerId,
       qbItemId: parse.data.qbItemId,
+      sku: parse.data.sku,
     });
     if (!result) {
       reply.code(404);
@@ -1239,6 +1247,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     const schema = z.object({
       qbCustomerId: z.string().min(1),
       qbItemId: z.string().min(1),
+      sku: z.string().max(100).nullish(),
     });
     const parse = schema.safeParse(req.body);
     if (!parse.success) {
@@ -1248,6 +1257,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
     const result = await findOriginalInvoiceForItem({
       qboCustomerId: parse.data.qbCustomerId,
       qbItemId: parse.data.qbItemId,
+      sku: parse.data.sku,
     });
     if (!result) {
       reply.code(404);
@@ -1279,6 +1289,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       const result = await lookupItemPriceForCustomer({
         qboCustomerId: rma.qbCustomerId,
         qbItemId: parse.data.qbItemId,
+        sku: parse.data.sku,
       });
       if (!result) {
         reply.code(404);
@@ -1311,6 +1322,7 @@ const returnsRoute: FastifyPluginAsync = async (app) => {
       const result = await findOriginalInvoiceForItem({
         qboCustomerId: rma.qbCustomerId,
         qbItemId: parse.data.qbItemId,
+        sku: parse.data.sku,
       });
       if (!result) {
         reply.code(404);
