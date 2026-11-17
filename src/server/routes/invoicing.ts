@@ -24,6 +24,11 @@ import {
   getOrderByName,
   getRetailPricesBySku,
 } from "../../integrations/shopify/index.js";
+import { getExtensivClient } from "../../integrations/extensiv/client.js";
+import {
+  summarizeCharges,
+  type ShipmentCharges,
+} from "../../integrations/extensiv/charges.js";
 import { and, count, desc, eq, gte, inArray, isNull, like, lt, max } from "drizzle-orm";
 import {
   parseShipmentHtml,
@@ -265,6 +270,29 @@ const shopifyRetailBodySchema = z.object({
   skus: z.array(z.string().trim().min(1).max(100)).min(1).max(100),
 });
 
+const extensivChargesBodySchema = z.object({
+  transactionNumbers: z
+    .array(z.string().trim().regex(/^\d{1,12}$/))
+    .min(1)
+    .max(300),
+});
+
+// Per-process cache of Extensiv charge summaries by transaction number.
+// Bounded by the Today window (a few hundred shipments); stale entries are
+// overwritten on the next lookup.
+const EXTENSIV_CACHE_BILLED_MS = 30 * 60 * 1000;
+const EXTENSIV_CACHE_UNBILLED_MS = 3 * 60 * 1000;
+const EXTENSIV_CACHE_MAX = 2000;
+const extensivChargeCache = new Map<string, { value: ShipmentCharges | null; exp: number }>();
+function cacheExtensivCharge(tx: string, entry: { value: ShipmentCharges | null; exp: number }): void {
+  extensivChargeCache.delete(tx);
+  if (extensivChargeCache.size >= EXTENSIV_CACHE_MAX) {
+    const oldest = extensivChargeCache.keys().next().value;
+    if (oldest !== undefined) extensivChargeCache.delete(oldest);
+  }
+  extensivChargeCache.set(tx, entry);
+}
+
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
   // Item search for the add-line picker. Returns up to 20 matches.
   app.get("/items/search", async (req, reply) => {
@@ -311,6 +339,56 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
       log.error({ err, count: parsed.data.skus.length }, "shopify retail lookup failed");
       return reply.code(502).send({ error: "shopify retail lookup failed" });
     }
+  });
+
+  // What Blue Chip billed us for each shipment (Extensiv billing charges),
+  // keyed by the shipment email's Transaction Number. Reference only; it is
+  // never added to the customer's invoice. Read-only API token.
+  app.post("/extensiv-charges", async (req, reply) => {
+    await requireAuth(req);
+    const parsed = extensivChargesBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid body" });
+    }
+    const client = getExtensivClient();
+    if (!client) {
+      return reply.send({ configured: false, charges: {} });
+    }
+    const now = Date.now();
+    const out: Record<string, ShipmentCharges> = {};
+    const missing: string[] = [];
+    for (const tx of parsed.data.transactionNumbers) {
+      const hit = extensivChargeCache.get(tx);
+      if (hit && hit.exp > now) {
+        if (hit.value) out[tx] = hit.value;
+      } else {
+        missing.push(tx);
+      }
+    }
+    if (missing.length > 0) {
+      try {
+        const orders = await client.getOrdersByIds(missing);
+        const found = new Map<string, ShipmentCharges>();
+        for (const o of orders) {
+          const s = summarizeCharges(o);
+          if (s) found.set(s.transactionNumber, s);
+        }
+        for (const tx of missing) {
+          const s = found.get(tx) ?? null;
+          // Unbilled orders get a short TTL so the charge appears soon after
+          // Blue Chip bills it; billed ones barely change.
+          const ttl = s?.shipping !== null && s?.shipping !== undefined
+            ? EXTENSIV_CACHE_BILLED_MS
+            : EXTENSIV_CACHE_UNBILLED_MS;
+          cacheExtensivCharge(tx, { value: s, exp: now + ttl });
+          if (s) out[tx] = s;
+        }
+      } catch (err) {
+        log.error({ err, count: missing.length }, "extensiv charges lookup failed");
+        return reply.code(502).send({ error: "extensiv lookup failed" });
+      }
+    }
+    return reply.send({ configured: true, charges: out });
   });
 
   // Fetch active QBO Term entities for the UI dropdown. Cached client-side via

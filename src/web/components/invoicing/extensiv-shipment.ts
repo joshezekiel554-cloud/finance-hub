@@ -82,3 +82,47 @@ export function retailTooltip(hit: RetailPriceHit | undefined): string | undefin
   if (hit.productStatus && hit.productStatus !== "ACTIVE") parts.push(hit.productStatus.toLowerCase());
   return parts.join(" · ");
 }
+
+// ---------- Extensiv warehouse charges (shipping cost) ----------
+
+// Mirrors the server's ShipmentCharges (src/integrations/extensiv/charges.ts).
+export type ShipmentChargesView = {
+  transactionNumber: string;
+  reference: string | null;
+  shipping: number | null;
+  lines: Array<{ label: string; amount: number }>;
+  totalCharges: number | null;
+  carrierService: string | null;
+  carrierRate: number | null;
+};
+
+// Short label for the card: "Shipping $6.87", or why there isn't one.
+export function shippingLabel(c: ShipmentChargesView | undefined): string | null {
+  if (!c) return null;
+  if (c.shipping !== null) return `Shipping $${c.shipping.toFixed(2)}`;
+  if (c.totalCharges === null) return "Shipping: not billed yet";
+  return "Shipping: no freight charge";
+}
+
+// Hover breakdown: every billed line, the total, and the carrier's own rate.
+export function shippingTooltip(c: ShipmentChargesView | undefined): string | undefined {
+  if (!c) return undefined;
+  const parts = c.lines.map((l) => `${l.label} $${l.amount.toFixed(2)}`);
+  if (c.totalCharges !== null) parts.push(`Total Blue Chip charges $${c.totalCharges.toFixed(2)}`);
+  if (c.carrierRate !== null) {
+    parts.push(`Carrier rate${c.carrierService ? ` (${c.carrierService})` : ""} $${c.carrierRate.toFixed(2)}`);
+  }
+  return parts.length > 0 ? `Extensiv / Blue Chip:\n${parts.join("\n")}` : undefined;
+}
+
+// Numeric, de-duplicated, sorted transaction numbers for the batch lookup.
+export function transactionNumbersFor(
+  rows: Array<{ parsed: { transactionNumber: string | null } }>,
+): string[] {
+  const out = new Set<string>();
+  for (const r of rows) {
+    const t = r.parsed.transactionNumber?.trim();
+    if (t && /^\d{1,12}$/.test(t)) out.add(t);
+  }
+  return Array.from(out).sort();
+}
