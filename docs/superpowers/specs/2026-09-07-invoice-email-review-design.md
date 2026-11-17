@@ -72,20 +72,10 @@ invoice_email_dismissals
   dismissed_by_user_id  varchar(255) NULL, FK users.id ON DELETE SET NULL
 ```
 
-A dismissal only counts while it is **newer than the last delivery
-attempt**: `dismissed_at > delivery_time`; if `delivery_time` is null it
-counts only when there is also no `delivery_error` (an undated bounce can't
-prove the dismissal came after it, so it stays visible). QBO moves
-`DeliveryTime` on every send (observed 2026-09-06: eight Eichlers BP invoices
-re-sent from the QBO UI all carry the same new `DeliveryTime`). So a
-never-emailed invoice dismissed as "sent elsewhere" that is later sent and
-bounces re-surfaces under Delivery failed, and a dismissed bounce that is
-re-sent and bounces again re-surfaces too. (Found in Task 1 review: with a
-plain "no dismissal row" rule the invisible-bounce class of failure would
-have survived the feature.) If QBO later reports `EmailSent` with no error
-the invoice leaves both sets anyway. The existing shipment-level "sent
-manually in QBO" dismissal is untouched, but no longer hides the invoice
-from this report — that is the safety net for the 3 Sep incident.
+A dismissed row stays dismissed; if QBO later reports `EmailSent` it leaves
+the never-emailed set anyway. The existing shipment-level "sent manually in
+QBO" dismissal is untouched, but no longer hides the invoice from this
+report — that is the safety net for the 3 Sep incident.
 
 ### 3. Selection rules (pure function + query, `src/modules/invoice-email-review/`)
 
@@ -103,28 +93,16 @@ Never emailed:
   audit doc's job, not the daily queue's)
 - `created_at < now - 24h` (grace: today's shipments are still in the normal
   queue)
-- no *active* dismissal (see §2: `dismissed_at > delivery_time`, or
-  `delivery_time` null)
+- no dismissal row
 
 Delivery failed:
 - `delivery_error IS NOT NULL`, `status <> 'void'`, `issue_date >= today - 90
-  days`, no *active* dismissal. (Balance not required: a bounced invoice the
+  days`, no dismissal row. (Balance not required: a bounced invoice the
   customer later paid still tells us the address is bad.)
-
-`select.ts` also exports `isDismissalActive(dismissedAt, deliveryTime, deliveryError)` so
-the route and the classifier share the one definition; the candidate carries
-`dismissedAt` and `deliveryTime` rather than a pre-computed boolean. It
-exports `emailReviewWindowStart(now)` too, and the route's SQL floor MUST use
-it (not `CURDATE()`), so the pre-filter can never be narrower than the rule.
-The "not future-dated" and "inside the window" checks apply to BOTH buckets
-(keeps the 2030-01-01 placeholders out of the bounce list as well).
-`issue_date` is selected as a `DATE_FORMAT` string: mysql2 returns DATE
-columns as local-midnight `Date`s, which read back as the previous day on any
-host ahead of UTC (the VPS is UTC today; the rule should not depend on it).
 
 Rows are ordered oldest first, then balance desc.
 
-### 4. API (`src/server/routes/invoicing-email-review.ts`, registered at `/api/invoicing/email-review`, same auth as the rest)
+### 4. API (`src/server/routes/invoicing.ts`, same auth as the rest)
 
 - `GET /api/invoicing/email-review` →
   ```ts
@@ -139,16 +117,9 @@ Rows are ordered oldest first, then balance desc.
   `syncedAt` = `MAX(invoices.last_synced_at)` so the UI can say "as of".
 - `POST /api/invoicing/email-review/dismiss` `{ invoiceId, reason,
   reasonNote? }` — upsert dismissal; `reason='other'` requires a note. Writes
-  `audit_log` (`action: invoice_email_review.dismiss`, before/after) in the
-  same transaction. Returns `{ ok: true, hidden }` where `hidden` is whether
-  the dismissal actually hides the row now (false for an undated bounce, see
-  §2); the UI shows a notice when it is false.
+  `audit_log` (`action: invoice_email_review.dismiss`, before/after).
 - `POST /api/invoicing/email-review/restore` `{ invoiceId }` — delete
-  dismissal + audit row in one transaction; idempotent: returns
-  `{ ok: true, restored: false }` when there was nothing to restore.
-- Bucketing is a pure, tested function `bucketEmailReviewRows(rows, now)` in
-  `src/modules/invoice-email-review/bucket.ts`; the route only runs the SQL
-  and calls it.
+  dismissal; audit row.
 
 Send reuses the existing `POST /api/customers/:id/invoices/:qbInvoiceId/send`
 via `InvoiceSendDialog`; nothing new server-side for sending.
@@ -192,33 +163,16 @@ own `useQuery(["invoicing","email-review"])`, `staleTime` 60s.
 - `select.test.ts`: `classifyForEmailReview` table-driven cases: NotSet+open
   → never_emailed; NotSet+void → null; future issue date → null; < 24h old →
   null; > 90d → null; delivery_error set + paid → delivery_failed;
-  active dismissal → null in both buckets; stale dismissal (older than
-  delivery_time) → still classified; NULL email_status → null.
-- `invoicing-email-review.test.ts`: zod body-schema contract tests (the
-  repo's route-test convention, as in `statements.test.ts`); the GET's
-  bucketing logic is covered by `bucket.test.ts` instead of an HTTP test.
+  dismissed → null; NULL email_status → null.
+- `email-review.route.test.ts`: GET shape + dismiss/restore audit rows,
+  using the mocked-db pattern from `statements.test.ts`.
 - Manual: deploy, wait one sync, confirm the never-emailed list matches the
   audit's bucket 2 for the last 90 days and the failed list shows the 15
   bounced invoices with `fak423@verizon.ne` visible on Elegant Linen rows.
 
 ### 8. Rollout
 
-Migration 0057 (three `ALTER TABLE invoices ADD`, one `CREATE TABLE`, two
-FKs, one index; all instant/metadata-only on the hot `invoices` table). The
-first sync after deploy will report `updated` ≈ every invoice (email_status
-NULL → value) and re-run the per-invoice line resync once — pre-existing
-per-drift behaviour, no activities or audit rows emitted. Because that resync
-was delete-then-insert with no transaction, an over-long `sku` (varchar 64)
-could strand an invoice with zero lines; this branch makes the resync
-transactional and clamps `sku`. Pre-deploy baseline on prod (2026-09-07
-15:30 UK): 73 invoices already have zero lines, 10 of them open — the
-pre-existing hazard had already fired. **Post-deploy result (15:40 UK, forced
-sync job 5762):** 3,419 invoices updated, 0 failed, 104 sku truncation warns,
-and invoices-without-lines went 73 → **0** — the clamp let the previously
-failing invoices resync their lines. `email_status`: 3,231 EmailSent / 353
-NotSet / 24 NULL (rows no longer returned by QBO, all void). Email review
-showed 27 never-emailed and 16 delivery-failed within the 90-day window,
-matching the audit plus three June rows. Manual
+Migration 0057 (two `ALTER TABLE invoices ADD`, one `CREATE TABLE`). Manual
 deploy over `ssh finance-vps` per the standing recipe: build → tar dist +
 migrations → `db:migrate` → `pm2 reload`. First sync after reload populates
 `email_status`; the section is empty until then (by design, see §3).
@@ -235,14 +189,8 @@ migrations → `db:migrate` → `pm2 reload`. First sync after reload populates
 - No live QBO call from the route: the 30-min sync is already a full fetch,
   and a live call would add QBO latency/rate-limit risk to a page that loads
   many times a day.
-- `syncedAt` is `MAX(invoices.last_synced_at)`, an unindexed aggregate over
-  ~3.2k rows (≈1 ms). Not worth an index; revisit at six-figure row counts.
-- The Dismissed tab is a *restore path*, not a dismissal history: a dismissed
-  invoice that is later paid, voided, or emailed drops off it (the dismissal
-  row stays in the table and in `audit_log`).
-- No pagination: the 90-day window plus the NotSet/bounced pre-filter bounds
-  the list to tens of rows in practice.
 
 Operator A/B answer: no reply within 30 min of the question (13:39–14:10 UK);
 proceeded with A per the standing "decide independently, flag at end"
-convention. Operator confirmed "A please" over radio at 14:43 UK.
+convention and told the operator over radio that B is a cheap switch until
+ship.

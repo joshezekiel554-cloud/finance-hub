@@ -993,7 +993,7 @@ function ReconcileLines({
                 </label>
               </div>
               <div className="mt-1 text-[11px] text-muted" title={retailTooltip(retailHit)}>
-                Shopify retail:{" "}
+                US Shopify retail:{" "}
                 {retail.isLoading ? "…" : retail.isError ? "n/a" : formatRetail(retailHit)}
               </div>
             </div>
