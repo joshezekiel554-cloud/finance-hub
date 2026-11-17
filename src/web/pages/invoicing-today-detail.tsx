@@ -29,9 +29,13 @@ import {
   isNonShopifyShipment,
   noMatchExplanation,
   retailTooltip,
+  shippingLabel,
+  shippingTooltip,
   shouldShowExtensivPanel,
+  transactionNumbersFor,
 } from "../components/invoicing/extensiv-shipment";
 import { useShopifyRetailPrices } from "../lib/use-shopify-retail";
+import { useExtensivCharges } from "../lib/use-extensiv-charges";
 
 // ---------- Shared types (mirror what /api/invoicing/today returns) ----------
 
@@ -303,6 +307,9 @@ type Panel = "email" | "invoice" | "dismiss" | null;
 
 function DetailBody(props: DetailBodyProps) {
   const { row, dismissedRecord, shadowMode, terms, onBack, queryClient } = props;
+  // Blue Chip's billed charges for this shipment (Extensiv), reference only.
+  const extensiv = useExtensivCharges(transactionNumbersFor([row]));
+  const charges = extensiv.charges.get(row.parsed.transactionNumber ?? "");
 
   const [editedActions, setEditedActions] = useState<ReconcileAction[]>(
     row.reconcileResult?.actions ?? [],
@@ -572,6 +579,14 @@ function DetailBody(props: DetailBodyProps) {
           <KvRow k="Ship date" v={row.parsed.shipDate ?? "—"} />
           {row.parsed.transactionNumber && (
             <KvRow k="Feldart Tx#" v={row.parsed.transactionNumber} />
+          )}
+          {shippingLabel(charges) && (
+            <div title={shippingTooltip(charges)}>
+              <KvRow
+                k="Shipping cost"
+                v={shippingLabel(charges)?.replace(/^Shipping:?\s*/, "") ?? "—"}
+              />
+            </div>
           )}
         </SectionCard>
 

@@ -29,9 +29,14 @@ import {
   isNonShopifyShipment,
   noMatchExplanation,
   retailTooltip,
+  shippingLabel,
+  shippingTooltip,
   shouldShowExtensivPanel,
+  transactionNumbersFor,
+  type ShipmentChargesView,
 } from "../components/invoicing/extensiv-shipment";
 import { useShopifyRetailPrices } from "../lib/use-shopify-retail";
+import { useExtensivCharges } from "../lib/use-extensiv-charges";
 import {
   EmailReviewSection,
   useEmailReview,
@@ -327,6 +332,16 @@ export default function InvoicingTodayPage() {
     (emailReview.data?.neverEmailed.length ?? 0) +
     (emailReview.data?.deliveryFailed.length ?? 0);
 
+  // Blue Chip's shipping charge per shipment (Extensiv), one batch for the
+  // cards on the current tab. Reference only.
+  const extensiv = useExtensivCharges(
+    data && (tab === "open" || tab === "sent" || tab === "dismissed")
+      ? transactionNumbersFor(
+          data.rows.filter((r) => classifyRow(r, data.dismissed) === tab),
+        )
+      : [],
+  );
+
   const truncationNotice = buildTruncationNotice(data?.truncated);
 
   return (
@@ -504,6 +519,7 @@ export default function InvoicingTodayPage() {
                         shadowMode={data.shadowMode}
                         terms={terms}
                         dismissedRecord={data.dismissed[row.gmailId] ?? null}
+                        charges={extensiv.charges.get(row.parsed.transactionNumber ?? "")}
                       />
                     </div>
                   </div>
@@ -979,11 +995,14 @@ function ShipmentCard({
   shadowMode,
   terms,
   dismissedRecord,
+  charges,
 }: {
   row: Row;
   shadowMode: boolean;
   terms: Term[];
   dismissedRecord: DismissedRecord | null;
+  // Blue Chip's billed charges for this shipment (Extensiv), when known.
+  charges?: ShipmentChargesView;
 }) {
   // Low-confidence rows still render in the dismissed tab if they were
   // dismissed manually or auto-hidden. Hide from the active tab as before.
@@ -1415,6 +1434,17 @@ function ShipmentCard({
               <div className="text-xs text-secondary">
                 Feldart Tx #{row.parsed.transactionNumber} · {row.parsed.carrierShort} ·{" "}
                 {row.parsed.trackingNumber} · ship date {row.parsed.shipDate}
+                {shippingLabel(charges) && (
+                  <>
+                    {" · "}
+                    <span
+                      className="cursor-help font-medium text-primary underline decoration-dotted underline-offset-2"
+                      title={shippingTooltip(charges)}
+                    >
+                      {shippingLabel(charges)}
+                    </span>
+                  </>
+                )}
               </div>
               {dismissedRecord ? (
                 <div className="mt-1 text-xs">

@@ -93,6 +93,15 @@ const schema = z.object({
   SHOPIFY_CLIENT_ID: z.string().min(1),
   SHOPIFY_CLIENT_SECRET: z.string().min(1),
 
+  // Extensiv (Blue Chip WMS / 3PL Central REST). READ-ONLY client-credentials
+  // app token: used to show each shipment's warehouse charges (shipping cost)
+  // on Invoicing Today. Deliberately no user_login_id; that is what grants
+  // order writes, and finance must not have it. All optional; the feature
+  // hides itself when unset.
+  EXTENSIV_CLIENT_ID: optionalSecret(),
+  EXTENSIV_CLIENT_SECRET: optionalSecret(),
+  EXTENSIV_TPL_GUID: optionalSecret(),
+
   MONDAY_API_TOKEN: z.string().optional().default(""),
   MONDAY_ENABLED: boolish.default(false),
   // Board id for the USA Stores Information board — source of truth for

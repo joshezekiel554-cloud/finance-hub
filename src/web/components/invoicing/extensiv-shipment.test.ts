@@ -5,7 +5,10 @@ import {
   isNonShopifyShipment,
   noMatchExplanation,
   retailTooltip,
+  shippingLabel,
+  shippingTooltip,
   shouldShowExtensivPanel,
+  transactionNumbersFor,
   uniqueSkus,
   type ExtensivRowShape,
 } from "./extensiv-shipment";
@@ -78,6 +81,46 @@ describe("addSkusNeedingReference / uniqueSkus", () => {
   });
   it("skips blanks", () => {
     expect(uniqueSkus(["", null, undefined, " x ", "X"])).toEqual(["x"]);
+  });
+});
+
+describe("shippingLabel / shippingTooltip / transactionNumbersFor", () => {
+  const billed = {
+    transactionNumber: "120003",
+    reference: "MERKAZleathers",
+    shipping: 6.87,
+    lines: [
+      { label: "Small Parcel Ship", amount: 6.87 },
+      { label: "Picks", amount: 4 },
+    ],
+    totalCharges: 10.87,
+    carrierService: "Fedex Smartpost Parcel Select",
+    carrierRate: 6.13,
+  };
+  it("labels billed, unbilled and freight-less shipments", () => {
+    expect(shippingLabel(billed)).toBe("Shipping $6.87");
+    expect(shippingLabel({ ...billed, shipping: null, totalCharges: null, lines: [] })).toBe(
+      "Shipping: not billed yet",
+    );
+    expect(shippingLabel({ ...billed, shipping: null })).toBe("Shipping: no freight charge");
+    expect(shippingLabel(undefined)).toBeNull();
+  });
+  it("breaks the charges down on hover", () => {
+    expect(shippingTooltip(billed)).toBe(
+      "Extensiv / Blue Chip:\nSmall Parcel Ship $6.87\nPicks $4.00\nTotal Blue Chip charges $10.87\nCarrier rate (Fedex Smartpost Parcel Select) $6.13",
+    );
+    expect(shippingTooltip(undefined)).toBeUndefined();
+  });
+  it("collects numeric, distinct, sorted transaction numbers", () => {
+    expect(
+      transactionNumbersFor([
+        { parsed: { transactionNumber: "120232" } },
+        { parsed: { transactionNumber: "120003" } },
+        { parsed: { transactionNumber: "120003" } },
+        { parsed: { transactionNumber: null } },
+        { parsed: { transactionNumber: "abc" } },
+      ]),
+    ).toEqual(["120003", "120232"]);
   });
 });
 
