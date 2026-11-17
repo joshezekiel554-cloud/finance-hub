@@ -22,6 +22,16 @@ import { Card, CardBody, CardHeader } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ShipmentRowMobile } from "../components/invoicing/shipment-row-mobile";
+import { ExtensivShipmentPanel } from "../components/invoicing/extensiv-shipment-panel";
+import {
+  addSkusNeedingReference,
+  formatRetail,
+  isNonShopifyShipment,
+  noMatchExplanation,
+  retailTooltip,
+  shouldShowExtensivPanel,
+} from "../components/invoicing/extensiv-shipment";
+import { useShopifyRetailPrices } from "../lib/use-shopify-retail";
 import {
   EmailReviewSection,
   useEmailReview,
@@ -1175,7 +1185,11 @@ function ShipmentCard({
   });
 
   const po = row.parsed.poNumber ?? "(no PO)";
-  const customer = row.qbInvoice?.customerName ?? row.shopifyOrder?.customerEmail ?? "(unknown)";
+  const customer =
+    row.qbInvoice?.customerName ??
+    row.shopifyOrder?.customerEmail ??
+    (row.parsed.endCustomerName || null) ??
+    "(unknown)";
 
   // Flag any add action with no resolved unitPrice — Send is blocked until
   // the user types one in.
@@ -1546,12 +1560,22 @@ function ShipmentCard({
           </div>
         )}
 
-        {row.qbInvoiceError && !row.qbInvoice && (
-          <p className="text-xs text-accent-danger">QB lookup: {row.qbInvoiceError}</p>
+        {isNonShopifyShipment(row) && !row.qbInvoice ? (
+          // Not a Shopify order (e.g. "MERKAZleathers", Etsy): the raw
+          // "no shopify order number parsed" errors told the operator
+          // nothing, so explain it plainly and show the Extensiv panel.
+          <p className="text-xs text-secondary">{noMatchExplanation(row)}</p>
+        ) : (
+          <>
+            {row.qbInvoiceError && !row.qbInvoice && (
+              <p className="text-xs text-accent-danger">QB lookup: {row.qbInvoiceError}</p>
+            )}
+            {row.shopifyOrderError && !row.shopifyOrder && (
+              <p className="text-xs text-accent-warning">Shopify lookup: {row.shopifyOrderError}</p>
+            )}
+          </>
         )}
-        {row.shopifyOrderError && !row.shopifyOrder && (
-          <p className="text-xs text-accent-warning">Shopify lookup: {row.shopifyOrderError}</p>
-        )}
+        {shouldShowExtensivPanel(row) && <ExtensivShipmentPanel row={row} />}
 
         {row.reconcileResult && (
           <>
@@ -2188,6 +2212,14 @@ function ReconcileTable({
   verifiedLineIds: Set<string>;
   onToggleVerify: (lineId: string) => void;
 }) {
+  // Lines the operator prices by hand (adds) get a read-only Shopify
+  // storefront retail price beside the price box, so there's no need to
+  // look each SKU up in the Shopify admin. Called before the early return
+  // to keep hook order stable.
+  const addSkus = addSkusNeedingReference(editedActions);
+  const retail = useShopifyRetailPrices(addSkus);
+  const showRetail = addSkus.length > 0;
+
   if (!row.qbInvoice || !row.reconcileResult) return null;
 
   // SalesReceipts are settled — customer paid for these lines, we
@@ -2286,6 +2318,11 @@ function ReconcileTable({
             <th className="px-3 py-2 text-right">Final qty</th>
             <th className="px-3 py-2 text-right">Shopify price</th>
             <th className="px-3 py-2 text-right">QB price</th>
+            {showRetail && (
+              <th className="px-3 py-2 text-right" title="Shopify storefront retail price, for reference">
+                Shopify retail
+              </th>
+            )}
             <th className="px-3 py-2 text-left">Action</th>
           </tr>
         </thead>
@@ -2380,6 +2417,24 @@ function ReconcileTable({
                     "—"
                   )}
                 </td>
+                {showRetail && (
+                  <td
+                    className="px-3 py-2 text-right tabular-nums text-muted"
+                    title={
+                      isAdd && !retail.isLoading
+                        ? retailTooltip(retail.prices.get(action.sku.trim().toUpperCase()))
+                        : undefined
+                    }
+                  >
+                    {!isAdd
+                      ? ""
+                      : retail.isLoading
+                        ? "…"
+                        : retail.isError
+                          ? "n/a"
+                          : formatRetail(retail.prices.get(action.sku.trim().toUpperCase()))}
+                  </td>
+                )}
                 <td className="px-3 py-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <ActionBadge action={action} />

@@ -22,6 +22,16 @@ import { Card, CardBody } from "../components/ui/card";
 import { MobileAppBar } from "../components/mobile-app-bar";
 import { StickyActionBar, StickyActionBarSpacer } from "../components/sticky-action-bar";
 import { cn } from "../lib/cn";
+import { ExtensivShipmentPanel } from "../components/invoicing/extensiv-shipment-panel";
+import {
+  addSkusNeedingReference,
+  formatRetail,
+  isNonShopifyShipment,
+  noMatchExplanation,
+  retailTooltip,
+  shouldShowExtensivPanel,
+} from "../components/invoicing/extensiv-shipment";
+import { useShopifyRetailPrices } from "../lib/use-shopify-retail";
 
 // ---------- Shared types (mirror what /api/invoicing/today returns) ----------
 
@@ -614,6 +624,12 @@ function DetailBody(props: DetailBodyProps) {
               </p>
             </CardBody>
           </Card>
+        ) : isNonShopifyShipment(row) && !row.qbInvoice ? (
+          <Card>
+            <CardBody>
+              <p className="text-xs text-secondary">{noMatchExplanation(row)}</p>
+            </CardBody>
+          </Card>
         ) : row.qbInvoiceError && !row.qbInvoice ? (
           <Card>
             <CardBody>
@@ -623,6 +639,11 @@ function DetailBody(props: DetailBodyProps) {
             </CardBody>
           </Card>
         ) : null}
+
+        {/* What Extensiv shipped, when there's no reconcile table to show it */}
+        {!row.autoHidden && shouldShowExtensivPanel(row) && (
+          <ExtensivShipmentPanel row={row} />
+        )}
 
         {/* Total */}
         {row.qbInvoice && (
@@ -917,12 +938,15 @@ function ReconcileLines({
   onAddQty: (sku: string, qty: number) => void;
   onRemoveAdd: (sku: string) => void;
 }) {
+  // Shopify storefront retail price for hand-priced (added) lines.
+  const retail = useShopifyRetailPrices(addSkusNeedingReference(actions));
   return (
     <div className="space-y-2">
       {actions.map((a, i) => {
         if (a.type === "set_metadata") return null;
         if (a.type === "add") {
           const needsPrice = a.unitPrice === null || a.unitPrice <= 0;
+          const retailHit = retail.prices.get(a.sku.trim().toUpperCase());
           return (
             <div
               key={`add-${a.sku}-${i}`}
@@ -967,6 +991,10 @@ function ReconcileLines({
                     className={fieldInputClsCompact}
                   />
                 </label>
+              </div>
+              <div className="mt-1 text-[11px] text-muted" title={retailTooltip(retailHit)}>
+                Shopify retail:{" "}
+                {retail.isLoading ? "…" : retail.isError ? "n/a" : formatRetail(retailHit)}
               </div>
             </div>
           );
