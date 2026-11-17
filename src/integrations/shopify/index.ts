@@ -14,6 +14,9 @@ export {
 } from "./orders.js";
 export type { ListOrdersOptions } from "./orders.js";
 
+export { getRetailPricesBySku, skuSearchTerm } from "./variants.js";
+export type { RetailPrice } from "./variants.js";
+
 export type {
   Money,
   ShopifyAddress,

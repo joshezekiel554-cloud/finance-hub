@@ -19,7 +19,11 @@ import {
 } from "../../integrations/gmail/client.js";
 import { classifyExtensivEmail } from "../../modules/returns/extensiv-receipt-classifier.js";
 import { QboClient } from "../../integrations/qb/client.js";
-import { ShopifyClient, getOrderByName } from "../../integrations/shopify/index.js";
+import {
+  ShopifyClient,
+  getOrderByName,
+  getRetailPricesBySku,
+} from "../../integrations/shopify/index.js";
 import { and, count, desc, eq, gte, inArray, isNull, like, lt, max } from "drizzle-orm";
 import {
   parseShipmentHtml,
@@ -257,6 +261,10 @@ const sendBodySchema = z.object({
   unreadAck: z.boolean().default(false),
 });
 
+const shopifyRetailBodySchema = z.object({
+  skus: z.array(z.string().trim().min(1).max(100)).min(1).max(100),
+});
+
 const invoicingRoutes: FastifyPluginAsync = async (app) => {
   // Item search for the add-line picker. Returns up to 20 matches.
   app.get("/items/search", async (req, reply) => {
@@ -280,6 +288,28 @@ const invoicingRoutes: FastifyPluginAsync = async (app) => {
     } catch (err) {
       log.error({ err, q }, "qbo item search failed");
       return reply.code(502).send({ error: "qbo item search failed" });
+    }
+  });
+
+  // Shopify storefront retail price per SKU, for reference next to the price
+  // box on lines the operator has to price by hand (warehouse shipped an item
+  // that wasn't on the Shopify order, or the shipment isn't a Shopify order).
+  // Read-only; SKUs with no catalogue match are just absent from `prices`.
+  app.post("/shopify-retail-prices", async (req, reply) => {
+    await requireAuth(req);
+    const parsed = shopifyRetailBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid body" });
+    }
+    try {
+      const map = await getRetailPricesBySku(
+        new ShopifyClient(),
+        parsed.data.skus,
+      );
+      return reply.send({ prices: Object.fromEntries(map) });
+    } catch (err) {
+      log.error({ err, count: parsed.data.skus.length }, "shopify retail lookup failed");
+      return reply.code(502).send({ error: "shopify retail lookup failed" });
     }
   });
 
