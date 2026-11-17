@@ -2319,8 +2319,8 @@ function ReconcileTable({
             <th className="px-3 py-2 text-right">Shopify price</th>
             <th className="px-3 py-2 text-right">QB price</th>
             {showRetail && (
-              <th className="px-3 py-2 text-right" title="Shopify storefront retail price, for reference">
-                Shopify retail
+              <th className="px-3 py-2 text-right" title="US Shopify store retail price (USD), for reference only">
+                US retail ($)
               </th>
             )}
             <th className="px-3 py-2 text-left">Action</th>

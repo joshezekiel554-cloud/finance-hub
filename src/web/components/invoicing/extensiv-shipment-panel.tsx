@@ -60,7 +60,7 @@ export function ExtensivShipmentPanel({ row }: { row: PanelRow }) {
           <tr>
             <th className="px-3 py-1.5 text-left">SKU</th>
             <th className="px-3 py-1.5 text-right">Qty shipped</th>
-            <th className="px-3 py-1.5 text-right">Shopify retail</th>
+            <th className="px-3 py-1.5 text-right">US retail ($)</th>
           </tr>
         </thead>
         <tbody>
