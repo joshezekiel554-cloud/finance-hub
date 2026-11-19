@@ -180,6 +180,11 @@ const schema = z.object({
   // tokens. Cutover: set this, keep the shared one; when the hub signs with
   // it, set HUB_SHARED_SECRET_RETIRED=1 to stop accepting HUB_SSO_SECRET.
   HUB_SECRET_FINANCE: optionalSecret(32),
+  // Hub phase 3 "season-missed" signal: the SKU → season map, served by the
+  // hub's proxy of the engine (prod: http://127.0.0.1:3020/api/svc/sku-map).
+  // Called with an app→hub token signed with HUB_SECRET_FINANCE. Unset (or
+  // no HUB_SECRET_FINANCE) = the check is skipped silently.
+  SKU_MAP_URL: optionalSecret().pipe(z.string().url().optional()),
   HUB_SHARED_SECRET_RETIRED: z
     .string()
     .default("")

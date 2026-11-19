@@ -57,6 +57,20 @@ export function mintHubToken(input: {
   return `${seg1}.${sign(seg1, input.secret)}`;
 }
 
+/**
+ * App → hub service token (finance calling a hub /api/svc/* endpoint, e.g.
+ * the SKU map proxy). Same seg1.sig format, signed with the per-app secret
+ * (HUB_SECRET_FINANCE): {aud:"hub", iss:"finance", exp, jti}. Mint one per
+ * request; TTL is capped at 300 s.
+ */
+export function mintAppToHubToken(input: { secret: string; ttlSeconds?: number; nowSeconds?: number; jti?: string }): string {
+  const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const ttl = Math.min(Math.max(1, input.ttlSeconds ?? 60), 300);
+  const payload = { aud: "hub", iss: "finance", exp: now + ttl, jti: input.jti ?? randomUUID() };
+  const seg1 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${seg1}.${sign(seg1, input.secret)}`;
+}
+
 export function verifyHubToken(
   token: string,
   // One secret, or several during a secret cutover (any one may match).

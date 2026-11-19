@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
-import { mintHubToken, verifyHubToken } from "./hub-token.js";
+import { mintAppToHubToken, mintHubToken, verifyHubToken } from "./hub-token.js";
 
 // Feldart Hub SSO handoff token (spec §4): `seg1.sig` where
 //   seg1 = base64url(JSON{ email, exp, aud, jti, scope? })
@@ -62,5 +62,26 @@ describe("verifyHubToken", () => {
   it("lower-cases the email so allow-list checks are case-insensitive", () => {
     const t = mintHubToken({ email: "Leibel@Feldart.com", aud: "finance", ttlSeconds: 300, nowSeconds: NOW, secret: SECRET });
     expect(verifyHubToken(t, { secret: SECRET, aud: "finance", nowSeconds: NOW })?.email).toBe("leibel@feldart.com");
+  });
+});
+
+describe("mintAppToHubToken", () => {
+  it("signs {aud:hub, iss:finance, exp, jti} with HMAC-SHA256 over seg1 (no padding)", () => {
+    const t = mintAppToHubToken({ secret: SECRET, ttlSeconds: 120, nowSeconds: NOW, jti: "j1" });
+    const [seg1, sig] = t.split(".");
+    expect(seg1).toBeTruthy();
+    expect(t).not.toContain("=");
+    expect(JSON.parse(Buffer.from(seg1!, "base64url").toString())).toEqual({ aud: "hub", iss: "finance", exp: NOW + 120, jti: "j1" });
+    expect(sig).toBe(createHmac("sha256", SECRET).update(seg1!).digest("base64url"));
+  });
+
+  it("caps the TTL at 300 s and mints a fresh jti each call", () => {
+    const a = mintAppToHubToken({ secret: SECRET, ttlSeconds: 9999, nowSeconds: NOW });
+    const b = mintAppToHubToken({ secret: SECRET, nowSeconds: NOW });
+    const pa = JSON.parse(Buffer.from(a.split(".")[0]!, "base64url").toString()) as { exp: number; jti: string };
+    const pb = JSON.parse(Buffer.from(b.split(".")[0]!, "base64url").toString()) as { exp: number; jti: string };
+    expect(pa.exp).toBe(NOW + 300);
+    expect(pb.exp).toBe(NOW + 60);
+    expect(pa.jti).not.toBe(pb.jti);
   });
 });

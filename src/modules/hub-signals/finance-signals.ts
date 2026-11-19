@@ -19,6 +19,20 @@
 //   finance.promise-suggested — the promise extractor (promises/
 //     promise-extractor.ts, run after each Gmail poll) read a payment date in
 //     a recent customer email and nobody has saved a promise since.
+// Phase 3 ("it knows the story", 2026-11-19; story maths in hub-stories/):
+//   finance.pay-slipping — ≥ 4 invoices paid in 2 years, the oldest overdue
+//     invoice is now > 1.5× their usual days-to-pay AND ≥ usual + 20 days.
+//     Re-arms monthly (key ends YYYY-MM). Skipped while a promise is active.
+//   finance.big-order-overdue — a Shopify order ≥ $1,000 in the last 7 days
+//     from a customer ≥ $500 overdue whose oldest overdue invoice is ≥ 30
+//     days past due.
+//   finance.reorder-due (sales) — a US B2B customer with ≥ 4 Feldart invoice
+//     days in 2 years has gone > 1.5× their usual gap (and ≥ 14 days).
+//   finance.season-missed (sales) — bought a season's SKUs in each of the
+//     last 3 seasons but nothing yet this cycle (needs SKU_MAP_URL).
+// Every signal carries customer.email (lower-cased) so the hub can join it
+// to the customer's story; money signals also get tags payUsualDays and
+// promiseRecord ("kept/resolved") when known.
 //
 // Pure builders are exported for tests; loadFinanceSignals does the queries.
 
@@ -32,6 +46,16 @@ import { promiseScans } from "../../db/schema/promise-scans.js";
 import { createLogger } from "../../lib/logger.js";
 import { SIGNAL_MIN_BALANCE } from "../promises/constants.js";
 import { isPromiseActive, newYorkYmd, todayYmd, toYmd, ymdDiffDays } from "../promises/promise-state.js";
+import { SEASON_RULES, type SeasonMiss } from "../hub-stories/seasons.js";
+import {
+  addDaysYmd,
+  buildBuying,
+  isSlipping,
+  type InvoiceDay,
+  type Money,
+  type PayBehaviour,
+} from "../hub-stories/story.js";
+import { loadStorySignalFacts } from "./story-signal-loads.js";
 
 const log = createLogger({ component: "hub-signals" });
 
@@ -56,7 +80,23 @@ export const SIGNAL_RULES = {
 // The hub's pinned signal contract (alice2, 2026-11-19; phase 2 adds
 // `promise` on promise-suggested and optional `tags` on every signal).
 export type SignalLink = { label: string; url: string };
-export type SignalKind = "chase-no-reply" | "promise-missed" | "promise-suggested";
+export type SignalKind =
+  | "chase-no-reply"
+  | "promise-missed"
+  | "promise-suggested"
+  | "pay-slipping"
+  | "big-order-overdue"
+  | "reorder-due"
+  | "season-missed";
+
+/** Money nudges (get payUsualDays / promiseRecord tags); the rest are sales. */
+export const MONEY_KINDS: ReadonlySet<SignalKind> = new Set<SignalKind>([
+  "chase-no-reply",
+  "promise-missed",
+  "promise-suggested",
+  "pay-slipping",
+  "big-order-overdue",
+]);
 export type SignalTags = Record<string, string | number | boolean>;
 
 export type Signal = {
@@ -66,7 +106,8 @@ export type Signal = {
   title: string; // ≤160
   detail?: string; // ≤400
   since: string; // ISO time the clock started
-  customer: { id: string; name: string };
+  /** email: lower-cased primary (else first linked) address, when known. */
+  customer: { id: string; name: string; email?: string };
   amount: { value: number; currency: "USD" };
   links: SignalLink[]; // 1-5, absolute https on finance's origin
   dedupe: string; // "customer:<id>"
@@ -115,6 +156,10 @@ export function signalContractProblems(s: Signal, baseUrl: string): string[] {
     if (!l.url.startsWith("https://") || !(l.url === origin || l.url.startsWith(`${origin}/`))) p.push("link-url");
   }
   if (s.dedupe !== `customer:${s.customer.id}`) p.push("dedupe");
+  if (s.customer.email !== undefined) {
+    const e = s.customer.email;
+    if (e.length > 254 || e !== e.toLowerCase() || !/^[^\s@]+@[^\s@]+$/.test(e)) p.push("customer-email");
+  }
   if (s.kind === "promise-suggested") {
     if (!s.promise || !/^\d{4}-\d{2}-\d{2}$/.test(s.promise.date)) p.push("promise");
     else if (s.promise.quote !== undefined && s.promise.quote.length > 200) p.push("promise-quote");
@@ -127,6 +172,7 @@ export function signalContractProblems(s: Signal, baseUrl: string): string[] {
     for (const [k, v] of entries) {
       if (k.length === 0 || k.length > 24) p.push("tag-key");
       if (!["string", "number", "boolean"].includes(typeof v)) p.push("tag-value");
+      else if (typeof v === "string" && v.length > 60) p.push("tag-value");
     }
   }
   return p;
@@ -384,6 +430,212 @@ export function buildSuggestedSignals(
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: pay-slipping, big-order-overdue, reorder-due, season-missed
+// ---------------------------------------------------------------------------
+
+export const STORY_SIGNAL_RULES = {
+  paySlipMinPaid: 4,
+  paySlipHighOverdue: 1_000,
+  bigOrderMin: 1_000,
+  bigOrderDays: 7,
+  bigOrderMinOverdue: 500,
+  bigOrderMinPastDue: 30,
+  reorderFactor: 1.5,
+  reorderMinDays: 14,
+  /** A customer quiet for over a year has lapsed — not "due" (judgement call). */
+  reorderMaxDays: 365,
+};
+
+const usd0 = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
+
+export type PaySlipFacts = {
+  customerId: string;
+  customerName: string;
+  money: Money;
+  pay: PayBehaviour;
+  promisedPayBy: string | null;
+};
+
+export function buildPaySlippingSignals(rows: PaySlipFacts[], ctx: { now: Date; baseUrl: string }): Signal[] {
+  const today = todayYmd(ctx.now);
+  const out: Signal[] = [];
+  for (const r of rows) {
+    const u = r.pay.usualDaysToPay;
+    const age = r.money.oldestOverdueAgeDays;
+    if (u === null || age === null || r.pay.invoicesPaid2y < STORY_SIGNAL_RULES.paySlipMinPaid) continue;
+    if (r.money.balance < SIGNAL_RULES.minBalance || r.money.overdue <= 0) continue;
+    if (!isSlipping(age, u)) continue;
+    if (isPromiseActive(r.promisedPayBy, ctx.now)) continue;
+    // The day the oldest invoice crossed the slipping line.
+    const crossAt = Math.max(Math.floor(1.5 * u) + 1, u + 20);
+    const since = addDaysYmd(addDaysYmd(today, -age), crossAt);
+    out.push({
+      key: safeKey(`finance.pay-slipping.${r.customerId}.${today.slice(0, 7)}`),
+      kind: "pay-slipping",
+      severity: r.money.overdue >= STORY_SIGNAL_RULES.paySlipHighOverdue ? "high" : "medium",
+      title: clip(`${r.customerName}: usually pays in ${u} days, oldest invoice now ${age} days (${usd(r.money.overdue)} overdue)`, 160),
+      detail: clip(
+        `Over ${r.pay.invoicesPaid2y} invoices paid in the last 2 years they took a median ${u} days from invoice date${
+          r.pay.onTimePct !== null ? ` (${r.pay.onTimePct}% by the due date)` : ""
+        }. Their oldest overdue invoice is ${age} days old${r.money.oldestOverdueDays !== null ? `, ${r.money.oldestOverdueDays} days past due` : ""}. ${usd(r.money.balance)} open in total.`,
+        400,
+      ),
+      since: `${since}T00:00:00.000Z`,
+      customer: { id: r.customerId, name: r.customerName },
+      amount: { value: r.money.overdue, currency: "USD" },
+      links: [{ label: `${r.customerName} in finance (${usd(r.money.overdue)} overdue)`, url: `${ctx.baseUrl}/customers/${r.customerId}?tab=invoices` }],
+      dedupe: `customer:${r.customerId}`,
+      tags: {
+        balanceBand: balanceBand(r.money.balance),
+        oldestDays: age,
+        ...(r.pay.onTimePct !== null ? { onTimePct: r.pay.onTimePct } : {}),
+        ...(r.pay.trend ? { trend: r.pay.trend } : {}),
+      },
+    });
+  }
+  return out;
+}
+
+export type BigOrderFacts = {
+  orderId: string;
+  orderNumber: string | null;
+  orderDate: Date;
+  orderTotal: number;
+  customerId: string;
+  customerName: string;
+  money: Money;
+};
+
+export function buildBigOrderSignals(rows: BigOrderFacts[], ctx: { now: Date; baseUrl: string }): Signal[] {
+  const oldest = ctx.now.getTime() - STORY_SIGNAL_RULES.bigOrderDays * DAY_MS;
+  const out: Signal[] = [];
+  for (const r of rows) {
+    if (r.orderDate.getTime() < oldest || r.orderDate.getTime() > ctx.now.getTime() + DAY_MS) continue;
+    if (r.orderTotal < STORY_SIGNAL_RULES.bigOrderMin) continue;
+    if (r.money.overdue < STORY_SIGNAL_RULES.bigOrderMinOverdue) continue;
+    if ((r.money.oldestOverdueDays ?? 0) < STORY_SIGNAL_RULES.bigOrderMinPastDue) continue;
+    const n = r.orderNumber ? `#${r.orderNumber.replace(/^#/, "")}` : "";
+    out.push({
+      key: safeKey(`finance.big-order-overdue.${r.customerId}.${r.orderId}`),
+      kind: "big-order-overdue",
+      severity: "high",
+      title: clip(
+        `${r.customerName}: new order ${n} for ${usd(r.orderTotal)} while ${usd(r.money.overdue)} is overdue (oldest ${r.money.oldestOverdueDays} days past due)`,
+        160,
+      ),
+      detail: clip(
+        `Shopify order ${n} placed ${ymd(r.orderDate)}. Decide whether it ships before the overdue balance is settled; ${usd(r.money.balance)} open in total.`,
+        400,
+      ),
+      since: r.orderDate.toISOString(),
+      customer: { id: r.customerId, name: r.customerName },
+      amount: { value: r.money.overdue, currency: "USD" },
+      links: [
+        { label: `${r.customerName}: orders in finance`, url: `${ctx.baseUrl}/customers/${r.customerId}?tab=orders` },
+        { label: `${r.customerName}: overdue invoices`, url: `${ctx.baseUrl}/customers/${r.customerId}?tab=invoices` },
+      ],
+      dedupe: `customer:${r.customerId}`,
+      tags: { balanceBand: balanceBand(r.money.balance), orderTotal: Math.round(r.orderTotal), oldestPastDue: r.money.oldestOverdueDays ?? 0 },
+    });
+  }
+  return out;
+}
+
+export type ReorderFacts = {
+  customerId: string;
+  customerName: string;
+  country: string | null;
+  customerType: "b2b" | "b2c" | null;
+  holdStatus: "active" | "hold" | "payment_upfront";
+  /** Feldart invoice totals per day, 2 years, ascending. */
+  days: InvoiceDay[];
+};
+
+/**
+ * US check for the Feldart (US) book. There's no currency on invoices, so
+ * the QBO billing country decides; a blank country counts as US (nearly
+ * every US customer is synced without one).
+ */
+export function isUsCustomer(country: string | null): boolean {
+  const c = (country ?? "").trim().toLowerCase().replace(/\./g, "");
+  return c === "" || c === "us" || c === "usa" || c === "united states" || c === "united states of america";
+}
+
+export function buildReorderSignals(rows: ReorderFacts[], ctx: { now: Date; baseUrl: string }): Signal[] {
+  const today = todayYmd(ctx.now);
+  const out: Signal[] = [];
+  for (const r of rows) {
+    if (!isUsCustomer(r.country) || r.customerType === "b2c" || r.holdStatus === "hold") continue;
+    const b = buildBuying(r.days);
+    if (b.usualGapDays === null || b.usualGapDays <= 0 || !b.lastOrderAt || b.avgOrderUsd === null) continue;
+    const since = ymdDiffDays(b.lastOrderAt, today);
+    if (since <= STORY_SIGNAL_RULES.reorderFactor * b.usualGapDays || since < STORY_SIGNAL_RULES.reorderMinDays) continue;
+    if (since > STORY_SIGNAL_RULES.reorderMaxDays) continue;
+    const dueOn = addDaysYmd(b.lastOrderAt, Math.max(Math.floor(STORY_SIGNAL_RULES.reorderFactor * b.usualGapDays) + 1, STORY_SIGNAL_RULES.reorderMinDays));
+    out.push({
+      key: safeKey(`finance.reorder-due.${r.customerId}.${b.lastOrderAt}`),
+      kind: "reorder-due",
+      severity: "info",
+      title: clip(`${r.customerName} usually orders every ~${b.usualGapDays} days; it's been ${since} (avg order ${usd0(b.avgOrderUsd)})`, 160),
+      detail: clip(`${b.orders2y} invoiced orders in the last 2 years; the last was ${b.lastOrderAt}. Worth a check-in from sales.`, 400),
+      since: `${dueOn}T00:00:00.000Z`,
+      customer: { id: r.customerId, name: r.customerName },
+      amount: { value: b.avgOrderUsd, currency: "USD" },
+      links: [{ label: `${r.customerName}: invoices in finance`, url: `${ctx.baseUrl}/customers/${r.customerId}?tab=invoices` }],
+      dedupe: `customer:${r.customerId}`,
+      tags: { group: "sales", usualGapDays: b.usualGapDays, daysSince: since, orders2y: b.orders2y },
+    });
+  }
+  return out;
+}
+
+export type SeasonMissFacts = SeasonMiss & { customerName: string };
+
+export function buildSeasonMissedSignals(rows: SeasonMissFacts[], ctx: { now: Date; baseUrl: string }): Signal[] {
+  return rows.map((r) => ({
+    key: safeKey(`finance.season-missed.${r.customerId}.${r.season}.${r.year}`),
+    kind: "season-missed" as const,
+    severity: "info" as const,
+    title: clip(
+      `${r.customerName}: bought ${r.season} stock the last ${r.pastYears.length} seasons (${[...r.pastYears].sort().join(", ")}); nothing yet for ${r.year}`,
+      160,
+    ),
+    detail: clip(
+      `The ${r.season} ${r.year} buying window runs ${r.windowStart} to ${r.windowEnd}. They spent about ${usd0(r.avgSpend)} on ${r.season} items per season before.`,
+      400,
+    ),
+    since: `${addDaysYmd(r.windowStart, -SEASON_RULES.leadDays)}T00:00:00.000Z`,
+    customer: { id: r.customerId, name: r.customerName },
+    amount: { value: r.avgSpend, currency: "USD" as const },
+    links: [{ label: `${r.customerName}: invoices in finance`, url: `${ctx.baseUrl}/customers/${r.customerId}?tab=invoices` }],
+    dedupe: `customer:${r.customerId}`,
+    tags: { group: "sales", season: clip(r.season, 60), seasonYear: r.year },
+  }));
+}
+
+export type SignalCustomerInfo = { email?: string | null; payUsualDays?: number | null; promiseRecord?: string | null };
+
+/**
+ * Adds customer.email to every signal and payUsualDays / promiseRecord to
+ * money signals, never past the 8-tag limit (existing tags win).
+ */
+export function enrichSignals(signals: Signal[], info: Map<string, SignalCustomerInfo>): Signal[] {
+  return signals.map((s) => {
+    const i = info.get(s.customer.id);
+    if (!i) return s;
+    const email = i.email?.trim().toLowerCase();
+    const customer = email ? { ...s.customer, email } : s.customer;
+    const tags: SignalTags = { ...(s.tags ?? {}) };
+    if (MONEY_KINDS.has(s.kind)) {
+      const room = () => Object.keys(tags).length < 8;
+      if (typeof i.payUsualDays === "number" && room()) tags.payUsualDays = i.payUsualDays;
+      if (i.promiseRecord && room()) tags.promiseRecord = i.promiseRecord;
+    }
+    return { ...s, customer, ...(Object.keys(tags).length ? { tags } : {}) };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +920,15 @@ async function loadSuggestionFacts(now: Date): Promise<SuggestionFacts[]> {
 
 const SEVERITY_ORDER = { high: 0, medium: 1, info: 2 } as const;
 // Within a severity: promises first (operator: "most important").
-const KIND_ORDER: Record<SignalKind, number> = { "promise-missed": 0, "chase-no-reply": 1, "promise-suggested": 2 };
+const KIND_ORDER: Record<SignalKind, number> = {
+  "promise-missed": 0,
+  "big-order-overdue": 1,
+  "chase-no-reply": 2,
+  "pay-slipping": 3,
+  "promise-suggested": 4,
+  "reorder-due": 5,
+  "season-missed": 6,
+};
 
 export function sortSignals(signals: Signal[]): Signal[] {
   return [...signals].sort(
@@ -695,20 +955,45 @@ export async function loadFinanceSignals(ctx: { now: Date; baseUrl: string }): P
     log.warn({ err }, `signals: ${name} check failed`);
     return [];
   };
-  const [chase, promise, customerPromise, suggested] = await Promise.all([
+  const phase12 = Promise.all([
     loadChaseFacts(ctx.now).catch(fail("chase-no-reply")) as Promise<ChaseFacts[]>,
     loadPromiseFacts().catch(fail("promise-missed")) as Promise<PromiseFacts[]>,
     loadCustomerPromiseFacts(ctx.now).catch(fail("promise-missed")) as Promise<CustomerPromiseFacts[]>,
     loadSuggestionFacts(ctx.now).catch(fail("promise-suggested")) as Promise<SuggestionFacts[]>,
   ]);
-  const all = dedupeByKey([
+  // Phase 3 starts its candidate queries at once; it only waits for the
+  // phase 1–2 customer ids before loading ledgers for the enrichment tags.
+  const storyFacts = loadStorySignalFacts({
+    now: ctx.now,
+    fail,
+    feedCustomerIds: phase12.then(([c, p, cp, s]) => [
+      ...c.map((r) => r.customerId),
+      ...p.map((r) => r.customerId),
+      ...cp.map((r) => r.customerId),
+      ...s.map((r) => r.customerId),
+    ]),
+  }).catch((err: unknown) => {
+    fail("story")(err);
+    return null;
+  });
+  const [[chase, promise, customerPromise, suggested], story] = await Promise.all([phase12, storyFacts]);
+  const built = dedupeByKey([
     // The customer-level promise is the richer record; the held-order
     // variant with the same customer + date is dropped.
     ...buildCustomerPromiseSignals(customerPromise, ctx),
     ...buildPromiseSignals(promise, ctx),
     ...buildChaseSignals(chase, ctx),
     ...buildSuggestedSignals(suggested, ctx),
+    ...(story
+      ? [
+          ...buildBigOrderSignals(story.bigOrders, ctx),
+          ...buildPaySlippingSignals(story.paySlip, ctx),
+          ...buildReorderSignals(story.reorder, ctx),
+          ...buildSeasonMissedSignals(story.season, ctx),
+        ]
+      : []),
   ]);
+  const all = story ? enrichSignals(built, story.info) : built;
   const valid = all.filter((s) => {
     const problems = signalContractProblems(s, ctx.baseUrl);
     if (problems.length > 0) log.warn({ key: s.key, problems }, "signals: dropped a signal that breaks the contract");
