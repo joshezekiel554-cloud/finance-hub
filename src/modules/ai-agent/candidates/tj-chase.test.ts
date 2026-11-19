@@ -250,3 +250,32 @@ describe("tj-chase isStillEligible", () => {
     expect(getOverdueForCustomer).toHaveBeenCalledWith("c-default", "tj");
   });
 });
+
+// ── customer promise to pay ─────────────────────────────────────────────────
+
+describe("tj-chase respects a customer promise to pay", () => {
+  const ymdFromToday = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+  const withPromise = (customerId: string, promisedPayBy: string): OverdueCustomer => {
+    const row = makeOverdueRow({ customerId, tier: "CRITICAL" });
+    return { ...row, customer: { ...row.customer, promisedPayBy } };
+  };
+
+  it("findCandidates skips an active promise and resumes after the date", async () => {
+    const results = await findCandidates(undefined, {
+      loadOverdue: async () => [withPromise("c-today", ymdFromToday(0)), withPromise("c-later", ymdFromToday(7)), withPromise("c-passed", ymdFromToday(-1))],
+      loadRecentChases: noRecentChases,
+      loadRecentHumanContact: async () => new Set<string>(),
+    });
+    expect(results.map((r) => r.entityId)).toEqual(["c-passed"]);
+  });
+
+  it("isStillEligible is false while the promise is active", async () => {
+    expect(
+      await isStillEligible("c-p", {
+        loadOverdueForCustomer: async () => withPromise("c-p", ymdFromToday(2)),
+        loadRecentChases: noRecentChases,
+        loadRecentHumanContact: async () => new Set<string>(),
+      }),
+    ).toBe(false);
+  });
+});

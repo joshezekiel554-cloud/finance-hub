@@ -27,6 +27,7 @@ import {
   loadInternalHoldRecipients,
   resolveHoldCustomerRecipients,
 } from "./recipients.js";
+import { isPromiseActive } from "../promises/promise-state.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -104,6 +105,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
       holdLadderPausedUntil: orders.holdLadderPausedUntil,
       customerId: orders.customerId,
       customerName: customers.displayName,
+      customerPromisedPayBy: customers.promisedPayBy,
       primaryEmail: customers.primaryEmail,
       billingEmails: customers.billingEmails,
       invoiceToEmails: customers.invoiceToEmails,
@@ -154,6 +156,16 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
       log.info(
         { orderId: r.id, orderNumber, pausedUntil: r.holdLadderPausedUntil },
         "hold ladder: paused for this order — skipping",
+      );
+      result.paused += 1;
+      continue;
+    }
+    // Customer-level promise (hub / customer page): same skip, for every
+    // held order of that customer, through the promised day.
+    if (isPromiseActive(r.customerPromisedPayBy)) {
+      log.info(
+        { orderId: r.id, orderNumber, promisedPayBy: r.customerPromisedPayBy },
+        "hold ladder: customer promised to pay — skipping",
       );
       result.paused += 1;
       continue;

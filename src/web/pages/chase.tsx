@@ -69,6 +69,7 @@ import { cn } from "../lib/cn";
 import { useFilterNavigate } from "../lib/use-filter-navigate";
 import { useFilterPersistence } from "../lib/use-filter-persistence";
 import type { ChaseSearch } from "../lib/search-schemas/chase";
+import { formatPromiseDate } from "../lib/customer-promise";
 
 const chaseRouteApi = getRouteApi("/chase");
 
@@ -90,6 +91,9 @@ type ChaseRow = {
   lastPaymentAt: string | null;
   lastStatementSentAt: string | null;
   hasPendingRma: boolean;
+  // Active customer promise to pay (set from the hub). Badge only — the
+  // customer stays in the manual queue.
+  promise?: { date: string | null; note: string | null } | null;
 };
 
 type ListResponse = {
@@ -664,6 +668,14 @@ export default function ChasePage() {
                             title="Has an active RMA in progress"
                           >
                             RMA
+                          </span>
+                        ) : null}
+                        {row.promise?.date ? (
+                          <span
+                            className="inline-flex items-center rounded border border-accent-info/40 bg-accent-info/10 px-1 text-[9px] font-medium uppercase tracking-wide text-accent-info"
+                            title={row.promise.note ? `Promise note: ${row.promise.note}` : "Customer promised to pay by this date"}
+                          >
+                            Promised: pay by {formatPromiseDate(row.promise.date)}
                           </span>
                         ) : null}
                       </a>

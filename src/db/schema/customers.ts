@@ -1,5 +1,6 @@
 import {
   boolean,
+  date,
   decimal,
   index,
   json,
@@ -110,6 +111,15 @@ export const customers = mysqlTable(
     // ai_proposal candidate query. Useful for VIPs the operator handles
     // manually or accounts where AI judgment shouldn't apply.
     agentModeExcluded: boolean("agent_mode_excluded").notNull().default(false),
+    // Customer-level "promised to pay by" (hub Chief of Staff phase 2).
+    // A calendar date (YYYY-MM-DD). While it is today or later every chase
+    // path (AI chase proposals, cadences, overdue alerts, hold ladder) skips
+    // the customer; from the day after it no longer suppresses anything and
+    // the hub gets a promise-missed nudge instead. See modules/promises/.
+    promisedPayBy: date("promised_pay_by", { mode: "string" }),
+    promiseNote: varchar("promise_note", { length: 300 }),
+    promiseSetBy: varchar("promise_set_by", { length: 255 }),
+    promiseSetAt: timestamp("promise_set_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },

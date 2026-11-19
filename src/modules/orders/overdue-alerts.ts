@@ -30,6 +30,7 @@ import { customerAiCards } from "../../db/schema/customer-ai-cards.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { unshippedOrderSql } from "./hold-alerts.js";
 import { renderTemplate } from "../email-compose/index.js";
+import { noActivePromiseSql } from "../promises/promise-state.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -92,6 +93,8 @@ function overdueOrderConditions(opts: {
     gte(orders.orderDate, opts.orderCutoff),
     // Autopilot ON only — the operator excludes agent-off customers from this.
     eq(customers.agentModeExcluded, false),
+    // Promised to pay by a date that hasn't passed — not an alert (yet).
+    noActivePromiseSql(),
     // Overdue balance at/above the threshold. overdueBalance is a decimal
     // string column; MySQL compares it numerically against the bound number.
     sql`${customers.overdueBalance} >= ${opts.thresholdGbp}`,

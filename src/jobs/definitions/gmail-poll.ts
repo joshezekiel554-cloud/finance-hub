@@ -11,6 +11,7 @@ import { db } from "../../db/index.js";
 import { syncRuns } from "../../db/schema/audit.js";
 import { pollNewEmails } from "../../integrations/gmail/poller.js";
 import { createLogger } from "../../lib/logger.js";
+import { scanPromiseEmails } from "../../modules/promises/promise-extractor.js";
 
 const log = createLogger({ component: "jobs.gmail-poll" });
 
@@ -66,6 +67,14 @@ export async function processGmailPoll(
       { stage: "completed", ...result, durationMs },
       "gmail-poll job completed",
     );
+
+    // Read the new inbound emails for payment-date promises (hub Chief of
+    // Staff "promise-suggested"). Best-effort: never fails the poll.
+    try {
+      await scanPromiseEmails();
+    } catch (err) {
+      jobLog.warn({ err }, "promise extractor failed (poll unaffected)");
+    }
 
     return { syncRunId, ...result, durationMs };
   } catch (err) {

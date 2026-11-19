@@ -58,6 +58,7 @@ import { loadAppSettings } from "../../modules/statements/settings.js";
 import { resolveRecipients } from "../../modules/customer-emails/recipients.js";
 import { getTjWinddown } from "../../modules/chase/winddown.js";
 import { users } from "../../db/schema/auth.js";
+import { isPromiseActive, toYmd } from "../../modules/promises/promise-state.js";
 
 const log = createLogger({ component: "routes.chase" });
 
@@ -327,6 +328,8 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         lastPaymentAt: lastPaymentExpr,
         lastStatementSentAt: lastStatementSentExpr,
         hasPendingRma: hasPendingRmaExpr,
+        promisedPayBy: customers.promisedPayBy,
+        promiseNote: customers.promiseNote,
       })
       .from(customers)
       .where(where);
@@ -362,6 +365,11 @@ const chaseRoute: FastifyPluginAsync = async (app) => {
         lastPaymentAt: normalizeSubqueryDate(r.lastPaymentAt),
         lastStatementSentAt: normalizeSubqueryDate(r.lastStatementSentAt),
         hasPendingRma: Boolean(r.hasPendingRma),
+        // Active customer promise (hub / customer page): shown as a badge,
+        // the row stays in the manual queue.
+        promise: isPromiseActive(r.promisedPayBy)
+          ? { date: toYmd(r.promisedPayBy), note: r.promiseNote }
+          : null,
       };
     });
 

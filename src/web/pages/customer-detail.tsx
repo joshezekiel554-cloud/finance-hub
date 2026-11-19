@@ -75,6 +75,7 @@ import InvoiceReminderDialog, {
   type InvoiceReminderSuccess,
 } from "../components/invoice-reminder-dialog";
 import { buildBookkeeperCompose } from "../lib/bookkeeper-compose";
+import { activePromise, promiseLine } from "../lib/customer-promise";
 import {
   BookSectionHeader,
   KpiChip,
@@ -103,6 +104,10 @@ type Customer = {
   paymentTerms: string | null;
   holdStatus: "active" | "hold" | "payment_upfront";
   agentModeExcluded: boolean;
+  promisedPayBy?: string | null;
+  promiseNote?: string | null;
+  promiseSetBy?: string | null;
+  promiseSetAt?: string | null;
   shopifyCustomerId: string | null;
   customerType: "b2b" | "b2c" | null;
   balance: string;
@@ -881,6 +886,10 @@ export default function CustomerDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Customer promised to pay by a date (saved from the hub) — chasing
+          is paused through that day. */}
+      <PromiseBanner customer={customer} />
 
       {/* Loud banner for any order currently on hold — sits above the AI card
           so it's the first thing seen on every tab. */}
@@ -1759,6 +1768,54 @@ function daysAgoLabel(iso: string | null): string {
   if (Number.isNaN(d.getTime())) return "";
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
   return days <= 0 ? "today" : `${days}d`;
+}
+
+// Active "promised to pay by" for this customer (set from the hub's Chief of
+// Staff panel) with a Clear button. Renders nothing when there's no active
+// promise; display rules live in lib/customer-promise.ts.
+function PromiseBanner({ customer }: { customer: Customer }) {
+  const queryClient = useQueryClient();
+  const promise = activePromise(customer);
+  const clear = useMutation<void, Error, void>({
+    mutationFn: async () => {
+      const res = await fetch(
+        `/api/customers/${encodeURIComponent(customer.id)}/promise/clear`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["customer", customer.id] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-orders", customer.id] });
+    },
+  });
+  if (!promise) return null;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-accent-info/40 bg-accent-info/10 p-3 text-sm">
+      <span className="min-w-0 flex-1 text-accent-info">
+        <span className="font-semibold">{promiseLine(promise)}</span>
+        <span className="block text-xs text-secondary">
+          Automatic chasing is paused until the day after.
+        </span>
+      </span>
+      <Button
+        size="sm"
+        variant="secondary"
+        disabled={clear.isPending}
+        onClick={() => clear.mutate()}
+      >
+        {clear.isPending ? "Clearing…" : "Clear"}
+      </Button>
+      {clear.isError && (
+        <span className="w-full text-xs text-accent-danger">
+          Couldn't clear: {clear.error.message}
+        </span>
+      )}
+    </div>
+  );
 }
 
 // Loud red banner listing this customer's on-hold orders, each with a

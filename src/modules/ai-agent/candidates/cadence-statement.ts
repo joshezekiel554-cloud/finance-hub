@@ -3,6 +3,7 @@ import { db } from "../../../db/index.js";
 import { customers } from "../../../db/schema/customers.js";
 import { invoices } from "../../../db/schema/invoices.js";
 import { statementSends } from "../../../db/schema/crm.js";
+import { isPromiseActive, noActivePromiseSql } from "../../promises/promise-state.js";
 
 export type Candidate = {
   entityType: "customer";
@@ -23,6 +24,7 @@ export async function findCandidates(
     .select({
       customerId: customers.id,
       customerName: customers.displayName,
+      promisedPayBy: customers.promisedPayBy,
       openInvoiceCount: count(invoices.id),
       totalOpenBalance: sum(invoices.balance),
       lastStatementSentAt: max(statementSends.sentAt),
@@ -42,10 +44,12 @@ export async function findCandidates(
     .where(
       and(
         eq(customers.agentModeExcluded, false),
+        // Promised to pay by a date that hasn't passed — no statement nudge.
+        noActivePromiseSql(),
         customerId ? eq(customers.id, customerId) : undefined,
       ),
     )
-    .groupBy(customers.id, customers.displayName)
+    .groupBy(customers.id, customers.displayName, customers.promisedPayBy)
     .having(
       or(
         isNull(max(statementSends.sentAt)),
@@ -53,7 +57,7 @@ export async function findCandidates(
       ),
     );
 
-  return rows.map((row) => {
+  return rows.filter((row) => !isPromiseActive(row.promisedPayBy)).map((row) => {
     const lastSentAt = row.lastStatementSentAt ?? null;
     const daysSinceLastStatement = lastSentAt
       ? Math.floor(
@@ -86,6 +90,7 @@ export async function isStillEligible(entityId: string): Promise<boolean> {
       openInvoiceCount: count(invoices.id),
       lastStatementSentAt: max(statementSends.sentAt),
       agentModeExcluded: customers.agentModeExcluded,
+      promisedPayBy: customers.promisedPayBy,
     })
     .from(customers)
     .leftJoin(
@@ -100,10 +105,11 @@ export async function isStillEligible(entityId: string): Promise<boolean> {
     )
     .leftJoin(statementSends, eq(statementSends.customerId, customers.id))
     .where(eq(customers.id, entityId))
-    .groupBy(customers.id, customers.agentModeExcluded);
+    .groupBy(customers.id, customers.agentModeExcluded, customers.promisedPayBy);
 
   if (!row) return false;
   if (row.agentModeExcluded) return false;
+  if (isPromiseActive(row.promisedPayBy)) return false;
   if (Number(row.openInvoiceCount) === 0) return false;
 
   const lastSent = row.lastStatementSentAt;
