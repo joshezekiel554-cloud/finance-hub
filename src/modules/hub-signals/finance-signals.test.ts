@@ -8,7 +8,7 @@ import {
 } from "./finance-signals.js";
 
 const now = new Date("2026-11-19T14:00:00Z");
-const ctx = { now, baseUrl: "https://finance.example", audience: ["josh@x.com", "shaya@x.com"] };
+const ctx = { now, baseUrl: "https://finance.example" };
 const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000);
 
 function chase(over: Partial<ChaseFacts> = {}): ChaseFacts {
@@ -18,7 +18,7 @@ function chase(over: Partial<ChaseFacts> = {}): ChaseFacts {
     customerName: "Keter Judaica",
     chasedAt: daysAgo(9),
     level: 2,
-    threadId: "thr1",
+    messageId: "msg1",
     subject: "Feldart - follow-up on overdue balance ($2,400.00)",
     balance: 2400,
     lastInboundAt: null,
@@ -28,26 +28,33 @@ function chase(over: Partial<ChaseFacts> = {}): ChaseFacts {
 }
 
 describe("buildChaseSignals", () => {
-  it("nudges a chase that's 7+ days old with no reply and no payment", () => {
+  it("nudges a quiet chase in the hub's pinned format", () => {
     const [s] = buildChaseSignals([chase()], ctx);
-    expect(s).toMatchObject({
-      key: "finance.chase-no-response.cust1.act1",
-      kind: "chase-no-response",
+    expect(s).toEqual({
+      key: "finance.chase-no-reply.cust1.msg1",
+      kind: "chase-no-reply",
       severity: "high",
-      since: "2026-11-10",
-      customer: { name: "Keter Judaica", id: "cust1" },
+      title: "Keter Judaica: level 2 chase sent 2026-11-10, no reply and no payment ($2,400.00 open)",
+      detail: 'Chase email: "Feldart - follow-up on overdue balance ($2,400.00)"',
+      since: "2026-11-10T14:00:00.000Z",
+      customer: { id: "cust1", name: "Keter Judaica" },
       amount: { value: 2400, currency: "USD" },
-      actions: ["open", "draft-follow-up"],
-      audience: ["josh@x.com", "shaya@x.com"],
+      links: [
+        { label: "Keter Judaica in finance ($2,400.00 open)", url: "https://finance.example/customers/cust1" },
+        { label: "Chase queue", url: "https://finance.example/chase" },
+      ],
+      dedupe: "customer:cust1",
     });
-    expect(s!.title).toBe("Keter Judaica: level 2 chase sent 9 days ago, no reply and no payment ($2,400.00 open)");
-    expect(s!.evidence[0]!.link).toBe("https://mail.google.com/mail/u/0/#all/thr1");
-    expect(s!.evidence[1]!.link).toBe("https://finance.example/customers/cust1");
   });
 
-  it("waits until 7 days have passed", () => {
-    expect(buildChaseSignals([chase({ chasedAt: daysAgo(6) })], ctx)).toHaveLength(0);
-    expect(buildChaseSignals([chase({ chasedAt: daysAgo(7) })], ctx)).toHaveLength(1);
+  it("sends candidates from 5 calendar days (the hub applies 7 working days)", () => {
+    expect(buildChaseSignals([chase({ chasedAt: daysAgo(4) })], ctx)).toHaveLength(0);
+    expect(buildChaseSignals([chase({ chasedAt: daysAgo(5) })], ctx)).toHaveLength(1);
+  });
+
+  it("keeps keys within the contract's charset and length", () => {
+    const [s] = buildChaseSignals([chase({ customerId: "a b/c", messageId: "x".repeat(300) })], ctx);
+    expect(s!.key).toMatch(/^[A-Za-z0-9._:-]{1,200}$/);
   });
 
   it("stays quiet once the customer replied after the chase", () => {
@@ -67,11 +74,12 @@ describe("buildChaseSignals", () => {
     expect(buildChaseSignals([chase({ balance: 50 })], ctx)).toHaveLength(1);
   });
 
-  it("marks a level 1 reminder medium and copes with missing thread/level", () => {
-    const [s] = buildChaseSignals([chase({ level: null, threadId: null })], ctx);
+  it("marks a level 1 reminder medium and falls back to the activity id", () => {
+    const [s] = buildChaseSignals([chase({ level: null, messageId: null, subject: null })], ctx);
     expect(s!.severity).toBe("medium");
     expect(s!.title).toContain("level 1 chase");
-    expect(s!.evidence[0]!.link).toBeUndefined();
+    expect(s!.key).toBe("finance.chase-no-reply.cust1.act1");
+    expect(s!.detail).toBeUndefined();
   });
 });
 
@@ -91,14 +99,18 @@ function promise(over: Partial<PromiseFacts> = {}): PromiseFacts {
 describe("buildPromiseSignals", () => {
   it("nudges a passed promise date on a held order", () => {
     const [s] = buildPromiseSignals([promise()], ctx);
-    expect(s).toMatchObject({
+    expect(s).toEqual({
       key: "finance.promise-missed.cust2.2026-11-14",
       kind: "promise-missed",
       severity: "high",
-      since: "2026-11-14",
+      title: "Meoros Judaica: promised payment by 2026-11-14, still unpaid ($1,240.00 open)",
+      detail: 'Order 18926 is on hold; promise note: "paying Friday"',
+      since: "2026-11-14T14:00:00.000Z",
+      customer: { id: "cust2", name: "Meoros Judaica" },
       amount: { value: 1240, currency: "USD" },
+      links: [{ label: "Meoros Judaica in finance (order 18926 on hold)", url: "https://finance.example/customers/cust2" }],
+      dedupe: "customer:cust2",
     });
-    expect(s!.title).toBe('Meoros Judaica promised payment by 2026-11-14 ("paying Friday"); still unpaid ($1,240.00 open)');
   });
 
   it("ignores promises still in the future and small balances", () => {
@@ -121,9 +133,9 @@ describe("sortSignals", () => {
     ]);
     expect(sorted.map((s) => s.key)).toEqual([
       "finance.promise-missed.cust2.2026-11-14",
-      "finance.chase-no-response.c.c",
-      "finance.chase-no-response.b.b",
-      "finance.chase-no-response.a.a",
+      "finance.chase-no-reply.c.msg1",
+      "finance.chase-no-reply.b.msg1",
+      "finance.chase-no-reply.a.msg1",
     ]);
   });
 });

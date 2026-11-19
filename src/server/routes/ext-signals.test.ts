@@ -7,7 +7,8 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 const state = vi.hoisted(() => ({
   claims: null as { email: string; ops?: boolean } | null,
-  loaderCalls: [] as Array<{ audience: string[]; baseUrl: string }>,
+  loaderCalls: [] as Array<{ baseUrl: string }>,
+  moneyFails: false,
 }));
 
 vi.mock("../../lib/env.js", async (orig) => {
@@ -29,8 +30,8 @@ vi.mock("../lib/hub-service-auth.js", () => ({
 }));
 
 vi.mock("../../modules/hub-signals/finance-signals.js", () => ({
-  loadFinanceSignals: vi.fn(async (ctx: { audience: string[]; baseUrl: string }) => {
-    state.loaderCalls.push({ audience: ctx.audience, baseUrl: ctx.baseUrl });
+  loadFinanceSignals: vi.fn(async (ctx: { baseUrl: string }) => {
+    state.loaderCalls.push({ baseUrl: ctx.baseUrl });
     return {
       signals: [{ key: "finance.promise-missed.c1.2026-11-14", kind: "promise-missed" }],
       errors: [],
@@ -39,7 +40,18 @@ vi.mock("../../modules/hub-signals/finance-signals.js", () => ({
 }));
 
 vi.mock("./dashboard-money.js", () => ({
-  getMoneySummaryCached: vi.fn(async () => ({ currency: "USD", total: { overdue: "10.00" } })),
+  getMoneySummaryCached: vi.fn(async () => {
+    if (state.moneyFails) throw new Error("db down");
+    return {
+      currency: "USD",
+      total: {
+        overdue: { amount: "1234.50", invoices: 3, customers: 2 },
+        currentDue: { amount: "0", invoices: 0 },
+        dueNext7: { amount: "800", invoices: 1 },
+        received30: { amount: "9999.99", payments: 4, unallocated: "0" },
+      },
+    };
+  }),
 }));
 
 import { signalsRoute } from "./ext-tools.js";
@@ -49,6 +61,7 @@ let app: FastifyInstance;
 beforeEach(async () => {
   state.claims = null;
   state.loaderCalls = [];
+  state.moneyFails = false;
   app = Fastify();
   await app.register(signalsRoute, { prefix: "/api/ext" });
   await app.ready();
@@ -71,16 +84,26 @@ describe("GET /api/ext/signals", () => {
     expect(state.loaderCalls).toHaveLength(0);
   });
 
-  it("serves signals + money summary to a finance admin, audience = admins", async () => {
+  it("serves signals + the panel money summary to a finance admin", async () => {
     state.claims = { email: "Shaya@x.com" };
     const res = await app.inject({ method: "GET", url: "/api/ext/signals" });
     expect(res.statusCode).toBe(200);
     expect(res.headers["cache-control"]).toBe("no-store");
     const body = res.json() as { signals: unknown[]; summary: unknown; errors: unknown[]; generatedAt: string };
     expect(body.signals).toHaveLength(1);
-    expect(body.summary).toMatchObject({ currency: "USD" });
+    expect(body.summary).toEqual({ overdue: { USD: 1234.5 }, dueThisWeek: { USD: 800 }, cashIn30d: { USD: 9999.99 } });
     expect(body.errors).toEqual([]);
     expect(typeof body.generatedAt).toBe("string");
-    expect(state.loaderCalls[0]).toEqual({ audience: ["josh@x.com", "shaya@x.com"], baseUrl: "https://finance.example" });
+    expect(state.loaderCalls[0]).toEqual({ baseUrl: "https://finance.example" });
+  });
+
+  it("still serves signals when the money summary fails, naming it in errors", async () => {
+    state.claims = { email: "josh@x.com" };
+    state.moneyFails = true;
+    const res = await app.inject({ method: "GET", url: "/api/ext/signals" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { summary?: unknown; errors: string[] };
+    expect(body.summary).toBeUndefined();
+    expect(body.errors).toEqual(["money-summary"]);
   });
 });

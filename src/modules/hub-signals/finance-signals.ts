@@ -7,8 +7,9 @@
 // the inbox owns other conversations and skips threads our chases started.
 //
 // Signals (one row per thing that needs Josh/Shaya):
-//   finance.chase-no-response — the customer's latest chase email (L1-L3) is
-//     7+ days old, no email from them since, no payment since, balance ≥ $50.
+//   finance.chase-no-reply — the customer's latest chase email (L1-L3) is
+//     5+ calendar days old (the hub applies the 7-working-day rule), no email
+//     from them since, no payment since, balance ≥ $50.
 //   finance.promise-missed — a held order's "promised to pay by" date
 //     (hold-ladder pause) has passed and the order is still on hold.
 //
@@ -20,30 +21,40 @@ import { orders } from "../../db/schema/catalog.js";
 import { activities } from "../../db/schema/crm.js";
 import { customers } from "../../db/schema/customers.js";
 import { payments } from "../../db/schema/payments.js";
+import { createLogger } from "../../lib/logger.js";
+
+const log = createLogger({ component: "hub-signals" });
 
 export const SIGNAL_RULES = {
-  /** Days after a chase email with no reply and no payment before we nudge. */
-  chaseQuietDays: 7,
+  /**
+   * Calendar-day floor before a quiet chase is sent as a candidate. The hub
+   * owns working days and applies the operator's 7-working-day rule.
+   */
+  chaseQuietDays: 5,
   /** Balances below this are ignored (operator decision, $50 / £50). */
   minBalance: 50,
   /** Only the latest chase within this window is considered. */
   chaseLookbackDays: 60,
 };
 
-export type SignalEvidence = { label: string; link?: string };
+// The hub's pinned signal contract (alice2, 2026-11-19).
+export type SignalLink = { label: string; url: string };
 
 export type Signal = {
-  key: string;
-  kind: "chase-no-response" | "promise-missed";
+  key: string; // ≤200 chars, [A-Za-z0-9._:-], "finance." prefix
+  kind: "chase-no-reply" | "promise-missed";
   severity: "high" | "medium" | "info";
-  title: string;
-  since: string; // YYYY-MM-DD
-  customer: { name: string; id: string };
+  title: string; // ≤160
+  detail?: string; // ≤400
+  since: string; // ISO time the clock started
+  customer: { id: string; name: string };
   amount: { value: number; currency: "USD" };
-  evidence: SignalEvidence[];
-  actions: Array<"open" | "draft-follow-up">;
-  audience: string[];
+  links: SignalLink[]; // 1-5, absolute https on finance's origin
+  dedupe: string; // "customer:<id>"
 };
+
+const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
+const safeKey = (s: string) => s.replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 200);
 
 const DAY_MS = 86_400_000;
 
@@ -56,10 +67,8 @@ function daysBetween(from: Date, to: Date): number {
   return Math.floor((to.getTime() - from.getTime()) / DAY_MS);
 }
 
-const gmailThreadLink = (threadId: string) => `https://mail.google.com/mail/u/0/#all/${threadId}`;
-
 // ---------------------------------------------------------------------------
-// chase-no-response
+// chase-no-reply
 // ---------------------------------------------------------------------------
 
 export type ChaseFacts = {
@@ -68,7 +77,8 @@ export type ChaseFacts = {
   customerName: string;
   chasedAt: Date;
   level: number | null;
-  threadId: string | null;
+  /** Gmail message id of the chase email, when recorded. */
+  messageId: string | null;
   subject: string | null;
   balance: number;
   lastInboundAt: Date | null;
@@ -77,7 +87,7 @@ export type ChaseFacts = {
 
 export function buildChaseSignals(
   rows: ChaseFacts[],
-  ctx: { now: Date; baseUrl: string; audience: string[] },
+  ctx: { now: Date; baseUrl: string },
 ): Signal[] {
   const out: Signal[] = [];
   for (const r of rows) {
@@ -90,24 +100,20 @@ export function buildChaseSignals(
     if (r.lastPaymentDate && ymd(r.lastPaymentDate) >= ymd(r.chasedAt)) continue;
 
     const level = r.level ?? 1;
-    const evidence: SignalEvidence[] = [
-      {
-        label: `Level ${level} chase sent ${ymd(r.chasedAt)}${r.subject ? `: "${r.subject}"` : ""}`,
-        ...(r.threadId ? { link: gmailThreadLink(r.threadId) } : {}),
-      },
-      { label: `Customer in finance (${usd(r.balance)} open)`, link: `${ctx.baseUrl}/customers/${r.customerId}` },
-    ];
     out.push({
-      key: `finance.chase-no-response.${r.customerId}.${r.activityId}`,
-      kind: "chase-no-response",
+      key: safeKey(`finance.chase-no-reply.${r.customerId}.${r.messageId ?? r.activityId}`),
+      kind: "chase-no-reply",
       severity: level >= 2 ? "high" : "medium",
-      title: `${r.customerName}: level ${level} chase sent ${days} days ago, no reply and no payment (${usd(r.balance)} open)`,
-      since: ymd(r.chasedAt),
-      customer: { name: r.customerName, id: r.customerId },
+      title: clip(`${r.customerName}: level ${level} chase sent ${ymd(r.chasedAt)}, no reply and no payment (${usd(r.balance)} open)`, 160),
+      ...(r.subject ? { detail: clip(`Chase email: "${r.subject}"`, 400) } : {}),
+      since: r.chasedAt.toISOString(),
+      customer: { id: r.customerId, name: r.customerName },
       amount: { value: r.balance, currency: "USD" },
-      evidence,
-      actions: ["open", "draft-follow-up"],
-      audience: ctx.audience,
+      links: [
+        { label: `${r.customerName} in finance (${usd(r.balance)} open)`, url: `${ctx.baseUrl}/customers/${r.customerId}` },
+        { label: "Chase queue", url: `${ctx.baseUrl}/chase` },
+      ],
+      dedupe: `customer:${r.customerId}`,
     });
   }
   return out;
@@ -129,7 +135,7 @@ export type PromiseFacts = {
 
 export function buildPromiseSignals(
   rows: PromiseFacts[],
-  ctx: { now: Date; baseUrl: string; audience: string[] },
+  ctx: { now: Date; baseUrl: string },
 ): Signal[] {
   // One signal per customer + promise date, even if several held orders
   // carry the same promise.
@@ -138,25 +144,20 @@ export function buildPromiseSignals(
   for (const r of rows) {
     if (r.promisedBy.getTime() >= ctx.now.getTime()) continue;
     if (r.balance < SIGNAL_RULES.minBalance) continue;
-    const key = `finance.promise-missed.${r.customerId}.${ymd(r.promisedBy)}`;
+    const key = safeKey(`finance.promise-missed.${r.customerId}.${ymd(r.promisedBy)}`);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
       key,
       kind: "promise-missed",
       severity: "high",
-      title: `${r.customerName} promised payment by ${ymd(r.promisedBy)}${r.note ? ` ("${r.note}")` : ""}; still unpaid (${usd(r.balance)} open)`,
-      since: ymd(r.promisedBy),
-      customer: { name: r.customerName, id: r.customerId },
+      title: clip(`${r.customerName}: promised payment by ${ymd(r.promisedBy)}, still unpaid (${usd(r.balance)} open)`, 160),
+      detail: clip(`Order ${r.orderNumber ?? "?"} is on hold${r.note ? `; promise note: "${r.note}"` : ""}`, 400),
+      since: r.promisedBy.toISOString(),
+      customer: { id: r.customerId, name: r.customerName },
       amount: { value: r.balance, currency: "USD" },
-      evidence: [
-        {
-          label: `Order ${r.orderNumber ?? "?"} on hold, payment promised by ${ymd(r.promisedBy)}`,
-          link: `${ctx.baseUrl}/customers/${r.customerId}`,
-        },
-      ],
-      actions: ["open", "draft-follow-up"],
-      audience: ctx.audience,
+      links: [{ label: `${r.customerName} in finance (order ${r.orderNumber ?? "?"} on hold)`, url: `${ctx.baseUrl}/customers/${r.customerId}` }],
+      dedupe: `customer:${r.customerId}`,
     });
   }
   return out;
@@ -230,14 +231,14 @@ async function loadChaseFacts(now: Date): Promise<ChaseFacts[]> {
   for (const [customerId, c] of latest) {
     const cu = cust.get(customerId);
     if (!cu) continue;
-    const meta = (c.meta ?? {}) as { level?: unknown; threadId?: unknown };
+    const meta = (c.meta ?? {}) as { level?: unknown; messageId?: unknown };
     out.push({
       activityId: c.id,
       customerId,
       customerName: cu.name,
       chasedAt: toDate(c.occurredAt)!,
       level: typeof meta.level === "number" ? meta.level : null,
-      threadId: typeof meta.threadId === "string" ? meta.threadId : null,
+      messageId: typeof meta.messageId === "string" ? meta.messageId : null,
       subject: c.subject,
       balance: toNum(cu.balance),
       lastInboundAt: inbound.get(customerId) ?? null,
@@ -286,18 +287,18 @@ export function sortSignals(signals: Signal[]): Signal[] {
   );
 }
 
-export async function loadFinanceSignals(ctx: { now: Date; baseUrl: string; audience: string[] }): Promise<{
+export async function loadFinanceSignals(ctx: { now: Date; baseUrl: string }): Promise<{
   signals: Signal[];
   errors: string[];
 }> {
   const errors: string[] = [];
   const [chase, promise] = await Promise.all([
     loadChaseFacts(ctx.now).catch((err: unknown) => {
-      errors.push(`chase-no-response: ${err instanceof Error ? err.message.slice(0, 200) : "failed"}`);
+      errors.push("chase-no-reply"); log.warn({ err }, "signals: chase-no-reply check failed");
       return [] as ChaseFacts[];
     }),
     loadPromiseFacts().catch((err: unknown) => {
-      errors.push(`promise-missed: ${err instanceof Error ? err.message.slice(0, 200) : "failed"}`);
+      errors.push("promise-missed"); log.warn({ err }, "signals: promise-missed check failed");
       return [] as PromiseFacts[];
     }),
   ]);
