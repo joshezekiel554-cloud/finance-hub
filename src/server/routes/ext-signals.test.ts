@@ -80,7 +80,19 @@ vi.mock("../../modules/promises/hub-notes.js", async (orig) => {
   };
 });
 
-import { signalsRoute } from "./ext-tools.js";
+const queueAdds = vi.hoisted(() => [] as Array<{ name: string; data: unknown; opts: { jobId?: string } }>);
+vi.mock("../../jobs/queues.js", () => ({
+  GMAIL_POLL_JOB: "gmail-poll",
+  getQueues: () => ({
+    gmail: {
+      add: vi.fn(async (name: string, data: unknown, opts: { jobId?: string }) => {
+        queueAdds.push({ name, data, opts });
+      }),
+    },
+  }),
+}));
+
+import { createRefreshGate, signalsRoute } from "./ext-tools.js";
 
 let app: FastifyInstance;
 
@@ -228,5 +240,39 @@ describe("POST /api/ext/signals/note", () => {
     expect((await post({ key: "finance.chase-no-reply.cust1.m1", note: "   " })).statusCode).toBe(400);
     expect((await post({ key: "finance.chase-no-reply.cust1.m1", note: "x".repeat(1001) })).statusCode).toBe(400);
     expect(writes.noteCalls).toHaveLength(0);
+  });
+});
+
+describe("POST /api/ext/signals/refresh", () => {
+  it("403s for a non-admin and queues nothing", async () => {
+    state.claims = { email: "sam@x.com", ops: true };
+    queueAdds.length = 0;
+    const res = await app.inject({ method: "POST", url: "/api/ext/signals/refresh" });
+    expect(res.statusCode).toBe(403);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(queueAdds).toHaveLength(0);
+  });
+
+  it("202s for an admin and queues one manual Gmail poll, debounced", async () => {
+    state.claims = { email: "josh@x.com" };
+    queueAdds.length = 0;
+    const a = await app.inject({ method: "POST", url: "/api/ext/signals/refresh" });
+    const b = await app.inject({ method: "POST", url: "/api/ext/signals/refresh" });
+    expect(a.statusCode).toBe(202);
+    expect(a.json()).toEqual({ ok: true, queued: true });
+    expect(b.statusCode).toBe(202);
+    expect(b.json()).toEqual({ ok: true, queued: false });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(queueAdds).toHaveLength(1);
+    expect(queueAdds[0]).toMatchObject({ name: "gmail-poll", data: { trigger: "manual" } });
+  });
+});
+
+describe("createRefreshGate", () => {
+  it("lets one through per window", () => {
+    const g = createRefreshGate(30_000);
+    expect(g.tryAcquire(0)).toBe(true);
+    expect(g.tryAcquire(29_999)).toBe(false);
+    expect(g.tryAcquire(30_000)).toBe(true);
   });
 });

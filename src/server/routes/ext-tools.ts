@@ -249,7 +249,52 @@ export const signalsRoute: FastifyPluginAsync = async (app) => {
     log.info({ email: claims.email, customerId, changed: res.changed }, "hub note saved");
     return reply.header("cache-control", "no-store").send({ ok: true, customerId });
   });
+
+  // POST /signals/refresh — the hub calls this after a confirmed change in
+  // Feldart AI (e.g. a reply sent through the inbox) so finance's Gmail poll
+  // records the send now rather than at the next 15-minute tick; the hub's
+  // ~75 s re-check then sees the card cleared. 202 at once, at most one
+  // poll per REFRESH_DEBOUNCE_MS.
+  app.post("/signals/refresh", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    if (!isEmailAllowed(claims.email, env.ADMIN_EMAILS)) {
+      return reply.code(403).send({ error: "Refresh is for finance admins only." });
+    }
+    const nowMs = Date.now();
+    const queued = refreshGate.tryAcquire(nowMs);
+    if (queued) {
+      void enqueueGmailPoll().catch((err: unknown) => log.warn({ err }, "signals refresh: enqueue failed"));
+    }
+    log.info({ email: claims.email, queued }, "signals refresh");
+    return reply.code(202).header("cache-control", "no-store").send({ ok: true, queued });
+  });
 };
+
+export const REFRESH_DEBOUNCE_MS = 30_000;
+
+/** Process-local debounce for /signals/refresh. */
+export function createRefreshGate(windowMs: number) {
+  let last = -Infinity;
+  return {
+    tryAcquire(nowMs: number): boolean {
+      if (nowMs - last < windowMs) return false;
+      last = nowMs;
+      return true;
+    },
+  };
+}
+const refreshGate = createRefreshGate(REFRESH_DEBOUNCE_MS);
+
+async function enqueueGmailPoll(): Promise<void> {
+  const { getQueues, GMAIL_POLL_JOB } = await import("../../jobs/queues.js");
+  // Bucketed jobId: BullMQ ignores a duplicate while one is still queued.
+  await getQueues().gmail.add(
+    GMAIL_POLL_JOB,
+    { trigger: "manual" },
+    { jobId: `hub-refresh-${Math.floor(Date.now() / REFRESH_DEBOUNCE_MS)}`, removeOnComplete: true, removeOnFail: 50 },
+  );
+}
 
 // GET /api/ext/alerts — finance's checks for the hub scheduler (ops only).
 export const alertsRoute: FastifyPluginAsync = async (app) => {
