@@ -118,6 +118,10 @@ describe("buildChaseSignals", () => {
     expect(pickFollowUp(base, [mk({ at: new Date(chasedAt.getTime() + 60_000), threadId: "t1" })])).toBeNull(); // same send
     expect(pickFollowUp(base, [mk({ threadId: "t1" })])?.messageId).toBe("mx");
     expect(pickFollowUp(base, [mk({ subject: "Re: Feldart - Statement of Account ($768.70 open)" })])?.messageId).toBe("mx");
+    expect(pickFollowUp(base, [mk({ subject: "Overdue - Final reminder" })])?.messageId).toBe("mx");
+    // automated statement runs / hold notices are not follow-ups (S Moskovits ignored 5 statements)
+    expect(pickFollowUp(base, [mk({ subject: "Feldart - Statement of Account ($3,643.00 open)" })])).toBeNull();
+    expect(pickFollowUp(base, [mk({ subject: "Action needed — order 18926 still on hold" })])).toBeNull();
     const latest = pickFollowUp(base, [mk({ threadId: "t1", messageId: "a", at: daysAgo(5) }), mk({ threadId: "t1", messageId: "b", at: daysAgo(2) })]);
     expect(latest?.messageId).toBe("b");
   });

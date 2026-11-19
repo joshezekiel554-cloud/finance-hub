@@ -516,6 +516,14 @@ async function loadChaseFacts(now: Date): Promise<ChaseFacts[]> {
 
 /** Subjects that read as a money follow-up (not order/product chatter). */
 const FOLLOW_UP_SUBJECT = /statement|overdue|outstanding|balance|payment|remittance|follow[- ]?up|chase|reminder/i;
+/**
+ * Automated sends that are NOT a follow-up even though they mention money:
+ * statement runs ("Feldart - Statement of Account (...)") and hold-ladder
+ * notices. A customer ignoring five statements is more worrying, not less.
+ * A human reply to one ("Re: Feldart - Statement...") still counts.
+ */
+const AUTOMATED_SUBJECT = /statement of account|is on hold|still on hold|^\s*credit memo|^\s*invoice\b/i;
+const IS_REPLY = /^\s*(re|fw|fwd)\s*:/i;
 
 export type OutboundEmail = {
   activityId: string;
@@ -542,7 +550,9 @@ export function pickFollowUp(
     if (chase.chaseMessageId && s.messageId === chase.chaseMessageId) continue;
     if (s.at.getTime() <= after) continue;
     const onThread = chase.chaseThreadId !== null && s.threadId === chase.chaseThreadId;
-    if (!onThread && !FOLLOW_UP_SUBJECT.test(s.subject ?? "")) continue;
+    const subject = s.subject ?? "";
+    if (!onThread && !FOLLOW_UP_SUBJECT.test(subject)) continue;
+    if (!IS_REPLY.test(subject) && AUTOMATED_SUBJECT.test(subject)) continue;
     if (!best || s.at.getTime() > best.at.getTime()) best = s;
   }
   return best ? { at: best.at, messageId: best.messageId, activityId: best.activityId, subject: best.subject } : null;
