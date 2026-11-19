@@ -28,6 +28,9 @@ import { settleHubProposal } from "../../modules/ai-tools/ops-proposals.js";
 import { OPS_QBO_TOOLS } from "../../modules/ai-tools/qbo-tools.js";
 import { OPS_MONEY_READS } from "../../modules/ai-tools/ops-money-reads.js";
 import { loadFinanceAlerts } from "../../modules/ai-tools/alerts.js";
+import { loadFinanceSignals } from "../../modules/hub-signals/finance-signals.js";
+import { getMoneySummaryCached } from "./dashboard-money.js";
+import type { MoneySummary } from "../../modules/dashboard/money.js";
 import { OPS_TOOLS as OPS_CORE } from "../../modules/ai-tools/ops-tools.js";
 
 export const OPS_TOOLS: ToolDef[] = [...OPS_CORE, ...OPS_FINANCE_READS, ...OPS_MONEY_READS, ...OPS_QBO_TOOLS, ...OPS_FINANCE_WRITES];
@@ -139,6 +142,51 @@ export const proposalsRoute: FastifyPluginAsync = async (app) => {
 };
 
 export default extToolsRoute;
+
+type PanelMoney = { USD: number };
+export type SignalsSummary = { overdue: PanelMoney; dueThisWeek: PanelMoney; cashIn30d: PanelMoney };
+
+/** The "where we are" money line for the hub panel (both books are USD). */
+export function panelSummary(m: MoneySummary): SignalsSummary {
+  const n = (s: string) => Math.round((parseFloat(s) || 0) * 100) / 100;
+  return {
+    overdue: { USD: n(m.total.overdue.amount) },
+    dueThisWeek: { USD: n(m.total.dueNext7.amount) },
+    cashIn30d: { USD: n(m.total.received30.amount) },
+  };
+}
+
+// GET /api/ext/signals — item-level money nudges for the hub's Chief of Staff
+// panel (phase 1, contract pinned by the hub 2026-11-19). Finance admins only
+// (Josh + Shaya): the token's email is the person, and money signals never go
+// to anyone else even with a valid hub token.
+//   {generatedAt, signals: Signal[], errors: string[], summary?: SignalsSummary}
+export const signalsRoute: FastifyPluginAsync = async (app) => {
+  app.get("/signals", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    if (!isEmailAllowed(claims.email, env.ADMIN_EMAILS)) {
+      return reply.code(403).send({ error: "Money signals are for finance admins only." });
+    }
+    const started = Date.now();
+    const now = new Date();
+    const [{ signals, errors }, money] = await Promise.all([
+      loadFinanceSignals({ now, baseUrl: env.PUBLIC_URL.replace(/\/$/, "") }),
+      getMoneySummaryCached(now).catch((err: unknown) => {
+        log.warn({ err }, "signals: money summary failed");
+        return null;
+      }),
+    ]);
+    const allErrors = money ? errors : [...errors, "money-summary"];
+    log.info({ email: claims.email, signals: signals.length, errors: allErrors, ms: Date.now() - started }, "signals served");
+    return reply.header("cache-control", "no-store").send({
+      generatedAt: now.toISOString(),
+      signals,
+      errors: allErrors,
+      ...(money ? { summary: panelSummary(money) } : {}),
+    });
+  });
+};
 
 // GET /api/ext/alerts — finance's checks for the hub scheduler (ops only).
 export const alertsRoute: FastifyPluginAsync = async (app) => {
