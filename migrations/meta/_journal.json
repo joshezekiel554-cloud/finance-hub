@@ -428,6 +428,13 @@
       "when": 1792082002512,
       "tag": "0060_invoice_lines_item_sku",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "5",
+      "when": 1795104785310,
+      "tag": "0061_hub_promises",
+      "breakpoints": true
     }
   ]
 }

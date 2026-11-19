@@ -29,6 +29,7 @@ import {
 } from "../../chase/lookups.js";
 import { loadRecentHumanContact as loadRecentHumanContactDefault } from "../../chase/chased-tracker.js";
 import type { OverdueCustomer } from "../../chase/types.js";
+import { isPromiseActive } from "../../promises/promise-state.js";
 
 export type Candidate = {
   entityType: "customer";
@@ -74,6 +75,8 @@ export async function findCandidates(
     (row) =>
       (!customerId || row.customerId === customerId) &&
       !row.customer.agentModeExcluded &&
+      // Promised to pay by a date that hasn't passed — no chasing.
+      !isPromiseActive(row.customer.promisedPayBy) &&
       ACTIONABLE_TIERS.has(row.severity.tier),
   );
   if (actionable.length === 0) return [];
@@ -143,6 +146,7 @@ export async function isStillEligible(
   const row = await loadOverdueForCustomer(entityId);
   if (!row) return false;
   if (row.customer.agentModeExcluded) return false;
+  if (isPromiseActive(row.customer.promisedPayBy)) return false;
   if (!ACTIONABLE_TIERS.has(row.severity.tier)) return false;
 
   const recent = await loadRecentChases([entityId], cooldownCutoff());

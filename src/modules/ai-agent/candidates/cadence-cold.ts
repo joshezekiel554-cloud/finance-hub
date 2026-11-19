@@ -3,6 +3,7 @@ import { db } from "../../../db/index.js";
 import { customers } from "../../../db/schema/customers.js";
 import { invoices } from "../../../db/schema/invoices.js";
 import { activities, emailLog } from "../../../db/schema/crm.js";
+import { isPromiseActive, noActivePromiseSql } from "../../promises/promise-state.js";
 
 export type Candidate = {
   entityType: "customer";
@@ -79,6 +80,7 @@ async function queryCandidates(customerId?: string): Promise<Candidate[]> {
       id: customers.id,
       displayName: customers.displayName,
       overdueBalance: customers.overdueBalance,
+      promisedPayBy: customers.promisedPayBy,
       lastPayment: lastPaymentSq.lastPayment,
       lastContact: lastContactSq.lastContact,
     })
@@ -89,6 +91,8 @@ async function queryCandidates(customerId?: string): Promise<Candidate[]> {
     .where(
       and(
         eq(customers.agentModeExcluded, false),
+        // Promised to pay by a date that hasn't passed — no chasing.
+        noActivePromiseSql(),
         gt(customers.overdueBalance, sql`0`),
         or(
           isNull(lastPaymentSq.lastPayment),
@@ -102,7 +106,9 @@ async function queryCandidates(customerId?: string): Promise<Candidate[]> {
       ),
     );
 
-  return rows.map((row) => ({
+  return rows
+    .filter((row) => !isPromiseActive(row.promisedPayBy))
+    .map((row) => ({
     entityType: "customer" as const,
     entityId: row.id,
     summary: {

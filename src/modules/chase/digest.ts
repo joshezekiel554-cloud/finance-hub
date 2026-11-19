@@ -23,6 +23,7 @@ import {
 } from "../ai-agent/candidates/tj-dispute-nudge.js";
 import type { InvoiceOrigin } from "../invoicing/origin.js";
 import { getOverdueCustomers } from "./lookups.js";
+import { isPromiseActive, toYmd } from "../promises/promise-state.js";
 import type { OverdueCustomer } from "./types.js";
 
 export type DailyDigestOptions = {
@@ -152,6 +153,8 @@ export function toChaseAccount(row: OverdueCustomer): ChaseAccount {
     last_chased: null,
     hold_status: customer.holdStatus,
     action_plan: null,
+    // Badge, not a filter: the digest still lists a customer who promised.
+    ...(isPromiseActive(customer.promisedPayBy) ? { promised_pay_by: toYmd(customer.promisedPayBy) } : {}),
   };
 }
 

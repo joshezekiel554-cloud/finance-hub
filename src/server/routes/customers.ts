@@ -68,6 +68,7 @@ import {
   deleteManualNote,
 } from "../../modules/crm/activity-ingester.js";
 import { loadQbTokens } from "../../integrations/qb/tokens.js";
+import { clearPromise } from "../../modules/promises/promises.js";
 import { QboClient } from "../../integrations/qb/client.js";
 
 const log = createLogger({ component: "routes.customers" });
@@ -754,6 +755,23 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       body: parse.data.body,
     });
     return reply.send({ activityId });
+  });
+
+  // POST /api/customers/:id/promise/clear — drop the customer's "promised
+  // to pay by" (set from the hub's Chief of Staff panel). Chasing resumes,
+  // order ladder pauses the promise created are lifted, and the clear lands
+  // on the timeline + audit log. Idempotent: no promise → {changed:false}.
+  app.post("/:id/promise/clear", async (req, reply) => {
+    const user = await requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    const res = await clearPromise({
+      customerId: id,
+      actorEmail: user.email ?? user.id,
+      userId: user.id,
+      source: "finance",
+    });
+    if (!res.ok) return reply.code(404).send({ error: res.error });
+    return reply.send({ ok: true, changed: res.changed });
   });
 
   // PATCH /api/customers/:id/notes/:activityId — edit a manual_note. Scoped

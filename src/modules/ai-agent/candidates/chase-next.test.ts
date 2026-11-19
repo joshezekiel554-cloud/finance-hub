@@ -64,6 +64,10 @@ function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     lastSyncedAt: now,
     vocatechLastPushedAt: null,
     agentModeExcluded: false,
+    promisedPayBy: null,
+    promiseNote: null,
+    promiseSetBy: null,
+    promiseSetAt: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -431,5 +435,50 @@ describe("isStillEligible", () => {
       [{ lastChasedAt: null }],
     );
     expect(await isStillEligible("cust-tj")).toBe(false);
+  });
+});
+
+// ── customer promise to pay ─────────────────────────────────────────────────
+
+function ymdFromToday(days: number): string {
+  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+describe("customer promise to pay", () => {
+  const critical = (promisedPayBy: string | null) => {
+    const customer = makeCustomer({
+      id: "cust-p",
+      overdueBalance: "60000.00",
+      unappliedCreditBalance: "0.00",
+      promisedPayBy,
+    });
+    const inv = makeInvoice({ id: "inv-p", customerId: "cust-p", balance: "60000.00", dueDate: daysAgo(120) });
+    return { customer, inv };
+  };
+
+  it("findCandidates skips a customer whose promise date is today or later", async () => {
+    for (const date of [ymdFromToday(0), ymdFromToday(5)]) {
+      const { customer, inv } = critical(date);
+      mockFindCandidatesDB([customer], [inv], []);
+      expect(await findCandidates()).toHaveLength(0);
+    }
+  });
+
+  it("findCandidates chases again the day after the promised date", async () => {
+    const { customer, inv } = critical(ymdFromToday(-1));
+    mockFindCandidatesDB([customer], [inv], []);
+    expect((await findCandidates()).map((c) => c.entityId)).toEqual(["cust-p"]);
+  });
+
+  it("isStillEligible cancels a drafted chase once a promise is saved", async () => {
+    const { customer, inv } = critical(ymdFromToday(3));
+    mockIsEligibleDB([customer], [inv], [{ lastChasedAt: null }]);
+    expect(await isStillEligible("cust-p")).toBe(false);
+  });
+
+  it("isStillEligible is unaffected by a passed promise", async () => {
+    const { customer, inv } = critical(ymdFromToday(-2));
+    mockIsEligibleDB([customer], [inv], [{ lastChasedAt: null }]);
+    expect(await isStillEligible("cust-p")).toBe(true);
   });
 });

@@ -182,6 +182,9 @@ function renderChaseAccountBlock(a: ChaseAccount, i: number): string {
     prompt += "- Last chased: never\n";
   }
   prompt += `- Hold status: ${a.hold_status ?? "unknown"}\n`;
+  if (a.promised_pay_by) {
+    prompt += `- Promised: pay by ${a.promised_pay_by} (automatic chasing paused until then)\n`;
+  }
   if (a.action_plan && a.action_plan.trim()) {
     prompt += `- Existing AI Action Plan:\n${a.action_plan.trim()}\n`;
   } else {

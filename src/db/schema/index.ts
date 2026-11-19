@@ -28,4 +28,5 @@ export * from "./invoice-bcc-forwards";
 export * from "./invoice-email-dismissals";
 export * from "./user-active-minutes";
 export * from "./time-clock-sessions";
+export * from "./promise-scans";
 export * from "../relations";

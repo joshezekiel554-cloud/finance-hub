@@ -51,6 +51,9 @@ export type ChaseAccount = {
   last_chased?: ChaseLastChased | null;
   hold_status?: string | null;
   action_plan?: string | null;
+  // Active customer promise to pay (YYYY-MM-DD) — chasing is paused until
+  // the day after. Present only while active.
+  promised_pay_by?: string | null;
 };
 
 // Torah Judaica wind-down block for the daily chase digest (origin-split-2

@@ -6,6 +6,7 @@ import type { Invoice } from "../../../db/schema/invoices.js";
 import { chaseLog } from "../../../db/schema/audit.js";
 import { computeSeverity } from "../../chase/scoring.js";
 import { loadRecentHumanContact } from "../../chase/chased-tracker.js";
+import { isPromiseActive, noActivePromiseSql } from "../../promises/promise-state.js";
 
 export type Candidate = {
   entityType: "customer";
@@ -31,6 +32,8 @@ export async function findCandidates(
       and(
         gt(customers.overdueBalance, "0"),
         eq(customers.agentModeExcluded, false),
+        // Promised to pay by a date that hasn't passed — no chasing.
+        noActivePromiseSql(),
         customerId ? eq(customers.id, customerId) : undefined,
       ),
     );
@@ -84,6 +87,7 @@ export async function findCandidates(
   const candidates: Candidate[] = [];
 
   for (const customer of overdueRows) {
+    if (isPromiseActive(customer.promisedPayBy)) continue;
     if (recentlyChased.has(customer.id)) continue;
     if (recentHumanContact.has(customer.id)) continue;
 
@@ -133,6 +137,8 @@ export async function isStillEligible(entityId: string): Promise<boolean> {
 
   if (!customerRow) return false;
   if (customerRow.agentModeExcluded) return false;
+  // A promise saved since the proposal was drafted cancels the chase.
+  if (isPromiseActive(customerRow.promisedPayBy)) return false;
 
   const overdueBalance = Number(customerRow.overdueBalance ?? 0);
   if (overdueBalance <= 0) return false;

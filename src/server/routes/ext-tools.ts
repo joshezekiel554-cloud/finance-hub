@@ -10,6 +10,7 @@
 // two independent checks, so neither side alone can widen access.
 
 import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
 import { env } from "../../lib/env.js";
 import { signQbPdfLink, signStoredFileLink } from "../../lib/file-link.js";
 import type { HubTokenClaims } from "../../lib/hub-token.js";
@@ -29,6 +30,8 @@ import { OPS_QBO_TOOLS } from "../../modules/ai-tools/qbo-tools.js";
 import { OPS_MONEY_READS } from "../../modules/ai-tools/ops-money-reads.js";
 import { loadFinanceAlerts } from "../../modules/ai-tools/alerts.js";
 import { loadFinanceSignals } from "../../modules/hub-signals/finance-signals.js";
+import { PROMISE_NOTE_MAX, setPromise } from "../../modules/promises/promises.js";
+import { addHubNote, cleanHubNote, customerIdFromSignalKey, HUB_NOTE_MAX } from "../../modules/promises/hub-notes.js";
 import { getMoneySummaryCached } from "./dashboard-money.js";
 import type { MoneySummary } from "../../modules/dashboard/money.js";
 import { OPS_TOOLS as OPS_CORE } from "../../modules/ai-tools/ops-tools.js";
@@ -156,17 +159,33 @@ export function panelSummary(m: MoneySummary): SignalsSummary {
   };
 }
 
-// GET /api/ext/signals — item-level money nudges for the hub's Chief of Staff
-// panel (phase 1, contract pinned by the hub 2026-11-19). Finance admins only
-// (Josh + Shaya): the token's email is the person, and money signals never go
-// to anyone else even with a valid hub token.
-//   {generatedAt, signals: Signal[], errors: string[], summary?: SignalsSummary}
+const promiseBody = z.object({
+  customerId: z.string().trim().min(1).max(24),
+  date: z.string(),
+  note: z.string().max(2000).nullish(),
+});
+
+const noteBody = z.object({ key: z.string(), note: z.string() });
+
+// Item-level money nudges for the hub's Chief of Staff panel (contract pinned
+// by the hub owner 2026-11-19, phase 2 the same day). The token's email is
+// the person: money signals only ever go to finance admins (Josh + Shaya).
+//
+//   GET  /signals         → {generatedAt, signals, errors, summary?}; a
+//                           non-admin gets 200 with no signals and no summary.
+//   POST /signals/promise {customerId, date:"YYYY-MM-DD", note?}
+//                         → {ok, promise:{customerId, promisedBy, note, setBy}}
+//   POST /signals/note    {key, note} → {ok, customerId}
+// The two writes are admin-only (403 otherwise) and idempotent.
 export const signalsRoute: FastifyPluginAsync = async (app) => {
   app.get("/signals", async (req, reply) => {
     const claims = requireHubService(req, reply);
     if (!claims) return reply;
     if (!isEmailAllowed(claims.email, env.ADMIN_EMAILS)) {
-      return reply.code(403).send({ error: "Money signals are for finance admins only." });
+      // Per-viewer feed: this person has no finance nudges.
+      return reply
+        .header("cache-control", "no-store")
+        .send({ generatedAt: new Date().toISOString(), signals: [], errors: [] });
     }
     const started = Date.now();
     const now = new Date();
@@ -185,6 +204,50 @@ export const signalsRoute: FastifyPluginAsync = async (app) => {
       errors: allErrors,
       ...(money ? { summary: panelSummary(money) } : {}),
     });
+  });
+
+  app.post("/signals/promise", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    if (!isEmailAllowed(claims.email, env.ADMIN_EMAILS)) {
+      return reply.code(403).send({ error: "Promises are for finance admins only." });
+    }
+    const parsed = promiseBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "expected {customerId, date: \"YYYY-MM-DD\", note?}" });
+    }
+    const note = parsed.data.note?.trim() || null;
+    if (note && note.length > PROMISE_NOTE_MAX) {
+      return reply.code(400).send({ error: `note must be at most ${PROMISE_NOTE_MAX} characters` });
+    }
+    const res = await setPromise({
+      customerId: parsed.data.customerId,
+      date: parsed.data.date.trim(),
+      note,
+      actorEmail: claims.email,
+      source: "hub",
+    });
+    if (!res.ok) return reply.code(400).send({ error: res.error });
+    log.info({ email: claims.email, customerId: parsed.data.customerId, changed: res.changed }, "hub promise saved");
+    return reply.header("cache-control", "no-store").send({ ok: true, promise: res.promise });
+  });
+
+  app.post("/signals/note", async (req, reply) => {
+    const claims = requireHubService(req, reply);
+    if (!claims) return reply;
+    if (!isEmailAllowed(claims.email, env.ADMIN_EMAILS)) {
+      return reply.code(403).send({ error: "Notes are for finance admins only." });
+    }
+    const parsed = noteBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "expected {key, note}" });
+    const note = cleanHubNote(parsed.data.note);
+    if (!note) return reply.code(400).send({ error: `note must be 1-${HUB_NOTE_MAX} characters` });
+    const customerId = customerIdFromSignalKey(parsed.data.key);
+    if (!customerId) return reply.code(404).send({ error: "not a finance signal key" });
+    const res = await addHubNote({ customerId, note, actorEmail: claims.email, signalKey: parsed.data.key });
+    if (!res.ok) return reply.code(404).send({ error: res.error });
+    log.info({ email: claims.email, customerId, changed: res.changed }, "hub note saved");
+    return reply.header("cache-control", "no-store").send({ ok: true, customerId });
   });
 };
 
