@@ -150,6 +150,13 @@ export type ChaseFacts = {
   lastPaymentDate: Date | null; // payments.txn_date
   /** customers.promised_pay_by — an active promise silences the nudge. */
   promisedPayBy?: string | null;
+  /**
+   * Our latest money follow-up to this customer after the chase (a reply on
+   * the chase thread or a payment/statement-type email — e.g. a draft sent
+   * from the hub card). It restarts the clock: the card clears on send and
+   * comes back only if they stay silent after it too (operator 2026-11-19).
+   */
+  followUp?: { at: Date; messageId: string | null; activityId: string; subject: string | null } | null;
 };
 
 export function buildChaseSignals(
@@ -158,28 +165,36 @@ export function buildChaseSignals(
 ): Signal[] {
   const out: Signal[] = [];
   for (const r of rows) {
-    const days = daysBetween(r.chasedAt, ctx.now);
+    const fu = r.followUp && r.followUp.at.getTime() > r.chasedAt.getTime() ? r.followUp : null;
+    const anchor = fu ? fu.at : r.chasedAt;
+    const days = daysBetween(anchor, ctx.now);
     if (days < SIGNAL_RULES.chaseQuietDays) continue;
     if (r.balance < SIGNAL_RULES.minBalance) continue;
-    if (r.lastInboundAt && r.lastInboundAt.getTime() >= r.chasedAt.getTime()) continue;
+    if (r.lastInboundAt && r.lastInboundAt.getTime() >= anchor.getTime()) continue;
     // Payment dates are calendar dates: a payment dated the same day as the
     // chase counts as "since" (it may have crossed with the email).
-    if (r.lastPaymentDate && ymd(r.lastPaymentDate) >= ymd(r.chasedAt)) continue;
+    if (r.lastPaymentDate && ymd(r.lastPaymentDate) >= ymd(anchor)) continue;
     // They've promised a date that hasn't passed yet — chasing is paused, so
     // "no reply" isn't news. promise-missed takes over once it passes.
     if (isPromiseActive(r.promisedPayBy, ctx.now)) continue;
 
     const level = r.level ?? 1;
+    const ref = fu ? (fu.messageId ?? fu.activityId) : (r.messageId ?? r.activityId);
     out.push({
-      key: safeKey(`finance.chase-no-reply.${r.customerId}.${r.messageId ?? r.activityId}`),
+      key: safeKey(`finance.chase-no-reply.${r.customerId}.${ref}`),
       kind: "chase-no-reply",
       severity: level >= 2 ? "high" : "medium",
-      title: clip(`${r.customerName}: level ${level} chase sent ${ymd(r.chasedAt)}, no reply and no payment (${usd(r.balance)} open)`, 160),
+      title: clip(
+        fu
+          ? `${r.customerName}: level ${level} chase ${ymd(r.chasedAt)}, followed up ${ymd(fu.at)}, still no reply or payment (${usd(r.balance)} open)`
+          : `${r.customerName}: level ${level} chase sent ${ymd(r.chasedAt)}, no reply and no payment (${usd(r.balance)} open)`,
+        160,
+      ),
       detail: clip(
-        `${r.subject ? `Chase email: "${r.subject}". ` : ""}No reply from the customer's linked email addresses and no payment recorded since.`,
+        `${r.subject ? `Chase email: "${r.subject}". ` : ""}${fu ? `Followed up ${ymd(fu.at)}${fu.subject ? ` ("${fu.subject}")` : ""}. ` : ""}No reply from the customer's linked email addresses and no payment recorded since.`,
         400,
       ),
-      since: r.chasedAt.toISOString(),
+      since: anchor.toISOString(),
       customer: { id: r.customerId, name: r.customerName },
       amount: { value: r.balance, currency: "USD" },
       links: [
@@ -187,7 +202,7 @@ export function buildChaseSignals(
         { label: "Chase queue", url: `${ctx.baseUrl}/chase` },
       ],
       dedupe: `customer:${r.customerId}`,
-      tags: { chaseLevel: level, balanceBand: balanceBand(r.balance), daysQuiet: days },
+      tags: { chaseLevel: level, balanceBand: balanceBand(r.balance), daysQuiet: days, followedUp: fu !== null },
     });
   }
   return out;
@@ -441,6 +456,16 @@ async function loadChaseFacts(now: Date): Promise<ChaseFacts[]> {
       .groupBy(activities.customerId),
     lastPayments(ids, fromDay, now),
   ]);
+  const outbound = await db
+    .select({
+      id: activities.id,
+      customerId: activities.customerId,
+      occurredAt: activities.occurredAt,
+      subject: activities.subject,
+      meta: activities.meta,
+    })
+    .from(activities)
+    .where(and(eq(activities.kind, "email_out"), inArray(activities.customerId, ids), gte(activities.occurredAt, fromDay)));
 
   const cust = new Map(custRows.map((c) => [c.id, c]));
   const inbound = new Map(inboundRows.map((r) => [r.customerId, toDate(r.last)]));
@@ -449,7 +474,28 @@ async function loadChaseFacts(now: Date): Promise<ChaseFacts[]> {
   for (const [customerId, c] of latest) {
     const cu = cust.get(customerId);
     if (!cu) continue;
-    const meta = (c.meta ?? {}) as { level?: unknown; messageId?: unknown };
+    const meta = (c.meta ?? {}) as { level?: unknown; messageId?: unknown; threadId?: unknown };
+    const followUp = pickFollowUp(
+      {
+        chasedAt: toDate(c.occurredAt)!,
+        chaseActivityId: c.id,
+        chaseMessageId: typeof meta.messageId === "string" ? meta.messageId : null,
+        chaseThreadId: typeof meta.threadId === "string" ? meta.threadId : null,
+      },
+      outbound
+        .filter((o) => o.customerId === customerId)
+        .map((o) => {
+          const om = (o.meta ?? {}) as { gmailMessageId?: unknown; messageId?: unknown; threadId?: unknown };
+          const mid = typeof om.gmailMessageId === "string" ? om.gmailMessageId : typeof om.messageId === "string" ? om.messageId : null;
+          return {
+            activityId: o.id,
+            at: toDate(o.occurredAt)!,
+            subject: o.subject,
+            messageId: mid,
+            threadId: typeof om.threadId === "string" ? om.threadId : null,
+          };
+        }),
+    );
     out.push({
       activityId: c.id,
       customerId,
@@ -462,9 +508,44 @@ async function loadChaseFacts(now: Date): Promise<ChaseFacts[]> {
       lastInboundAt: inbound.get(customerId) ?? null,
       lastPaymentDate: paid.get(customerId) ?? null,
       promisedPayBy: toYmd(cu.promisedPayBy),
+      followUp,
     });
   }
   return out;
+}
+
+/** Subjects that read as a money follow-up (not order/product chatter). */
+const FOLLOW_UP_SUBJECT = /statement|overdue|outstanding|balance|payment|remittance|follow[- ]?up|chase|reminder/i;
+
+export type OutboundEmail = {
+  activityId: string;
+  at: Date;
+  subject: string | null;
+  messageId: string | null;
+  threadId: string | null;
+};
+
+/**
+ * Latest email we sent this customer after their chase that counts as a
+ * follow-up: on the chase's own Gmail thread, or with a money subject. The
+ * chase's own copy (Gmail poll records it again) and anything within 10
+ * minutes of it are ignored.
+ */
+export function pickFollowUp(
+  chase: { chasedAt: Date; chaseActivityId: string; chaseMessageId: string | null; chaseThreadId: string | null },
+  sent: OutboundEmail[],
+): { at: Date; messageId: string | null; activityId: string; subject: string | null } | null {
+  const after = chase.chasedAt.getTime() + 10 * 60_000;
+  let best: OutboundEmail | null = null;
+  for (const s of sent) {
+    if (s.activityId === chase.chaseActivityId) continue;
+    if (chase.chaseMessageId && s.messageId === chase.chaseMessageId) continue;
+    if (s.at.getTime() <= after) continue;
+    const onThread = chase.chaseThreadId !== null && s.threadId === chase.chaseThreadId;
+    if (!onThread && !FOLLOW_UP_SUBJECT.test(s.subject ?? "")) continue;
+    if (!best || s.at.getTime() > best.at.getTime()) best = s;
+  }
+  return best ? { at: best.at, messageId: best.messageId, activityId: best.activityId, subject: best.subject } : null;
 }
 
 async function loadPromiseFacts(): Promise<PromiseFacts[]> {

@@ -5,6 +5,7 @@ import {
   buildPromiseSignals,
   buildSuggestedSignals,
   dedupeByKey,
+  pickFollowUp,
   signalContractProblems,
   sortSignals,
   type ChaseFacts,
@@ -53,7 +54,7 @@ describe("buildChaseSignals", () => {
         { label: "Chase queue", url: "https://finance.example/chase" },
       ],
       dedupe: "customer:cust1",
-      tags: { chaseLevel: 2, balanceBand: "2k-10k", daysQuiet: 9 },
+      tags: { chaseLevel: 2, balanceBand: "2k-10k", daysQuiet: 9, followedUp: false },
     });
   });
 
@@ -90,6 +91,35 @@ describe("buildChaseSignals", () => {
     expect(s!.title).toContain("level 1 chase");
     expect(s!.key).toBe("finance.chase-no-reply.cust1.act1");
     expect(s!.detail).toBe("No reply from the customer's linked email addresses and no payment recorded since.");
+  });
+
+  it("a follow-up we sent restarts the clock: card clears, returns 5 days later under a new key", () => {
+    const fu = { at: daysAgo(2), messageId: "fu1", activityId: "actfu", subject: "Re: follow-up" };
+    expect(buildChaseSignals([chase({ followUp: fu })], ctx)).toHaveLength(0);
+    const [s] = buildChaseSignals([chase({ chasedAt: daysAgo(20), followUp: { ...fu, at: daysAgo(6) } })], ctx);
+    expect(s!.key).toBe("finance.chase-no-reply.cust1.fu1");
+    expect(s!.title).toContain(`followed up ${daysAgo(6).toISOString().slice(0, 10)}, still no reply`);
+    expect(s!.since).toBe(daysAgo(6).toISOString());
+    expect(s!.tags?.followedUp).toBe(true);
+    // a reply after the follow-up clears it
+    expect(buildChaseSignals([chase({ chasedAt: daysAgo(20), followUp: { ...fu, at: daysAgo(6) }, lastInboundAt: daysAgo(1) })], ctx)).toHaveLength(0);
+    // a follow-up older than the chase is ignored
+    expect(buildChaseSignals([chase({ followUp: { ...fu, at: daysAgo(30) } })], ctx)[0]!.key).toBe("finance.chase-no-reply.cust1.msg1");
+  });
+
+  it("pickFollowUp: chase thread or money subject, never the chase's own copy or unrelated mail", () => {
+    const chasedAt = daysAgo(10);
+    const base = { chasedAt, chaseActivityId: "c1", chaseMessageId: "m1", chaseThreadId: "t1" };
+    const mk = (o: Partial<{ activityId: string; at: Date; subject: string | null; messageId: string | null; threadId: string | null }>) => ({
+      activityId: "x", at: daysAgo(3), subject: "Re: Order 110719", messageId: "mx", threadId: "tx", ...o,
+    });
+    expect(pickFollowUp(base, [mk({})])).toBeNull(); // order chatter
+    expect(pickFollowUp(base, [mk({ messageId: "m1", threadId: "t1" })])).toBeNull(); // the chase itself
+    expect(pickFollowUp(base, [mk({ at: new Date(chasedAt.getTime() + 60_000), threadId: "t1" })])).toBeNull(); // same send
+    expect(pickFollowUp(base, [mk({ threadId: "t1" })])?.messageId).toBe("mx");
+    expect(pickFollowUp(base, [mk({ subject: "Re: Feldart - Statement of Account ($768.70 open)" })])?.messageId).toBe("mx");
+    const latest = pickFollowUp(base, [mk({ threadId: "t1", messageId: "a", at: daysAgo(5) }), mk({ threadId: "t1", messageId: "b", at: daysAgo(2) })]);
+    expect(latest?.messageId).toBe("b");
   });
 
   it("keeps a customer chased months ago and silent since (no age-out)", () => {
