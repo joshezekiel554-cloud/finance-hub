@@ -222,7 +222,12 @@ export function buildPayBehaviour(ledger: Ledger, today: string, oldestOverdueAg
     const ageLate = oldestOverdueAgeDays !== null && isSlipping(oldestOverdueAgeDays, usual);
     const recentLate = recentMed !== null && isSlipping(recentMed, usual);
     if (ageLate || recentLate) trend = "slipping";
-    else if (recentMed !== null && priorMed !== null && recentMed <= 0.75 * priorMed && recentMed <= priorMed - 10) trend = "improving";
+    // Survivor bias (alice review): recent medians only see invoices already
+    // PAID, so "improving" also needs nothing currently older than usual.
+    else if (
+      recentMed !== null && priorMed !== null && recentMed <= 0.75 * priorMed && recentMed <= priorMed - 10 &&
+      (oldestOverdueAgeDays === null || oldestOverdueAgeDays <= usual)
+    ) trend = "improving";
     else trend = "steady";
   }
   return {

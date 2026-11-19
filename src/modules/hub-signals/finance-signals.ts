@@ -445,8 +445,13 @@ export const STORY_SIGNAL_RULES = {
   bigOrderMinPastDue: 30,
   reorderFactor: 1.5,
   reorderMinDays: 14,
-  /** A customer quiet for over a year has lapsed — not "due" (judgement call). */
-  reorderMaxDays: 365,
+  /**
+   * Past ~6 months a customer has lapsed — a win-back, not a "reorder due".
+   * 365 gave 26 cards on prod, mostly long-gone accounts (2026-11-19).
+   */
+  reorderMaxDays: 180,
+  /** Tiny accounts aren't worth a sales nudge. */
+  reorderMinAvgOrder: 100,
 };
 
 const usd0 = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
@@ -574,6 +579,7 @@ export function buildReorderSignals(rows: ReorderFacts[], ctx: { now: Date; base
     const since = ymdDiffDays(b.lastOrderAt, today);
     if (since <= STORY_SIGNAL_RULES.reorderFactor * b.usualGapDays || since < STORY_SIGNAL_RULES.reorderMinDays) continue;
     if (since > STORY_SIGNAL_RULES.reorderMaxDays) continue;
+    if (b.avgOrderUsd < STORY_SIGNAL_RULES.reorderMinAvgOrder) continue;
     const dueOn = addDaysYmd(b.lastOrderAt, Math.max(Math.floor(STORY_SIGNAL_RULES.reorderFactor * b.usualGapDays) + 1, STORY_SIGNAL_RULES.reorderMinDays));
     out.push({
       key: safeKey(`finance.reorder-due.${r.customerId}.${b.lastOrderAt}`),

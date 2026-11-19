@@ -34,7 +34,9 @@ export type SeasonWindow = { name: string; year: number; windowStart: string; wi
 export const SEASON_RULES = {
   /** Lead before windowStart that still counts as buying for the season. */
   leadDays: 42,
-  pastSeasons: 3,
+  // Operator asked for 3; finance invoice history only starts mid-2024, so 3
+  // past windows can never be met. Use 2 until there is a third year of data.
+  pastSeasons: 2,
 };
 
 // Hebrew-calendar date of each season's holiday (first day).
@@ -134,7 +136,7 @@ export function seasonLookbackFrom(map: SkuMap, today: string): string | null {
  * (from windowStart − 6 weeks), and today is between windowStart − 6 weeks
  * and windowEnd.
  */
-export function findSeasonMisses(map: SkuMap, purchases: SeasonPurchase[], today: string): SeasonMiss[] {
+export function findSeasonMisses(map: SkuMap, purchases: SeasonPurchase[], today: string, nPast: number = SEASON_RULES.pastSeasons): SeasonMiss[] {
   const idx = seasonIndex(map);
   const seasonsOf = (p: SeasonPurchase): Set<string> => {
     const out = new Set<string>();
@@ -147,8 +149,8 @@ export function findSeasonMisses(map: SkuMap, purchases: SeasonPurchase[], today
   const tagged = purchases.map((p) => ({ p, seasons: seasonsOf(p) })).filter((x) => x.seasons.size > 0);
   const out: SeasonMiss[] = [];
   for (const up of liveSeasons(map, today)) {
-    const past = pastWindows(map, up);
-    if (past.length < SEASON_RULES.pastSeasons) continue;
+    const past = pastWindows(map, up, nPast);
+    if (past.length < nPast) continue;
     const cycleFrom = addDaysYmd(up.windowStart, -SEASON_RULES.leadDays);
     const byCustomer = new Map<string, Array<{ date: string; amount: number }>>();
     for (const { p, seasons } of tagged) {

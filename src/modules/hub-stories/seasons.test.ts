@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { findSeasonMisses, holidayYmd, liveSeasons, pastWindows, seasonLookbackFrom, type SkuMap } from "./seasons.js";
+import { findSeasonMisses, holidayYmd, liveSeasons, pastWindows, seasonLookbackFrom, SEASON_RULES, type SkuMap } from "./seasons.js";
 import { createSkuMapCache, SKU_MAP_TTL_MS } from "./sku-map.js";
 import { addDaysYmd } from "./story.js";
 
@@ -25,7 +25,7 @@ const map: SkuMap = {
 
 describe("pastWindows", () => {
   it("rebuilds the last three windows with the same offsets from the holiday", () => {
-    const w = pastWindows(map, chanukah2026);
+    const w = pastWindows(map, chanukah2026, 3);
     expect(w.map((x) => x.year)).toEqual([2025, 2024, 2023]);
     const h2024 = holidayYmd("Chanukah", 2024)!;
     expect(w[1]).toMatchObject({ holiday: h2024, windowStart: addDaysYmd(h2024, -84), windowEnd: addDaysYmd(h2024, 8) });
@@ -42,21 +42,21 @@ describe("findSeasonMisses", () => {
   it("fires when they bought the last 3 seasons and nothing this cycle, from windowStart − 6 weeks", () => {
     const today = "2026-11-19";
     expect(liveSeasons(map, today).map((s) => s.year)).toEqual([2026]);
-    const misses = findSeasonMisses(map, loyal, today);
+    const misses = findSeasonMisses(map, loyal, today, 3);
     expect(misses).toEqual([
       { customerId: "c1", season: "Chanukah", year: 2026, windowStart: "2026-09-12", windowEnd: "2026-12-13", pastYears: [2025, 2024, 2023], avgSpend: 333 },
     ]);
-    expect(seasonLookbackFrom(map, today)! <= addDaysYmd(holidayYmd("Chanukah", 2023)!, -84 - 42)).toBe(true);
+    expect(seasonLookbackFrom(map, today)! <= addDaysYmd(holidayYmd("Chanukah", 2024)!, -84 - 42)).toBe(true); // default 2 past seasons
   });
 
   it("quiet once they've bought this cycle, if a past season is missing, or outside the live span", () => {
-    expect(findSeasonMisses(map, [...loyal, { customerId: "c1", date: "2026-08-20", values: ["MEN01"], amount: 1 }], "2026-11-19")).toEqual([]);
-    expect(findSeasonMisses(map, loyal.slice(0, 2), "2026-11-19")).toEqual([]);
-    expect(findSeasonMisses(map, loyal, "2026-07-01")).toEqual([]); // before windowStart − 6 weeks
-    expect(findSeasonMisses(map, loyal, "2026-12-14")).toEqual([]); // after windowEnd
+    expect(findSeasonMisses(map, [...loyal, { customerId: "c1", date: "2026-08-20", values: ["MEN01"], amount: 1 }], "2026-11-19", 3)).toEqual([]);
+    expect(findSeasonMisses(map, loyal.slice(0, 2), "2026-11-19", 3)).toEqual([]);
+    expect(findSeasonMisses(map, loyal, "2026-07-01", 3)).toEqual([]); // before windowStart − 6 weeks
+    expect(findSeasonMisses(map, loyal, "2026-12-14", 3)).toEqual([]); // after windowEnd
     // Another season's SKU doesn't count.
     const pesach = loyal.map((p) => ({ ...p, values: ["SED01"] }));
-    expect(findSeasonMisses(map, pesach, "2026-11-19")).toEqual([]);
+    expect(findSeasonMisses(map, pesach, "2026-11-19", 3)).toEqual([]);
   });
 });
 
@@ -87,5 +87,11 @@ describe("createSkuMapCache", () => {
   it("throws with no map at all, rejects a bad shape", async () => {
     const c = createSkuMapCache({ url: "http://x", secret: "s".repeat(32), fetcher: async () => ({ nope: 1 }) });
     await expect(c.get()).rejects.toThrow();
+  });
+});
+
+describe("SEASON_RULES default", () => {
+  it("uses 2 past seasons while finance history only covers 2024 onwards", () => {
+    expect(SEASON_RULES.pastSeasons).toBe(2);
   });
 });

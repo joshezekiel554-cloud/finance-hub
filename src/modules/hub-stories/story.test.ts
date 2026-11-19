@@ -140,6 +140,8 @@ describe("buildPayBehaviour", () => {
     add(120, 15);
     add(60, 15);
     expect(buildPayBehaviour({ ...emptyLedger(), invoices, payments }, TODAY, null)).toMatchObject({ trend: "improving", recentDaysToPay: 15 });
+    // survivor bias: an unpaid invoice older than their usual days → steady, not improving
+    expect(buildPayBehaviour({ ...emptyLedger(), invoices, payments }, TODAY, 70)).toMatchObject({ trend: "steady" });
   });
 
   it("ignores invoices issued over 2 years ago", () => {
