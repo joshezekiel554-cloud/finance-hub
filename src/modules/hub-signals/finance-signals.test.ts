@@ -35,7 +35,8 @@ describe("buildChaseSignals", () => {
       kind: "chase-no-reply",
       severity: "high",
       title: "Keter Judaica: level 2 chase sent 2026-11-10, no reply and no payment ($2,400.00 open)",
-      detail: 'Chase email: "Feldart - follow-up on overdue balance ($2,400.00)"',
+      detail:
+        'Chase email: "Feldart - follow-up on overdue balance ($2,400.00)". No reply from the customer\'s linked email addresses and no payment recorded since.',
       since: "2026-11-10T14:00:00.000Z",
       customer: { id: "cust1", name: "Keter Judaica" },
       amount: { value: 2400, currency: "USD" },
@@ -79,7 +80,12 @@ describe("buildChaseSignals", () => {
     expect(s!.severity).toBe("medium");
     expect(s!.title).toContain("level 1 chase");
     expect(s!.key).toBe("finance.chase-no-reply.cust1.act1");
-    expect(s!.detail).toBeUndefined();
+    expect(s!.detail).toBe("No reply from the customer's linked email addresses and no payment recorded since.");
+  });
+
+  it("keeps a customer chased months ago and silent since (no age-out)", () => {
+    const [s] = buildChaseSignals([chase({ chasedAt: daysAgo(70) })], ctx);
+    expect(s!.since).toBe(daysAgo(70).toISOString());
   });
 });
 
@@ -103,14 +109,22 @@ describe("buildPromiseSignals", () => {
       key: "finance.promise-missed.cust2.2026-11-14",
       kind: "promise-missed",
       severity: "high",
-      title: "Meoros Judaica: promised payment by 2026-11-14, still unpaid ($1,240.00 open)",
-      detail: 'Order 18926 is on hold; promise note: "paying Friday"',
+      title: "Meoros Judaica: promised payment by 2026-11-14, date passed and order still on hold ($1,240.00 open)",
+      detail:
+        'Order 18926 is still on hold; promise note: "paying Friday". Check whether payment arrived and release the hold, or chase.',
       since: "2026-11-14T14:00:00.000Z",
       customer: { id: "cust2", name: "Meoros Judaica" },
       amount: { value: 1240, currency: "USD" },
       links: [{ label: "Meoros Judaica in finance (order 18926 on hold)", url: "https://finance.example/customers/cust2" }],
       dedupe: "customer:cust2",
     });
+  });
+
+  it("counts the whole promised day: missed only from the next day", () => {
+    const today = new Date("2026-11-19T00:00:00Z");
+    expect(buildPromiseSignals([promise({ promisedBy: today })], ctx)).toHaveLength(0);
+    const yesterday = new Date("2026-11-18T00:00:00Z");
+    expect(buildPromiseSignals([promise({ promisedBy: yesterday })], ctx)).toHaveLength(1);
   });
 
   it("ignores promises still in the future and small balances", () => {

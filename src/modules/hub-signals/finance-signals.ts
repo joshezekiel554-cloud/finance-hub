@@ -33,8 +33,12 @@ export const SIGNAL_RULES = {
   chaseQuietDays: 5,
   /** Balances below this are ignored (operator decision, $50 / £50). */
   minBalance: 50,
-  /** Only the latest chase within this window is considered. */
-  chaseLookbackDays: 60,
+  /**
+   * How far back to look for a customer's LATEST chase. Long on purpose: a
+   * customer chased months ago and silent ever since is the worst case, not
+   * one to age out (alice review). Replies/payments are bounded by the chase.
+   */
+  chaseLookbackDays: 365,
 };
 
 // The hub's pinned signal contract (alice2, 2026-11-19).
@@ -105,7 +109,10 @@ export function buildChaseSignals(
       kind: "chase-no-reply",
       severity: level >= 2 ? "high" : "medium",
       title: clip(`${r.customerName}: level ${level} chase sent ${ymd(r.chasedAt)}, no reply and no payment (${usd(r.balance)} open)`, 160),
-      ...(r.subject ? { detail: clip(`Chase email: "${r.subject}"`, 400) } : {}),
+      detail: clip(
+        `${r.subject ? `Chase email: "${r.subject}". ` : ""}No reply from the customer's linked email addresses and no payment recorded since.`,
+        400,
+      ),
       since: r.chasedAt.toISOString(),
       customer: { id: r.customerId, name: r.customerName },
       amount: { value: r.balance, currency: "USD" },
@@ -142,7 +149,9 @@ export function buildPromiseSignals(
   const seen = new Set<string>();
   const out: Signal[] = [];
   for (const r of rows) {
-    if (r.promisedBy.getTime() >= ctx.now.getTime()) continue;
+    // The promise covers the whole promised day: "pay by Friday" first
+    // counts as missed on Saturday, not Friday morning (alice review).
+    if (ymd(r.promisedBy) >= ymd(ctx.now)) continue;
     if (r.balance < SIGNAL_RULES.minBalance) continue;
     const key = safeKey(`finance.promise-missed.${r.customerId}.${ymd(r.promisedBy)}`);
     if (seen.has(key)) continue;
@@ -151,8 +160,11 @@ export function buildPromiseSignals(
       key,
       kind: "promise-missed",
       severity: "high",
-      title: clip(`${r.customerName}: promised payment by ${ymd(r.promisedBy)}, still unpaid (${usd(r.balance)} open)`, 160),
-      detail: clip(`Order ${r.orderNumber ?? "?"} is on hold${r.note ? `; promise note: "${r.note}"` : ""}`, 400),
+      // Worded as what finance knows for sure: the date passed and the order
+      // is still held. A late payment nobody released the hold for still
+      // reads true (alice review).
+      title: clip(`${r.customerName}: promised payment by ${ymd(r.promisedBy)}, date passed and order still on hold (${usd(r.balance)} open)`, 160),
+      detail: clip(`Order ${r.orderNumber ?? "?"} is still on hold${r.note ? `; promise note: "${r.note}"` : ""}. Check whether payment arrived and release the hold, or chase.`, 400),
       since: r.promisedBy.toISOString(),
       customer: { id: r.customerId, name: r.customerName },
       amount: { value: r.balance, currency: "USD" },
@@ -204,6 +216,10 @@ async function loadChaseFacts(now: Date): Promise<ChaseFacts[]> {
   }
   const ids = Array.from(latest.keys());
   if (ids.length === 0) return [];
+  // Replies/payments only matter from the earliest of these latest chases on;
+  // the builder then compares each customer against their own chase date.
+  const fromMs = Math.min(...Array.from(latest.values(), (c) => toDate(c.occurredAt)!.getTime()));
+  const fromDay = new Date(`${ymd(new Date(fromMs))}T00:00:00.000Z`);
 
   const [custRows, inboundRows, paymentRows] = await Promise.all([
     db
@@ -213,13 +229,13 @@ async function loadChaseFacts(now: Date): Promise<ChaseFacts[]> {
     db
       .select({ customerId: activities.customerId, last: sql<Date | string>`MAX(${activities.occurredAt})` })
       .from(activities)
-      .where(and(eq(activities.kind, "email_in"), inArray(activities.customerId, ids), gte(activities.occurredAt, since)))
+      .where(and(eq(activities.kind, "email_in"), inArray(activities.customerId, ids), gte(activities.occurredAt, fromDay)))
       .groupBy(activities.customerId),
     db
       .select({ customerId: payments.customerId, last: sql<Date | string>`MAX(${payments.txnDate})` })
       .from(payments)
       // txn_date ≤ today: the sync uses 2030-01-01 placeholders on some rows.
-      .where(and(inArray(payments.customerId, ids), gte(payments.txnDate, since), lt(payments.txnDate, new Date(now.getTime() + DAY_MS))))
+      .where(and(inArray(payments.customerId, ids), gte(payments.txnDate, fromDay), lt(payments.txnDate, new Date(now.getTime() + DAY_MS))))
       .groupBy(payments.customerId),
   ]);
 
