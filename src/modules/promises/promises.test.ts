@@ -69,6 +69,12 @@ describe("promise-state", () => {
     expect(promiseDateError("19/11/2026", NOW)).toMatch(/real calendar date/);
     expect(promiseDateError(20261119, NOW)).toMatch(/real calendar date/);
   });
+
+  it("refuses a date more than 60 days out (a typo must not park chasing for months)", () => {
+    expect(promiseDateError("2027-01-18", NOW)).toBeNull(); // 60 days
+    expect(promiseDateError("2027-01-19", NOW)).toMatch(/more than 60 days/);
+    expect(promiseDateError("2027-11-19", NOW)).toMatch(/more than 60 days/);
+  });
 });
 
 describe("setPromise", () => {

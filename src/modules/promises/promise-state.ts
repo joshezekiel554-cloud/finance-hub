@@ -10,6 +10,9 @@ import { customers } from "../../db/schema/customers.js";
 
 const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+/** Furthest a hub-saved promise may be from today (matches the extractor). */
+export const MAX_PROMISE_DAYS = 60;
+
 /** Today's UTC calendar day as YYYY-MM-DD. */
 export function todayYmd(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
@@ -53,7 +56,14 @@ export function isPromiseActive(
  */
 export function promiseDateError(date: unknown, now: Date = new Date()): string | null {
   if (typeof date !== "string" || !isRealYmd(date)) return "date must be a real calendar date in YYYY-MM-DD form";
-  if (date < todayYmd(now)) return "date is in the past";
+  const today = todayYmd(now);
+  if (date < today) return "date is in the past";
+  // A promise silences all chasing until its date, so a typo (2027) or a bad
+  // suggestion mustn't park a customer for months (alice review). Longer
+  // arrangements are set in finance itself.
+  if (ymdDiffDays(today, date) > MAX_PROMISE_DAYS) {
+    return `date is more than ${MAX_PROMISE_DAYS} days away; set longer arrangements in finance`;
+  }
   return null;
 }
 

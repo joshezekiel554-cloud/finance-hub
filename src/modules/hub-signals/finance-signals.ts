@@ -273,19 +273,28 @@ export function buildCustomerPromiseSignals(
   for (const r of rows) {
     if (r.promisedBy >= today) continue; // still active (covers the whole day)
     if (r.balance < SIGNAL_RULES.minBalance) continue;
-    // A payment made after the promise was saved means they acted on it —
-    // finance can't tell a part-payment from the whole, so it stays quiet
-    // and lets the normal chase cadence take over.
+    // Kept = the balance is under the $50 floor (checked above). A payment
+    // since the promise that still leaves ≥ $50 open is a part-payment: say
+    // so rather than going quiet (alice review — $20 of $3,600 isn't kept).
     const madeOn = r.setAt ? ymd(r.setAt) : r.promisedBy;
-    if (r.lastPaymentDate && ymd(r.lastPaymentDate) >= madeOn) continue;
+    const partPaid = r.lastPaymentDate !== null && ymd(r.lastPaymentDate) >= madeOn;
     const by = r.setBy ? ` by ${r.setBy}` : "";
     out.push({
       key: safeKey(`finance.promise-missed.${r.customerId}.${r.promisedBy}`),
       kind: "promise-missed",
       severity: "high",
-      title: clip(`${r.customerName}: promised payment by ${r.promisedBy}, no payment recorded since (${usd(r.balance)} open)`, 160),
+      title: clip(
+        partPaid
+          ? `${r.customerName}: promised payment by ${r.promisedBy}, only part-paid since (${usd(r.balance)} still open)`
+          : `${r.customerName}: promised payment by ${r.promisedBy}, no payment recorded since (${usd(r.balance)} open)`,
+        160,
+      ),
       detail: clip(
-        `Promise saved ${madeOn}${by}${r.note ? `; note: "${r.note}"` : ""}. No payment from this customer has reached QuickBooks since then. Automatic chasing has resumed.`,
+        `Promise saved ${madeOn}${by}${r.note ? `; note: "${r.note}"` : ""}. ${
+          partPaid
+            ? `A payment has reached QuickBooks since (latest ${ymd(r.lastPaymentDate!)}), but ${usd(r.balance)} is still open.`
+            : "No payment from this customer has reached QuickBooks since then."
+        } Automatic chasing has resumed.`,
         400,
       ),
       since: `${r.promisedBy}T23:59:59.000Z`,
@@ -293,7 +302,7 @@ export function buildCustomerPromiseSignals(
       amount: { value: r.balance, currency: "USD" },
       links: [{ label: `${r.customerName} in finance (${usd(r.balance)} open)`, url: `${ctx.baseUrl}/customers/${r.customerId}` }],
       dedupe: `customer:${r.customerId}`,
-      tags: { variant: "customer", balanceBand: balanceBand(r.balance), daysPast: ymdDiffDays(r.promisedBy, today) },
+      tags: { variant: "customer", balanceBand: balanceBand(r.balance), daysPast: ymdDiffDays(r.promisedBy, today), partPaid },
     });
   }
   return out;

@@ -211,10 +211,15 @@ describe("buildCustomerPromiseSignals", () => {
     expect(buildCustomerPromiseSignals([custPromise({ promisedBy: "2026-11-18" })], ctx)).toHaveLength(1);
   });
 
-  it("stays quiet when a payment landed after the promise was made, or the balance is small", () => {
-    expect(buildCustomerPromiseSignals([custPromise({ lastPaymentDate: new Date("2026-11-14") })], ctx)).toHaveLength(0);
-    expect(buildCustomerPromiseSignals([custPromise({ lastPaymentDate: new Date("2026-11-01") })], ctx)).toHaveLength(1);
-    expect(buildCustomerPromiseSignals([custPromise({ balance: 20 })], ctx)).toHaveLength(0);
+  it("counts a promise kept only once the balance is under $50; a part-payment still fires, worded as such", () => {
+    expect(buildCustomerPromiseSignals([custPromise({ balance: 20, lastPaymentDate: new Date("2026-11-14") })], ctx)).toHaveLength(0);
+    const [part] = buildCustomerPromiseSignals([custPromise({ lastPaymentDate: new Date("2026-11-14") })], ctx);
+    expect(part!.title).toContain("only part-paid since");
+    expect(part!.detail).toContain("A payment has reached QuickBooks since (latest 2026-11-14)");
+    expect(part!.tags?.partPaid).toBe(true);
+    const [none] = buildCustomerPromiseSignals([custPromise({ lastPaymentDate: new Date("2026-11-01") })], ctx);
+    expect(none!.title).toContain("no payment recorded since");
+    expect(none!.tags?.partPaid).toBe(false);
   });
 
   it("dedupes against the held-order variant with the same customer + date", () => {
