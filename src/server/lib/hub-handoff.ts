@@ -45,11 +45,42 @@ export function handoffLandingUrl(input: {
   returnTo: unknown;
   fetchDest: string | string[] | undefined;
   hubOrigin: string;
+  // The hub's tab for this app: "finance" (default) or "holds" (the hub app id for Hold Orders).
+  hubTab?: string;
 }): string {
   if (input.fromHub && input.returnTo === "hub" && input.fetchDest !== "iframe") {
-    return `${input.hubOrigin.replace(/\/$/, "")}/finance?${new URLSearchParams({ p: input.next }).toString()}`;
+    return `${input.hubOrigin.replace(/\/$/, "")}/${input.hubTab ?? "finance"}?${new URLSearchParams({ p: input.next }).toString()}`;
   }
   return input.next;
+}
+
+/**
+ * Which app a handoff is for, by request host: the Hold Orders host has its
+ * own sign-in gate (ADMIN_EMAILS ∪ HOLDORDERS_EMAILS) and origin; every other
+ * host is finance (ALLOWED_EMAILS). Pure.
+ */
+export function handoffGate(input: {
+  email: string;
+  onHoldsHost: boolean;
+  allowedEmails: string;
+  adminEmails: string;
+  holdsEmails: string;
+}): { allowed: boolean; refusal: string } {
+  if (input.onHoldsHost) {
+    const ok =
+      isEmailAllowed(input.email, input.adminEmails) || isEmailAllowed(input.email, input.holdsEmails);
+    return { allowed: ok, refusal: "This account is not set up for Hold Orders." };
+  }
+  return {
+    allowed: isEmailAllowed(input.email, input.allowedEmails),
+    refusal: "This account is not allowed in Finance.",
+  };
+}
+
+/** https://holdorders.feldart.com when finance itself is on https, else http. */
+export function holdsOrigin(publicUrl: string, holdsHost: string): string {
+  const proto = publicUrl.startsWith("https://") ? "https" : "http";
+  return `${proto}://${holdsHost}`;
 }
 
 /** Case-insensitive membership in the comma-separated allow-list. Empty list → nobody. */
@@ -146,11 +177,12 @@ function escapeHtml(s: string): string {
  * Google button (Google won't render inside a frame); the way out is a
  * top-level tab where finance's normal sign-in works.
  */
-export function renderHandoffErrorPage(input: { reason: string; publicUrl: string }): string {
+export function renderHandoffErrorPage(input: { reason: string; publicUrl: string; appName?: string }): string {
   const base = input.publicUrl.replace(/\/$/, "");
   const reason = escapeHtml(input.reason);
+  const app = escapeHtml(input.appName ?? "Finance");
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Finance</title>
+<html lang="en"><head><meta charset="utf-8"><title>${app}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   body{margin:0;font:14px/1.5 Inter,"Segoe UI",system-ui,sans-serif;color:oklch(20% 0.015 250);background:oklch(99% 0.003 250);display:grid;place-items:center;min-height:100vh}
@@ -159,6 +191,6 @@ export function renderHandoffErrorPage(input: { reason: string; publicUrl: strin
   p{margin:0 0 16px;color:oklch(40% 0.015 250)}
   a{display:inline-block;padding:8px 14px;border-radius:8px;background:oklch(58% 0.18 260);color:#fff;text-decoration:none;font-weight:600}
 </style></head>
-<body><div class="card"><h1>Finance can’t sign you in here</h1><p>${reason}</p>
-<a href="${base}/" target="_blank" rel="noopener">Open Finance in a new tab</a></div></body></html>`;
+<body><div class="card"><h1>${app} can’t sign you in here</h1><p>${reason}</p>
+<a href="${base}/" target="_blank" rel="noopener">Open ${app} in a new tab</a></div></body></html>`;
 }

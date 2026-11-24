@@ -219,6 +219,20 @@ export async function processOrdersSync(
     if (alertResult.candidates > 0) {
       jobLog.info({ stage: "hold-alerts", ...alertResult }, "order hold alerts");
     }
+    // Customer-specific hold rules (Hold Orders) — only customers someone
+    // explicitly set a rule on; isolated so a rule hiccup can't stop the
+    // standard passes below.
+    try {
+      const { runCustomerRuleHolds } = await import(
+        "../../modules/hold-orders/detection.js"
+      );
+      const ruleResult = await runCustomerRuleHolds();
+      if (ruleResult.held > 0) {
+        jobLog.info({ stage: "rule-holds", ...ruleResult }, "customer-rule holds");
+      }
+    } catch (err) {
+      jobLog.error({ err }, "orders-sync: customer-rule hold pass failed (non-fatal)");
+    }
     // Auto-release held orders whose reason has resolved.
     const releaseResult = await releaseResolvedHolds();
     if (releaseResult.released > 0) {

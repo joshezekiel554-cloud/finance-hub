@@ -27,6 +27,7 @@ import { invoices } from "../../db/schema/invoices.js";
 import { orderReviewDismissals } from "../../db/schema/order-review-dismissals.js";
 import { emailLog } from "../../db/schema/crm.js";
 import { customerAiCards } from "../../db/schema/customer-ai-cards.js";
+import { customerHoldRules } from "../../db/schema/hold-rules.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { unshippedOrderSql } from "./hold-alerts.js";
 import { renderTemplate } from "../email-compose/index.js";
@@ -98,6 +99,14 @@ function overdueOrderConditions(opts: {
     // Overdue balance at/above the threshold. overdueBalance is a decimal
     // string column; MySQL compares it numerically against the bound number.
     sql`${customers.overdueBalance} >= ${opts.thresholdGbp}`,
+    // Hold Orders: a customer explicitly set to "never hold automatically"
+    // is out of the overdue-review flag too. Customers with no rule row (the
+    // vast majority) are unaffected.
+    sql`NOT EXISTS (
+      SELECT 1 FROM ${customerHoldRules}
+      WHERE ${customerHoldRules.customerId} = \`customers\`.\`id\`
+        AND ${customerHoldRules.preset} = 'never'
+    )`,
     // Not communicating: zero emails (either direction) since the contact
     // cutoff. customers.id is hand-qualified inside the correlated subquery
     // because Drizzle's column serializer drops the table prefix here (same

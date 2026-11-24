@@ -16,6 +16,7 @@ import { ssePlugin } from "./plugins/sse.js";
 import { healthRoute } from "./routes/health.js";
 import { registerRoutes } from "./routes/index.js";
 import { registerCardInvalidation } from "../modules/ai-agent/card-invalidation.js";
+import { isHoldsHost, servesHoldsSpa } from "./lib/holds-host.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,6 +110,16 @@ async function buildServer(): Promise<FastifyInstance> {
       root: path.resolve(__dirname, "../web"),
       prefix: "/",
       wildcard: false,
+    });
+    // Hold Orders (holdorders.feldart.com) is served by this same process,
+    // by Host: page loads there get the holds SPA shell (holds.html) instead
+    // of finance's index.html. API/auth routes and real asset files are
+    // untouched (shared /assets bundle). Unknown paths fall through to the
+    // not-found handler, which is host-aware too.
+    app.addHook("onRequest", async (req, reply) => {
+      if (req.method !== "GET" && req.method !== "HEAD") return;
+      if (!isHoldsHost(req.hostname) || !servesHoldsSpa(req.url)) return;
+      return reply.sendFile("holds.html");
     });
   }
 

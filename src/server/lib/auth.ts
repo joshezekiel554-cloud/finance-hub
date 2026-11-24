@@ -4,6 +4,7 @@ import { db } from "~/db/index.js";
 import { sessions, users, type User } from "~/db/schema/auth.js";
 import { env } from "~/lib/env.js";
 import { createLogger } from "~/lib/logger.js";
+import { isHoldsOnlyEmail } from "~/modules/hold-orders/permissions.js";
 
 const log = createLogger({ component: "auth" });
 
@@ -132,9 +133,31 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  statusCode = 403;
+  constructor(message = "Forbidden") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
+// The finance gate. A holds-ONLY account (HOLDORDERS_EMAILS, not a finance
+// user) has a valid session on holdorders.feldart.com, and that host is
+// served by this same server — so every finance route must refuse it here.
+// Hold Orders routes use requireHoldsAccess (server/lib/holds-auth.ts)
+// instead of this.
 export async function requireAuth(req: FastifyRequest): Promise<User> {
   const user = await getCurrentUser(req);
   if (!user) throw new UnauthorizedError();
+  if (
+    isHoldsOnlyEmail(user.email, {
+      adminEmails: env.ADMIN_EMAILS,
+      holdsEmails: env.HOLDORDERS_EMAILS,
+      allowedEmails: env.ALLOWED_EMAILS,
+    })
+  ) {
+    throw new ForbiddenError("This account can only use Hold Orders.");
+  }
   return user;
 }
 

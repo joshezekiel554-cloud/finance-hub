@@ -29,4 +29,5 @@ export * from "./invoice-email-dismissals";
 export * from "./user-active-minutes";
 export * from "./time-clock-sessions";
 export * from "./promise-scans";
+export * from "./hold-rules";
 export * from "../relations";
