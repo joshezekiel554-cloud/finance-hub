@@ -7,6 +7,7 @@ import type {
 import fp from "fastify-plugin";
 import { ZodError } from "zod";
 import { env } from "~/lib/env.js";
+import { isHoldsHost } from "../lib/holds-host.js";
 
 interface HttpishError extends Error {
   statusCode?: number;
@@ -97,7 +98,8 @@ async function errorHandlerPluginImpl(app: FastifyInstance): Promise<void> {
       // @fastify/static decorates `reply.sendFile` when registered.
       const replyAny = reply as FastifyReply & { sendFile?: (p: string) => void };
       if (typeof replyAny.sendFile === "function") {
-        replyAny.sendFile("index.html");
+        // holdorders.feldart.com gets the Hold Orders SPA shell.
+        replyAny.sendFile(isHoldsHost(req.hostname) ? "holds.html" : "index.html");
         return;
       }
     }

@@ -412,6 +412,9 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
   const rows = await db
     .select({
       id: orders.id,
+      orderNumber: orders.orderNumber,
+      shopifyOrderId: orders.shopifyOrderId,
+      customerId: orders.customerId,
       holdReason: orders.holdReason,
       financialStatus: orders.financialStatus,
       holdStatus: customers.holdStatus,
@@ -422,16 +425,45 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
     .where(eq(orders.holdState, "on_hold"))
     .limit(500);
 
+  // Customer hold rules (Hold Orders): the per-rule auto-release switch and
+  // the customer_rule reason. Customers without a rule are unaffected.
+  const { loadRulesFor, loadOpenInvoices } = await import("../hold-orders/rules-store.js");
+  const { evaluateCustomerRule } = await import("../hold-orders/rule-engine.js");
+  const { shouldAutoRelease } = await import("../hold-orders/auto-release.js");
+  const { onHoldReleased } = await import("../hold-orders/inbox-resolve.js");
+  const heldCustomerIds = Array.from(
+    new Set(rows.map((r) => r.customerId).filter((c): c is string => Boolean(c))),
+  );
+  const rules = await loadRulesFor(heldCustomerIds);
+  const ruleCustomerIds = Array.from(
+    new Set(
+      rows
+        .filter((r) => r.holdReason === "customer_rule" && r.customerId && rules.has(r.customerId))
+        .map((r) => r.customerId as string),
+    ),
+  );
+  const ruleInvoices = await loadOpenInvoices(ruleCustomerIds);
+  const now = new Date();
+
   let released = 0;
   for (const r of rows) {
-    const stillHeld = holdReasonStillApplies({
+    const rule = r.customerId ? (rules.get(r.customerId) ?? null) : null;
+    const release = shouldAutoRelease({
       reason: r.holdReason,
-      holdStatus: r.holdStatus,
-      financialStatus: r.financialStatus,
-      overdueBalance: r.overdueBalance,
-      overdueThresholdGbp,
+      rule,
+      standardStillApplies: holdReasonStillApplies({
+        reason: r.holdReason,
+        holdStatus: r.holdStatus,
+        financialStatus: r.financialStatus,
+        overdueBalance: r.overdueBalance,
+        overdueThresholdGbp,
+      }),
+      ruleStillHolds:
+        rule && r.customerId
+          ? evaluateCustomerRule(rule, ruleInvoices.get(r.customerId) ?? [], now).wouldHold
+          : true,
     });
-    if (stillHeld) continue;
+    if (!release) continue;
     await db
       .update(orders)
       .set({
@@ -445,7 +477,16 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
       userId: null,
       action: "order.hold_auto_released",
       before: { holdState: "on_hold", holdReason: r.holdReason },
-      after: { holdState: "released", reason: "resolved" },
+      after: { holdState: "released", reason: "resolved", mode: "auto" },
+    });
+    onHoldReleased({
+      orderId: r.id,
+      customerId: r.customerId,
+      orderNumber: r.orderNumber ?? `#${r.shopifyOrderId}`,
+      action: "released",
+      note: "Auto-released: the hold reason resolved (payment / balance cleared in QBO or account taken off hold).",
+      actingEmail: null,
+      idempotencyKey: `hold-auto-release:${r.id}:${now.getTime()}`,
     });
     released += 1;
     log.info(

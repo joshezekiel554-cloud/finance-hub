@@ -213,6 +213,36 @@ const schema = z.object({
   // to 'self'. The hub loads finance in an iframe.
   HUB_PARENT_ORIGIN: z.string().url().default("https://hub.feldart.com"),
 
+  // --- Hold Orders app (holdorders.feldart.com), served by THIS server ---
+  // Requests whose Host matches HOLDORDERS_HOST get the Hold Orders SPA
+  // (dist/web/holds.html) instead of finance's. Bare hostname, no port.
+  HOLDORDERS_HOST: z
+    .string()
+    .default("holdorders.feldart.com")
+    .transform((v) => v.trim().toLowerCase()),
+  // Emails that may use Hold Orders ONLY (the salesman). They can sign in via
+  // the hub handoff on the holdorders host; every other finance route
+  // rejects them (requireAuth 403s a holds-only account). ADMIN_EMAILS users
+  // get Hold Orders + rules editing. Lowercased csv, empty = nobody.
+  HOLDORDERS_EMAILS: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .join(","),
+    ),
+  // inbox-4's "resolve the ⚠ HOLD thread" endpoint, e.g.
+  // https://inbox.feldart.com/api/svc/holds/resolve. Called fire-and-forget
+  // on every hold release with the INBOX_SERVICE_TOKEN bearer. Unset = skip.
+  INBOX_HOLD_RESOLVE_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v == null || v.trim() === "" ? undefined : v.trim()))
+    .pipe(z.string().url().optional()),
+
   VOCATECH_API_KEY: optionalSecret(1),
   VOCATECH_WEBHOOK_SECRET: optionalSecret(1),
   // E.164 or 10-digit US sender number registered to your Vocatech tenant.

@@ -435,6 +435,13 @@
       "when": 1795104785310,
       "tag": "0061_hub_promises",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "5",
+      "when": 1795538881110,
+      "tag": "0062_hold_orders_rules",
+      "breakpoints": true
     }
   ]
 }

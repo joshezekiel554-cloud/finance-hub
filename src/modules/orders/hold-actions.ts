@@ -17,10 +17,12 @@ import { orderReviewDismissals } from "../../db/schema/order-review-dismissals.j
 import { recordHoldTransition } from "./hold-alerts.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { loadOrderTemplate, renderOrderTemplate } from "./templates.js";
+import { resolveHoldCustomerRecipients } from "./recipients.js";
 import {
-  loadInternalHoldRecipients,
-  resolveHoldCustomerRecipients,
-} from "./recipients.js";
+  planHoldAlertEmail,
+  planReleaseEmail,
+  sendPlannedEmail,
+} from "./hold-email-plan.js";
 import { reasonClause } from "./hold-ladder.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
@@ -31,11 +33,11 @@ export type HoldActionResult =
   | { ok: true }
   | { ok: false; reason: string };
 
-function toHtml(body: string): string {
-  return body
-    .split(/\n{2,}/)
-    .map((p) => `<p>${p.replace(/\n/g, "<br/>")}</p>`)
-    .join("\n");
+export const OVERDUE_HOLD_REASON_LINE =
+  "Reason: this customer has a large overdue balance and hasn't been in contact.";
+
+export function manualHoldReasonLine(note: string | null): string {
+  return `Reason: ${note || "Manually placed on hold by the accounts team."}`;
 }
 
 // "Good to send" — release the hold + tell the warehouse to ship, in-thread.
@@ -67,24 +69,25 @@ export async function releaseHold(
 
   const orderNumber = o.orderNumber ?? `#${o.shopifyOrderId}`;
   const settings = await loadAppSettings();
-  const recipients = loadInternalHoldRecipients(settings);
+  // Planned via the shared planner (reply on the hold-alert thread so Inbox
+  // flips THAT thread to Done) — the Hold Orders preview shows exactly this.
+  const planned = planReleaseEmail(
+    {
+      orderId: o.id,
+      orderNumber: o.orderNumber,
+      shopifyOrderId: o.shopifyOrderId,
+      total: null,
+      customerId: o.customerId,
+      customerName: o.customerName,
+      holdAlertThreadId: o.holdAlertThreadId,
+      holdAlertMessageId: o.holdAlertMessageId,
+    },
+    settings,
+  );
 
-  if (!env.SHADOW_MODE && recipients) {
-    const body = `Order ${orderNumber} for ${o.customerName ?? "the customer"} is now CLEARED — good to send. Please go ahead and ship it.`;
-    const { sendEmail } = await import("../../integrations/gmail/send.js");
+  if (!env.SHADOW_MODE && planned) {
     try {
-      await sendEmail({
-        to: recipients,
-        subject: `✅ CLEARED — order ${orderNumber} good to send`,
-        html: toHtml(body),
-        text: body,
-        // Reply on the original hold-alert thread so Inbox flips THAT thread to
-        // Done and drops the ⚠ treatment.
-        threadId: o.holdAlertThreadId ?? undefined,
-        inReplyTo: o.holdAlertMessageId ?? undefined,
-        financeSendType: "hold-release",
-        financeCustomerId: o.customerId ?? undefined,
-      });
+      await sendPlannedEmail(planned);
     } catch (err) {
       log.error({ err, orderId, orderNumber }, "release: warehouse email failed");
       // Don't block the state change on the email — the operator decided to
@@ -138,41 +141,28 @@ export async function placeOnHold(
   const orderNumber = o.orderNumber ?? `#${o.shopifyOrderId}`;
   const now = new Date();
   const settings = await loadAppSettings();
-  const recipients = loadInternalHoldRecipients(settings);
+  // Manual overdue hold: the operator-editable hold_alert template via the
+  // shared planner. Vars we don't have here strip to blank.
+  const planned = planHoldAlertEmail(
+    {
+      orderId: o.id,
+      orderNumber: o.orderNumber,
+      shopifyOrderId: o.shopifyOrderId,
+      total: o.total,
+      customerId: o.customerId,
+      customerName: o.customerName,
+    },
+    settings,
+    { reasonLine: OVERDUE_HOLD_REASON_LINE, holdStatus: "overdue" },
+  );
 
   let threadId: string | null = null;
   let messageId: string | null = null;
-  if (!env.SHADOW_MODE && recipients) {
-    // Manual overdue hold: render the operator-editable hold_alert template.
-    // Vars we don't have here (item_count/payment_status/order_date/hold_status)
-    // strip to blank via renderOrderTemplate — the template stays readable.
-    const orderTotal = Number.isFinite(Number(o.total))
-      ? `$${Number(o.total).toFixed(2)}`
-      : "—";
-    const tpl = loadOrderTemplate(settings, "hold_alert");
-    const rendered = renderOrderTemplate(tpl, {
-      order_number: orderNumber,
-      customer_name: o.customerName ?? "(unknown customer)",
-      reason_line:
-        "Reason: this customer has a large overdue balance and hasn't been in contact.",
-      order_total: orderTotal,
-      hold_status: "overdue",
-      customer_url: o.customerId
-        ? `${env.PUBLIC_URL}/customers/${o.customerId}`
-        : "—",
-    });
-    const { sendEmail } = await import("../../integrations/gmail/send.js");
+  if (!env.SHADOW_MODE && planned) {
     try {
-      const r = await sendEmail({
-        to: recipients,
-        subject: rendered.subject,
-        html: rendered.html,
-        text: rendered.text,
-        financeSendType: "hold-alert",
-        financeCustomerId: o.customerId ?? undefined,
-      });
-      threadId = r.threadId || null;
-      messageId = r.messageId || null;
+      const r = await sendPlannedEmail(planned);
+      threadId = r.threadId;
+      messageId = r.messageId;
     } catch (err) {
       log.error({ err, orderId, orderNumber }, "place-on-hold: warehouse email failed");
     }
@@ -234,39 +224,28 @@ export async function manualHold(
   const customerLadder = opts.customerLadder === true;
   const now = new Date();
   const settings = await loadAppSettings();
-  const recipients = loadInternalHoldRecipients(settings);
+  // Immediate INTERNAL warehouse hold-alert — the operator-editable
+  // hold_alert template via the shared planner.
+  const planned = planHoldAlertEmail(
+    {
+      orderId: o.id,
+      orderNumber: o.orderNumber,
+      shopifyOrderId: o.shopifyOrderId,
+      total: o.total,
+      customerId: o.customerId,
+      customerName: o.customerName,
+    },
+    settings,
+    { reasonLine: manualHoldReasonLine(note), holdStatus: "manual" },
+  );
 
   let threadId: string | null = null;
   let messageId: string | null = null;
-  if (!env.SHADOW_MODE && recipients) {
-    // Immediate INTERNAL warehouse hold-alert — reuse the operator-editable
-    // hold_alert template (vars we don't have strip to blank via render).
-    const orderTotal = Number.isFinite(Number(o.total))
-      ? `$${Number(o.total).toFixed(2)}`
-      : "—";
-    const tpl = loadOrderTemplate(settings, "hold_alert");
-    const rendered = renderOrderTemplate(tpl, {
-      order_number: orderNumber,
-      customer_name: o.customerName ?? "(unknown customer)",
-      reason_line: `Reason: ${note || "Manually placed on hold by the accounts team."}`,
-      order_total: orderTotal,
-      hold_status: "manual",
-      customer_url: o.customerId
-        ? `${env.PUBLIC_URL}/customers/${o.customerId}`
-        : "—",
-    });
-    const { sendEmail } = await import("../../integrations/gmail/send.js");
+  if (!env.SHADOW_MODE && planned) {
     try {
-      const r = await sendEmail({
-        to: recipients,
-        subject: rendered.subject,
-        html: rendered.html,
-        text: rendered.text,
-        financeSendType: "hold-alert",
-        financeCustomerId: o.customerId ?? undefined,
-      });
-      threadId = r.threadId || null;
-      messageId = r.messageId || null;
+      const r = await sendPlannedEmail(planned);
+      threadId = r.threadId;
+      messageId = r.messageId;
     } catch (err) {
       // Best-effort: never block the state change on the email.
       log.error({ err, orderId, orderNumber }, "manual-hold: warehouse email failed");

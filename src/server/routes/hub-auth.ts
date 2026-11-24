@@ -17,12 +17,14 @@ import { verifyHubToken } from "../../lib/hub-token.js";
 import { hubSecrets } from "../lib/hub-service-auth.js";
 import { createLogger } from "../../lib/logger.js";
 import { getSession } from "../lib/auth.js";
+import { isHoldsHost } from "../lib/holds-host.js";
 import {
   ConsumedJtiGuard,
   buildHubEmbeddedCookie,
   buildSessionCookie,
+  handoffGate,
   handoffLandingUrl,
-  isEmailAllowed,
+  holdsOrigin,
   renderHandoffErrorPage,
   safeNextPath,
   sessionExpiry,
@@ -38,13 +40,18 @@ type Query = { ht?: string; next?: string; hub?: string; return?: string };
 
 const hubAuthRoute: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: Query }>("/hub", async (req, reply) => {
+    // Same route on holdorders.feldart.com (Hold Orders): own allow-list
+    // (ADMIN_EMAILS ∪ HOLDORDERS_EMAILS), own origin, lands in the holds SPA.
+    const onHoldsHost = isHoldsHost(req.hostname);
+    const appOrigin = onHoldsHost ? holdsOrigin(env.PUBLIC_URL, env.HOLDORDERS_HOST) : env.PUBLIC_URL;
+    const appName = onHoldsHost ? "Hold Orders" : "Finance";
     // Refusals render a small page (this lands inside the hub's iframe)
     // rather than JSON, with the "open in a new tab" escape hatch.
     const refuse = (status: number, reason: string) =>
       reply
         .code(status)
         .header("content-type", "text/html; charset=utf-8")
-        .send(renderHandoffErrorPage({ reason, publicUrl: env.PUBLIC_URL }));
+        .send(renderHandoffErrorPage({ reason, publicUrl: appOrigin, appName }));
 
     const secrets = hubSecrets();
     if (secrets.length === 0) {
@@ -65,18 +72,26 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
       log.warn({ email: claims.email, jti: claims.jti, ip: req.ip }, "hub handoff rejected: token replayed");
       return refuse(401, "This sign-in link was already used. Go back to the hub and try again.");
     }
-    if (!isEmailAllowed(claims.email, env.ALLOWED_EMAILS)) {
-      log.warn({ email: claims.email, jti: claims.jti }, "hub handoff rejected: not on ALLOWED_EMAILS");
-      return refuse(403, "This account is not allowed in Finance.");
+    const gate = handoffGate({
+      email: claims.email,
+      onHoldsHost,
+      allowedEmails: env.ALLOWED_EMAILS,
+      adminEmails: env.ADMIN_EMAILS,
+      holdsEmails: env.HOLDORDERS_EMAILS,
+    });
+    if (!gate.allowed) {
+      log.warn({ email: claims.email, jti: claims.jti, onHoldsHost }, "hub handoff rejected: not on the allow-list");
+      return refuse(403, gate.refusal);
     }
 
     const secure = env.PUBLIC_URL.startsWith("https://");
     const landing = handoffLandingUrl({
-      next: safeNextPath(req.query.next, env.PUBLIC_URL),
+      next: safeNextPath(req.query.next, appOrigin),
       fromHub: req.query.hub === "1",
       returnTo: req.query.return,
       fetchDest: req.headers["sec-fetch-dest"],
       hubOrigin: env.HUB_PARENT_ORIGIN,
+      hubTab: onHoldsHost ? "holdorders" : "finance",
     });
 
     // Already signed in as this very user (the hub re-minted while our

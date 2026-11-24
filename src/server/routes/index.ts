@@ -51,6 +51,8 @@ import hubAuthRoute from "./hub-auth.js";
 import ordersRoute from "./orders.js";
 import teamActivityRoute from "./team-activity.js";
 import timeClockRoute from "./time-clock.js";
+import holdsAppRoute from "./holds-app.js";
+import extHoldOrdersRoute from "./ext-holdorders.js";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/ping", async () => ({ ok: true, ts: Date.now() }));
@@ -137,6 +139,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(extFilesRoute, { prefix: "/api" });
   await app.register(storedFileRoute, { prefix: "/api" });
   await app.register(hubAuthRoute, { prefix: "/auth" });
+  // Hold Orders (holdorders.feldart.com) — own role gate, see holds-auth.ts.
+  await app.register(holdsAppRoute, { prefix: "/api/holds" });
+  await app.register(extHoldOrdersRoute, { prefix: "/api/ext" });
   // Team Activity report + the app-wide heartbeat sink. Mounted at /api so the
   // plugin owns both /api/heartbeat and /api/team-activity/*.
   await app.register(teamActivityRoute, { prefix: "/api" });

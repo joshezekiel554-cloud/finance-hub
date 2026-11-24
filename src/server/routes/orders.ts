@@ -19,6 +19,7 @@ import {
   getHoldHistory,
   pauseHoldLadder,
 } from "../../modules/orders/hold-actions.js";
+import { endOfDayNewYork } from "../../modules/hold-orders/dates.js";
 
 const manualHoldBody = z.object({
   note: z.string().trim().max(500).optional(),
@@ -37,13 +38,6 @@ const pauseLadderBody = z.object({
   note: z.string().trim().max(300).optional(),
 });
 
-function endOfDayNewYork(ymd: string): Date | null {
-  // -04:00 in summer, -05:00 in winter. Using 23:59 local means the pause
-  // covers the whole promised day either way; an hour of DST slop at the
-  // boundary costs nothing here (worst case the ladder resumes an hour late).
-  const d = new Date(`${ymd}T23:59:00-04:00`);
-  return Number.isFinite(d.getTime()) ? d : null;
-}
 
 const ordersRoute: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string } }>("/:id/good-to-send", async (req, reply) => {
