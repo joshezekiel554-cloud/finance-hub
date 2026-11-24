@@ -110,6 +110,17 @@ export async function releaseHold(
     before: { holdState: "on_hold" },
     after: { holdState: "released", via: "good_to_send" },
   });
+  // Same inbox thread-resolve hook Hold Orders fires on every release.
+  const { onHoldReleased } = await import("../hold-orders/inbox-resolve.js");
+  onHoldReleased({
+    orderId,
+    customerId: o.customerId,
+    orderNumber,
+    action: "released",
+    note: "Released (good to send) from finance — warehouse told to ship.",
+    actingEmail: null,
+    idempotencyKey: `hold-release:${orderId}:${Date.now()}`,
+  });
   log.info({ orderId, orderNumber, userId }, "order hold released (good to send)");
   return { ok: true };
 }
