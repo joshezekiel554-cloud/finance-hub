@@ -9,14 +9,26 @@ const h = vi.hoisted(() => ({
   updates: [] as Array<Record<string, unknown>>,
   transitions: [] as Array<Record<string, unknown>>,
   sends: [] as Array<Record<string, unknown>>,
+  // The DB row's state as the conditional UPDATE sees it: how many claims of
+  // "o-new" (hold_state='none') can still succeed.
+  claimable: 1,
+  promisedPayBy: null as string | null,
+  respectPromise: false,
 }));
 
 vi.mock("../../lib/env.js", () => ({ env: { SHADOW_MODE: false, PUBLIC_URL: "https://finance.example" } }));
+vi.mock("./decisions.js", () => ({
+  get RULE_HOLDS_RESPECT_PROMISE() {
+    return h.respectPromise;
+  },
+  AUTO_RELEASE_EMAILS_WAREHOUSE_IF_ALERTED: false,
+}));
 vi.mock("../../db/index.js", () => {
   const chain = {
     from: () => chain,
     where: () => chain,
-    then: (resolve: (v: unknown) => void) => resolve([{ id: "c-rule", name: "Rule Co" }]),
+    then: (resolve: (v: unknown) => void) =>
+      resolve([{ id: "c-rule", name: "Rule Co", promisedPayBy: h.promisedPayBy }]),
   };
   return {
     db: {
@@ -24,7 +36,13 @@ vi.mock("../../db/index.js", () => {
       update: () => ({
         set: (s: Record<string, unknown>) => {
           h.updates.push(s);
-          return { where: () => Promise.resolve() };
+          let n = 1;
+          if ("holdState" in s) {
+            n = h.claimable > 0 ? 1 : 0;
+            if (n) h.claimable -= 1;
+          }
+          // Yield like a real round-trip so concurrent passes interleave.
+          return { where: () => new Promise((res) => setTimeout(() => res([{ affectedRows: n }, []]), 0)) };
         },
       }),
     },
@@ -73,6 +91,9 @@ beforeEach(() => {
   h.updates.length = 0;
   h.transitions.length = 0;
   h.sends.length = 0;
+  h.claimable = 1;
+  h.promisedPayBy = null;
+  h.respectPromise = false;
 });
 
 describe("runCustomerRuleHolds", () => {
@@ -107,5 +128,42 @@ describe("runCustomerRuleHolds", () => {
     const r = await runCustomerRuleHolds(now);
     expect(r.alerted).toBe(1);
     expect(h.sends[0]).toMatchObject({ to: "wh@x.example", financeSendType: "hold-alert" });
+    // claim first (no thread yet), then the thread stamp after the send
+    expect(h.updates[0]).toMatchObject({ holdState: "on_hold", holdAlertThreadId: null });
+    expect(h.updates[1]).toMatchObject({ holdAlertThreadId: "t", holdAlertMessageId: "m" });
+  });
+});
+
+describe("claim-then-send", () => {
+  it("two concurrent passes → exactly one warehouse email and one audit row", async () => {
+    h.rules = new Map([["c-rule", { ...vip, notifyWarehouse: true }]]);
+    const [a, b] = await Promise.all([runCustomerRuleHolds(now), runCustomerRuleHolds(now)]);
+    expect(a.held + b.held).toBe(1);
+    expect(h.sends).toHaveLength(1);
+    expect(h.transitions).toHaveLength(1);
+  });
+
+  it("a manual hold/release between load and update → the rule pass does nothing", async () => {
+    h.rules = new Map([["c-rule", { ...vip, notifyWarehouse: true }]]);
+    h.claimable = 0; // the row is no longer hold_state='none'
+    const r = await runCustomerRuleHolds(now);
+    expect(r).toMatchObject({ held: 0, alerted: 0 });
+    expect(h.sends).toEqual([]);
+    expect(h.transitions).toEqual([]);
+  });
+});
+
+describe("H9 switch: active promise blocks new rule holds", () => {
+  it("off (today): a promise doesn't stop the rule hold", async () => {
+    h.rules = new Map([["c-rule", vip]]);
+    h.promisedPayBy = "2099-01-01";
+    expect((await runCustomerRuleHolds(now)).held).toBe(1);
+  });
+  it("on: customer with an active promise is skipped", async () => {
+    h.rules = new Map([["c-rule", vip]]);
+    h.promisedPayBy = "2099-01-01";
+    h.respectPromise = true;
+    expect((await runCustomerRuleHolds(now)).held).toBe(0);
+    expect(h.updates).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // and every Gmail send (the senders are mocked so we can assert exact calls).
 const h = vi.hoisted(() => {
   const state: { order: Record<string, unknown> | undefined } = { order: undefined };
+  const claim = { rows: 1 };
   const updates: Array<Record<string, unknown>> = [];
   const inserts: Array<Record<string, unknown>> = [];
   const sends: Array<Record<string, unknown>> = [];
@@ -22,7 +23,10 @@ const h = vi.hoisted(() => {
   const update = () => ({
     set: (set: Record<string, unknown>) => {
       updates.push(set);
-      return { where: () => Promise.resolve() };
+      // mysql2 shape: [ResultSetHeader, fields]. Claims (they set holdState)
+      // match `claimRows` rows; follow-up stamps always match.
+      const n = "holdState" in set ? claim.rows : 1;
+      return { where: () => Promise.resolve([{ affectedRows: n }, []]) };
     },
   });
   const insert = () => ({
@@ -35,7 +39,7 @@ const h = vi.hoisted(() => {
     SHADOW_MODE: false,
     PUBLIC_URL: "https://finance.feldart.com",
   };
-  return { state, updates, inserts, sends, resolves, db: { select, update, insert }, envState };
+  return { state, claim, updates, inserts, sends, resolves, db: { select, update, insert }, envState };
 });
 
 vi.mock("../../db/index.js", () => ({ db: h.db }));
@@ -96,6 +100,48 @@ beforeEach(() => {
   h.sends.length = 0;
   h.resolves.length = 0;
   h.envState.SHADOW_MODE = false;
+  h.claim.rows = 1;
+});
+
+describe("claim-then-send", () => {
+  it("hold: someone changed the order since we loaded it → nothing sent, nothing audited", async () => {
+    h.state.order = baseOrder();
+    h.claim.rows = 0;
+    const r = await holdOrder("o1", actor, { reason: "manual", startLadder: false, mode: "notify" });
+    expect(r).toEqual({ ok: false, reason: "changed_concurrently" });
+    expect(h.sends).toHaveLength(0);
+    expect(h.inserts).toHaveLength(0);
+  });
+
+  it("release: already released by someone else → no second warehouse email, no inbox call", async () => {
+    h.state.order = baseOrder({ holdState: "on_hold" });
+    h.claim.rows = 0;
+    const r = await releaseOrder("o1", actor, { mode: "notify" });
+    expect(r).toEqual({ ok: false, reason: "changed_concurrently" });
+    expect(h.sends).toHaveLength(0);
+    expect(h.resolves).toHaveLength(0);
+  });
+
+  it("hold notify: claim happens before the send, thread stamped after", async () => {
+    h.state.order = baseOrder();
+    await holdOrder("o1", actor, { reason: "manual", startLadder: false, mode: "notify" });
+    expect(h.updates[0]).toMatchObject({ holdState: "on_hold", holdAlertThreadId: null });
+    expect(h.updates[1]).toEqual({ holdAlertThreadId: "thr-1", holdAlertMessageId: "msg-1" });
+  });
+});
+
+describe("preview for the holds role", () => {
+  it("hides the finance customer link in the preview body; the sent email keeps it", async () => {
+    h.state.order = baseOrder();
+    const opts = { reason: "manual" as const, startLadder: false, mode: "notify" as const };
+    const admin = await previewAction("o1", { action: "hold", opts });
+    const sales = await previewAction("o1", { action: "hold", opts }, { hideFinanceLinks: true });
+    expect(admin?.emails[0]?.body).toContain("https://finance.feldart.com/customers/c1");
+    expect(sales?.emails[0]?.body).not.toContain("finance.feldart.com/customers");
+    expect(sales?.emails[0]?.body).toContain("(finance customer link — not shown)");
+    await holdOrder("o1", actor, opts);
+    expect(String(h.sends[0]?.text)).toContain("https://finance.feldart.com/customers/c1");
+  });
 });
 
 function auditAfter(): Record<string, unknown> {
@@ -165,8 +211,11 @@ describe("preview == what notify sends", () => {
     );
     expect(h.sends[0]?.to).toBe("warehouse@bluechip.example,accounts@feldart.example");
     // The action's own record of who it emailed is the same plan.
-    if (r.ok) expect(r.emailed).toEqual(preview!.emails);
-    expect(h.updates[0]).toMatchObject({ holdLadderEnabled: true, holdAlertThreadId: "thr-1" });
+    if (r.ok) expect(r.emailed).toEqual(preview!.emails.map(({ body: _body, ...e }) => e));
+    // Preview body == the body actually sent.
+    expect(h.sends[0]?.text).toBe(preview!.emails[0]!.body);
+    expect(h.updates[0]).toMatchObject({ holdLadderEnabled: true });
+    expect(h.updates[1]).toMatchObject({ holdAlertThreadId: "thr-1" });
   });
 
   it("release notify: preview == the in-thread warehouse CLEARED email that is sent", async () => {

@@ -10,7 +10,10 @@
 //   auto_start_ladder → enter the Day-0/7/10 customer ladder
 // Released orders are never re-held by a rule (see ordersRuleWouldHold).
 
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import { affectedRows } from "./claim.js";
+import { RULE_HOLDS_RESPECT_PROMISE } from "./decisions.js";
+import { isPromiseActive } from "../promises/promise-state.js";
 import { db } from "../../db/index.js";
 import { orders } from "../../db/schema/catalog.js";
 import { customers } from "../../db/schema/customers.js";
@@ -37,15 +40,16 @@ export async function runCustomerRuleHolds(now: Date = new Date()): Promise<RunC
   if (active.length === 0) return result;
 
   const ids = active.map(([id]) => id);
-  const [invoicesBy, ordersBy, names] = await Promise.all([
+  const [invoicesBy, ordersBy, custRows] = await Promise.all([
     loadOpenInvoices(ids),
     loadCandidateOrders(ids, now),
     db
-      .select({ id: customers.id, name: customers.displayName })
+      .select({ id: customers.id, name: customers.displayName, promisedPayBy: customers.promisedPayBy })
       .from(customers)
-      .where(inArray(customers.id, ids))
-      .then((rows) => new Map(rows.map((r) => [r.id, r.name]))),
+      .where(inArray(customers.id, ids)),
   ]);
+  const names = new Map(custRows.map((r) => [r.id, r.name]));
+  const promises = new Map(custRows.map((r) => [r.id, r.promisedPayBy ?? null]));
 
   const settings = await loadAppSettings();
   for (const [customerId, rule] of active) {
@@ -54,7 +58,40 @@ export async function runCustomerRuleHolds(now: Date = new Date()): Promise<RunC
     if (toHold.length === 0) continue;
     const why = evaluation.why ?? "Customer hold rule";
 
+    if (RULE_HOLDS_RESPECT_PROMISE && isPromiseActive(promises.get(customerId) ?? null, now)) {
+      log.info({ customerId }, "rule hold skipped: customer has an active promise (H9 switch on)");
+      continue;
+    }
+
     for (const o of toHold) {
+      // 1) CLAIM: only an order still in hold_state 'none' can be taken. A
+      //    concurrent pass, or a person holding/releasing it since we loaded
+      //    it, makes this match 0 rows → we do nothing (no email, no audit).
+      const at = new Date();
+      const claimed = affectedRows(
+        await db
+          .update(orders)
+          .set({
+            holdState: "on_hold",
+            holdReason: "customer_rule",
+            holdNote: why.slice(0, 500),
+            holdLadderEnabled: rule.autoStartLadder,
+            holdStartedAt: at,
+            // Stamped either way: rule holds are never re-alerted by the
+            // standard pass (notify_warehouse=false means "tell nobody").
+            holdAlertedAt: at,
+            holdAlertThreadId: null,
+            holdAlertMessageId: null,
+          })
+          .where(and(eq(orders.id, o.orderId), eq(orders.holdState, "none"))),
+      );
+      if (claimed !== 1) {
+        log.info({ orderId: o.orderId }, "rule hold: order changed since load — skipped");
+        continue;
+      }
+
+      // 2) SEND (only the claimer gets here), then stamp the thread so the
+      //    release can reply on it.
       let threadId: string | null = null;
       let messageId: string | null = null;
       if (rule.notifyWarehouse && !env.SHADOW_MODE) {
@@ -81,22 +118,12 @@ export async function runCustomerRuleHolds(now: Date = new Date()): Promise<RunC
           }
         }
       }
-      const at = new Date();
-      await db
-        .update(orders)
-        .set({
-          holdState: "on_hold",
-          holdReason: "customer_rule",
-          holdNote: why.slice(0, 500),
-          holdLadderEnabled: rule.autoStartLadder,
-          holdStartedAt: at,
-          // Stamped either way: rule holds are never re-alerted by the
-          // standard pass (notify_warehouse=false means "tell nobody").
-          holdAlertedAt: at,
-          holdAlertThreadId: threadId,
-          holdAlertMessageId: messageId,
-        })
-        .where(eq(orders.id, o.orderId));
+      if (threadId || messageId) {
+        await db
+          .update(orders)
+          .set({ holdAlertedAt: new Date(), holdAlertThreadId: threadId, holdAlertMessageId: messageId })
+          .where(eq(orders.id, o.orderId));
+      }
       await recordHoldTransition({
         orderId: o.orderId,
         userId: null,

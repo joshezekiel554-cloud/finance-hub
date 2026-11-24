@@ -37,6 +37,7 @@ import {
 } from "../orders/hold-email-plan.js";
 import { manualHoldReasonLine, OVERDUE_HOLD_REASON_LINE, pauseHoldLadder } from "../orders/hold-actions.js";
 import { onHoldReleased } from "./inbox-resolve.js";
+import { affectedRows } from "./claim.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -211,6 +212,39 @@ export async function holdOrder(
   const settings = await loadAppSettings();
   const plan = await planHoldAction(o, settings, opts);
 
+  // 1) CLAIM the transition from the state we loaded. Someone else holding
+  //    it (or a rule pass) in between → 0 rows → nothing sent.
+  const now = new Date();
+  const ladder = opts.mode === "notify" && opts.startLadder;
+  const fromState = (o.holdState ?? "none") as "none" | "released";
+  const claimed = affectedRows(
+    await db
+      .update(orders)
+      .set({
+        holdState: "on_hold",
+        holdReason: opts.reason,
+        holdNote: note,
+        holdLadderEnabled: ladder,
+        holdLadderPausedUntil: null,
+        holdLadderPauseNote: null,
+        holdStartedAt: now,
+        // Always stamped: marks the hold as handled so the standard detection
+        // pass never sends its own alert for this order (a record-only hold
+        // must stay silent).
+        holdAlertedAt: now,
+        holdAlertThreadId: null,
+        holdAlertMessageId: null,
+        holdNoticeAt: null,
+        holdWarnedAt: null,
+        holdCancelNotifiedAt: null,
+        holdReleasedAt: null,
+        holdReleasedByUserId: null,
+      })
+      .where(and(eq(orders.id, orderId), eq(orders.holdState, fromState))),
+  );
+  if (claimed !== 1) return { ok: false, reason: "changed_concurrently" };
+
+  // 2) SEND (claimer only), then stamp the alert thread for the release reply.
   let threadId: string | null = null;
   let messageId: string | null = null;
   if (!env.SHADOW_MODE) {
@@ -228,32 +262,12 @@ export async function holdOrder(
       }
     }
   }
-
-  const now = new Date();
-  const ladder = opts.mode === "notify" && opts.startLadder;
-  await db
-    .update(orders)
-    .set({
-      holdState: "on_hold",
-      holdReason: opts.reason,
-      holdNote: note,
-      holdLadderEnabled: ladder,
-      holdLadderPausedUntil: null,
-      holdLadderPauseNote: null,
-      holdStartedAt: now,
-      // Always stamped: marks the hold as handled so the standard detection
-      // pass never sends its own alert for this order (a record-only hold
-      // must stay silent).
-      holdAlertedAt: now,
-      holdAlertThreadId: threadId,
-      holdAlertMessageId: messageId,
-      holdNoticeAt: null,
-      holdWarnedAt: null,
-      holdCancelNotifiedAt: null,
-      holdReleasedAt: null,
-      holdReleasedByUserId: null,
-    })
-    .where(eq(orders.id, orderId));
+  if (threadId || messageId) {
+    await db
+      .update(orders)
+      .set({ holdAlertThreadId: threadId, holdAlertMessageId: messageId })
+      .where(eq(orders.id, orderId));
+  }
   const emailed = summarizeEmails(plan);
   await audit({
     orderId,
@@ -294,6 +308,22 @@ export async function releaseOrder(
 
   const settings = await loadAppSettings();
   const plan = planReleaseAction(o, settings, opts.mode);
+
+  // 1) CLAIM on_hold → released; a concurrent release / auto-release wins → stop.
+  const now = new Date();
+  const claimed = affectedRows(
+    await db
+      .update(orders)
+      .set({
+        holdState: "released",
+        holdReleasedAt: now,
+        holdReleasedByUserId: actor.userId,
+      })
+      .where(and(eq(orders.id, orderId), eq(orders.holdState, "on_hold"))),
+  );
+  if (claimed !== 1) return { ok: false, reason: "changed_concurrently" };
+
+  // 2) SEND (claimer only).
   if (!env.SHADOW_MODE) {
     for (const p of plan) {
       try {
@@ -303,16 +333,6 @@ export async function releaseOrder(
       }
     }
   }
-
-  const now = new Date();
-  await db
-    .update(orders)
-    .set({
-      holdState: "released",
-      holdReleasedAt: now,
-      holdReleasedByUserId: actor.userId,
-    })
-    .where(and(eq(orders.id, orderId), eq(orders.holdState, "on_hold")));
   const note = opts.note?.trim() || null;
   const paid = opts.paidOutsideQbo
     ? { method: opts.paidOutsideQbo.method, note: opts.paidOutsideQbo.note.trim() }
@@ -384,17 +404,32 @@ export async function addHoldNote(
   return { ok: true, emailed: [] };
 }
 
+export type PreviewEmail = EmailSummary & { body: string };
+
 export type PreviewResult = {
-  emails: EmailSummary[];
+  emails: PreviewEmail[];
   // In shadow mode nothing actually sends, whatever the plan says.
   shadowMode: boolean;
 };
+
+export const FINANCE_LINK_HIDDEN = "(finance customer link — not shown)";
+
+/**
+ * Hide finance customer-page links (`<PUBLIC_URL>/customers/<id>`) from a
+ * preview body. For viewers who can't open finance (the holds role) — the
+ * email actually sent to the warehouse is unchanged.
+ */
+export function redactFinanceLinks(text: string, publicUrl: string): string {
+  const base = publicUrl.replace(/\/$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`${base}/customers/[A-Za-z0-9_-]+`, "g"), FINANCE_LINK_HIDDEN);
+}
 
 export async function previewAction(
   orderId: string,
   input:
     | { action: "hold"; opts: HoldOpts }
     | { action: "release"; mode: HoldMode },
+  view: { hideFinanceLinks: boolean } = { hideFinanceLinks: false },
 ): Promise<PreviewResult | null> {
   const o = await loadOrderCtx(orderId);
   if (!o) return null;
@@ -403,5 +438,10 @@ export async function previewAction(
     input.action === "hold"
       ? await planHoldAction(o, settings, input.opts)
       : planReleaseAction(o, settings, input.mode);
-  return { emails: summarizeEmails(plan), shadowMode: env.SHADOW_MODE };
+  const summaries = summarizeEmails(plan);
+  const emails = summaries.map((s, i) => {
+    const text = plan[i]!.text;
+    return { ...s, body: view.hideFinanceLinks ? redactFinanceLinks(text, env.PUBLIC_URL) : text };
+  });
+  return { emails, shadowMode: env.SHADOW_MODE };
 }

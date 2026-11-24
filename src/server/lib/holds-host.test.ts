@@ -44,8 +44,8 @@ describe("hub handoff on the holdorders host", () => {
     expect(safeNextPath("/?tab=held", origin)).toBe("/?tab=held");
     expect(safeNextPath("https://evil.com/", origin)).toBe("/");
     expect(
-      handoffLandingUrl({ next: "/", fromHub: true, returnTo: "hub", fetchDest: "document", hubOrigin: "https://hub.feldart.com", hubTab: "holdorders" }),
-    ).toBe("https://hub.feldart.com/holdorders?p=%2F");
+      handoffLandingUrl({ next: "/", fromHub: true, returnTo: "hub", fetchDest: "document", hubOrigin: "https://hub.feldart.com", hubTab: "holds" }),
+    ).toBe("https://hub.feldart.com/holds?p=%2F");
   });
 });
 

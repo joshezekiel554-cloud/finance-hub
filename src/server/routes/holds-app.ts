@@ -281,6 +281,9 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
             },
           }
         : { action: "release", mode: q.data.mode },
+      // The holds role can't open finance, so its preview hides the finance
+      // customer link (the real warehouse email still carries it).
+      { hideFinanceLinks: !can(access.role, "financeLinks") },
     );
     if (!result) return reply.code(404).send({ error: "not_found" });
     return reply.send(result);

@@ -417,13 +417,19 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
       customerId: orders.customerId,
       holdReason: orders.holdReason,
       financialStatus: orders.financialStatus,
+      holdAlertThreadId: orders.holdAlertThreadId,
+      holdAlertMessageId: orders.holdAlertMessageId,
       holdStatus: customers.holdStatus,
       overdueBalance: customers.overdueBalance,
+      customerName: customers.displayName,
     })
     .from(orders)
     .innerJoin(customers, eq(orders.customerId, customers.id))
     .where(eq(orders.holdState, "on_hold"))
     .limit(500);
+  const { affectedRows } = await import("../hold-orders/claim.js");
+  const { AUTO_RELEASE_EMAILS_WAREHOUSE_IF_ALERTED } = await import("../hold-orders/decisions.js");
+  const { planReleaseEmail, sendPlannedEmail } = await import("./hold-email-plan.js");
 
   // Customer hold rules (Hold Orders): the per-rule auto-release switch and
   // the customer_rule reason. Customers without a rule are unaffected.
@@ -464,20 +470,51 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
           : true,
     });
     if (!release) continue;
-    await db
-      .update(orders)
-      .set({
-        holdState: "released",
-        holdReleasedAt: new Date(),
-        holdReleasedByUserId: null,
-      })
-      .where(eq(orders.id, r.id));
+    // Claim on_hold → released first: if a person released (or re-held) it
+    // since we loaded it, this matches 0 rows and we do nothing.
+    const claimed = affectedRows(
+      await db
+        .update(orders)
+        .set({
+          holdState: "released",
+          holdReleasedAt: new Date(),
+          holdReleasedByUserId: null,
+        })
+        .where(and(eq(orders.id, r.id), eq(orders.holdState, "on_hold"))),
+    );
+    if (claimed !== 1) continue;
+    // H8 (pending operator decision, switch in hold-orders/decisions.ts):
+    // tell the warehouse "good to send" only if it was alerted about this hold.
+    let emailed: Array<{ to: string; role: string; template: string; subject: string }> = [];
+    if (AUTO_RELEASE_EMAILS_WAREHOUSE_IF_ALERTED && r.holdAlertThreadId && !env.SHADOW_MODE) {
+      const planned = planReleaseEmail(
+        {
+          orderId: r.id,
+          orderNumber: r.orderNumber,
+          shopifyOrderId: r.shopifyOrderId,
+          total: null,
+          customerId: r.customerId,
+          customerName: r.customerName,
+          holdAlertThreadId: r.holdAlertThreadId,
+          holdAlertMessageId: r.holdAlertMessageId,
+        },
+        settings,
+      );
+      if (planned) {
+        try {
+          await sendPlannedEmail(planned);
+          emailed = [{ to: planned.to, role: planned.role, template: planned.template, subject: planned.subject }];
+        } catch (err) {
+          log.error({ err, orderId: r.id }, "auto-release: warehouse good-to-send email failed");
+        }
+      }
+    }
     await recordHoldTransition({
       orderId: r.id,
       userId: null,
       action: "order.hold_auto_released",
       before: { holdState: "on_hold", holdReason: r.holdReason },
-      after: { holdState: "released", reason: "resolved", mode: "auto" },
+      after: { holdState: "released", reason: "resolved", mode: "auto", emailed },
     });
     onHoldReleased({
       orderId: r.id,

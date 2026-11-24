@@ -91,7 +91,7 @@ const hubAuthRoute: FastifyPluginAsync = async (app) => {
       returnTo: req.query.return,
       fetchDest: req.headers["sec-fetch-dest"],
       hubOrigin: env.HUB_PARENT_ORIGIN,
-      hubTab: onHoldsHost ? "holdorders" : "finance",
+      hubTab: onHoldsHost ? "holds" : "finance",
     });
 
     // Already signed in as this very user (the hub re-minted while our

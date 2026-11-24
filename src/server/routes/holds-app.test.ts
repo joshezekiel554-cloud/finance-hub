@@ -122,6 +122,17 @@ describe("HOLDORDERS_EMAILS (sales@) role", () => {
     expect(res.json().canEdit).toBe(false);
   });
 
+  it("preview hides finance customer links for the holds role (admins see them)", async () => {
+    const { previewAction } = await import("../../modules/hold-orders/actions.js");
+    const mocked = vi.mocked(previewAction);
+    mocked.mockClear();
+    await app.inject({ method: "GET", url: "/api/holds/o1/preview?action=release&mode=notify" });
+    expect(mocked.mock.calls[0]?.[2]).toEqual({ hideFinanceLinks: true });
+    as("josh@feldart.com");
+    await app.inject({ method: "GET", url: "/api/holds/o1/preview?action=release&mode=notify" });
+    expect(mocked.mock.calls[1]?.[2]).toEqual({ hideFinanceLinks: false });
+  });
+
   it("/me reports the holds role", async () => {
     const res = await app.inject({ method: "GET", url: "/api/holds/me" });
     expect(res.json()).toMatchObject({ role: "holds", financeUrl: null, permissions: { editRules: false, release: true } });

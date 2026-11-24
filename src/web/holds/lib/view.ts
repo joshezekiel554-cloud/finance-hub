@@ -13,6 +13,8 @@ export type EmailPreview = {
   template: string;
   subject: string;
   when: "now" | "next_sync";
+  // Plain-text body (preview only; finance links hidden for the holds role).
+  body?: string;
 };
 
 export function parseTab(v: string | null | undefined): HoldTab {

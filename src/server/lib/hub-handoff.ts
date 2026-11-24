@@ -45,7 +45,7 @@ export function handoffLandingUrl(input: {
   returnTo: unknown;
   fetchDest: string | string[] | undefined;
   hubOrigin: string;
-  // The hub's tab for this app: "finance" (default) or "holdorders".
+  // The hub's tab for this app: "finance" (default) or "holds" (the hub app id for Hold Orders).
   hubTab?: string;
 }): string {
   if (input.fromHub && input.returnTo === "hub" && input.fetchDest !== "iframe") {

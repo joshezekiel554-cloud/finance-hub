@@ -266,6 +266,12 @@ function EmailList({ emails, shadowMode, loading }: { emails: EmailPreview[]; sh
               <div className="mt-0.5 break-all text-primary">To: {e.to}</div>
               {e.cc ? <div className="break-all text-secondary">Cc: {e.cc}</div> : null}
               <div className="text-secondary">“{e.subject}”</div>
+              {e.body ? (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-muted hover:text-primary">Show email</summary>
+                  <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-subtle p-2 font-sans text-xs text-secondary">{e.body}</pre>
+                </details>
+              ) : null}
             </li>
           ))}
         </ul>
