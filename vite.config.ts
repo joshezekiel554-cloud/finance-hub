@@ -31,6 +31,15 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: path.resolve(__dirname, "dist/web"),
       emptyOutDir: true,
+      // Two SPAs from one build: finance (index.html) and Hold Orders
+      // (holds.html, served on holdorders.feldart.com by Host — see
+      // src/server/server.ts). Dev: http://localhost:5173/holds.html.
+      rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, "src/web/index.html"),
+          holds: path.resolve(__dirname, "src/web/holds.html"),
+        },
+      },
     },
   };
 });
