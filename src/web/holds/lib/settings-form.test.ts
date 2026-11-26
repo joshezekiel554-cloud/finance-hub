@@ -33,13 +33,13 @@ describe("settings form", () => {
     const d = draftFromConfig(cur);
     d.fields.warnDays = "5";
     d.fields.defaultRuleEnabled = true;
-    d.presets.vip_90_110.holdWhenInvoiceDaysOver = "120";
+    d.presets.relaxed.graceDays = "45";
     const r = draftToPatch(d, cur);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.changed.sort()).toEqual(["defaultRuleEnabled", "presets", "warnDays"]);
     expect(r.patch).toMatchObject({ warnDays: 5, defaultRuleEnabled: true });
-    expect(r.patch.presets?.vip_90_110).toEqual({ termsDays: 90, holdWhenInvoiceDaysOver: 120, minBalance: 50 });
+    expect(r.patch.presets?.relaxed).toEqual({ graceDays: 45, minOverdue: 50 });
     expect(sectionHasChanges("ladder", r.changed)).toBe(true);
     expect(sectionHasChanges("autoRelease", r.changed)).toBe(false);
   });
@@ -48,13 +48,13 @@ describe("settings form", () => {
     const d = draftFromConfig(cur);
     d.fields.warnDays = "10"; // not before cancel (10)
     d.fields.noContactDays = "";
-    d.presets.strict.holdWhenInvoiceDaysOver = "5"; // < terms 30
+    d.presets.strict.graceDays = "-1"; // below 0
     d.fields.teamRecipients = "info@feldart.com, nope";
     const r = draftToPatch(d, cur);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(Object.keys(r.errors).sort()).toEqual(
-      ["noContactDays", "presets.strict.holdWhenInvoiceDaysOver", "teamRecipients", "warnDays"].sort(),
+      ["noContactDays", "presets.strict.graceDays", "teamRecipients", "warnDays"].sort(),
     );
     expect(r.errors.noContactDays).toBe("Enter a number");
   });
@@ -63,7 +63,7 @@ describe("settings form", () => {
     expect(formatSettingValue("overdueThresholdGbp", cur)).toBe("£1,000");
     expect(formatSettingValue("warnDays", cur)).toBe("7 days");
     expect(formatSettingValue("autoReleaseEmailsWarehouse", cur)).toBe("On");
-    expect(formatSettingValue("defaultRulePreset", cur)).toBe("Standard 30/45");
+    expect(formatSettingValue("defaultRulePreset", cur)).toBe("Standard — 15 days overdue");
     expect(formatSettingValue("overdueRecipients", { ...cur, overdueRecipients: "" })).toBe("Nobody");
   });
 
@@ -84,16 +84,16 @@ describe("settings form", () => {
 
 describe("rule editor follows live preset numbers", () => {
   it("displayNumbers uses the Settings table", () => {
-    const t = parsePresetOverrides(JSON.stringify({ standard_30_45: { termsDays: 30, holdWhenInvoiceDaysOver: 50, minBalance: 10 } }));
-    expect(displayNumbers(NEW_RULE_DRAFT, t)).toEqual({ termsDays: 30, holdWhenInvoiceDaysOver: 50, minBalance: 10 });
-    expect(displayNumbers(NEW_RULE_DRAFT)?.holdWhenInvoiceDaysOver).toBe(45);
+    const t = parsePresetOverrides(JSON.stringify({ standard: { graceDays: 20, minOverdue: 10 } }));
+    expect(displayNumbers(NEW_RULE_DRAFT, t)).toEqual({ graceDays: 20, minOverdue: 10 });
+    expect(displayNumbers(NEW_RULE_DRAFT)?.graceDays).toBe(15);
   });
 });
 
 describe("bulk picker", () => {
   const rows = [
     { id: "a", name: "Alpha Ltd", email: "a@alpha.com", rule: null, defaultScope: true },
-    { id: "b", name: "Beta", email: null, rule: { label: "VIP 90/110" }, defaultScope: false },
+    { id: "b", name: "Beta", email: null, rule: { label: "Relaxed — 30 days overdue" }, defaultScope: false },
     { id: "c", name: "Gamma", email: "buyer@gamma.co", rule: null, defaultScope: false },
   ];
 
@@ -106,7 +106,7 @@ describe("bulk picker", () => {
   it("current rule column", () => {
     expect(currentRuleLabel(rows[0]!, false)).toBe("None (default rule is off)");
     expect(currentRuleLabel(rows[0]!, true)).toBe("Default rule");
-    expect(currentRuleLabel(rows[1]!, true)).toBe("VIP 90/110");
+    expect(currentRuleLabel(rows[1]!, true)).toBe("Relaxed — 30 days overdue");
     expect(currentRuleLabel(rows[2]!, true)).toBe("None");
   });
 

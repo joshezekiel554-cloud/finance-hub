@@ -76,9 +76,10 @@ vi.mock("./rules-store.js", () => ({
   loadOpenInvoices: vi.fn(async (ids: string[]) => {
     h.invoiceCalls.push(ids);
     return new Map([
-      ["c-rule", [{ docNumber: "19310", issueDate: "2026-07-01", dueDate: null, balance: "900", status: "overdue", origin: "feldart" }]],
+      ["c-rule", [{ docNumber: "19310", issueDate: "2026-07-01", dueDate: "2026-07-31", balance: "900", status: "overdue", origin: "feldart" }]],
     ]);
   }),
+  loadCustomerTerms: vi.fn(async () => new Map([["c-rule", { days: 30, label: "Net 30" }]])),
   loadCandidateOrders: vi.fn(async (ids: string[]) => {
     h.orderCalls.push(ids);
     const o = { orderNumber: "#1", shopifyOrderId: "1", total: "10", cancelledAt: null, fulfillmentStatus: null, shipmentStatus: null, orderDate: null };
@@ -91,7 +92,7 @@ vi.mock("./rules-store.js", () => ({
 import { runCustomerRuleHolds } from "./detection.js";
 
 const now = new Date("2026-11-24T12:00:00Z");
-const vip = { preset: "vip_90_110", termsDays: 90, holdWhenInvoiceDaysOver: 110, minBalance: 50, autoStartLadder: true, autoReleaseOnPayment: true, notifyWarehouse: false, note: null };
+const vip = { preset: "relaxed", graceDays: 30, minOverdue: 50, autoStartLadder: true, autoReleaseOnPayment: true, notifyWarehouse: false, note: null };
 
 beforeEach(() => {
   h.rules = new Map();
@@ -127,7 +128,7 @@ describe("runCustomerRuleHolds", () => {
     expect(h.orderCalls).toEqual([["c-rule"]]);
     expect(r.held).toBe(1);
     expect(h.updates[0]).toMatchObject({ holdState: "on_hold", holdReason: "customer_rule", holdLadderEnabled: true });
-    expect(String(h.updates[0]?.holdNote)).toMatch(/^Rule: VIP 90\/110 — invoice 19310 at \d+ days$/);
+    expect(String(h.updates[0]?.holdNote)).toMatch(/^Rule: Relaxed — 30 days overdue — invoice 19310 is \d+ days overdue \(Net 30\)$/);
     // notify_warehouse=false → nobody emailed
     expect(h.sends).toEqual([]);
     expect(h.transitions[0]).toMatchObject({ orderId: "o-new", after: { mode: "record_only", via: "customer_rule" } });
@@ -194,10 +195,10 @@ describe("default b2b rule (Settings)", () => {
 
   it("on: the rule-less b2b customer is held as if they had the default preset", async () => {
     h.defaultIds = ["c-rule"];
-    h.settings = { holds_default_rule_enabled: "true", holds_default_rule_preset: "standard_30_45" };
+    h.settings = { holds_default_rule_enabled: "true", holds_default_rule_preset: "standard" };
     const r = await runCustomerRuleHolds(now);
     expect(r.held).toBe(1);
-    expect(String(h.updates[0]?.holdNote)).toMatch(/^Rule: Default b2b rule \(Standard 30\/45\) — invoice 19310 at \d+ days$/);
+    expect(String(h.updates[0]?.holdNote)).toMatch(/^Rule: Default b2b rule \(Standard — 15 days overdue\) — invoice 19310 is \d+ days overdue \(Net 30\)$/);
     // default flags: warehouse emailed, customer ladder off
     expect(h.updates[0]).toMatchObject({ holdLadderEnabled: false });
     expect(h.sends).toHaveLength(1);
@@ -217,14 +218,14 @@ describe("default b2b rule (Settings)", () => {
     h.defaultIds = ["c-rule"];
     h.settings = { holds_default_rule_enabled: "true", holds_default_rule_preset: "strict" };
     await runCustomerRuleHolds(now);
-    expect(String(h.updates[0]?.holdNote)).toMatch(/^Rule: VIP 90\/110/);
+    expect(String(h.updates[0]?.holdNote)).toMatch(/^Rule: Relaxed — 30 days overdue/);
   });
 
-  it("the default follows edited preset numbers (Standard 30/200 → invoice at 146 days not held)", async () => {
+  it("the default follows edited preset numbers (Standard at 200 days overdue → invoice 116 days overdue not held)", async () => {
     h.defaultIds = ["c-rule"];
     h.settings = {
       holds_default_rule_enabled: "true",
-      holds_preset_overrides: JSON.stringify({ standard_30_45: { termsDays: 30, holdWhenInvoiceDaysOver: 200, minBalance: 50 } }),
+      holds_preset_overrides: JSON.stringify({ standard: { graceDays: 200, minOverdue: 50 } }),
     };
     expect((await runCustomerRuleHolds(now)).held).toBe(0);
   });

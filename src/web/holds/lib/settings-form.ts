@@ -92,9 +92,9 @@ export const FIELD_META: Record<Exclude<HoldsConfigField, "presets">, FieldMeta>
     help: "Customers whose finance type is B2B (set on the customer page / b2b import).",
     kind: "scope",
   },
-  defaultMinBalance: {
-    label: "Default minimum balance",
-    help: "Used by custom rules that leave the minimum blank. Below this total open balance nothing is held.",
+  defaultMinOverdue: {
+    label: "Default minimum overdue",
+    help: "Used by custom rules that leave the minimum blank. Below this much overdue nothing is held.",
     kind: "money",
     unit: "$",
   },
@@ -145,9 +145,8 @@ export const FIELD_META: Record<Exclude<HoldsConfigField, "presets">, FieldMeta>
 };
 
 export const PRESET_NUMBER_LABELS = {
-  termsDays: "Terms (days)",
-  holdWhenInvoiceDaysOver: "Hold when older than (days)",
-  minBalance: "Min balance ($)",
+  graceDays: "Days overdue",
+  minOverdue: "Min overdue ($)",
 } as const;
 export type PresetNumberField = keyof typeof PRESET_NUMBER_LABELS;
 
@@ -168,9 +167,8 @@ export function draftFromConfig(c: HoldsConfig): SettingsDraft {
   const presets = {} as SettingsDraft["presets"];
   for (const p of NUMBERED_PRESETS) {
     presets[p] = {
-      termsDays: String(c.presets[p].termsDays),
-      holdWhenInvoiceDaysOver: String(c.presets[p].holdWhenInvoiceDaysOver),
-      minBalance: String(c.presets[p].minBalance),
+      graceDays: String(c.presets[p].graceDays),
+      minOverdue: String(c.presets[p].minOverdue),
     };
   }
   return { fields, presets };
@@ -193,9 +191,8 @@ export function draftToCandidate(d: SettingsDraft): Record<string, unknown> {
   const presets: Record<string, unknown> = {};
   for (const p of NUMBERED_PRESETS) {
     presets[p] = {
-      termsDays: num(d.presets[p].termsDays),
-      holdWhenInvoiceDaysOver: num(d.presets[p].holdWhenInvoiceDaysOver),
-      minBalance: num(d.presets[p].minBalance),
+      graceDays: num(d.presets[p].graceDays),
+      minOverdue: num(d.presets[p].minOverdue),
     };
   }
   out.presets = presets;
@@ -209,7 +206,7 @@ export type DraftResult =
 /**
  * Validate the draft against the server's schema and build the PATCH body
  * with only the changed fields. errors are keyed "warnDays" /
- * "presets.vip_90_110.minBalance".
+ * "presets.relaxed.minOverdue".
  */
 export function draftToPatch(d: SettingsDraft, current: HoldsConfig): DraftResult {
   const merged = mergeHoldsConfig(current, draftToCandidate(d));

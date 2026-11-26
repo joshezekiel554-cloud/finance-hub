@@ -51,6 +51,7 @@ vi.mock("../statements/settings.js", () => ({
 vi.mock("../hold-orders/rules-store.js", () => ({
   loadEffectiveRules: vi.fn(async () => new Map()),
   loadOpenInvoices: vi.fn(async () => new Map()),
+  loadCustomerTerms: vi.fn(async () => new Map()),
 }));
 vi.mock("../hold-orders/inbox-resolve.js", () => ({
   onHoldReleased: vi.fn((a: Record<string, unknown>) => {

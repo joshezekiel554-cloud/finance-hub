@@ -128,7 +128,7 @@ beforeEach(() => {
 const as = (email: string | null) => {
   h.user = email ? { id: `u-${email}`, email, name: null, image: null } : null;
 };
-const vipRule = { preset: "vip_90_110", autoStartLadder: false, autoReleaseOnPayment: true, notifyWarehouse: true };
+const vipRule = { preset: "relaxed", autoStartLadder: false, autoReleaseOnPayment: true, notifyWarehouse: true };
 
 describe("HOLDORDERS_EMAILS (sales@) role", () => {
   beforeEach(() => as("sales@feldart.com"));
@@ -198,7 +198,7 @@ describe("ADMIN_EMAILS role", () => {
     const call = h.calls.find((c) => c.fn === "upsertRule");
     expect(call?.args[0]).toMatchObject({
       customerId: "c1",
-      rule: { preset: "vip_90_110", termsDays: 90, holdWhenInvoiceDaysOver: 110 },
+      rule: { preset: "relaxed", graceDays: 30, minOverdue: 50 },
       actorEmail: "josh@feldart.com",
     });
   });
@@ -207,7 +207,7 @@ describe("ADMIN_EMAILS role", () => {
     const put = await app.inject({
       method: "PUT",
       url: "/api/holds/rules/c1",
-      payload: { ...vipRule, preset: "custom", termsDays: 60, holdWhenInvoiceDaysOver: 30 },
+      payload: { ...vipRule, preset: "custom", graceDays: -3 },
     });
     expect(put.statusCode).toBe(400);
   });
@@ -310,7 +310,7 @@ describe("bulk rule picker (admin)", () => {
     expect(call?.args[0]).toMatchObject({
       ids: ["c1", "c2"],
       overwrite: true,
-      rule: { preset: "vip_90_110", termsDays: 90, holdWhenInvoiceDaysOver: 110 },
+      rule: { preset: "relaxed", graceDays: 30, minOverdue: 50 },
       actorEmail: "josh@feldart.com",
     });
   });

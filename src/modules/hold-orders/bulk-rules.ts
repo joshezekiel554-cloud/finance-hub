@@ -37,8 +37,10 @@ export type CandidateRow = {
   holdStatus: string | null;
   balance: string | null;
   overdueBalance: string | null;
+  // customers.payment_terms (finance-owned, read-only here), e.g. "Net 60".
+  paymentTerms: string | null;
   // Explicit rule, if any.
-  rule: { preset: HoldRulePreset; label: string } | null;
+  rule: { preset: HoldRulePreset; label: string; graceDays: number } | null;
   // No explicit rule, in the default rule's scope (b2b). Whether that
   // default is actually ON is in the settings payload.
   defaultScope: boolean;
@@ -57,6 +59,7 @@ export async function loadCandidateRows(
       holdStatus: customers.holdStatus,
       balance: customers.balance,
       overdueBalance: customers.overdueBalance,
+      paymentTerms: customers.paymentTerms,
       rule: customerHoldRules,
     })
     .from(customers)
@@ -72,7 +75,13 @@ export async function loadCandidateRows(
     holdStatus: r.holdStatus,
     balance: r.balance,
     overdueBalance: r.overdueBalance,
-    rule: r.rule ? { preset: r.rule.preset, label: describeRule(rowToRule(r.rule, config.presets)) } : null,
+    paymentTerms: r.paymentTerms,
+    rule: r.rule
+      ? (() => {
+          const resolved = rowToRule(r.rule, config.presets);
+          return { preset: r.rule.preset, label: describeRule(resolved), graceDays: resolved.graceDays };
+        })()
+      : null,
     defaultScope: !r.rule && inDefaultRuleScope(r),
   }));
 }
@@ -94,7 +103,7 @@ export function candidateWhere(
         ? isNull(customerHoldRules.customerId)
         : and(isNull(customerHoldRules.customerId), eq(customers.customerType, "b2b"));
     case "preset":
-      return eq(customerHoldRules.preset, preset && HOLD_RULE_PRESETS.includes(preset) ? preset : "standard_30_45");
+      return eq(customerHoldRules.preset, preset && HOLD_RULE_PRESETS.includes(preset) ? preset : "standard");
   }
 }
 
@@ -193,9 +202,8 @@ export async function previewBulkRule(args: {
 function sameRule(a: ResolvedHoldRule, b: ResolvedHoldRule): boolean {
   return (
     a.preset === b.preset &&
-    a.termsDays === b.termsDays &&
-    a.holdWhenInvoiceDaysOver === b.holdWhenInvoiceDaysOver &&
-    a.minBalance === b.minBalance &&
+    a.graceDays === b.graceDays &&
+    a.minOverdue === b.minOverdue &&
     a.autoStartLadder === b.autoStartLadder &&
     a.autoReleaseOnPayment === b.autoReleaseOnPayment &&
     a.notifyWarehouse === b.notifyWarehouse &&

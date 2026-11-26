@@ -62,13 +62,14 @@ describe("rule form", () => {
     expect(NEW_RULE_DRAFT).toMatchObject({ autoStartLadder: false, notifyWarehouse: true, autoReleaseOnPayment: true });
   });
   it("presets show their fixed numbers; never shows none", () => {
-    expect(displayNumbers({ ...NEW_RULE_DRAFT, preset: "vip_90_110" })).toEqual({ termsDays: 90, holdWhenInvoiceDaysOver: 110, minBalance: 50 });
+    expect(displayNumbers({ ...NEW_RULE_DRAFT, preset: "relaxed" })).toEqual({ graceDays: 30, minOverdue: 50 });
     expect(displayNumbers({ ...NEW_RULE_DRAFT, preset: "never" })).toBeNull();
   });
   it("custom validation mirrors the server", () => {
-    expect(draftToBody({ ...NEW_RULE_DRAFT, preset: "custom", termsDays: "60", holdWhenInvoiceDaysOver: "30" }).ok).toBe(false);
-    expect(draftToBody({ ...NEW_RULE_DRAFT, preset: "custom", termsDays: "abc", holdWhenInvoiceDaysOver: "30" }).ok).toBe(false);
-    const ok = draftToBody({ ...NEW_RULE_DRAFT, preset: "custom", termsDays: "45", holdWhenInvoiceDaysOver: "60", minBalance: "200" });
-    expect(ok).toMatchObject({ ok: true, body: { preset: "custom", termsDays: 45, holdWhenInvoiceDaysOver: 60, minBalance: 200 } });
+    expect(draftToBody({ ...NEW_RULE_DRAFT, preset: "custom", graceDays: "400" }).ok).toBe(false);
+    expect(draftToBody({ ...NEW_RULE_DRAFT, preset: "custom", graceDays: "abc" }).ok).toBe(false);
+    expect(draftToBody({ ...NEW_RULE_DRAFT, preset: "custom", graceDays: "" }).ok).toBe(false);
+    const ok = draftToBody({ ...NEW_RULE_DRAFT, preset: "custom", graceDays: "20", minOverdue: "200" });
+    expect(ok).toMatchObject({ ok: true, body: { preset: "custom", graceDays: 20, minOverdue: 200 } });
   });
 });

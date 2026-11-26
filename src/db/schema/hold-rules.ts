@@ -17,7 +17,9 @@ import { users } from "./auth";
 // rule in Hold Orders → Settings (ships off; see
 // src/modules/hold-orders/effective-rules.ts). A row always beats the
 // default, including "never". For preset rows the stored numbers are a
-// snapshot; evaluation uses the live preset numbers from Settings. Semantics
+// snapshot; evaluation uses the live preset numbers from Settings. Rules are
+// OVERDUE-based since migration 0063 (days past each invoice's due date);
+// terms are not stored here — they're the customer's payment_terms. Semantics
 // of the numbers: src/modules/hold-orders/presets.ts. Every change is
 // audit-logged (entity "customer_hold_rule").
 export const customerHoldRules = mysqlTable(
@@ -26,19 +28,11 @@ export const customerHoldRules = mysqlTable(
     customerId: varchar("customer_id", { length: 24 })
       .primaryKey()
       .references(() => customers.id, { onDelete: "cascade" }),
-    preset: mysqlEnum("preset", [
-      "standard_30_45",
-      "extended_60_75",
-      "vip_90_110",
-      "strict",
-      "never",
-      "custom",
-    ]).notNull(),
-    termsDays: int("terms_days").notNull(),
-    // Hold when an open invoice is MORE than this many days past its
-    // invoice date (not days past due).
-    holdWhenInvoiceDaysOver: int("hold_when_invoice_days_over").notNull(),
-    minBalance: decimal("min_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+    preset: mysqlEnum("preset", ["strict", "standard", "relaxed", "never", "custom"]).notNull(),
+    // Hold when an open invoice is MORE than this many days past its due date.
+    graceDays: int("grace_days").notNull().default(15),
+    // ...and the customer's overdue balance is at least this much.
+    minOverdue: decimal("min_overdue", { precision: 12, scale: 2 }).notNull().default("50"),
     autoStartLadder: boolean("auto_start_ladder").notNull().default(false),
     autoReleaseOnPayment: boolean("auto_release_on_payment").notNull().default(true),
     notifyWarehouse: boolean("notify_warehouse").notNull().default(true),

@@ -5,7 +5,8 @@ import { api, ApiError, type BulkPreviewResponse } from "./api";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Button } from "../components/ui/button";
-import { HOLD_RULE_PRESETS, presetLabel, type HoldRulePreset, type PresetTable } from "../../modules/hold-orders/presets";
+import { HOLD_RULE_PRESETS, graceText, presetLabel, type HoldRulePreset, type PresetTable } from "../../modules/hold-orders/presets";
+import { termsLine } from "../../modules/hold-orders/terms";
 import { NEW_RULE_DRAFT, displayNumbers, draftToBody, type RuleDraft } from "./lib/rule-form";
 import {
   BULK_PICK_MAX,
@@ -18,7 +19,7 @@ import {
   toggleId,
 } from "./lib/bulk-picker";
 import { CANDIDATE_SOURCE_LABELS, type CandidateSource } from "./lib/settings-form";
-import { formatDateTime, formatMoney } from "./lib/view";
+import { formatDateTime, formatMoney, owesLine } from "./lib/view";
 
 const SOURCES: CandidateSource[] = ["shopify_b2b", "finance_b2b", "no_rule", "preset"];
 
@@ -35,7 +36,7 @@ export function BulkPicker({
 }) {
   const qc = useQueryClient();
   const [source, setSource] = useState<CandidateSource>("finance_b2b");
-  const [sourcePreset, setSourcePreset] = useState<HoldRulePreset>("standard_30_45");
+  const [sourcePreset, setSourcePreset] = useState<HoldRulePreset>("standard");
   const [search, setSearch] = useState("");
   // "Has no rule yet": b2b only unless this is ticked.
   const [allTypes, setAllTypes] = useState(false);
@@ -82,6 +83,8 @@ export function BulkPicker({
 
   const set = (patch: Partial<RuleDraft>) => setDraft({ ...draft, ...patch });
   const nums = displayNumbers(draft, presets);
+  const draftRule =
+    draft.preset === "never" ? { preset: "never", graceDays: 0 } : nums && Number.isFinite(nums.graceDays) ? { preset: draft.preset, graceDays: nums.graceDays } : null;
   const skipped = skippedCount(rows, selected, overwrite);
   const tooMany = selected.size > BULK_PICK_MAX;
   const candError = candidates.error instanceof ApiError ? candidates.error.message : candidates.error ? "Couldn't load customers." : null;
@@ -191,10 +194,9 @@ export function BulkPicker({
                     <input type="checkbox" className="mt-1" checked={selected.has(r.id)} onChange={() => setSelected(toggleId(selected, r.id))} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm text-primary">{r.name}</span>
-                      <span className="block truncate text-xs text-muted">
-                        {r.email ?? "no email"}
-                        {r.overdueBalance && Number(r.overdueBalance) > 0 ? ` · ${formatMoney(r.overdueBalance)} overdue` : ""}
-                      </span>
+                      <span className="block truncate text-xs text-muted">{r.email ?? "no email"}</span>
+                      <span className="block truncate text-xs text-secondary tabular-nums">{owesLine(r.balance, r.overdueBalance)}</span>
+                      <RowTerms terms={r.paymentTerms} draftRule={draftRule} />
                     </span>
                     <span className="shrink-0 text-right text-xs text-secondary">{currentRuleLabel(r, defaultRuleOn)}</span>
                   </label>
@@ -233,15 +235,15 @@ export function BulkPicker({
           </Select>
         </label>
         {draft.preset === "custom" ? (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <NumField label="Terms (days)" value={draft.termsDays} onChange={(v) => set({ termsDays: v })} />
-            <NumField label="Hold when older than (days)" value={draft.holdWhenInvoiceDaysOver} onChange={(v) => set({ holdWhenInvoiceDaysOver: v })} />
-            <NumField label="Min balance ($)" value={draft.minBalance} onChange={(v) => set({ minBalance: v })} />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <NumField label="Hold after (days overdue)" value={draft.graceDays} onChange={(v) => set({ graceDays: v })} />
+            <NumField label="Min overdue ($)" value={draft.minOverdue} onChange={(v) => set({ minOverdue: v })} />
           </div>
         ) : nums ? (
           <p className="text-xs text-secondary">
-            Holds new orders when any open invoice is more than {nums.holdWhenInvoiceDaysOver} days old
-            {nums.minBalance > 0 ? ` and they owe at least ${formatMoney(nums.minBalance)}` : ""}.
+            Holds new orders once any invoice is {nums.graceDays > 0 ? `more than ${graceText(nums.graceDays)}` : "overdue"} (past its
+            due date){nums.minOverdue > 0 ? ` and at least ${formatMoney(nums.minOverdue)} is overdue` : ""}. Each customer's own terms
+            set the due dates.
           </p>
         ) : null}
         {draft.preset !== "never" ? (
@@ -321,4 +323,10 @@ function Check({ checked, onChange, label }: { checked: boolean; onChange: (v: b
       <span>{label}</span>
     </label>
   );
+}
+
+/** Per-row terms, showing where the rule being applied would hold them. */
+function RowTerms({ terms, draftRule }: { terms: string | null; draftRule: { preset: string; graceDays: number } | null }) {
+  const t = termsLine(terms, draftRule);
+  return <span className={`block truncate text-xs ${t.known ? "text-secondary" : "text-accent-warning"}`}>{t.text}</span>;
 }

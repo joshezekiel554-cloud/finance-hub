@@ -24,7 +24,7 @@ import { customers } from "../../db/schema/customers.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { recordHoldTransition } from "../orders/hold-alerts.js";
 import { planHoldAlertEmail, sendPlannedEmail } from "../orders/hold-email-plan.js";
-import { loadCandidateOrders, loadEffectiveRules, loadOpenInvoices } from "./rules-store.js";
+import { loadCandidateOrders, loadCustomerTerms, loadEffectiveRules, loadOpenInvoices } from "./rules-store.js";
 import { evaluateCustomerRule, ordersRuleWouldHold, type RuleHit } from "./rule-engine.js";
 import { parseHoldsConfig, type HoldsConfig } from "./holds-settings.js";
 import type { ResolvedHoldRule } from "./presets.js";
@@ -82,15 +82,16 @@ export async function planRuleHolds(
         .where(inArray(customers.id, ids.slice(i, i + 1000)))),
     );
   }
-  const [invoicesBy, ordersBy] = await Promise.all([
+  const [invoicesBy, ordersBy, termsBy] = await Promise.all([
     loadOpenInvoices(ids),
     loadCandidateOrders(ids, now, config.ruleOrderLookbackDays),
+    loadCustomerTerms(ids),
   ]);
   const names = new Map(custRows.map((r) => [r.id, r.name]));
   const promises = new Map(custRows.map((r) => [r.id, r.promisedPayBy ?? null]));
 
   for (const [customerId, rule] of active) {
-    const evaluation = evaluateCustomerRule(rule, invoicesBy.get(customerId) ?? [], now);
+    const evaluation = evaluateCustomerRule(rule, invoicesBy.get(customerId) ?? [], now, termsBy.get(customerId));
     const toHold = ordersRuleWouldHold(evaluation, ordersBy.get(customerId) ?? []);
     if (toHold.length === 0) continue;
     if (config.ruleHoldsRespectPromise && isPromiseActive(promises.get(customerId) ?? null, now)) {

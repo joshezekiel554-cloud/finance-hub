@@ -24,7 +24,7 @@ import { emailLog } from "../../db/schema/crm.js";
 import { parseShipmentHtml } from "../b2b-invoicing/parser.js";
 import { listFlaggedOverdueOrders } from "../orders/overdue-alerts.js";
 import { classifyOrderHoldAlert } from "../orders/hold-alerts.js";
-import { loadCandidateOrders, loadEffectiveRules, loadOpenInvoices } from "./rules-store.js";
+import { loadCandidateOrders, loadCustomerTerms, loadEffectiveRules, loadOpenInvoices } from "./rules-store.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { parseHoldsConfig } from "./holds-settings.js";
 import { loadPromiseSources } from "./promise-source.js";
@@ -64,6 +64,10 @@ export type HoldBoardRow = {
   // Present only when the viewer may see balances.
   balance?: string | null;
   overdueBalance?: string | null;
+  // Customer terms (finance-owned, read-only) + the rule they run on, for the
+  // "Net 60 · holds at day 75 (15 days overdue)" line.
+  paymentTerms: string | null;
+  rule: { preset: string; graceDays: number; label: string } | null;
   holdState: string;
   holdReason: string | null;
   why: string;
@@ -191,6 +195,7 @@ const orderCols = {
   customerHoldStatus: customers.holdStatus,
   balance: customers.balance,
   overdueBalance: customers.overdueBalance,
+  paymentTerms: customers.paymentTerms,
   promisedPayBy: customers.promisedPayBy,
   promiseNote: customers.promiseNote,
 };
@@ -229,13 +234,14 @@ export async function loadHoldBoard(opts: {
   const rules = await loadEffectiveRules(config);
   const ruleIds = [...rules.entries()].filter(([, r]) => r.preset !== "never").map(([id]) => id);
   if (ruleIds.length > 0) {
-    const [inv, ord] = await Promise.all([
+    const [inv, ord, terms] = await Promise.all([
       loadOpenInvoices(ruleIds),
       loadCandidateOrders(ruleIds, now, config.ruleOrderLookbackDays),
+      loadCustomerTerms(ruleIds),
     ]);
     for (const id of ruleIds) {
       const rule = rules.get(id)!;
-      const ev = evaluateCustomerRule(rule, inv.get(id) ?? [], now);
+      const ev = evaluateCustomerRule(rule, inv.get(id) ?? [], now, terms.get(id));
       for (const o of ordersRuleWouldHold(ev, ord.get(id) ?? [])) {
         addRisk(o.orderId, ev.why ?? `Rule: ${describeRule(rule)}`);
       }
@@ -400,6 +406,11 @@ export async function loadHoldBoard(opts: {
             emailUrl: (r.customerId ? promiseSources.get(r.customerId)?.url : undefined) ?? null,
           }
         : null,
+      paymentTerms: r.paymentTerms ?? null,
+      rule: (() => {
+        const er = r.customerId ? rules.get(r.customerId) : undefined;
+        return er ? { preset: er.preset, graceDays: er.graceDays, label: describeRule(er) } : null;
+      })(),
       releasedAt: iso(r.holdReleasedAt),
       invoiced: key ? (invoiceBy.get(key) ?? null) : null,
       shipped,

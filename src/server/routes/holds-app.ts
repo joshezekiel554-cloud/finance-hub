@@ -53,6 +53,7 @@ import {
   deleteRule,
   getRule,
   listRules,
+  loadCustomerContext,
   loadDefaultRuleCustomerIds,
   previewRule,
   upsertRule,
@@ -112,9 +113,8 @@ const noteBody = z.object({ note: z.string().trim().min(1).max(1000) });
 
 const ruleBody = z.object({
   preset: z.enum(HOLD_RULE_PRESETS),
-  termsDays: z.number().int().nullable().optional(),
-  holdWhenInvoiceDaysOver: z.number().int().nullable().optional(),
-  minBalance: z.number().nullable().optional(),
+  graceDays: z.number().int().nullable().optional(),
+  minOverdue: z.number().nullable().optional(),
   autoStartLadder: z.boolean().default(false),
   autoReleaseOnPayment: z.boolean().default(true),
   notifyWarehouse: z.boolean().default(true),
@@ -275,7 +275,7 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
     const parsed = bulkBody.safeParse(req.body);
     if (!parsed.success) return badRequest(reply, parsed.error);
     const config = await loadHoldsConfig();
-    const resolved = resolveHoldRule(parsed.data.rule, config.presets, config.defaultMinBalance);
+    const resolved = resolveHoldRule(parsed.data.rule, config.presets, config.defaultMinOverdue);
     if (!resolved.ok) return reply.code(400).send({ error: resolved.error });
     const preview = await previewBulkRule({
       ids: parsed.data.customerIds,
@@ -292,7 +292,7 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
     const parsed = bulkBody.safeParse(req.body);
     if (!parsed.success) return badRequest(reply, parsed.error);
     const config = await loadHoldsConfig();
-    const resolved = resolveHoldRule(parsed.data.rule, config.presets, config.defaultMinBalance);
+    const resolved = resolveHoldRule(parsed.data.rule, config.presets, config.defaultMinOverdue);
     if (!resolved.ok) return reply.code(400).send({ error: resolved.error });
     const result = await applyBulkRule({
       ids: parsed.data.customerIds,
@@ -401,7 +401,7 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
       .safeParse(req.body);
     if (!parsed.success) return badRequest(reply, parsed.error);
     const config = await loadHoldsConfig();
-    const resolved = resolveHoldRule(parsed.data.rule, config.presets, config.defaultMinBalance);
+    const resolved = resolveHoldRule(parsed.data.rule, config.presets, config.defaultMinOverdue);
     if (!resolved.ok) return reply.code(400).send({ error: resolved.error });
     const preview = await previewRule(parsed.data.customerId, resolved.rule, new Date(), config.ruleOrderLookbackDays);
     return reply.send({ rule: resolved.rule, ...preview });
@@ -411,7 +411,18 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
     const access = await requireHoldsAccess(req, reply, "view");
     if (!access) return;
     const config = await loadHoldsConfig();
-    return reply.send({ rule: await getRule(req.params.customerId, config.presets), canEdit: can(access.role, "editRules") });
+    const [rule, customer] = await Promise.all([
+      getRule(req.params.customerId, config.presets),
+      loadCustomerContext(req.params.customerId),
+    ]);
+    return reply.send({
+      rule,
+      customer,
+      financeCustomerUrl: can(access.role, "financeLinks")
+        ? `${env.PUBLIC_URL}/customers/${encodeURIComponent(req.params.customerId)}`
+        : null,
+      canEdit: can(access.role, "editRules"),
+    });
   });
 
   app.put<{ Params: { customerId: string } }>("/rules/:customerId", async (req, reply) => {
@@ -420,7 +431,7 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
     const parsed = ruleBody.safeParse(req.body);
     if (!parsed.success) return badRequest(reply, parsed.error);
     const config = await loadHoldsConfig();
-    const resolved = resolveHoldRule(parsed.data, config.presets, config.defaultMinBalance);
+    const resolved = resolveHoldRule(parsed.data, config.presets, config.defaultMinOverdue);
     if (!resolved.ok) return reply.code(400).send({ error: resolved.error });
     const r = await upsertRule({
       customerId: req.params.customerId,
