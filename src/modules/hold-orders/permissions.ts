@@ -21,6 +21,7 @@ export type HoldsPermission =
   | "recordOnly"
   | "seeBalances"
   | "editRules"
+  | "editSettings"
   | "financeLinks";
 
 export type HoldsPermissions = Record<HoldsPermission, boolean>;
@@ -35,6 +36,7 @@ export const HOLDS_ROLE_PERMISSIONS: Record<HoldsRole, HoldsPermissions> = {
     recordOnly: true,
     seeBalances: true,
     editRules: true,
+    editSettings: true,
     financeLinks: true,
   },
   holds: {
@@ -46,6 +48,9 @@ export const HOLDS_ROLE_PERMISSIONS: Record<HoldsRole, HoldsPermissions> = {
     recordOnly: true,
     seeBalances: true,
     editRules: false,
+    // Operator decision B: sales@ can VIEW Settings (read-only); every
+    // settings write is admin-only.
+    editSettings: false,
     financeLinks: false,
   },
 };

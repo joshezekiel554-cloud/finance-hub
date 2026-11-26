@@ -72,6 +72,7 @@ describe("roles", () => {
       recordOnly: true,
       seeBalances: true,
       editRules: false,
+      editSettings: false,
       financeLinks: false,
     });
     expect(can("admin", "editRules")).toBe(true);
