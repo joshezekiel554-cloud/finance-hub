@@ -22,19 +22,23 @@ import { recordHoldTransition } from "./hold-alerts.js";
 import {
   loadOrderTemplate,
   renderOrderTemplate,
+  ladderDayVars,
 } from "./templates.js";
 import {
   loadInternalHoldRecipients,
   resolveHoldCustomerRecipients,
 } from "./recipients.js";
 import { isPromiseActive } from "../promises/promise-state.js";
+import { HOLDS_CONFIG_DEFAULTS, parseHoldsConfig } from "../hold-orders/holds-settings.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
 const log = createLogger({ component: "orders.hold-ladder" });
 
-export const HOLD_WARN_DAYS = 7;
-export const HOLD_CANCEL_DAYS = 10;
+// DEFAULTS only — the live days are Hold Orders → Settings → Email ladder
+// (order_hold_warn_days / order_hold_cancel_days), read per run.
+export const HOLD_WARN_DAYS = HOLDS_CONFIG_DEFAULTS.warnDays;
+export const HOLD_CANCEL_DAYS = HOLDS_CONFIG_DEFAULTS.cancelDays;
 
 type LadderReason = string | null;
 
@@ -141,6 +145,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
   }
 
   const settings = await loadAppSettings();
+  const { warnDays, cancelDays } = parseHoldsConfig(settings);
   const internalRecipients = loadInternalHoldRecipients(settings);
   const noticeTpl = loadOrderTemplate(settings, "hold_notice");
   const warningTpl = loadOrderTemplate(settings, "hold_warning");
@@ -178,6 +183,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
       reason_clause: reasonClause(r.holdReason),
       action_clause: actionClause(r.holdReason),
       age_days: String(ageDays),
+      ...ladderDayVars({ warnDays, cancelDays }),
       customer_url: r.customerId
         ? `${env.PUBLIC_URL}/customers/${r.customerId}`
         : "—",
@@ -215,7 +221,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
       }
 
       // Day 7 — customer final warning (Email 2).
-      if (ageDays >= HOLD_WARN_DAYS && !r.holdWarnedAt) {
+      if (ageDays >= warnDays && !r.holdWarnedAt) {
         const to = await resolveHoldCustomerRecipients(r);
         if (to) {
           const rendered = renderOrderTemplate(warningTpl, vars);
@@ -244,7 +250,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
 
       // Day 10 — internal cancel notice (Email 3).
       if (
-        ageDays >= HOLD_CANCEL_DAYS &&
+        ageDays >= cancelDays &&
         r.holdWarnedAt &&
         !r.holdCancelNotifiedAt &&
         internalRecipients

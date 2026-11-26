@@ -32,6 +32,7 @@ import { loadAppSettings } from "../statements/settings.js";
 import { unshippedOrderSql } from "./hold-alerts.js";
 import { renderTemplate } from "../email-compose/index.js";
 import { noActivePromiseSql } from "../promises/promise-state.js";
+import { HOLDS_CONFIG_DEFAULTS, parseHoldsConfig } from "../hold-orders/holds-settings.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -39,10 +40,12 @@ const log = createLogger({ component: "orders.overdue-alerts" });
 
 // Only orders this fresh are eligible for a (first-time) email alert — keeps the
 // 30-day first sync from back-blasting and matches the hold-alert window.
-export const OVERDUE_ALERT_MAX_AGE_DAYS = 3;
+// DEFAULT only — live value: Hold Orders → Settings (order_overdue_alert_lookback_days).
+export const OVERDUE_ALERT_MAX_AGE_DAYS = HOLDS_CONFIG_DEFAULTS.overdueAlertLookbackDays;
 // The dashboard widget looks back further so flagged orders stay visible for a
-// while after they trigger.
-export const OVERDUE_WIDGET_LOOKBACK_DAYS = 30;
+// while after they trigger. DEFAULT only — live value:
+// order_overdue_widget_lookback_days (also drives the Hold Orders at-risk tab).
+export const OVERDUE_WIDGET_LOOKBACK_DAYS = HOLDS_CONFIG_DEFAULTS.overdueWidgetLookbackDays;
 
 export const DEFAULT_OVERDUE_THRESHOLD_GBP = 1000;
 export const DEFAULT_NO_CONTACT_DAYS = 14;
@@ -130,15 +133,32 @@ export type FlaggedOverdueOrder = {
   alerted: boolean;
 };
 
+export type OverdueFlagConfig = {
+  thresholdGbp: number;
+  noContactDays: number;
+  lookbackDays: number;
+};
+
 // Dashboard widget data — currently-qualifying recent orders, newest first.
+// `override` = draft thresholds for the Hold Orders Settings dry run (reads only).
 export async function listFlaggedOverdueOrders(
   limit = 10,
+  override?: OverdueFlagConfig,
 ): Promise<FlaggedOverdueOrder[]> {
-  const settings = await loadAppSettings();
-  const cfg = parseOverdueConfig(settings);
+  let cfg: OverdueFlagConfig;
+  if (override) cfg = override;
+  else {
+    const settings = await loadAppSettings();
+    const base = parseOverdueConfig(settings);
+    cfg = {
+      thresholdGbp: base.thresholdGbp,
+      noContactDays: base.noContactDays,
+      lookbackDays: parseHoldsConfig(settings).overdueWidgetLookbackDays,
+    };
+  }
   const now = Date.now();
   const conds = overdueOrderConditions({
-    orderCutoff: new Date(now - OVERDUE_WIDGET_LOOKBACK_DAYS * 86_400_000),
+    orderCutoff: new Date(now - cfg.lookbackDays * 86_400_000),
     thresholdGbp: cfg.thresholdGbp,
     contactCutoff: new Date(now - cfg.noContactDays * 86_400_000),
   });
@@ -233,8 +253,9 @@ export async function runOrderOverdueAlerts(): Promise<RunOrderOverdueAlertsResu
   const cfg = parseOverdueConfig(settings);
   const now = Date.now();
 
+  const lookbackDays = parseHoldsConfig(settings).overdueAlertLookbackDays;
   const conds = overdueOrderConditions({
-    orderCutoff: new Date(now - OVERDUE_ALERT_MAX_AGE_DAYS * 86_400_000),
+    orderCutoff: new Date(now - lookbackDays * 86_400_000),
     thresholdGbp: cfg.thresholdGbp,
     contactCutoff: new Date(now - cfg.noContactDays * 86_400_000),
   });

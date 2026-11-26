@@ -7,6 +7,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 const h = vi.hoisted(() => ({
   user: null as { id: string; email: string; name: string | null; image: string | null } | null,
   calls: [] as Array<{ fn: string; args: unknown[] }>,
+  shopifyDown: false,
 }));
 
 vi.mock("../../lib/env.js", () => ({
@@ -58,6 +59,54 @@ vi.mock("../../modules/hold-orders/rules-store.js", () => ({
   upsertRule: record("upsertRule"),
   deleteRule: record("deleteRule"),
   previewRule: vi.fn(async () => ({ evaluation: { wouldHold: false }, orders: [] })),
+  loadDefaultRuleCustomerIds: vi.fn(async () => ["c-b2b-1", "c-b2b-2"]),
+}));
+vi.mock("../../modules/hold-orders/settings-store.js", async () => {
+  const { HOLDS_CONFIG_DEFAULTS } = await import("../../modules/hold-orders/holds-settings.js");
+  return {
+    loadHoldsConfig: vi.fn(async () => HOLDS_CONFIG_DEFAULTS),
+    loadHoldsConfigWithTemplateCheck: vi.fn(async () => ({ config: HOLDS_CONFIG_DEFAULTS, ladderTemplateLiterals: ["hold_warning"] })),
+    loadLastChanged: vi.fn(async () => null),
+    saveHoldsConfig: vi.fn(async (a: unknown) => {
+      h.calls.push({ fn: "saveHoldsConfig", args: [a] });
+      return { changed: [{ key: "order_hold_warn_days", before: "7", after: "5" }] };
+    }),
+  };
+});
+vi.mock("../../modules/hold-orders/settings-preview.js", () => ({
+  dryRunHoldsConfig: vi.fn(async (cfg: unknown) => {
+    h.calls.push({ fn: "dryRunHoldsConfig", args: [cfg] });
+    return { hold: { count: 0, orders: [] }, flag: { count: 0, orders: [] } };
+  }),
+}));
+vi.mock("../../modules/hold-orders/exclusions.js", () => ({ loadExclusions: vi.fn(async () => []) }));
+vi.mock("../../modules/hold-orders/bulk-rules.js", () => ({
+  BULK_MAX_IDS: 1000,
+  CANDIDATE_SOURCES: ["shopify_b2b", "finance_b2b", "no_rule", "preset"],
+  candidateWhere: vi.fn(() => undefined),
+  loadCandidateRows: vi.fn(async () => [{ id: "c1" }]),
+  loadCandidateRowsByIds: vi.fn(async (ids: string[]) => ids.map((id) => ({ id }))),
+  previewBulkRule: vi.fn(async (a: unknown) => {
+    h.calls.push({ fn: "previewBulkRule", args: [a] });
+    return { targets: 1, skippedExisting: 0, unknown: 0, orderCount: 0, customersHit: 0, orders: [] };
+  }),
+  applyBulkRule: vi.fn(async (a: unknown) => {
+    h.calls.push({ fn: "applyBulkRule", args: [a] });
+    return { applied: 1, unchanged: 0, skippedExisting: 0, unknown: 0 };
+  }),
+}));
+vi.mock("../../integrations/shopify/client.js", () => ({ ShopifyClient: class {} }));
+vi.mock("../../integrations/shopify/customers.js", () => ({
+  listCustomersByTag: vi.fn(async () => {
+    if (h.shopifyDown) throw new Error("shopify 503");
+    return [{ id: 1, email: "a@x.com" }];
+  }),
+}));
+vi.mock("../../modules/crm/shopify-customer-match.js", () => ({
+  matchShopifyCustomers: vi.fn(async () => ({
+    matched: [{ id: "c-shop", displayName: "Shop Co", email: "a@x.com" }],
+    unmatched: [{ shopifyId: "2", name: "Ghost", email: "g@x.com" }],
+  })),
 }));
 
 import holdsAppRoute from "./holds-app.js";
@@ -73,6 +122,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   h.calls.length = 0;
+  h.shopifyDown = false;
 });
 
 const as = (email: string | null) => {
@@ -160,6 +210,115 @@ describe("ADMIN_EMAILS role", () => {
       payload: { ...vipRule, preset: "custom", termsDays: 60, holdWhenInvoiceDaysOver: 30 },
     });
     expect(put.statusCode).toBe(400);
+  });
+});
+
+describe("Settings (operator decision B: sales@ read-only, writes admin-only)", () => {
+  it("holds role: GET /settings 200 with canEdit=false; exclusions readable", async () => {
+    as("sales@feldart.com");
+    const res = await app.inject({ method: "GET", url: "/api/holds/settings" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      canEdit: false,
+      values: { defaultRuleEnabled: false, warnDays: 7, autoReleaseEmailsWarehouse: true, ruleHoldsRespectPromise: false },
+      defaultRuleScopeCount: 2,
+    });
+    const ex = await app.inject({ method: "GET", url: "/api/holds/settings/exclusions" });
+    expect(ex.statusCode).toBe(200);
+    expect(ex.json().financeUrl).toBeNull();
+  });
+
+  it("holds role: PATCH and preview → 403, nothing saved or dry-run", async () => {
+    as("sales@feldart.com");
+    const patch = await app.inject({ method: "PATCH", url: "/api/holds/settings", payload: { warnDays: 5 } });
+    const prev = await app.inject({ method: "POST", url: "/api/holds/settings/preview", payload: { draft: { warnDays: 5 } } });
+    expect([patch.statusCode, prev.statusCode]).toEqual([403, 403]);
+    expect(h.calls.filter((c) => c.fn === "saveHoldsConfig" || c.fn === "dryRunHoldsConfig")).toEqual([]);
+  });
+
+  it("holds role: bulk rule endpoints → 403", async () => {
+    as("sales@feldart.com");
+    const body = { customerIds: ["c1"], rule: vipRule, overwrite: false };
+    const cand = await app.inject({ method: "POST", url: "/api/holds/rules/candidates", payload: { source: "finance_b2b" } });
+    const prev = await app.inject({ method: "POST", url: "/api/holds/rules/bulk-preview", payload: body });
+    const apply = await app.inject({ method: "POST", url: "/api/holds/rules/bulk-apply", payload: body });
+    expect([cand.statusCode, prev.statusCode, apply.statusCode]).toEqual([403, 403, 403]);
+    expect(h.calls.filter((c) => c.fn === "applyBulkRule")).toEqual([]);
+  });
+
+  it("admin: GET canEdit=true; PATCH saves the merged config with the actor", async () => {
+    as("josh@feldart.com");
+    expect((await app.inject({ method: "GET", url: "/api/holds/settings" })).json().canEdit).toBe(true);
+    const res = await app.inject({ method: "PATCH", url: "/api/holds/settings", payload: { warnDays: 5 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().changed).toEqual(["order_hold_warn_days"]);
+    const call = h.calls.find((c) => c.fn === "saveHoldsConfig");
+    expect(call?.args[0]).toMatchObject({ next: { warnDays: 5, cancelDays: 10 }, userId: "u-josh@feldart.com", actorEmail: "josh@feldart.com" });
+  });
+
+  it("admin: invalid values → 400 with field errors (warn must be before cancel; bounds)", async () => {
+    as("josh@feldart.com");
+    const order = await app.inject({ method: "PATCH", url: "/api/holds/settings", payload: { warnDays: 12 } });
+    expect(order.statusCode).toBe(400);
+    expect(order.json().errors[0]).toMatchObject({ field: "warnDays" });
+    const bounds = await app.inject({ method: "PATCH", url: "/api/holds/settings", payload: { holdAlertLookbackDays: 0 } });
+    expect(bounds.statusCode).toBe(400);
+    const unknown = await app.inject({ method: "PATCH", url: "/api/holds/settings", payload: { bogus: 1 } });
+    expect(unknown.statusCode).toBe(400);
+    expect(h.calls.filter((c) => c.fn === "saveHoldsConfig")).toEqual([]);
+  });
+
+  it("admin: preview dry-runs the draft AND today's config, never saves", async () => {
+    as("josh@feldart.com");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/holds/settings/preview",
+      payload: { draft: { defaultRuleEnabled: true } },
+    });
+    expect(res.statusCode).toBe(200);
+    const runs = h.calls.filter((c) => c.fn === "dryRunHoldsConfig").map((c) => c.args[0] as { defaultRuleEnabled: boolean });
+    expect(runs.map((r) => r.defaultRuleEnabled).sort()).toEqual([false, true]);
+    expect(h.calls.filter((c) => c.fn === "saveHoldsConfig")).toEqual([]);
+  });
+});
+
+describe("bulk rule picker (admin)", () => {
+  beforeEach(() => as("josh@feldart.com"));
+
+  it("Shopify source: matched rows + unmatched list + fetchedAt", async () => {
+    const res = await app.inject({ method: "POST", url: "/api/holds/rules/candidates", payload: { source: "shopify_b2b" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ rows: [{ id: "c-shop" }], unmatched: [{ name: "Ghost" }], unmatchedCount: 1 });
+    expect(typeof res.json().fetchedAt).toBe("string");
+  });
+
+  it("Shopify down → 502 with a friendly message", async () => {
+    h.shopifyDown = true;
+    const res = await app.inject({ method: "POST", url: "/api/holds/rules/candidates", payload: { source: "shopify_b2b" } });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/Shopify/);
+  });
+
+  it("bulk apply resolves the preset and passes overwrite + actor through", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/holds/rules/bulk-apply",
+      payload: { customerIds: ["c1", "c2"], rule: vipRule, overwrite: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const call = h.calls.find((c) => c.fn === "applyBulkRule");
+    expect(call?.args[0]).toMatchObject({
+      ids: ["c1", "c2"],
+      overwrite: true,
+      rule: { preset: "vip_90_110", termsDays: 90, holdWhenInvoiceDaysOver: 110 },
+      actorEmail: "josh@feldart.com",
+    });
+  });
+
+  it("more than 1000 ids → 400", async () => {
+    const ids = Array.from({ length: 1001 }, (_, i) => `c${i}`);
+    const res = await app.inject({ method: "POST", url: "/api/holds/rules/bulk-preview", payload: { customerIds: ids, rule: vipRule } });
+    expect(res.statusCode).toBe(400);
   });
 });
 

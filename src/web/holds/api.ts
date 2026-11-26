@@ -3,7 +3,9 @@
 import type { HoldTab, LadderStage, Mismatch, ShippedInfo } from "../../modules/hold-orders/board-classify";
 import type { HoldsPermissions, HoldsRole } from "../../modules/hold-orders/permissions";
 import type { HoldRulePreset } from "../../modules/hold-orders/presets";
+import type { HoldsConfig, HoldsConfigPatch, LastChanged } from "../../modules/hold-orders/holds-settings";
 import type { EmailPreview } from "./lib/view";
+import type { CandidateSource, ExclusionKind } from "./lib/settings-form";
 
 export type Me = {
   user: { id: string; email: string | null; name: string | null; image: string | null } | null;
@@ -33,7 +35,7 @@ export type HoldRow = {
   chasing: boolean;
   pausedUntil: string | null;
   pauseNote: string | null;
-  promise: { payBy: string; note: string | null } | null;
+  promise: { payBy: string; note: string | null; emailUrl: string | null } | null;
   releasedAt: string | null;
   invoiced: { docNumber: string; status: string | null; balance: string } | null;
   shipped: ShippedInfo | null;
@@ -105,10 +107,72 @@ export type FoundOrder = {
   customerName: string | null;
 };
 
+export type SettingsResponse = {
+  values: HoldsConfig;
+  defaults: HoldsConfig;
+  canEdit: boolean;
+  lastChanged: LastChanged | null;
+  // b2b customers with no rule of their own (who the default rule would cover).
+  defaultRuleScopeCount: number;
+  // Stored ladder templates (order_tpl_*) that still say "3 days" / "day 7" / "day 10".
+  ladderTemplateLiterals: string[];
+};
+
+export type SettingsPreviewResponse = {
+  draft: {
+    hold: { count: number; orders: PreviewOrder[] };
+    flag: { count: number; orders: PreviewOrder[] };
+  };
+  current: { hold: number; flag: number };
+};
+
+export type PreviewOrder = { orderId: string; orderNumber: string | null; customerName: string | null; reason: string };
+
+export type ExclusionGroup = {
+  kind: ExclusionKind;
+  count: number;
+  items: Array<{ customerId: string; customerName: string | null; orderId?: string; orderNumber?: string | null }>;
+};
+
+export type CandidateRow = {
+  id: string;
+  name: string;
+  email: string | null;
+  customerType: string | null;
+  holdStatus: string | null;
+  balance: string | null;
+  overdueBalance: string | null;
+  rule: { preset: HoldRulePreset; label: string } | null;
+  defaultScope: boolean;
+};
+
+export type CandidatesResponse = {
+  source: CandidateSource;
+  rows: CandidateRow[];
+  unmatched: Array<{ shopifyId: string; name: string; email: string | null }>;
+  unmatchedCount?: number;
+  fetched?: number;
+  fetchedAt: string | null;
+};
+
+export type BulkPreviewResponse = {
+  targets: number;
+  skippedExisting: number;
+  unknown: number;
+  orderCount: number;
+  customersHit: number;
+  orders: Array<{ orderId: string; orderNumber: string | null; customerName: string | null; total: string | null; why: string }>;
+};
+
+export type BulkApplyResponse = { ok: true; applied: number; unchanged: number; skippedExisting: number; unknown: number };
+
+export type BulkBody = { customerIds: string[]; rule: Record<string, unknown>; overwrite: boolean };
+
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly details?: unknown,
   ) {
     super(message);
   }
@@ -124,7 +188,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const json: unknown = text ? JSON.parse(text) : {};
   if (!res.ok) {
     const err = (json as { error?: unknown }).error;
-    throw new ApiError(typeof err === "string" ? err : `Request failed (${res.status})`, res.status);
+    throw new ApiError(typeof err === "string" ? err : `Request failed (${res.status})`, res.status, json);
   }
   return json as T;
 }
@@ -158,4 +222,15 @@ export const api = {
   saveRule: (customerId: string, rule: Record<string, unknown>) =>
     call<{ ok: true }>(`/rules/${encodeURIComponent(customerId)}`, { method: "PUT", body: JSON.stringify(rule) }),
   deleteRule: (customerId: string) => call<{ ok: true }>(`/rules/${encodeURIComponent(customerId)}`, { method: "DELETE" }),
+  candidates: (source: CandidateSource, preset?: HoldRulePreset, allTypes = false) =>
+    call<CandidatesResponse>("/rules/candidates", { method: "POST", body: JSON.stringify({ source, preset, allTypes }) }),
+  bulkPreview: (body: BulkBody) =>
+    call<BulkPreviewResponse>("/rules/bulk-preview", { method: "POST", body: JSON.stringify(body) }),
+  bulkApply: (body: BulkBody) => call<BulkApplyResponse>("/rules/bulk-apply", { method: "POST", body: JSON.stringify(body) }),
+  settings: () => call<SettingsResponse>("/settings"),
+  exclusions: () => call<{ groups: ExclusionGroup[]; financeUrl: string | null }>("/settings/exclusions"),
+  previewSettings: (draft: HoldsConfigPatch) =>
+    call<SettingsPreviewResponse>("/settings/preview", { method: "POST", body: JSON.stringify({ draft }) }),
+  saveSettings: (patch: HoldsConfigPatch) =>
+    call<{ ok: true; changed: string[]; values: HoldsConfig }>("/settings", { method: "PATCH", body: JSON.stringify(patch) }),
 };

@@ -143,5 +143,33 @@ export const APP_SETTING_KEYS = [
   // timesheet is enabled (the dashboard card + the in/out routes are gated to
   // this list). Seed ["<hillel-user-id>"]. Missing/blank = feature off for all.
   "time_clock_user_ids",
+  // Hold Orders v2 → Settings (holdorders.feldart.com, admin-edited; parsed
+  // by src/modules/hold-orders/holds-settings.ts parseHoldsConfig, which
+  // holds the defaults + bounds). Blank/garbage = the default.
+  //   order_hold_alert_lookback_days    — new-order window for account-state hold alerts (3)
+  //   order_overdue_alert_lookback_days — new-order window for the overdue review email (3)
+  //   order_overdue_widget_lookback_days — overdue "Orders to review" list window (30)
+  //   holds_rule_order_lookback_days    — open-order window for rule holds + at-risk (30)
+  //   order_hold_warn_days / order_hold_cancel_days — ladder Day-7 / Day-10
+  //   holds_default_rule_enabled        — "true"/"false", default OFF
+  //   holds_default_rule_preset         — numbered preset (standard_30_45)
+  //   holds_default_rule_scope          — "b2b" (customers.customer_type)
+  //   holds_preset_overrides            — JSON {preset: {termsDays, holdWhenInvoiceDaysOver, minBalance}}
+  //   holds_default_min_balance         — custom-rule min balance fallback (50)
+  //   holds_auto_release_emails_warehouse — H8, default true
+  //   holds_rule_holds_respect_promise  — H9, default false
+  "order_hold_alert_lookback_days",
+  "order_overdue_alert_lookback_days",
+  "order_overdue_widget_lookback_days",
+  "holds_rule_order_lookback_days",
+  "order_hold_warn_days",
+  "order_hold_cancel_days",
+  "holds_default_rule_enabled",
+  "holds_default_rule_preset",
+  "holds_default_rule_scope",
+  "holds_preset_overrides",
+  "holds_default_min_balance",
+  "holds_auto_release_emails_warehouse",
+  "holds_rule_holds_respect_promise",
 ] as const;
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[number];

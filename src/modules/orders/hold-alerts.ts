@@ -33,6 +33,7 @@ import { auditLog } from "../../db/schema/audit.js";
 import { loadAppSettings } from "../statements/settings.js";
 import { loadOrderTemplate, renderOrderTemplate } from "./templates.js";
 import { loadInternalHoldRecipients } from "./recipients.js";
+import { HOLDS_CONFIG_DEFAULTS, parseHoldsConfig } from "../hold-orders/holds-settings.js";
 import { env } from "../../lib/env.js";
 import { createLogger } from "../../lib/logger.js";
 
@@ -40,8 +41,9 @@ const log = createLogger({ component: "orders.hold-alerts" });
 
 // Don't back-blast historical orders: only orders newer than this are eligible
 // for a (first-time) alert. Generous enough to catch a "customer put on hold
-// after they ordered" case on the next sync.
-export const HOLD_ALERT_MAX_AGE_DAYS = 3;
+// after they ordered" case on the next sync. DEFAULT only — the live value is
+// Hold Orders → Settings (order_hold_alert_lookback_days).
+export const HOLD_ALERT_MAX_AGE_DAYS = HOLDS_CONFIG_DEFAULTS.holdAlertLookbackDays;
 
 // Shopify financial_status values that mean "money is in" — anything else (incl.
 // null/pending/authorized/partially_paid) counts as not-yet-paid for a prepay
@@ -168,12 +170,14 @@ export type RunOrderHoldAlertsResult = {
 // Evaluate recent, un-alerted orders and send a hold alert for each violation.
 // Idempotent per order via orders.hold_alerted_at. Send failures leave the
 // stamp unset so the next run retries.
-export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
-  const cutoff = new Date(Date.now() - HOLD_ALERT_MAX_AGE_DAYS * 86_400_000);
-
-  // Orders linked to a customer who's on hold, OR payment-upfront with an
-  // unpaid order. Not cancelled, not yet alerted, recent.
-  const rows = await db
+/**
+ * Orders the standard pass would alert/hold: linked to a customer who's on
+ * hold, OR payment-upfront with an unpaid order. Not cancelled, not yet
+ * alerted, newer than `lookbackDays`. Reads only (the Settings dry run uses it).
+ */
+export async function findHoldAlertCandidates(lookbackDays: number, now: Date = new Date()) {
+  const cutoff = new Date(now.getTime() - lookbackDays * 86_400_000);
+  return db
     .select({
       order: orders,
       holdStatus: customers.holdStatus,
@@ -196,12 +200,17 @@ export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
       ),
     )
     .limit(200);
+}
+
+export async function runOrderHoldAlerts(): Promise<RunOrderHoldAlertsResult> {
+  const settings = await loadAppSettings();
+  const config = parseHoldsConfig(settings);
+  const rows = await findHoldAlertCandidates(config.holdAlertLookbackDays);
 
   if (rows.length === 0) {
     return { candidates: 0, sent: 0, skipped: 0 };
   }
 
-  const settings = await loadAppSettings();
   const recipients = loadInternalHoldRecipients(settings);
   const alertTpl = loadOrderTemplate(settings, "hold_alert");
 
@@ -405,9 +414,8 @@ export async function listHoldableHoldOrders(
 // orders-sync.
 export async function releaseResolvedHolds(): Promise<{ released: number }> {
   const settings = await loadAppSettings();
-  const thRaw = (settings.order_overdue_threshold_gbp ?? "").trim();
-  const overdueThresholdGbp =
-    thRaw === "" || !Number.isFinite(Number(thRaw)) ? 1000 : Number(thRaw);
+  const config = parseHoldsConfig(settings);
+  const overdueThresholdGbp = config.overdueThresholdGbp;
 
   const rows = await db
     .select({
@@ -428,19 +436,19 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
     .where(eq(orders.holdState, "on_hold"))
     .limit(500);
   const { affectedRows } = await import("../hold-orders/claim.js");
-  const { AUTO_RELEASE_EMAILS_WAREHOUSE_IF_ALERTED } = await import("../hold-orders/decisions.js");
   const { planReleaseEmail, sendPlannedEmail } = await import("./hold-email-plan.js");
 
   // Customer hold rules (Hold Orders): the per-rule auto-release switch and
-  // the customer_rule reason. Customers without a rule are unaffected.
-  const { loadRulesFor, loadOpenInvoices } = await import("../hold-orders/rules-store.js");
+  // the customer_rule reason. Customers without a rule (explicit, or the
+  // default b2b rule when it's switched on) are unaffected.
+  const { loadEffectiveRules, loadOpenInvoices } = await import("../hold-orders/rules-store.js");
   const { evaluateCustomerRule } = await import("../hold-orders/rule-engine.js");
   const { shouldAutoRelease } = await import("../hold-orders/auto-release.js");
   const { onHoldReleased } = await import("../hold-orders/inbox-resolve.js");
   const heldCustomerIds = Array.from(
     new Set(rows.map((r) => r.customerId).filter((c): c is string => Boolean(c))),
   );
-  const rules = await loadRulesFor(heldCustomerIds);
+  const rules = await loadEffectiveRules(config, heldCustomerIds);
   const ruleCustomerIds = Array.from(
     new Set(
       rows
@@ -483,10 +491,10 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
         .where(and(eq(orders.id, r.id), eq(orders.holdState, "on_hold"))),
     );
     if (claimed !== 1) continue;
-    // H8 (pending operator decision, switch in hold-orders/decisions.ts):
-    // tell the warehouse "good to send" only if it was alerted about this hold.
+    // H8 (Hold Orders → Settings → Auto-release, default ON): tell the
+    // warehouse "good to send" only if it was alerted about this hold.
     let emailed: Array<{ to: string; role: string; template: string; subject: string }> = [];
-    if (AUTO_RELEASE_EMAILS_WAREHOUSE_IF_ALERTED && r.holdAlertThreadId && !env.SHADOW_MODE) {
+    if (config.autoReleaseEmailsWarehouse && r.holdAlertThreadId && !env.SHADOW_MODE) {
       const planned = planReleaseEmail(
         {
           orderId: r.id,

@@ -61,6 +61,7 @@ import {
   withStatementOpenBalance,
 } from "../../modules/statements/send.js";
 import { listCustomersByTag } from "../../integrations/shopify/customers.js";
+import { matchShopifyCustomers } from "../../modules/crm/shopify-customer-match.js";
 import { syncEmailsForCustomer } from "../../integrations/gmail/poller.js";
 import {
   recordActivity,
@@ -527,28 +528,9 @@ const customersRoute: FastifyPluginAsync = async (app) => {
       return reply.code(502).send({ error: "shopify fetch failed" });
     }
 
-    const shopifyEmails = new Set(
-      shopifyCustomers
-        .map((c) => c.email?.toLowerCase().trim())
-        .filter((e): e is string => Boolean(e)),
-    );
-    if (shopifyEmails.size === 0) {
-      return reply.send({
-        tag,
-        fetched: shopifyCustomers.length,
-        matchedIds: [],
-        sampleNames: [],
-      });
-    }
-
-    // Match by primary_email (case-insensitive). The billingEmails JSON
-    // array could also match in theory but in practice QB customers
-    // are keyed on a single primary email — covering the 99% case
-    // without needing per-row JSON_CONTAINS calls.
-    const matches = await db
-      .select({ id: customers.id, displayName: customers.displayName, email: customers.primaryEmail })
-      .from(customers)
-      .where(inArray(customers.primaryEmail, Array.from(shopifyEmails)));
+    // Match by primary_email, case-insensitive (shared helper — the Hold
+    // Orders bulk rule picker uses the same matching).
+    const { matched: matches } = await matchShopifyCustomers(shopifyCustomers);
 
     return reply.send({
       tag,

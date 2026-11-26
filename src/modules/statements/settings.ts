@@ -90,6 +90,21 @@ export type AppSettingsMap = {
   // Time Clock allow-list (JSON array of userIds) — surfaced so loadAppSettings
   // can index by any canonical key without a type error.
   time_clock_user_ids: string;
+  // Hold Orders v2 settings (parsed + defaulted by
+  // modules/hold-orders/holds-settings.ts parseHoldsConfig; "" here = default).
+  order_hold_alert_lookback_days: string;
+  order_overdue_alert_lookback_days: string;
+  order_overdue_widget_lookback_days: string;
+  holds_rule_order_lookback_days: string;
+  order_hold_warn_days: string;
+  order_hold_cancel_days: string;
+  holds_default_rule_enabled: string;
+  holds_default_rule_preset: string;
+  holds_default_rule_scope: string;
+  holds_preset_overrides: string;
+  holds_default_min_balance: string;
+  holds_auto_release_emails_warehouse: string;
+  holds_rule_holds_respect_promise: string;
 };
 
 const DEFAULTS: AppSettingsMap = {
@@ -156,6 +171,20 @@ const DEFAULTS: AppSettingsMap = {
   // Time Clock allow-list (JSON array of userIds). Empty default = feature off
   // until the operator seeds it (Hillel's id) via /settings.
   time_clock_user_ids: "",
+  // Hold Orders v2: "" = parseHoldsConfig's default (see holds-settings.ts).
+  order_hold_alert_lookback_days: "",
+  order_overdue_alert_lookback_days: "",
+  order_overdue_widget_lookback_days: "",
+  holds_rule_order_lookback_days: "",
+  order_hold_warn_days: "",
+  order_hold_cancel_days: "",
+  holds_default_rule_enabled: "",
+  holds_default_rule_preset: "",
+  holds_default_rule_scope: "",
+  holds_preset_overrides: "",
+  holds_default_min_balance: "",
+  holds_auto_release_emails_warehouse: "",
+  holds_rule_holds_respect_promise: "",
 };
 
 // Single SELECT * over app_settings. With only 9 canonical rows this is
