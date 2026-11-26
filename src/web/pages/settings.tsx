@@ -2432,17 +2432,17 @@ const ORDER_TEMPLATE_DEFS: {
   },
   {
     key: "hold_warning",
-    label: "Hold warning — Day 7 (customer)",
+    label: "Hold warning (customer)",
     audience: "Customer",
     description:
-      "Final warning: resolve within 3 days or the order is cancelled and items returned to stock.",
+      "Final warning on the warn day ({{warn_day}}, set in Hold Orders → Settings): resolve within {{days_until_cancel}} days or the order is cancelled and items returned to stock.",
   },
   {
     key: "hold_cancel",
-    label: "Cancel notice — Day 10 (internal)",
+    label: "Cancel notice (internal)",
     audience: "Warehouse + accounts team",
     description:
-      "Day-10 internal notice to cancel the order and return the items to stock.",
+      "Internal notice on the cancel day ({{cancel_day}}) to cancel the order and return the items to stock.",
   },
   {
     key: "order_cancelled",
@@ -2458,6 +2458,9 @@ const ORDER_TEMPLATE_PLACEHOLDERS = [
   "{{customer_name}}",
   "{{order_total}}",
   "{{age_days}}",
+  "{{warn_day}}",
+  "{{cancel_day}}",
+  "{{days_until_cancel}}",
   "{{customer_url}}",
   "{{payment_status}}",
 ];

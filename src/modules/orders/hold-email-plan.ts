@@ -9,7 +9,8 @@
 
 import type { AppSettingsMap } from "../statements/settings.js";
 import type { FinanceSendType } from "../../integrations/gmail/types.js";
-import { loadOrderTemplate, renderOrderTemplate } from "./templates.js";
+import { ladderDayVars, loadOrderTemplate, renderOrderTemplate } from "./templates.js";
+import { parseHoldsConfig } from "../hold-orders/holds-settings.js";
 import {
   loadInternalHoldRecipients,
   resolveHoldCustomerRecipients,
@@ -161,6 +162,7 @@ export async function planLadderNoticeEmail(
     reason_clause: reasonClause(o.holdReason),
     action_clause: actionClause(o.holdReason),
     age_days: "0",
+    ...ladderDayVars(parseHoldsConfig(settings)),
     customer_url: customerUrl(o.customerId),
   });
   return {

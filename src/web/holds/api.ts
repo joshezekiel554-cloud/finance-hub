@@ -114,6 +114,8 @@ export type SettingsResponse = {
   lastChanged: LastChanged | null;
   // b2b customers with no rule of their own (who the default rule would cover).
   defaultRuleScopeCount: number;
+  // Stored ladder templates (order_tpl_*) that still say "3 days" / "day 7" / "day 10".
+  ladderTemplateLiterals: string[];
 };
 
 export type SettingsPreviewResponse = {
@@ -220,8 +222,8 @@ export const api = {
   saveRule: (customerId: string, rule: Record<string, unknown>) =>
     call<{ ok: true }>(`/rules/${encodeURIComponent(customerId)}`, { method: "PUT", body: JSON.stringify(rule) }),
   deleteRule: (customerId: string) => call<{ ok: true }>(`/rules/${encodeURIComponent(customerId)}`, { method: "DELETE" }),
-  candidates: (source: CandidateSource, preset?: HoldRulePreset) =>
-    call<CandidatesResponse>("/rules/candidates", { method: "POST", body: JSON.stringify({ source, preset }) }),
+  candidates: (source: CandidateSource, preset?: HoldRulePreset, allTypes = false) =>
+    call<CandidatesResponse>("/rules/candidates", { method: "POST", body: JSON.stringify({ source, preset, allTypes }) }),
   bulkPreview: (body: BulkBody) =>
     call<BulkPreviewResponse>("/rules/bulk-preview", { method: "POST", body: JSON.stringify(body) }),
   bulkApply: (body: BulkBody) => call<BulkApplyResponse>("/rules/bulk-apply", { method: "POST", body: JSON.stringify(body) }),

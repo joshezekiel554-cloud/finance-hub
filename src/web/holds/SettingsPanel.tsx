@@ -17,6 +17,7 @@ import {
   defaultRuleBanner,
   draftFromConfig,
   draftToPatch,
+  ladderTemplateWarning,
   formatSettingValue,
   sectionHasChanges,
   type PresetNumberField,
@@ -90,6 +91,7 @@ function SettingsForm({
   };
   const live: HoldsConfig = result.ok ? result.config : data.values;
   const banner = defaultRuleBanner(data.values);
+  const ladderWarning = ladderTemplateWarning(data.ladderTemplateLiterals ?? [], live);
 
   const fieldProps = { draft, setField, errors, defaults: data.defaults, values: data.values, canEdit };
 
@@ -179,6 +181,12 @@ function SettingsForm({
 
       <Section id="ladder" data={data} changed={changed}>
         <p className="text-xs text-secondary">Day 0: “your order is on hold” notice. Then the warning, then the cancel notice to the warehouse + team.</p>
+        {ladderWarning ? (
+          <p className="flex items-start gap-2 rounded-lg border border-accent-warning/40 bg-accent-warning/10 px-3 py-2 text-xs text-primary">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-accent-warning" aria-hidden />
+            <span>{ladderWarning}</span>
+          </p>
+        ) : null}
         <Field f="warnDays" {...fieldProps} />
         <Field f="cancelDays" {...fieldProps} />
         <Field f="warehouseRecipients" {...fieldProps} />

@@ -22,6 +22,7 @@ import { recordHoldTransition } from "./hold-alerts.js";
 import {
   loadOrderTemplate,
   renderOrderTemplate,
+  ladderDayVars,
 } from "./templates.js";
 import {
   loadInternalHoldRecipients,
@@ -182,6 +183,7 @@ export async function runHoldLadder(): Promise<RunHoldLadderResult> {
       reason_clause: reasonClause(r.holdReason),
       action_clause: actionClause(r.holdReason),
       age_days: String(ageDays),
+      ...ladderDayVars({ warnDays, cancelDays }),
       customer_url: r.customerId
         ? `${env.PUBLIC_URL}/customers/${r.customerId}`
         : "—",

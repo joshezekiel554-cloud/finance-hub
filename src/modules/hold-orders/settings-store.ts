@@ -10,6 +10,7 @@ import { appSettings } from "../../db/schema/app-settings.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { users } from "../../db/schema/auth.js";
 import { loadAppSettings } from "../statements/settings.js";
+import { ladderTemplatesWithLiteralDays, type OrderTemplateKey } from "../orders/templates.js";
 import {
   HOLDS_SETTING_KEYS,
   diffHoldsConfig,
@@ -24,6 +25,15 @@ export const HOLDS_SETTINGS_AUDIT_ACTION = "holds_settings.updated";
 
 export async function loadHoldsConfig(): Promise<HoldsConfig> {
   return parseHoldsConfig(await loadAppSettings());
+}
+
+/** Config + the ladder templates whose stored text has literal day numbers. */
+export async function loadHoldsConfigWithTemplateCheck(): Promise<{
+  config: HoldsConfig;
+  ladderTemplateLiterals: OrderTemplateKey[];
+}> {
+  const settings = await loadAppSettings();
+  return { config: parseHoldsConfig(settings), ladderTemplateLiterals: ladderTemplatesWithLiteralDays(settings) };
 }
 
 export type SaveResult = { changed: Array<{ key: string; before: string; after: string }> };

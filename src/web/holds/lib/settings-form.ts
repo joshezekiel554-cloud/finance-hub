@@ -261,6 +261,28 @@ export function formatSettingValue(field: ScalarField, c: HoldsConfig, table: Pr
   }
 }
 
+const LADDER_TEMPLATE_NAMES: Record<string, string> = {
+  hold_notice: "Day-0 notice",
+  hold_warning: "warning",
+  hold_cancel: "cancel notice",
+};
+
+/**
+ * Warn when operator-edited ladder templates still say "3 days" / "day 7" /
+ * "day 10" literally but the (draft) days are no longer 7/10. Stored text is
+ * never rewritten for them; they fix it in finance Settings → order emails
+ * (the defaults use {{warn_day}} / {{cancel_day}} / {{days_until_cancel}}).
+ */
+export function ladderTemplateWarning(
+  literals: readonly string[],
+  days: { warnDays: number; cancelDays: number },
+): string | null {
+  if (literals.length === 0) return null;
+  if (days.warnDays === 7 && days.cancelDays === 10) return null;
+  const names = literals.map((k) => LADDER_TEMPLATE_NAMES[k] ?? k).join(", ");
+  return `The edited ${names} email template${literals.length === 1 ? "" : "s"} still say${literals.length === 1 ? "s" : ""} “3 days” / “day 7” / “day 10” in words, but the ladder is now day ${days.warnDays} / day ${days.cancelDays}. Update the text in finance Settings → order emails (use {{days_until_cancel}}, {{warn_day}}, {{cancel_day}}).`;
+}
+
 /** The warning banner for Settings + the customer rules list. */
 export function defaultRuleBanner(values: Pick<HoldsConfig, "defaultRuleEnabled">): string | null {
   return values.defaultRuleEnabled ? null : "Default rule: not set up yet";

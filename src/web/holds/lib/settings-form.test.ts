@@ -4,6 +4,7 @@ import {
   draftFromConfig,
   draftToPatch,
   formatSettingValue,
+  ladderTemplateWarning,
   sectionHasChanges,
 } from "./settings-form";
 import {
@@ -64,6 +65,15 @@ describe("settings form", () => {
     expect(formatSettingValue("autoReleaseEmailsWarehouse", cur)).toBe("On");
     expect(formatSettingValue("defaultRulePreset", cur)).toBe("Standard 30/45");
     expect(formatSettingValue("overdueRecipients", { ...cur, overdueRecipients: "" })).toBe("Nobody");
+  });
+
+  it("warns about stored templates with literal days only when the days changed", () => {
+    expect(ladderTemplateWarning([], { warnDays: 5, cancelDays: 12 })).toBeNull();
+    expect(ladderTemplateWarning(["hold_warning"], { warnDays: 7, cancelDays: 10 })).toBeNull();
+    const w = ladderTemplateWarning(["hold_warning", "hold_cancel"], { warnDays: 5, cancelDays: 12 });
+    expect(w).toMatch(/warning, cancel notice email templates still say/);
+    expect(w).toMatch(/day 5 \/ day 12/);
+    expect(w).toMatch(/\{\{days_until_cancel\}\}/);
   });
 
   it("default-rule banner until an admin turns it on", () => {

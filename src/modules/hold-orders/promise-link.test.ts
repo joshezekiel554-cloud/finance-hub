@@ -35,12 +35,14 @@ describe("pickPromiseSource", () => {
     expect(r?.url).toBe(promiseEmailUrl("t-new-match"));
   });
 
-  it("no date match → newest promise scan", () => {
+  it("no scan matches the promised date → no link (no newest-scan fallback)", () => {
     const r = pickPromiseSource(
       [scan("a1", "2026-11-01T10:00:00Z", "2026-11-20", "t1"), scan("a2", "2026-11-10T10:00:00Z", "2026-11-25", "t2")],
       "2026-12-01",
     );
-    expect(r?.threadId).toBe("t2");
+    expect(r).toBeNull();
+    expect(pickPromiseSource([scan("a1", "2026-11-01T10:00:00Z", null, "t1")], "2026-12-01")).toBeNull();
+    expect(pickPromiseSource([scan("a1", "2026-11-01T10:00:00Z", "2026-12-01", "t1")], null)).toBeNull();
   });
 
   it("chosen scan has no Gmail thread id → no link", () => {

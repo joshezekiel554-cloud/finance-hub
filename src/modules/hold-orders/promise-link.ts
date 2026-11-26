@@ -37,20 +37,22 @@ function ms(d: Date | string): number {
 }
 
 /**
- * The scan the customer's promise most likely came from: the newest
- * result='promise' scan whose promised date equals customers.promised_pay_by,
- * else the newest result='promise' scan. Callers pass only that customer's
- * result='promise' scans. No scans (a promise typed by hand in the hub) →
- * null → no link. A chosen scan without a Gmail thread id → no link either.
+ * The scan the customer's promise came from: the newest result='promise'
+ * scan whose promised date equals customers.promised_pay_by. Callers pass
+ * only that customer's result='promise' scans. No scan with that date (e.g. a
+ * promise typed by hand in the hub, or a different date than any email
+ * said) → null → no link; we never guess with an older email. A matching
+ * scan without a Gmail thread id → no link either.
  */
 export function pickPromiseSource(
   scans: readonly PromiseScanCandidate[],
   payBy: string | null,
 ): { activityId: string; threadId: string; url: string } | null {
-  if (scans.length === 0) return null;
-  const newestFirst = [...scans].sort((a, b) => ms(b.emailAt) - ms(a.emailAt));
   const want = toYmd(payBy);
-  const chosen = (want ? newestFirst.find((s) => toYmd(s.promisedDate) === want) : undefined) ?? newestFirst[0]!;
+  if (!want || scans.length === 0) return null;
+  const newestFirst = [...scans].sort((a, b) => ms(b.emailAt) - ms(a.emailAt));
+  const chosen = newestFirst.find((s) => toYmd(s.promisedDate) === want);
+  if (!chosen) return null;
   const threadId = threadIdFromMeta(chosen.meta);
   if (!threadId) return null;
   return { activityId: chosen.activityId, threadId, url: promiseEmailUrl(threadId) };

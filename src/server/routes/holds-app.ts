@@ -59,7 +59,12 @@ import {
 } from "../../modules/hold-orders/rules-store.js";
 import { endOfDayNewYork } from "../../modules/hold-orders/dates.js";
 import { HOLDS_CONFIG_DEFAULTS, mergeHoldsConfig } from "../../modules/hold-orders/holds-settings.js";
-import { loadHoldsConfig, loadLastChanged, saveHoldsConfig } from "../../modules/hold-orders/settings-store.js";
+import {
+  loadHoldsConfig,
+  loadHoldsConfigWithTemplateCheck,
+  loadLastChanged,
+  saveHoldsConfig,
+} from "../../modules/hold-orders/settings-store.js";
 import { dryRunHoldsConfig } from "../../modules/hold-orders/settings-preview.js";
 import { loadExclusions } from "../../modules/hold-orders/exclusions.js";
 import {
@@ -119,6 +124,8 @@ const ruleBody = z.object({
 const candidatesBody = z.object({
   source: z.enum(CANDIDATE_SOURCES),
   preset: z.enum(HOLD_RULE_PRESETS).optional(),
+  // "no_rule" only: include every customer type (default b2b only).
+  allTypes: z.boolean().default(false),
 });
 
 const bulkBody = z.object({
@@ -233,9 +240,9 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
     const parsed = candidatesBody.safeParse(req.body ?? {});
     if (!parsed.success) return badRequest(reply, parsed.error);
     const config = await loadHoldsConfig();
-    const { source, preset } = parsed.data;
+    const { source, preset, allTypes } = parsed.data;
     if (source !== "shopify_b2b") {
-      const rows = await loadCandidateRows(candidateWhere(source, preset), config);
+      const rows = await loadCandidateRows(candidateWhere(source, preset, allTypes), config);
       return reply.send({ source, rows, unmatched: [], fetchedAt: null });
     }
     let shopifyCustomers;
@@ -303,8 +310,8 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
   app.get("/settings", async (req, reply) => {
     const access = await requireHoldsAccess(req, reply, "view");
     if (!access) return;
-    const [values, lastChanged, defaultScopeIds] = await Promise.all([
-      loadHoldsConfig(),
+    const [{ config: values, ladderTemplateLiterals }, lastChanged, defaultScopeIds] = await Promise.all([
+      loadHoldsConfigWithTemplateCheck(),
       loadLastChanged().catch((err: unknown) => {
         log.warn({ err }, "settings: changed-by lookup failed");
         return null;
@@ -317,6 +324,9 @@ const holdsAppRoute: FastifyPluginAsync = async (app) => {
       canEdit: can(access.role, "editSettings"),
       lastChanged,
       defaultRuleScopeCount: defaultScopeIds.length,
+      // Stored (operator-edited) ladder templates still saying "3 days" /
+      // "day 7" / "day 10" literally — the UI warns when the days differ.
+      ladderTemplateLiterals,
     });
   });
 

@@ -12,6 +12,19 @@ import { DEFAULT_RULE_FLAGS, type HoldsConfig } from "./holds-settings.js";
 import type { ResolvedHoldRule } from "./presets.js";
 
 export type RuleSource = "explicit" | "default";
+
+/**
+ * Is a customer (without an explicit row) covered by the default rule?
+ * Scope "b2b" = customer_type 'b2b' AND hold_status 'active'. Accounts on
+ * hold / payment upfront are left out: the standard pass already holds their
+ * orders (customer_on_hold / payment_upfront_unpaid), and a default-rule
+ * hold there would record the wrong reason (customer_rule). An explicit row
+ * can still opt them in. Mirrored in SQL by rules-store
+ * loadDefaultRuleCustomerIds — keep the two in step.
+ */
+export function inDefaultRuleScope(c: { customerType: string | null; holdStatus: string | null }): boolean {
+  return c.customerType === "b2b" && (c.holdStatus ?? "active") === "active";
+}
 export type EffectiveRule = ResolvedHoldRule & { source: RuleSource };
 
 /** The default rule as a resolved rule, or null when it's switched off. */

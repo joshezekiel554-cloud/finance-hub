@@ -37,6 +37,8 @@ export function BulkPicker({
   const [source, setSource] = useState<CandidateSource>("finance_b2b");
   const [sourcePreset, setSourcePreset] = useState<HoldRulePreset>("standard_30_45");
   const [search, setSearch] = useState("");
+  // "Has no rule yet": b2b only unless this is ticked.
+  const [allTypes, setAllTypes] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<RuleDraft>(NEW_RULE_DRAFT);
   const [overwrite, setOverwrite] = useState(false);
@@ -44,8 +46,8 @@ export function BulkPicker({
   const [done, setDone] = useState<string | null>(null);
 
   const candidates = useQuery({
-    queryKey: ["holds-candidates", source, source === "preset" ? sourcePreset : null],
-    queryFn: () => api.candidates(source, source === "preset" ? sourcePreset : undefined),
+    queryKey: ["holds-candidates", source, source === "preset" ? sourcePreset : null, source === "no_rule" && allTypes],
+    queryFn: () => api.candidates(source, source === "preset" ? sourcePreset : undefined, source === "no_rule" && allTypes),
     staleTime: source === "shopify_b2b" ? 0 : 60_000,
     retry: false,
   });
@@ -131,6 +133,20 @@ export function BulkPicker({
           </label>
         ) : null}
       </div>
+
+      {source === "no_rule" ? (
+        <label className="mt-2 flex items-center gap-2 text-xs text-secondary">
+          <input
+            type="checkbox"
+            checked={allTypes}
+            onChange={(e) => {
+              setAllTypes(e.target.checked);
+              setSelected(new Set());
+            }}
+          />
+          Include all customer types (default: b2b only)
+        </label>
+      ) : null}
 
       {source === "shopify_b2b" && candidates.data?.fetchedAt ? (
         <p className="mt-2 text-xs text-muted">

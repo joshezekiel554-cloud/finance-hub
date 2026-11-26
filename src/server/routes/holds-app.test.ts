@@ -65,6 +65,7 @@ vi.mock("../../modules/hold-orders/settings-store.js", async () => {
   const { HOLDS_CONFIG_DEFAULTS } = await import("../../modules/hold-orders/holds-settings.js");
   return {
     loadHoldsConfig: vi.fn(async () => HOLDS_CONFIG_DEFAULTS),
+    loadHoldsConfigWithTemplateCheck: vi.fn(async () => ({ config: HOLDS_CONFIG_DEFAULTS, ladderTemplateLiterals: ["hold_warning"] })),
     loadLastChanged: vi.fn(async () => null),
     saveHoldsConfig: vi.fn(async (a: unknown) => {
       h.calls.push({ fn: "saveHoldsConfig", args: [a] });

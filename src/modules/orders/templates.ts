@@ -77,7 +77,7 @@ Feldart Accounts`,
 
 Order {{order_number}} ({{order_total}}) is still on hold {{reason_clause}}.
 
-Please note: if this isn't resolved within the next 3 days, the order will be cancelled and the items returned to stock.
+Please note: if this isn't resolved within the next {{days_until_cancel}} days, the order will be cancelled and the items returned to stock.
 
 To keep the order, please {{action_clause}} as soon as possible.
 
@@ -87,7 +87,7 @@ Feldart Accounts`,
   // From hold-ladder.ts CANCEL_SUBJECT / CANCEL_BODY (Day-10 internal cancel).
   hold_cancel: {
     subject: "CANCEL order {{order_number}} — return items to stock",
-    body: `Order {{order_number}} for {{customer_name}} has been on hold for {{age_days}} days with no resolution.
+    body: `Order {{order_number}} for {{customer_name}} has been on hold for {{age_days}} days (the cancel point is day {{cancel_day}}) with no resolution.
 
 Please CANCEL this order and return the items to stock.
 
@@ -127,12 +127,49 @@ export const SAMPLE_VARS: Record<string, string> = {
   hold_status: "hold",
   reason_line:
     "Reason: this customer is currently ON HOLD — they should not be able to place orders.",
+  warn_day: "7",
+  cancel_day: "10",
+  days_until_cancel: "3",
   reason_clause: "pending settlement of your overdue account balance",
   action_clause:
     "settle your outstanding balance (or contact us to arrange it)",
 };
 
 const TPL_KEY_PREFIX = "order_tpl_";
+
+// Ladder-day placeholders, from Hold Orders → Settings → Email ladder:
+//   {{warn_day}}          day the customer warning goes out (default 7)
+//   {{cancel_day}}        day the internal cancel notice goes out (default 10)
+//   {{days_until_cancel}} cancel_day − warn_day (default 3) — "resolve within N days"
+export function ladderDayVars(days: { warnDays: number; cancelDays: number }): Record<string, string> {
+  return {
+    warn_day: String(days.warnDays),
+    cancel_day: String(days.cancelDays),
+    days_until_cancel: String(Math.max(1, days.cancelDays - days.warnDays)),
+  };
+}
+
+export const LADDER_TEMPLATE_KEYS = ["hold_notice", "hold_warning", "hold_cancel"] as const;
+
+// Literal day numbers an operator may have typed into a stored template
+// before the days became settings ("within the next 3 days", "Day 7",
+// "day-10"). Matched case-insensitively on word boundaries.
+const LITERAL_DAY_RE = /\b3\s+days\b|\bday[\s-]*(7|10)\b/i;
+
+/**
+ * Ladder templates whose STORED override (order_tpl_* — never rewritten by
+ * us) still contains a literal "3 days" / "day 7" / "day 10". Only overrides
+ * count: the defaults use {{placeholders}}.
+ */
+export function ladderTemplatesWithLiteralDays(settings: Record<string, string | undefined>): OrderTemplateKey[] {
+  const out: OrderTemplateKey[] = [];
+  for (const key of LADDER_TEMPLATE_KEYS) {
+    const s = settings[`${TPL_KEY_PREFIX}${key}_subject`] ?? "";
+    const b = settings[`${TPL_KEY_PREFIX}${key}_body`] ?? "";
+    if (LITERAL_DAY_RE.test(s) || LITERAL_DAY_RE.test(b)) out.push(key);
+  }
+  return out;
+}
 
 // Strip any unrendered {{...}} token to blank. Mirrors the placeholder charset
 // used by renderTemplate (alnum + underscore, whitespace-tolerant) but ALSO

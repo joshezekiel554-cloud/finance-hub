@@ -11,7 +11,7 @@
 //                 only ever come from the normal detection run
 //                 (claim-then-send), same as a single rule save.
 
-import { eq, inArray, isNull, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNull, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../../db/index.js";
 import { customers } from "../../db/schema/customers.js";
@@ -20,6 +20,7 @@ import { auditLog } from "../../db/schema/audit.js";
 import { describeRule, HOLD_RULE_PRESETS, type HoldRulePreset, type ResolvedHoldRule } from "./presets.js";
 import { rowToRule, ruleRowValues } from "./rules-store.js";
 import { planRuleHolds } from "./detection.js";
+import { inDefaultRuleScope } from "./effective-rules.js";
 import type { HoldsConfig } from "./holds-settings.js";
 
 export const BULK_MAX_IDS = 1000;
@@ -72,17 +73,26 @@ export async function loadCandidateRows(
     balance: r.balance,
     overdueBalance: r.overdueBalance,
     rule: r.rule ? { preset: r.rule.preset, label: describeRule(rowToRule(r.rule, config.presets)) } : null,
-    defaultScope: !r.rule && r.customerType === "b2b",
+    defaultScope: !r.rule && inDefaultRuleScope(r),
   }));
 }
 
-/** WHERE for a non-Shopify source. */
-export function candidateWhere(source: Exclude<CandidateSource, "shopify_b2b">, preset?: HoldRulePreset): SQL | undefined {
+/**
+ * WHERE for a non-Shopify source. "no_rule" is b2b customers only unless
+ * `allTypes` (the picker's "include all customer types" toggle).
+ */
+export function candidateWhere(
+  source: Exclude<CandidateSource, "shopify_b2b">,
+  preset?: HoldRulePreset,
+  allTypes = false,
+): SQL | undefined {
   switch (source) {
     case "finance_b2b":
       return eq(customers.customerType, "b2b");
     case "no_rule":
-      return isNull(customerHoldRules.customerId);
+      return allTypes
+        ? isNull(customerHoldRules.customerId)
+        : and(isNull(customerHoldRules.customerId), eq(customers.customerType, "b2b"));
     case "preset":
       return eq(customerHoldRules.preset, preset && HOLD_RULE_PRESETS.includes(preset) ? preset : "standard_30_45");
   }

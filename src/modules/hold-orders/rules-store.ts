@@ -110,12 +110,18 @@ export async function loadRulesFor(
 }
 
 /**
- * Customers in the default rule's scope ("b2b" = customers.customer_type
- * 'b2b') that have NO explicit row. Optionally limited to `customerIds`.
+ * Customers in the default rule's scope that have NO explicit row: scope
+ * "b2b" = customer_type 'b2b' AND hold_status 'active' (on-hold / prepay
+ * accounts are the standard pass's job — see inDefaultRuleScope in
+ * effective-rules.ts, which this mirrors). Optionally limited to `customerIds`.
  */
 export async function loadDefaultRuleCustomerIds(customerIds?: readonly string[]): Promise<string[]> {
   if (customerIds && customerIds.length === 0) return [];
-  const conds = [eq(customers.customerType, "b2b"), isNull(customerHoldRules.customerId)];
+  const conds = [
+    eq(customers.customerType, "b2b"),
+    eq(customers.holdStatus, "active"),
+    isNull(customerHoldRules.customerId),
+  ];
   if (customerIds) conds.push(inArray(customers.id, [...customerIds]));
   const rows = await db
     .select({ id: customers.id })

@@ -14,10 +14,19 @@ export function filterRows<T extends Pick<PickerRow, "name" | "email">>(rows: re
   return rows.filter((r) => r.name.toLowerCase().includes(needle) || (r.email ?? "").toLowerCase().includes(needle));
 }
 
-/** What the "current rule" column says. */
-export function currentRuleLabel(row: Pick<PickerRow, "rule" | "defaultScope">, defaultRuleOn: boolean): string {
+/**
+ * What the "current rule" column says. defaultScope comes from the server
+ * (b2b AND hold_status active — on-hold / prepay accounts are never on the
+ * default rule; the standard checks hold their orders).
+ */
+export function currentRuleLabel(
+  row: Pick<PickerRow, "rule" | "defaultScope"> & { holdStatus?: string | null },
+  defaultRuleOn: boolean,
+): string {
   if (row.rule) return row.rule.label;
   if (row.defaultScope) return defaultRuleOn ? "Default rule" : "None (default rule is off)";
+  if (row.holdStatus === "hold") return "None (account on hold)";
+  if (row.holdStatus === "payment_upfront") return "None (payment upfront)";
   return "None";
 }
 
