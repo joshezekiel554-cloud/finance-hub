@@ -5,18 +5,26 @@ import { api, ApiError, type Me } from "./api";
 import { HoldsList } from "./HoldsList";
 import { OrderDrawer } from "./OrderDrawer";
 import { RulesPanel } from "./RulesPanel";
+import { SettingsPanel } from "./SettingsPanel";
 import { parseTab } from "./lib/view";
 import type { HoldTab } from "../../modules/hold-orders/board-classify";
 import { cn } from "../lib/cn";
 
-type View = "holds" | "rules";
+type View = "holds" | "rules" | "settings";
+
+const VIEWS: View[] = ["holds", "rules", "settings"];
+const VIEW_LABELS: Record<View, string> = { holds: "Orders", rules: "Customer rules", settings: "Settings" };
+
+function parseView(v: string | null): View {
+  return v === "rules" || v === "settings" ? v : "holds";
+}
 
 type UrlState = { view: View; tab: HoldTab; order: string | null };
 
 function readUrl(): UrlState {
   const p = new URLSearchParams(window.location.search);
   return {
-    view: p.get("view") === "rules" ? "rules" : "holds",
+    view: parseView(p.get("view")),
     tab: parseTab(p.get("tab")),
     order: p.get("order"),
   };
@@ -43,7 +51,7 @@ export default function HoldsApp() {
   }, []);
 
   useEffect(() => {
-    document.title = url.view === "rules" ? "Rules · Hold Orders" : "Hold Orders · Feldart";
+    document.title = url.view === "holds" ? "Hold Orders · Feldart" : `${VIEW_LABELS[url.view]} · Hold Orders`;
   }, [url.view]);
 
   if (me.isLoading) {
@@ -79,8 +87,15 @@ export default function HoldsApp() {
         ) : null}
         {url.view === "holds" ? (
           <HoldsList tab={url.tab} onTab={(tab) => update({ tab })} onOpen={(order) => update({ order })} />
+        ) : url.view === "rules" ? (
+          <RulesPanel
+            canEdit={data.permissions.editRules}
+            onOpenOrder={(order) => update({ view: "holds", order })}
+            onOpenSettings={() => update({ view: "settings", order: null })}
+          />
         ) : (
-          <RulesPanel canEdit={data.permissions.editRules} onOpenOrder={(order) => update({ view: "holds", order })} />
+          // The drawer opens over Settings (it's rendered for any view).
+          <SettingsPanel onOpenOrder={(order) => update({ order })} />
         )}
       </main>
       {url.order ? (
@@ -99,7 +114,7 @@ function Header({ me, view, onView }: { me: Me; view: View; onView: (v: View) =>
           <span className="text-base font-semibold text-primary">Hold Orders</span>
         </div>
         <nav className="flex gap-1" aria-label="Sections">
-          {(["holds", "rules"] as const).map((v) => (
+          {VIEWS.map((v) => (
             <button
               key={v}
               type="button"
@@ -110,7 +125,7 @@ function Header({ me, view, onView }: { me: Me; view: View; onView: (v: View) =>
               )}
               aria-current={view === v ? "page" : undefined}
             >
-              {v === "holds" ? "Orders" : "Customer rules"}
+              {VIEW_LABELS[v]}
             </button>
           ))}
         </nav>

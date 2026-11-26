@@ -7,6 +7,7 @@ import {
   resolveHoldRule,
   type HoldRulePreset,
   type HoldRuleNumbers,
+  type PresetTable,
 } from "../../../modules/hold-orders/presets";
 
 export type RuleDraft = {
@@ -54,10 +55,13 @@ export function draftFromRule(r: {
   };
 }
 
-/** Numbers to DISPLAY for a preset (custom → whatever's typed). */
-export function displayNumbers(d: RuleDraft): HoldRuleNumbers | null {
+/**
+ * Numbers to DISPLAY for a preset (custom → whatever's typed). `table` = the
+ * live preset numbers from Settings (falls back to the built-ins).
+ */
+export function displayNumbers(d: RuleDraft, table: PresetTable = PRESET_NUMBERS): HoldRuleNumbers | null {
   if (d.preset === "never") return null;
-  if (d.preset !== "custom") return PRESET_NUMBERS[d.preset];
+  if (d.preset !== "custom") return table[d.preset];
   return {
     termsDays: Number(d.termsDays),
     holdWhenInvoiceDaysOver: Number(d.holdWhenInvoiceDaysOver),

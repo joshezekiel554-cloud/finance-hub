@@ -131,6 +131,11 @@ export function tomorrowYmd(now: Date = new Date()): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** "Promised to pay by 1 Dec 2026 — wire Friday" (board list + drawer). */
+export function promiseLine(p: { payBy: string; note: string | null }): string {
+  return `Promised to pay by ${formatDate(p.payBy)}${p.note ? ` — ${p.note}` : ""}`;
+}
+
 export function holdStateLabel(s: string): string {
   switch (s) {
     case "on_hold":

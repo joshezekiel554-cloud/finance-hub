@@ -17,6 +17,7 @@ import {
   holdConfirmLabel,
   holdStateLabel,
   previewSummary,
+  promiseLine,
   releaseBody,
   releaseConfirmLabel,
   roleLabel,
@@ -125,8 +126,15 @@ function DrawerBody({
         ) : null}
         {row.promise ? (
           <Fact label="Promise">
-            Promised to pay by {formatDate(row.promise.payBy)}
-            {row.promise.note ? ` — ${row.promise.note}` : ""}
+            {promiseLine(row.promise)}
+            {row.promise.emailUrl ? (
+              <>
+                {" "}
+                <a href={row.promise.emailUrl} target="_top" className="inline-flex items-center gap-0.5 text-accent-primary hover:underline">
+                  Open the email <ExternalLink className="size-3" aria-hidden />
+                </a>
+              </>
+            ) : null}
           </Fact>
         ) : null}
         <Fact label="Invoiced">

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Search } from "lucide-react";
+import { AlertTriangle, Loader2, Search } from "lucide-react";
 import { api, type CustomerHit, type StoredRule } from "./api";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { HOLD_RULE_PRESETS, PRESET_LABELS, describeRule } from "../../modules/hold-orders/presets";
+import { HOLD_RULE_PRESETS, PRESET_NUMBERS, describeRule, presetLabel, type PresetTable } from "../../modules/hold-orders/presets";
+import { BulkPicker } from "./BulkPicker";
+import { defaultRuleBanner } from "./lib/settings-form";
 import { NEW_RULE_DRAFT, displayNumbers, draftFromRule, draftToBody, type RuleDraft } from "./lib/rule-form";
 import { formatDate, formatMoney } from "./lib/view";
 
@@ -21,18 +23,57 @@ function useDebounced<T>(value: T, ms: number): T {
 
 type Picked = { id: string; name: string };
 
-export function RulesPanel({ canEdit, onOpenOrder }: { canEdit: boolean; onOpenOrder: (orderId: string) => void }) {
+export function RulesPanel({
+  canEdit,
+  onOpenOrder,
+  onOpenSettings,
+}: {
+  canEdit: boolean;
+  onOpenOrder: (orderId: string) => void;
+  onOpenSettings: () => void;
+}) {
   const rules = useQuery({ queryKey: ["holds-rules"], queryFn: api.rules });
+  const settings = useQuery({ queryKey: ["holds-settings"], queryFn: api.settings, staleTime: 60_000 });
+  const presets = settings.data?.values.presets ?? PRESET_NUMBERS;
+  const defaultOn = settings.data?.values.defaultRuleEnabled ?? false;
+  const banner = settings.data ? defaultRuleBanner(settings.data.values) : null;
   const [picked, setPicked] = useState<Picked | null>(null);
+  const [bulk, setBulk] = useState(false);
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
       <section aria-label="Customers with a rule">
         <h2 className="mb-1 text-sm font-semibold text-primary">Customers with their own rule</h2>
         <p className="mb-3 text-xs text-secondary">
-          Everyone else follows the standard hold checks. A rule only applies to the customer it's set on.
+          {defaultOn
+            ? `Every other b2b customer runs on the default rule (${presetLabel(settings.data!.values.defaultRulePreset, presets)}); everyone else follows the standard hold checks.`
+            : "Everyone else follows the standard hold checks. A rule only applies to the customer it's set on."}
         </p>
-        {canEdit ? <CustomerSearch onPick={setPicked} /> : null}
+        {banner ? (
+          <p className="mb-3 flex flex-wrap items-center gap-x-2 rounded-lg border border-accent-warning/40 bg-accent-warning/10 px-3 py-2 text-xs text-primary">
+            <AlertTriangle className="size-3.5 text-accent-warning" aria-hidden />
+            <span className="font-medium">{banner}</span>
+            <span className="text-secondary">— b2b customers without a rule of their own are not held by invoice age.</span>
+            <button type="button" onClick={onOpenSettings} className="font-medium text-accent-primary hover:underline">
+              Settings
+            </button>
+          </p>
+        ) : null}
+        {canEdit ? (
+          <div className="mb-3 flex flex-wrap gap-2">
+            <div className="min-w-0 flex-1">
+              <CustomerSearch onPick={setPicked} />
+            </div>
+            {!bulk ? (
+              <Button variant="secondary" onClick={() => setBulk(true)}>
+                Select customers
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        {canEdit && bulk ? (
+          <BulkPicker presets={presets} defaultRuleOn={defaultOn} onClose={() => setBulk(false)} onOpenOrder={onOpenOrder} />
+        ) : null}
         {rules.isLoading ? (
           <p className="flex items-center gap-2 py-6 text-sm text-muted">
             <Loader2 className="size-4 animate-spin" /> Loading…
@@ -49,7 +90,7 @@ export function RulesPanel({ canEdit, onOpenOrder }: { canEdit: boolean; onOpenO
       </section>
       <section aria-label="Rule editor">
         {picked ? (
-          <RuleEditor key={picked.id} customer={picked} canEdit={canEdit} onOpenOrder={onOpenOrder} onClose={() => setPicked(null)} />
+          <RuleEditor key={picked.id} customer={picked} presets={presets} canEdit={canEdit} onOpenOrder={onOpenOrder} onClose={() => setPicked(null)} />
         ) : (
           <p className="rounded-xl border border-dashed border-default p-6 text-sm text-muted">
             {canEdit ? "Search for a customer, or pick one from the list, to set their rule." : "Pick a customer to see their rule. Only admins can change rules."}
@@ -86,7 +127,7 @@ function CustomerSearch({ onPick }: { onPick: (c: Picked) => void }) {
   const q = useDebounced(value.trim(), 250);
   const res = useQuery({ queryKey: ["holds-customers", q], queryFn: () => api.customers(q), enabled: q.length >= 2 });
   return (
-    <div className="relative mb-3">
+    <div className="relative">
       <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden />
       <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="Find a customer to set a rule" className="pl-8" aria-label="Find a customer" />
       {q.length >= 2 && res.data ? (
@@ -120,11 +161,13 @@ function CustomerSearch({ onPick }: { onPick: (c: Picked) => void }) {
 
 function RuleEditor({
   customer,
+  presets,
   canEdit,
   onOpenOrder,
   onClose,
 }: {
   customer: Picked;
+  presets: PresetTable;
   canEdit: boolean;
   onOpenOrder: (id: string) => void;
   onClose: () => void;
@@ -163,7 +206,7 @@ function RuleEditor({
       </p>
     );
   }
-  const nums = displayNumbers(draft);
+  const nums = displayNumbers(draft, presets);
   const set = (patch: Partial<RuleDraft>) => setDraft({ ...draft, ...patch });
   const disabled = !canEdit;
 
@@ -183,7 +226,7 @@ function RuleEditor({
           <Select value={draft.preset} onChange={(e) => set({ preset: e.target.value as RuleDraft["preset"] })} className="mt-1">
             {HOLD_RULE_PRESETS.map((p) => (
               <option key={p} value={p}>
-                {PRESET_LABELS[p]}
+                {presetLabel(p, presets)}
               </option>
             ))}
           </Select>

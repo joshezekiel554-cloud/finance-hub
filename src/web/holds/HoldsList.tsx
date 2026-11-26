@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, FileText, Loader2, Search, Truck } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileText, HandCoins, Loader2, Search, Truck } from "lucide-react";
 import { api, type HoldRow } from "./api";
 import {
   HOLD_TABS,
@@ -9,7 +9,7 @@ import {
   MISMATCH_LABELS,
   type HoldTab,
 } from "../../modules/hold-orders/board-classify";
-import { daysLabel, formatDate, formatMoney, holdStateLabel } from "./lib/view";
+import { daysLabel, formatDate, formatMoney, holdStateLabel, promiseLine } from "./lib/view";
 import { Input } from "../components/ui/input";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -182,6 +182,18 @@ function HoldRowItem({ row, onOpen }: { row: HoldRow; onOpen: () => void }) {
           ) : null}
         </div>
       </button>
+      {row.promise && row.holdState === "on_hold" ? (
+        // Outside the row button: a link can't live inside a <button>.
+        <p className="-mt-1 flex flex-wrap items-center gap-x-2 px-4 pb-3 text-xs text-accent-info">
+          <HandCoins className="size-3.5 shrink-0" aria-hidden />
+          <span>{promiseLine(row.promise)}</span>
+          {row.promise.emailUrl ? (
+            <a href={row.promise.emailUrl} target="_top" className="inline-flex items-center gap-0.5 font-medium hover:underline">
+              Open the email <ExternalLink className="size-3" aria-hidden />
+            </a>
+          ) : null}
+        </p>
+      ) : null}
     </li>
   );
 }

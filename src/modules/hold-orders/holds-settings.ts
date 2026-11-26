@@ -214,7 +214,15 @@ export type MergeResult =
 export function mergeHoldsConfig(current: HoldsConfig, patch: unknown): MergeResult {
   const p = holdsConfigPatchSchema.safeParse(patch);
   if (!p.success) {
-    return { ok: false, errors: p.error.issues.map((i) => ({ field: i.path.join("."), message: i.message })) };
+    const errors = p.error.issues.map((i) => ({ field: i.path.join("."), message: i.message }));
+    // Report the ladder ordering too, so a form shows every problem at once.
+    const raw = (patch && typeof patch === "object" ? patch : {}) as Record<string, unknown>;
+    const warn = typeof raw.warnDays === "number" ? raw.warnDays : current.warnDays;
+    const cancel = typeof raw.cancelDays === "number" ? raw.cancelDays : current.cancelDays;
+    if (warn >= cancel && !errors.some((e) => e.field === "warnDays")) {
+      errors.push({ field: "warnDays", message: "The warning day must come before the cancel day" });
+    }
+    return { ok: false, errors };
   }
   const merged = { ...current, ...p.data, presets: { ...current.presets, ...(p.data.presets ?? {}) } };
   const full = holdsConfigSchema.safeParse(merged);
