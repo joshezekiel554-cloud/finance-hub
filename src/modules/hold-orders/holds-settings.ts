@@ -10,10 +10,13 @@
 
 import { z } from "zod";
 import {
-  DEFAULT_RULE_MIN_BALANCE,
+  DEFAULT_RULE_MIN_OVERDUE,
+  MAX_GRACE_DAYS,
+  MAX_MIN_OVERDUE,
   NUMBERED_PRESETS,
   PRESET_NUMBERS,
   isNumberedPreset,
+  normalisePreset,
   type HoldRuleNumbers,
   type NumberedPreset,
   type PresetTable,
@@ -48,7 +51,8 @@ export type HoldsConfig = {
   defaultRuleScope: DefaultRuleScope;
   // 2. Presets
   presets: PresetTable;
-  defaultMinBalance: number;
+  // The min OVERDUE amount for custom rules left blank (key keeps its v2 name).
+  defaultMinOverdue: number;
   // 3. "Possible hold" flags (the board's At-risk tab)
   ruleOrderLookbackDays: number;
   overdueWidgetLookbackDays: number;
@@ -75,7 +79,7 @@ export const HOLDS_SETTING_KEYS = {
   defaultRulePreset: "holds_default_rule_preset",
   defaultRuleScope: "holds_default_rule_scope",
   presets: "holds_preset_overrides",
-  defaultMinBalance: "holds_default_min_balance",
+  defaultMinOverdue: "holds_default_min_balance",
   ruleOrderLookbackDays: "holds_rule_order_lookback_days",
   overdueWidgetLookbackDays: "order_overdue_widget_lookback_days",
   warnDays: "order_hold_warn_days",
@@ -89,12 +93,7 @@ export const HOLDS_SETTING_KEYS = {
 export type HoldsSettingKey = (typeof HOLDS_SETTING_KEYS)[HoldsConfigField];
 
 function clonePresets(t: PresetTable): PresetTable {
-  return {
-    standard_30_45: { ...t.standard_30_45 },
-    extended_60_75: { ...t.extended_60_75 },
-    vip_90_110: { ...t.vip_90_110 },
-    strict: { ...t.strict },
-  };
+  return { strict: { ...t.strict }, standard: { ...t.standard }, relaxed: { ...t.relaxed } };
 }
 
 /** Defaults = the constants the code used before Settings existed. */
@@ -107,10 +106,10 @@ export const HOLDS_CONFIG_DEFAULTS: HoldsConfig = {
   // Ships OFF (operator decision A): a default rule is only live once an
   // admin has dry-run it and switched it on.
   defaultRuleEnabled: false,
-  defaultRulePreset: "standard_30_45",
+  defaultRulePreset: "standard",
   defaultRuleScope: "b2b",
   presets: clonePresets(PRESET_NUMBERS),
-  defaultMinBalance: DEFAULT_RULE_MIN_BALANCE,
+  defaultMinOverdue: DEFAULT_RULE_MIN_OVERDUE,
   ruleOrderLookbackDays: 30,
   overdueWidgetLookbackDays: 30,
   warnDays: 7,
@@ -130,7 +129,8 @@ export const BOUNDS = {
   noContactDays: { min: 1, max: 365 },
   alertLookbackDays: { min: 1, max: 30 },
   listLookbackDays: { min: 1, max: 180 },
-  ruleDays: { min: 0, max: 730 },
+  graceDays: { min: 0, max: MAX_GRACE_DAYS },
+  minOverdue: { min: 0, max: MAX_MIN_OVERDUE },
   ladderDays: { min: 1, max: 60 },
 } as const;
 
@@ -151,16 +151,12 @@ const emails = z
   .max(2000)
   .refine((s) => invalidEmails(s).length === 0, { message: "Not a valid email list (comma-separated)" });
 
-const presetNumbersSchema = z
-  .object({
-    termsDays: int(BOUNDS.ruleDays),
-    holdWhenInvoiceDaysOver: int(BOUNDS.ruleDays),
-    minBalance: money,
-  })
-  .refine((n) => n.holdWhenInvoiceDaysOver >= n.termsDays, {
-    message: "Hold-after days can't be less than the terms",
-    path: ["holdWhenInvoiceDaysOver"],
-  });
+const minOverdue = z.number().finite().min(BOUNDS.minOverdue.min).max(BOUNDS.minOverdue.max);
+
+const presetNumbersSchema = z.object({
+  graceDays: int(BOUNDS.graceDays),
+  minOverdue,
+});
 
 const baseShape = {
   overdueThresholdGbp: money,
@@ -172,12 +168,11 @@ const baseShape = {
   defaultRulePreset: z.enum(NUMBERED_PRESETS),
   defaultRuleScope: z.enum(DEFAULT_RULE_SCOPES),
   presets: z.object({
-    standard_30_45: presetNumbersSchema,
-    extended_60_75: presetNumbersSchema,
-    vip_90_110: presetNumbersSchema,
     strict: presetNumbersSchema,
+    standard: presetNumbersSchema,
+    relaxed: presetNumbersSchema,
   }),
-  defaultMinBalance: money,
+  defaultMinOverdue: minOverdue,
   ruleOrderLookbackDays: int(BOUNDS.listLookbackDays),
   overdueWidgetLookbackDays: int(BOUNDS.listLookbackDays),
   warnDays: int(BOUNDS.ladderDays),
@@ -256,6 +251,10 @@ function boolOr(raw: string | undefined, def: boolean): boolean {
   return def;
 }
 
+function numberedOr(p: string | null, def: NumberedPreset): NumberedPreset {
+  return p && isNumberedPreset(p) ? p : def;
+}
+
 /** holds_preset_overrides JSON → full table (bad/missing entries → built-in). */
 export function parsePresetOverrides(raw: string | undefined, base: PresetTable = PRESET_NUMBERS): PresetTable {
   const out = clonePresets(base);
@@ -295,12 +294,12 @@ export function parseHoldsConfig(settings: RawSettings): HoldsConfig {
     holdAlertLookbackDays: intIn(get("holdAlertLookbackDays"), d.holdAlertLookbackDays, BOUNDS.alertLookbackDays),
     overdueAlertLookbackDays: intIn(get("overdueAlertLookbackDays"), d.overdueAlertLookbackDays, BOUNDS.alertLookbackDays),
     defaultRuleEnabled: boolOr(get("defaultRuleEnabled"), d.defaultRuleEnabled),
-    defaultRulePreset: isNumberedPreset(presetRaw) ? presetRaw : d.defaultRulePreset,
+    defaultRulePreset: numberedOr(normalisePreset(presetRaw), d.defaultRulePreset),
     defaultRuleScope: (DEFAULT_RULE_SCOPES as readonly string[]).includes(scopeRaw)
       ? (scopeRaw as DefaultRuleScope)
       : d.defaultRuleScope,
     presets: parsePresetOverrides(get("presets")),
-    defaultMinBalance: numOr(get("defaultMinBalance"), d.defaultMinBalance, (n) => n >= 0 && n <= BOUNDS.money.max),
+    defaultMinOverdue: numOr(get("defaultMinOverdue"), d.defaultMinOverdue, (n) => n >= 0 && n <= BOUNDS.minOverdue.max),
     ruleOrderLookbackDays: intIn(get("ruleOrderLookbackDays"), d.ruleOrderLookbackDays, BOUNDS.listLookbackDays),
     overdueWidgetLookbackDays: intIn(get("overdueWidgetLookbackDays"), d.overdueWidgetLookbackDays, BOUNDS.listLookbackDays),
     warnDays,
@@ -321,11 +320,7 @@ function serializeField(c: HoldsConfig, f: HoldsConfigField): string {
     // Stable key order so an unchanged table never diffs.
     const ordered: Record<string, HoldRuleNumbers> = {};
     for (const p of NUMBERED_PRESETS) {
-      ordered[p] = {
-        termsDays: t[p].termsDays,
-        holdWhenInvoiceDaysOver: t[p].holdWhenInvoiceDaysOver,
-        minBalance: t[p].minBalance,
-      };
+      ordered[p] = { graceDays: t[p].graceDays, minOverdue: t[p].minOverdue };
     }
     return JSON.stringify(ordered);
   }
@@ -378,7 +373,7 @@ export const SECTION_FIELDS: Record<HoldsSettingsSection, HoldsConfigField[]> = 
     "defaultRulePreset",
     "defaultRuleScope",
   ],
-  presets: ["presets", "defaultMinBalance"],
+  presets: ["presets", "defaultMinOverdue"],
   flags: ["ruleOrderLookbackDays", "overdueWidgetLookbackDays"],
   ladder: ["warnDays", "cancelDays", "warehouseRecipients", "teamRecipients"],
   autoRelease: ["autoReleaseEmailsWarehouse", "ruleHoldsRespectPromise"],

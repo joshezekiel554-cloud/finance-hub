@@ -6,11 +6,12 @@ import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { HOLD_RULE_PRESETS, PRESET_NUMBERS, describeRule, presetLabel, type PresetTable } from "../../modules/hold-orders/presets";
+import { HOLD_RULE_PRESETS, PRESET_NUMBERS, describeRule, graceText, presetLabel, type PresetTable } from "../../modules/hold-orders/presets";
+import { TermsText } from "./TermsText";
 import { BulkPicker } from "./BulkPicker";
 import { defaultRuleBanner } from "./lib/settings-form";
 import { NEW_RULE_DRAFT, displayNumbers, draftFromRule, draftToBody, type RuleDraft } from "./lib/rule-form";
-import { formatDate, formatMoney } from "./lib/view";
+import { formatDate, formatMoney, owesLine } from "./lib/view";
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -53,7 +54,7 @@ export function RulesPanel({
           <p className="mb-3 flex flex-wrap items-center gap-x-2 rounded-lg border border-accent-warning/40 bg-accent-warning/10 px-3 py-2 text-xs text-primary">
             <AlertTriangle className="size-3.5 text-accent-warning" aria-hidden />
             <span className="font-medium">{banner}</span>
-            <span className="text-secondary">— b2b customers without a rule of their own are not held by invoice age.</span>
+            <span className="text-secondary">— b2b customers without a rule of their own are not held for overdue invoices.</span>
             <button type="button" onClick={onOpenSettings} className="font-medium text-accent-primary hover:underline">
               Settings
             </button>
@@ -109,6 +110,8 @@ function RuleRow({ rule, active, onClick }: { rule: StoredRule; active: boolean;
           <span className="truncate text-sm font-medium text-primary">{rule.customerName ?? rule.customerId}</span>
           <Badge tone={rule.preset === "never" ? "neutral" : "info"}>{describeRule(rule)}</Badge>
         </div>
+        <TermsText terms={rule.paymentTerms} rule={rule} className="mt-0.5 text-xs" />
+        <div className="mt-0.5 text-xs text-secondary tabular-nums">{owesLine(rule.balance, rule.overdueBalance)}</div>
         <div className="mt-0.5 text-xs text-muted">
           {[
             rule.notifyWarehouse ? "emails warehouse" : "warehouse not emailed",
@@ -218,6 +221,20 @@ function RuleEditor({
           Close
         </button>
       </div>
+      {existing.data?.customer ? (
+        <div className="mb-3 rounded-lg border border-default bg-base px-3 py-2">
+          <TermsText
+            terms={existing.data.customer.paymentTerms}
+            rule={nums ? { preset: draft.preset, graceDays: nums.graceDays } : draft.preset === "never" ? { preset: "never", graceDays: 0 } : null}
+            financeUrl={existing.data.financeCustomerUrl}
+            className="text-sm"
+          />
+          <div className="mt-0.5 text-xs text-secondary tabular-nums">
+            {owesLine(existing.data.customer.balance, existing.data.customer.overdueBalance)}
+          </div>
+          <p className="mt-1 text-xs text-muted">Terms are set on the finance customer page (and pushed to QuickBooks), not here.</p>
+        </div>
+      ) : null}
       {existing.data?.rule ? null : <p className="mb-3 text-xs text-secondary">No rule yet — this customer follows the standard checks.</p>}
 
       <fieldset disabled={disabled} className="space-y-3">
@@ -233,26 +250,25 @@ function RuleEditor({
         </label>
 
         {draft.preset === "custom" ? (
-          <div className="grid grid-cols-3 gap-2">
-            <NumField label="Terms (days)" value={draft.termsDays} onChange={(v) => set({ termsDays: v })} />
-            <NumField label="Hold when older than (days)" value={draft.holdWhenInvoiceDaysOver} onChange={(v) => set({ holdWhenInvoiceDaysOver: v })} />
-            <NumField label="Min balance ($)" value={draft.minBalance} onChange={(v) => set({ minBalance: v })} />
+          <div className="grid grid-cols-2 gap-2">
+            <NumField label="Hold after (days overdue)" value={draft.graceDays} onChange={(v) => set({ graceDays: v })} />
+            <NumField label="Min overdue ($)" value={draft.minOverdue} onChange={(v) => set({ minOverdue: v })} />
           </div>
         ) : nums ? (
           <p className="text-xs text-secondary">
-            Terms {nums.termsDays} days. Holds new orders when any open invoice is more than {nums.holdWhenInvoiceDaysOver} days old
-            (from the invoice date){nums.minBalance > 0 ? ` and they owe at least ${formatMoney(nums.minBalance)}` : ""}.
+            Holds new orders once any invoice is {nums.graceDays > 0 ? `more than ${graceText(nums.graceDays)}` : "overdue"} (past its due
+            date){nums.minOverdue > 0 ? ` and at least ${formatMoney(nums.minOverdue)} is overdue` : ""}.
           </p>
         ) : (
           <p className="text-xs text-secondary">
-            Never held automatically by invoice age, and left out of the overdue-review check. Manual holds and account holds still apply.
+            Never held automatically for overdue invoices, and left out of the overdue-review check. Manual holds and account holds still apply.
           </p>
         )}
 
         {draft.preset !== "never" ? (
           <div className="space-y-1.5">
             <Toggle checked={draft.notifyWarehouse} onChange={(v) => set({ notifyWarehouse: v })} label="Email the warehouse when it holds an order" />
-            <Toggle checked={draft.autoStartLadder} onChange={(v) => set({ autoStartLadder: v })} label="Chase the customer by email (Day-0 / 7 / 10)" />
+            <Toggle checked={draft.autoStartLadder} onChange={(v) => set({ autoStartLadder: v })} label="Chase the customer by email (Day-0 / warning / cancel)" />
             <Toggle
               checked={draft.autoReleaseOnPayment}
               onChange={(v) => set({ autoReleaseOnPayment: v })}
@@ -283,7 +299,9 @@ function RuleEditor({
                   : `Would hold ${preview.data.orders.length} order${preview.data.orders.length === 1 ? "" : "s"} today`}
               </p>
               {preview.data.evaluation.why ? <p className="mt-0.5 text-xs text-secondary">{preview.data.evaluation.why}</p> : null}
-              <p className="mt-0.5 text-xs text-muted">Open balance {formatMoney(preview.data.evaluation.openBalance)}</p>
+              <p className="mt-0.5 text-xs text-muted tabular-nums">
+                {owesLine(preview.data.evaluation.openBalance, preview.data.evaluation.overdueBalance)} (Feldart invoices)
+              </p>
               {preview.data.orders.length > 0 ? (
                 <ul className="mt-2 flex flex-wrap gap-2">
                   {preview.data.orders.map((o) => (

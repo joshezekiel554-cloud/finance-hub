@@ -110,7 +110,7 @@ function SettingsForm({
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-accent-warning/40 bg-accent-warning/10 px-3 py-2 text-sm text-primary">
           <AlertTriangle className="mt-0.5 size-4 shrink-0 text-accent-warning" aria-hidden />
           <span>
-            <span className="font-semibold">{banner}.</span> b2b customers without a rule of their own are not held by invoice age.
+            <span className="font-semibold">{banner}.</span> b2b customers without a rule of their own are not held for overdue invoices.
             {canEdit ? " Run a dry run below before switching it on." : ""}
           </span>
         </div>
@@ -139,7 +139,7 @@ function SettingsForm({
           {NUMBERED_PRESETS.map((p) => (
             <div key={p} className="rounded-lg border border-default bg-base p-3">
               <h4 className="mb-2 text-sm font-semibold text-primary">{presetLabel(p, live.presets)}</h4>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 {(Object.keys(PRESET_NUMBER_LABELS) as PresetNumberField[]).map((n) => {
                   const err = errors[`presets.${p}.${n}`];
                   return (
@@ -163,10 +163,10 @@ function SettingsForm({
           ))}
         </div>
         <p className="text-xs text-muted">
-          An order is held when any open invoice is older (from its invoice date) than “hold when older than” and the customer owes at least the
-          min balance. Terms is informational.
+          An order is held when any invoice is more than “days overdue” past its due date and the customer has at least the min overdue amount
+          overdue. Due dates come from each customer's own terms (set on the finance customer page).
         </p>
-        <Field f="defaultMinBalance" {...fieldProps} />
+        <Field f="defaultMinOverdue" {...fieldProps} />
       </Section>
 
       <Section id="flags" data={data} changed={changed}>

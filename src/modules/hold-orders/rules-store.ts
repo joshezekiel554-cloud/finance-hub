@@ -10,6 +10,7 @@ import { invoices } from "../../db/schema/invoices.js";
 import { orders } from "../../db/schema/catalog.js";
 import { auditLog } from "../../db/schema/audit.js";
 import { isNumberedPreset, type PresetTable, type ResolvedHoldRule } from "./presets.js";
+import { parseTermsDays } from "./terms.js";
 import { buildEffectiveRules, type EffectiveRule } from "./effective-rules.js";
 import { HOLDS_CONFIG_DEFAULTS, type HoldsConfig } from "./holds-settings.js";
 import {
@@ -35,9 +36,8 @@ export function rowToRule(row: CustomerHoldRule, presets?: PresetTable): Resolve
   const live = presets && isNumberedPreset(row.preset) ? presets[row.preset] : null;
   return {
     preset: row.preset,
-    termsDays: live ? live.termsDays : row.termsDays,
-    holdWhenInvoiceDaysOver: live ? live.holdWhenInvoiceDaysOver : row.holdWhenInvoiceDaysOver,
-    minBalance: live ? live.minBalance : Number(row.minBalance),
+    graceDays: live ? live.graceDays : row.graceDays,
+    minOverdue: live ? live.minOverdue : Number(row.minOverdue),
     autoStartLadder: row.autoStartLadder,
     autoReleaseOnPayment: row.autoReleaseOnPayment,
     notifyWarehouse: row.notifyWarehouse,
@@ -48,6 +48,10 @@ export function rowToRule(row: CustomerHoldRule, presets?: PresetTable): Resolve
 export type StoredRule = ResolvedHoldRule & {
   customerId: string;
   customerName: string | null;
+  // Read-only customer context for the rules list / editor header.
+  paymentTerms: string | null;
+  balance: string | null;
+  overdueBalance: string | null;
   setByUserId: string | null;
   setAt: string;
   updatedAt: string;
@@ -59,7 +63,13 @@ function iso(d: Date | string): string {
 
 export async function getRule(customerId: string, presets?: PresetTable): Promise<StoredRule | null> {
   const rows = await db
-    .select({ rule: customerHoldRules, customerName: customers.displayName })
+    .select({
+      rule: customerHoldRules,
+      customerName: customers.displayName,
+      paymentTerms: customers.paymentTerms,
+      balance: customers.balance,
+      overdueBalance: customers.overdueBalance,
+    })
     .from(customerHoldRules)
     .leftJoin(customers, eq(customers.id, customerHoldRules.customerId))
     .where(eq(customerHoldRules.customerId, customerId))
@@ -70,6 +80,9 @@ export async function getRule(customerId: string, presets?: PresetTable): Promis
     ...rowToRule(r.rule, presets),
     customerId: r.rule.customerId,
     customerName: r.customerName,
+    paymentTerms: r.paymentTerms ?? null,
+    balance: r.balance ?? null,
+    overdueBalance: r.overdueBalance ?? null,
     setByUserId: r.rule.setByUserId,
     setAt: iso(r.rule.setAt),
     updatedAt: iso(r.rule.updatedAt),
@@ -78,7 +91,13 @@ export async function getRule(customerId: string, presets?: PresetTable): Promis
 
 export async function listRules(presets?: PresetTable): Promise<StoredRule[]> {
   const rows = await db
-    .select({ rule: customerHoldRules, customerName: customers.displayName })
+    .select({
+      rule: customerHoldRules,
+      customerName: customers.displayName,
+      paymentTerms: customers.paymentTerms,
+      balance: customers.balance,
+      overdueBalance: customers.overdueBalance,
+    })
     .from(customerHoldRules)
     .leftJoin(customers, eq(customers.id, customerHoldRules.customerId))
     .limit(5000);
@@ -87,6 +106,9 @@ export async function listRules(presets?: PresetTable): Promise<StoredRule[]> {
       ...rowToRule(r.rule, presets),
       customerId: r.rule.customerId,
       customerName: r.customerName,
+      paymentTerms: r.paymentTerms ?? null,
+      balance: r.balance ?? null,
+      overdueBalance: r.overdueBalance ?? null,
       setByUserId: r.rule.setByUserId,
       setAt: iso(r.rule.setAt),
       updatedAt: iso(r.rule.updatedAt),
@@ -150,9 +172,8 @@ export async function loadEffectiveRules(
 export function ruleRowValues(rule: ResolvedHoldRule, userId: string | null) {
   return {
     preset: rule.preset,
-    termsDays: rule.termsDays,
-    holdWhenInvoiceDaysOver: rule.holdWhenInvoiceDaysOver,
-    minBalance: rule.minBalance.toFixed(2),
+    graceDays: rule.graceDays,
+    minOverdue: rule.minOverdue.toFixed(2),
     autoStartLadder: rule.autoStartLadder,
     autoReleaseOnPayment: rule.autoReleaseOnPayment,
     notifyWarehouse: rule.notifyWarehouse,
@@ -252,6 +273,38 @@ export async function loadOpenInvoices(
   return out;
 }
 
+export type CustomerTerms = { days: number | null; label: string | null };
+
+/** customers.payment_terms per customer (finance-owned; pushed to QBO). */
+export async function loadCustomerTerms(customerIds: readonly string[]): Promise<Map<string, CustomerTerms>> {
+  const out = new Map<string, CustomerTerms>();
+  for (let i = 0; i < customerIds.length; i += 1000) {
+    const chunk = customerIds.slice(i, i + 1000);
+    const rows = await db
+      .select({ id: customers.id, terms: customers.paymentTerms })
+      .from(customers)
+      .where(inArray(customers.id, [...chunk]));
+    for (const r of rows) out.set(r.id, { days: parseTermsDays(r.terms), label: r.terms?.trim() || null });
+  }
+  return out;
+}
+
+export type CustomerContext = {
+  paymentTerms: string | null;
+  balance: string | null;
+  overdueBalance: string | null;
+};
+
+/** Read-only customer facts for the rule editor header. */
+export async function loadCustomerContext(customerId: string): Promise<CustomerContext | null> {
+  const rows = await db
+    .select({ paymentTerms: customers.paymentTerms, balance: customers.balance, overdueBalance: customers.overdueBalance })
+    .from(customers)
+    .where(eq(customers.id, customerId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export type CandidateOrder = RuleOrder & {
   customerId: string;
   shopifyOrderId: string;
@@ -312,11 +365,12 @@ export async function previewRule(
   now: Date = new Date(),
   lookbackDays: number = RULE_ORDER_LOOKBACK_DAYS,
 ): Promise<RulePreview> {
-  const [inv, ord] = await Promise.all([
+  const [inv, ord, terms] = await Promise.all([
     loadOpenInvoices([customerId]),
     loadCandidateOrders([customerId], now, lookbackDays),
+    loadCustomerTerms([customerId]),
   ]);
-  const evaluation = evaluateCustomerRule(rule, inv.get(customerId) ?? [], now);
+  const evaluation = evaluateCustomerRule(rule, inv.get(customerId) ?? [], now, terms.get(customerId));
   const hit = ordersRuleWouldHold(evaluation, ord.get(customerId) ?? []);
   return {
     evaluation,

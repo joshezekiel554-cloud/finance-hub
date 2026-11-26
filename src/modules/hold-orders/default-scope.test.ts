@@ -52,7 +52,7 @@ describe("default-rule scope", () => {
 
   it("an explicit row still opts an on-hold / prepay account in", () => {
     const explicit = new Map([
-      ["c-hold", { preset: "strict" as const, termsDays: 30, holdWhenInvoiceDaysOver: 30, minBalance: 0, autoStartLadder: false, autoReleaseOnPayment: true, notifyWarehouse: true, note: null }],
+      ["c-hold", { preset: "strict" as const, graceDays: 0, minOverdue: 0, autoStartLadder: false, autoReleaseOnPayment: true, notifyWarehouse: true, note: null }],
     ]);
     // c-hold is not a default candidate (filtered by SQL) but keeps its own rule.
     const m = buildEffectiveRules(explicit, [], { ...HOLDS_CONFIG_DEFAULTS, defaultRuleEnabled: true });

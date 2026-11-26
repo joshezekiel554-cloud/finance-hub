@@ -28,6 +28,14 @@ export function formatMoney(v: string | number | null | undefined): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 }
 
+/** "Owes $6,195.50 · $4,800.00 overdue" (either side may be missing). */
+export function owesLine(balance: string | number | null | undefined, overdue: string | number | null | undefined): string {
+  const owes = formatMoney(balance);
+  const od = Number(overdue);
+  const odText = Number.isFinite(od) && od > 0 ? `${formatMoney(od)} overdue` : "nothing overdue";
+  return owes === "—" ? odText : `Owes ${owes} · ${odText}`;
+}
+
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso.length === 10 ? `${iso}T12:00:00Z` : iso);

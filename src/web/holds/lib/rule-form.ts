@@ -1,8 +1,11 @@
 // Rules editor form state (pure). Preset numbers come from the SAME module
 // the server resolves rules with, so the editor can't show stale numbers.
+// Rules are overdue-based: the admin picks how many days PAST DUE before a
+// hold (grace) and the minimum overdue amount. Terms are NOT edited here —
+// they're the customer's payment_terms from finance (shown read-only).
 
 import {
-  DEFAULT_RULE_MIN_BALANCE,
+  DEFAULT_RULE_MIN_OVERDUE,
   PRESET_NUMBERS,
   resolveHoldRule,
   type HoldRulePreset,
@@ -12,9 +15,8 @@ import {
 
 export type RuleDraft = {
   preset: HoldRulePreset;
-  termsDays: string;
-  holdWhenInvoiceDaysOver: string;
-  minBalance: string;
+  graceDays: string;
+  minOverdue: string;
   autoStartLadder: boolean;
   autoReleaseOnPayment: boolean;
   notifyWarehouse: boolean;
@@ -22,10 +24,9 @@ export type RuleDraft = {
 };
 
 export const NEW_RULE_DRAFT: RuleDraft = {
-  preset: "standard_30_45",
-  termsDays: "30",
-  holdWhenInvoiceDaysOver: "45",
-  minBalance: String(DEFAULT_RULE_MIN_BALANCE),
+  preset: "standard",
+  graceDays: String(PRESET_NUMBERS.standard.graceDays),
+  minOverdue: String(DEFAULT_RULE_MIN_OVERDUE),
   // New rules don't email customers unless someone opts in.
   autoStartLadder: false,
   autoReleaseOnPayment: true,
@@ -35,9 +36,8 @@ export const NEW_RULE_DRAFT: RuleDraft = {
 
 export function draftFromRule(r: {
   preset: HoldRulePreset;
-  termsDays: number;
-  holdWhenInvoiceDaysOver: number;
-  minBalance: number;
+  graceDays: number;
+  minOverdue: number;
   autoStartLadder: boolean;
   autoReleaseOnPayment: boolean;
   notifyWarehouse: boolean;
@@ -45,9 +45,8 @@ export function draftFromRule(r: {
 }): RuleDraft {
   return {
     preset: r.preset,
-    termsDays: String(r.termsDays),
-    holdWhenInvoiceDaysOver: String(r.holdWhenInvoiceDaysOver),
-    minBalance: String(r.minBalance),
+    graceDays: String(r.graceDays),
+    minOverdue: String(r.minOverdue),
     autoStartLadder: r.autoStartLadder,
     autoReleaseOnPayment: r.autoReleaseOnPayment,
     notifyWarehouse: r.notifyWarehouse,
@@ -62,11 +61,7 @@ export function draftFromRule(r: {
 export function displayNumbers(d: RuleDraft, table: PresetTable = PRESET_NUMBERS): HoldRuleNumbers | null {
   if (d.preset === "never") return null;
   if (d.preset !== "custom") return table[d.preset];
-  return {
-    termsDays: Number(d.termsDays),
-    holdWhenInvoiceDaysOver: Number(d.holdWhenInvoiceDaysOver),
-    minBalance: Number(d.minBalance),
-  };
+  return { graceDays: Number(d.graceDays), minOverdue: Number(d.minOverdue) };
 }
 
 function intOrNull(s: string): number | null {
@@ -81,9 +76,8 @@ export function draftToBody(
 ): { ok: true; body: Record<string, unknown> } | { ok: false; error: string } {
   const body = {
     preset: d.preset,
-    termsDays: d.preset === "custom" ? intOrNull(d.termsDays) : null,
-    holdWhenInvoiceDaysOver: d.preset === "custom" ? intOrNull(d.holdWhenInvoiceDaysOver) : null,
-    minBalance: d.preset === "custom" && d.minBalance.trim() !== "" ? Number(d.minBalance) : null,
+    graceDays: d.preset === "custom" ? intOrNull(d.graceDays) : null,
+    minOverdue: d.preset === "custom" && d.minOverdue.trim() !== "" ? Number(d.minOverdue) : null,
     autoStartLadder: d.autoStartLadder,
     autoReleaseOnPayment: d.autoReleaseOnPayment,
     notifyWarehouse: d.notifyWarehouse,

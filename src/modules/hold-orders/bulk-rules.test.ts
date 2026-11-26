@@ -48,10 +48,9 @@ import type { CustomerHoldRule } from "../../db/schema/hold-rules.js";
 import type { ResolvedHoldRule } from "./presets.js";
 
 const std: ResolvedHoldRule = {
-  preset: "standard_30_45",
-  termsDays: 30,
-  holdWhenInvoiceDaysOver: 45,
-  minBalance: 50,
+  preset: "standard",
+  graceDays: 15,
+  minOverdue: 50,
   autoStartLadder: false,
   autoReleaseOnPayment: true,
   notifyWarehouse: true,
@@ -61,10 +60,9 @@ const std: ResolvedHoldRule = {
 function row(customerId: string, over: Partial<CustomerHoldRule> = {}): CustomerHoldRule {
   return {
     customerId,
-    preset: "vip_90_110",
-    termsDays: 90,
-    holdWhenInvoiceDaysOver: 110,
-    minBalance: "50.00",
+    preset: "relaxed",
+    graceDays: 30,
+    minOverdue: "50.00",
     autoStartLadder: false,
     autoReleaseOnPayment: true,
     notifyWarehouse: true,
@@ -104,7 +102,7 @@ describe("applyBulkRule", () => {
       { id: "has-vip", name: "VIP Co" },
       { id: "same", name: "Same Co" },
     ];
-    h.rules = [row("has-vip"), row("same", { preset: "standard_30_45", termsDays: 30, holdWhenInvoiceDaysOver: 45 })];
+    h.rules = [row("has-vip"), row("same", { preset: "standard", graceDays: 15 })];
 
     const skip = await applyBulkRule({ ids: ["new", "has-vip", "same", "ghost"], rule: std, overwrite: false, userId: "u", actorEmail: "josh@x" });
     expect(skip).toEqual({ applied: 1, unchanged: 0, skippedExisting: 2, unknown: 1 });
@@ -114,7 +112,7 @@ describe("applyBulkRule", () => {
       action: "customer_hold_rule.created",
       entityType: "customer_hold_rule",
       entityId: "new",
-      after: { preset: "standard_30_45", actorEmail: "josh@x", via: "bulk" },
+      after: { preset: "standard", actorEmail: "josh@x", via: "bulk" },
     });
 
     h.selectN = 0;
@@ -127,17 +125,17 @@ describe("applyBulkRule", () => {
       ["new", "customer_hold_rule.created"],
       ["has-vip", "customer_hold_rule.updated"],
     ]);
-    expect(h.audits[1]?.before).toMatchObject({ preset: "vip_90_110", customerName: "VIP Co" });
+    expect(h.audits[1]?.before).toMatchObject({ preset: "relaxed", customerName: "VIP Co" });
   });
 });
 
 describe("rowToRule: preset rows follow the live preset table", () => {
   it("preset row → live numbers; custom row keeps its own", () => {
-    const table = parsePresetOverrides(JSON.stringify({ vip_90_110: { termsDays: 90, holdWhenInvoiceDaysOver: 120, minBalance: 0 } }));
-    expect(rowToRule(row("a"), table)).toMatchObject({ holdWhenInvoiceDaysOver: 120, minBalance: 0 });
-    expect(rowToRule(row("a"))).toMatchObject({ holdWhenInvoiceDaysOver: 110, minBalance: 50 });
-    const custom = row("b", { preset: "custom", termsDays: 45, holdWhenInvoiceDaysOver: 60, minBalance: "200.00" });
-    expect(rowToRule(custom, table)).toMatchObject({ termsDays: 45, holdWhenInvoiceDaysOver: 60, minBalance: 200 });
+    const table = parsePresetOverrides(JSON.stringify({ relaxed: { graceDays: 45, minOverdue: 0 } }));
+    expect(rowToRule(row("a"), table)).toMatchObject({ graceDays: 45, minOverdue: 0 });
+    expect(rowToRule(row("a"))).toMatchObject({ graceDays: 30, minOverdue: 50 });
+    const custom = row("b", { preset: "custom", graceDays: 70, minOverdue: "200.00" });
+    expect(rowToRule(custom, table)).toMatchObject({ graceDays: 70, minOverdue: 200 });
   });
 });
 

@@ -14,6 +14,7 @@ import {
   formatDate,
   formatDateTime,
   formatMoney,
+  owesLine,
   holdConfirmLabel,
   holdStateLabel,
   previewSummary,
@@ -28,6 +29,7 @@ import {
   type ReleaseDraft,
 } from "./lib/view";
 import { cn } from "../lib/cn";
+import { TermsText } from "./TermsText";
 
 export function OrderDrawer({ orderId, me, onClose }: { orderId: string; me: Me; onClose: () => void }) {
   const q = useQuery({ queryKey: ["holds-order", orderId], queryFn: () => api.order(orderId) });
@@ -147,9 +149,11 @@ function DrawerBody({
             ? `${row.shipped.source === "extensiv" ? "Warehouse (Extensiv)" : "Shopify"}${row.shipped.shipDate ? ` ${formatDate(row.shipped.shipDate)}` : ""}${row.shipped.carrier ? ` · ${row.shipped.carrier}` : ""}${row.shipped.trackingNumber ? ` · ${row.shipped.trackingNumber}` : ""}`
             : "Not shipped"}
         </Fact>
-        {row.balance != null ? (
-          <Fact label="Account">
-            {formatMoney(row.balance)} balance · {formatMoney(row.overdueBalance)} overdue
+        {row.balance != null ? <Fact label="Account">{owesLine(row.balance, row.overdueBalance)}</Fact> : null}
+        {row.customerId ? (
+          <Fact label="Terms">
+            <TermsText terms={row.paymentTerms} rule={row.rule} financeUrl={row.links.financeCustomer} />
+            {row.rule ? <span className="block text-xs text-muted">Rule: {row.rule.label}</span> : null}
           </Fact>
         ) : null}
       </dl>

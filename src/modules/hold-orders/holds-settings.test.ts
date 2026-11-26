@@ -23,13 +23,13 @@ describe("parseHoldsConfig", () => {
       warnDays: 7,
       cancelDays: 10,
       defaultRuleEnabled: false,
-      defaultRulePreset: "standard_30_45",
+      defaultRulePreset: "standard",
       defaultRuleScope: "b2b",
       autoReleaseEmailsWarehouse: true,
       ruleHoldsRespectPromise: false,
       ruleOrderLookbackDays: 30,
       overdueWidgetLookbackDays: 30,
-      defaultMinBalance: 50,
+      defaultMinOverdue: 50,
     });
     expect(c.presets).toEqual(PRESET_NUMBERS);
   });
@@ -42,7 +42,7 @@ describe("parseHoldsConfig", () => {
       order_hold_warn_days: "5",
       order_hold_cancel_days: "12",
       holds_default_rule_enabled: "true",
-      holds_default_rule_preset: "vip_90_110",
+      holds_default_rule_preset: "relaxed",
       holds_auto_release_emails_warehouse: "false",
       holds_rule_holds_respect_promise: "1",
       order_hold_warehouse_recipients: "",
@@ -54,12 +54,16 @@ describe("parseHoldsConfig", () => {
       warnDays: 5,
       cancelDays: 12,
       defaultRuleEnabled: true,
-      defaultRulePreset: "vip_90_110",
+      defaultRulePreset: "relaxed",
       autoReleaseEmailsWarehouse: false,
       ruleHoldsRespectPromise: true,
       // blank recipient list = nobody, not the default
       warehouseRecipients: "",
     });
+  });
+
+  it("a legacy stored default preset maps to the new one", () => {
+    expect(parseHoldsConfig({ holds_default_rule_preset: "standard_30_45" }).defaultRulePreset).toBe("standard");
   });
 
   it("garbage / out-of-range values fall back to defaults", () => {
@@ -74,7 +78,7 @@ describe("parseHoldsConfig", () => {
     expect(c).toMatchObject({
       holdAlertLookbackDays: 3,
       overdueAlertLookbackDays: 3,
-      defaultRulePreset: "standard_30_45",
+      defaultRulePreset: "standard",
       defaultRuleScope: "b2b",
       defaultRuleEnabled: false,
       overdueThresholdGbp: 1000,
@@ -92,32 +96,34 @@ describe("preset overrides", () => {
   it("partial / invalid JSON entries fall back per preset", () => {
     const t = parsePresetOverrides(
       JSON.stringify({
-        standard_30_45: { termsDays: 30, holdWhenInvoiceDaysOver: 60, minBalance: 100 },
-        vip_90_110: { termsDays: 90, holdWhenInvoiceDaysOver: 50, minBalance: 0 }, // over < terms → ignored
-        bogus: { termsDays: 1 },
+        standard: { graceDays: 20, minOverdue: 100 },
+        relaxed: { graceDays: -5, minOverdue: 0 }, // negative → ignored
+        standard_30_45: { termsDays: 30, holdWhenInvoiceDaysOver: 45, minBalance: 50 }, // legacy shape → ignored
+        bogus: { graceDays: 1 },
       }),
     );
-    expect(t.standard_30_45).toEqual({ termsDays: 30, holdWhenInvoiceDaysOver: 60, minBalance: 100 });
-    expect(t.vip_90_110).toEqual(PRESET_NUMBERS.vip_90_110);
+    expect(t.standard).toEqual({ graceDays: 20, minOverdue: 100 });
+    expect(t.relaxed).toEqual(PRESET_NUMBERS.relaxed);
+    expect(t.strict).toEqual(PRESET_NUMBERS.strict);
     expect(parsePresetOverrides("not json")).toEqual(PRESET_NUMBERS);
   });
 
   it("rules on a preset resolve the live table; custom keeps its numbers", () => {
-    const table = parsePresetOverrides(JSON.stringify({ standard_30_45: { termsDays: 30, holdWhenInvoiceDaysOver: 50, minBalance: 75 } }));
+    const table = parsePresetOverrides(JSON.stringify({ standard: { graceDays: 20, minOverdue: 75 } }));
     const flags = { autoStartLadder: false, autoReleaseOnPayment: true, notifyWarehouse: true };
-    const std = resolveHoldRule({ preset: "standard_30_45", ...flags }, table);
-    expect(std.ok && std.rule).toMatchObject({ holdWhenInvoiceDaysOver: 50, minBalance: 75 });
-    const custom = resolveHoldRule({ preset: "custom", termsDays: 10, holdWhenInvoiceDaysOver: 20, ...flags }, table, 300);
-    expect(custom.ok && custom.rule).toMatchObject({ termsDays: 10, holdWhenInvoiceDaysOver: 20, minBalance: 300 });
+    const std = resolveHoldRule({ preset: "standard", ...flags }, table);
+    expect(std.ok && std.rule).toMatchObject({ graceDays: 20, minOverdue: 75 });
+    const custom = resolveHoldRule({ preset: "custom", graceDays: 10, ...flags }, table, 300);
+    expect(custom.ok && custom.rule).toMatchObject({ graceDays: 10, minOverdue: 300 });
   });
 
   it("labels reflect the edited numbers", () => {
-    const table = parsePresetOverrides(JSON.stringify({ standard_30_45: { termsDays: 30, holdWhenInvoiceDaysOver: 50, minBalance: 50 } }));
-    expect(presetLabel("standard_30_45", table)).toBe("Standard 30/50");
-    expect(presetLabel("standard_30_45")).toBe("Standard 30/45");
-    expect(presetLabel("strict")).toBe("Strict (hold when past due)");
+    const table = parsePresetOverrides(JSON.stringify({ standard: { graceDays: 20, minOverdue: 50 } }));
+    expect(presetLabel("standard", table)).toBe("Standard — 20 days overdue");
+    expect(presetLabel("standard")).toBe("Standard — 15 days overdue");
+    expect(presetLabel("strict")).toBe("Strict — hold as soon as overdue");
     expect(presetLabel("never", table)).toBe("Never hold automatically");
-    expect(describeRule({ preset: "vip_90_110", termsDays: 90, holdWhenInvoiceDaysOver: 120, minBalance: 50 })).toBe("VIP 90/120");
+    expect(describeRule({ preset: "relaxed", graceDays: 45, minOverdue: 50 })).toBe("Relaxed — 45 days overdue");
   });
 });
 
@@ -128,9 +134,9 @@ describe("mergeHoldsConfig (PATCH validation)", () => {
     expect(r.ok && r.config).toMatchObject({ warnDays: 5, cancelDays: 10, defaultRuleEnabled: true });
   });
   it("merges a single preset into the table", () => {
-    const r = mergeHoldsConfig(cur, { presets: { strict: { termsDays: 14, holdWhenInvoiceDaysOver: 20, minBalance: 0 } } });
-    expect(r.ok && r.config.presets.strict).toEqual({ termsDays: 14, holdWhenInvoiceDaysOver: 20, minBalance: 0 });
-    expect(r.ok && r.config.presets.vip_90_110).toEqual(PRESET_NUMBERS.vip_90_110);
+    const r = mergeHoldsConfig(cur, { presets: { strict: { graceDays: 3, minOverdue: 0 } } });
+    expect(r.ok && r.config.presets.strict).toEqual({ graceDays: 3, minOverdue: 0 });
+    expect(r.ok && r.config.presets.relaxed).toEqual(PRESET_NUMBERS.relaxed);
   });
   it.each([
     [{ warnDays: 10 }, "warnDays"],
@@ -140,7 +146,9 @@ describe("mergeHoldsConfig (PATCH validation)", () => {
     [{ overdueThresholdGbp: -1 }, "overdueThresholdGbp"],
     [{ noContactDays: 1.5 }, "noContactDays"],
     [{ overdueRecipients: "a@x.com, not-an-email" }, "overdueRecipients"],
-    [{ presets: { vip_90_110: { termsDays: 90, holdWhenInvoiceDaysOver: 80, minBalance: 0 } } }, "presets.vip_90_110.holdWhenInvoiceDaysOver"],
+    [{ presets: { relaxed: { graceDays: 400, minOverdue: 0 } } }, "presets.relaxed.graceDays"],
+    [{ presets: { standard: { graceDays: 15, minOverdue: -1 } } }, "presets.standard.minOverdue"],
+    [{ presets: { standard_30_45: { graceDays: 15, minOverdue: 50 } } }, ""],
     [{ defaultRulePreset: "never" }, "defaultRulePreset"],
     [{ defaultRuleScope: "all" }, "defaultRuleScope"],
     [{ unknownKey: 1 }, ""],
@@ -157,7 +165,7 @@ describe("mergeHoldsConfig (PATCH validation)", () => {
 
 describe("serialize / diff", () => {
   it("round-trips", () => {
-    const r = mergeHoldsConfig(HOLDS_CONFIG_DEFAULTS, { warnDays: 4, defaultRuleEnabled: true, presets: { strict: { termsDays: 7, holdWhenInvoiceDaysOver: 7, minBalance: 0 } } });
+    const r = mergeHoldsConfig(HOLDS_CONFIG_DEFAULTS, { warnDays: 4, defaultRuleEnabled: true, presets: { strict: { graceDays: 2, minOverdue: 0 } } });
     if (!r.ok) throw new Error("bad");
     expect(parseHoldsConfig(serializeHoldsConfig(r.config))).toEqual(r.config);
   });
@@ -188,8 +196,8 @@ describe("lastChangedBySection", () => {
 
 describe("effective rules (default b2b rule)", () => {
   const explicitVip = new Map([
-    ["c-vip", { preset: "vip_90_110" as const, termsDays: 90, holdWhenInvoiceDaysOver: 110, minBalance: 50, autoStartLadder: true, autoReleaseOnPayment: true, notifyWarehouse: false, note: null }],
-    ["c-never", { preset: "never" as const, termsDays: 0, holdWhenInvoiceDaysOver: 0, minBalance: 0, autoStartLadder: false, autoReleaseOnPayment: true, notifyWarehouse: false, note: null }],
+    ["c-vip", { preset: "relaxed" as const, graceDays: 30, minOverdue: 50, autoStartLadder: true, autoReleaseOnPayment: true, notifyWarehouse: false, note: null }],
+    ["c-never", { preset: "never" as const, graceDays: 0, minOverdue: 0, autoStartLadder: false, autoReleaseOnPayment: true, notifyWarehouse: false, note: null }],
   ]);
 
   it("off → only explicit rules", () => {
@@ -199,19 +207,19 @@ describe("effective rules (default b2b rule)", () => {
   });
 
   it("on → rule-less b2b customers get the default preset (live numbers); explicit rows, incl. never, win", () => {
-    const cfg = { ...HOLDS_CONFIG_DEFAULTS, defaultRuleEnabled: true, defaultRulePreset: "extended_60_75" as const };
-    cfg.presets = { ...cfg.presets, extended_60_75: { termsDays: 60, holdWhenInvoiceDaysOver: 80, minBalance: 10 } };
+    const cfg = { ...HOLDS_CONFIG_DEFAULTS, defaultRuleEnabled: true, defaultRulePreset: "standard" as const };
+    cfg.presets = { ...cfg.presets, standard: { graceDays: 20, minOverdue: 10 } };
     const m = buildEffectiveRules(explicitVip, ["c-b2b", "c-never"], cfg);
     expect(m.get("c-b2b")).toMatchObject({
       source: "default",
-      preset: "extended_60_75",
-      holdWhenInvoiceDaysOver: 80,
+      preset: "standard",
+      graceDays: 20,
       notifyWarehouse: true,
       autoStartLadder: false,
       autoReleaseOnPayment: true,
     });
     expect(m.get("c-never")).toMatchObject({ preset: "never", source: "explicit" });
     expect(m.get("c-vip")?.source).toBe("explicit");
-    expect(describeRule(m.get("c-b2b")!)).toBe("Default b2b rule (Extended 60/80)");
+    expect(describeRule(m.get("c-b2b")!)).toBe("Default b2b rule (Standard — 20 days overdue)");
   });
 });

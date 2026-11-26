@@ -26,6 +26,8 @@ export type HoldRow = {
   customerName: string | null;
   balance?: string | null;
   overdueBalance?: string | null;
+  paymentTerms: string | null;
+  rule: { preset: HoldRulePreset; graceDays: number; label: string } | null;
   holdState: string;
   holdReason: string | null;
   why: string;
@@ -66,9 +68,8 @@ export type PreviewResponse = { emails: EmailPreview[]; shadowMode: boolean };
 
 export type RuleShape = {
   preset: HoldRulePreset;
-  termsDays: number;
-  holdWhenInvoiceDaysOver: number;
-  minBalance: number;
+  graceDays: number;
+  minOverdue: number;
   autoStartLadder: boolean;
   autoReleaseOnPayment: boolean;
   notifyWarehouse: boolean;
@@ -78,13 +79,22 @@ export type RuleShape = {
 export type StoredRule = RuleShape & {
   customerId: string;
   customerName: string | null;
+  paymentTerms: string | null;
+  balance: string | null;
+  overdueBalance: string | null;
   setAt: string;
   updatedAt: string;
 };
 
 export type RulePreviewResponse = {
   rule: RuleShape;
-  evaluation: { wouldHold: boolean; why: string | null; openBalance: number; hits: Array<{ docNumber: string | null; ageDays: number; balance: number }> };
+  evaluation: {
+    wouldHold: boolean;
+    why: string | null;
+    openBalance: number;
+    overdueBalance: number;
+    hits: Array<{ docNumber: string | null; daysOverdue: number; balance: number }>;
+  };
   orders: Array<{ orderId: string; orderNumber: string | null; total: string | null }>;
 };
 
@@ -142,7 +152,8 @@ export type CandidateRow = {
   holdStatus: string | null;
   balance: string | null;
   overdueBalance: string | null;
-  rule: { preset: HoldRulePreset; label: string } | null;
+  paymentTerms: string | null;
+  rule: { preset: HoldRulePreset; label: string; graceDays: number } | null;
   defaultScope: boolean;
 };
 
@@ -215,7 +226,13 @@ export const api = {
   note: (id: string, note: string) =>
     call<{ ok: true }>(`/${encodeURIComponent(id)}/note`, { method: "POST", body: JSON.stringify({ note }) }),
   rules: () => call<{ rules: StoredRule[]; canEdit: boolean }>("/rules"),
-  rule: (customerId: string) => call<{ rule: StoredRule | null; canEdit: boolean }>(`/rules/${encodeURIComponent(customerId)}`),
+  rule: (customerId: string) =>
+    call<{
+      rule: StoredRule | null;
+      customer: { paymentTerms: string | null; balance: string | null; overdueBalance: string | null } | null;
+      financeCustomerUrl: string | null;
+      canEdit: boolean;
+    }>(`/rules/${encodeURIComponent(customerId)}`),
   customers: (q: string) => call<{ customers: CustomerHit[] }>(`/rules/customers?${new URLSearchParams({ q }).toString()}`),
   previewRule: (customerId: string, rule: Record<string, unknown>) =>
     call<RulePreviewResponse>("/rules/preview", { method: "POST", body: JSON.stringify({ customerId, rule }) }),

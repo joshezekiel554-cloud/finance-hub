@@ -441,7 +441,7 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
   // Customer hold rules (Hold Orders): the per-rule auto-release switch and
   // the customer_rule reason. Customers without a rule (explicit, or the
   // default b2b rule when it's switched on) are unaffected.
-  const { loadEffectiveRules, loadOpenInvoices } = await import("../hold-orders/rules-store.js");
+  const { loadEffectiveRules, loadOpenInvoices, loadCustomerTerms } = await import("../hold-orders/rules-store.js");
   const { evaluateCustomerRule } = await import("../hold-orders/rule-engine.js");
   const { shouldAutoRelease } = await import("../hold-orders/auto-release.js");
   const { onHoldReleased } = await import("../hold-orders/inbox-resolve.js");
@@ -456,7 +456,10 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
         .map((r) => r.customerId as string),
     ),
   );
-  const ruleInvoices = await loadOpenInvoices(ruleCustomerIds);
+  const [ruleInvoices, ruleTerms] = await Promise.all([
+    loadOpenInvoices(ruleCustomerIds),
+    loadCustomerTerms(ruleCustomerIds),
+  ]);
   const now = new Date();
 
   let released = 0;
@@ -474,7 +477,8 @@ export async function releaseResolvedHolds(): Promise<{ released: number }> {
       }),
       ruleStillHolds:
         rule && r.customerId
-          ? evaluateCustomerRule(rule, ruleInvoices.get(r.customerId) ?? [], now).wouldHold
+          ? evaluateCustomerRule(rule, ruleInvoices.get(r.customerId) ?? [], now, ruleTerms.get(r.customerId))
+              .wouldHold
           : true,
     });
     if (!release) continue;
