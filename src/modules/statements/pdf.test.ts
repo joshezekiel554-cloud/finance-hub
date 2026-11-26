@@ -11,6 +11,23 @@ import type { Customer } from "../../db/schema/customers.js";
 import type { Invoice } from "../../db/schema/invoices.js";
 import type { AppSettingsMap } from "./settings.js";
 
+// Hold Orders v2 keys — irrelevant to the statement PDF ("" = default).
+const HOLDS_BLANK = {
+  order_hold_alert_lookback_days: "",
+  order_overdue_alert_lookback_days: "",
+  order_overdue_widget_lookback_days: "",
+  holds_rule_order_lookback_days: "",
+  order_hold_warn_days: "",
+  order_hold_cancel_days: "",
+  holds_default_rule_enabled: "",
+  holds_default_rule_preset: "",
+  holds_default_rule_scope: "",
+  holds_preset_overrides: "",
+  holds_default_min_balance: "",
+  holds_auto_release_emails_warehouse: "",
+  holds_rule_holds_respect_promise: "",
+};
+
 const FROZEN = new Date("2026-04-29T12:00:00.000Z");
 
 function makeCustomer(overrides: Partial<Customer> = {}): Customer {
@@ -132,6 +149,7 @@ const SETTINGS: AppSettingsMap = {
   order_overdue_threshold_gbp: "1000",
   order_overdue_no_contact_days: "14",
   time_clock_user_ids: "",
+  ...HOLDS_BLANK,
 };
 
 describe("renderStatementPdf", () => {
@@ -249,6 +267,7 @@ describe("renderStatementPdf", () => {
         order_overdue_threshold_gbp: "1000",
         order_overdue_no_contact_days: "14",
         time_clock_user_ids: "",
+        ...HOLDS_BLANK,
       },
       statementNumber: 1,
       generatedAt: FROZEN,

@@ -9,7 +9,9 @@ import { customers } from "../../db/schema/customers.js";
 import { invoices } from "../../db/schema/invoices.js";
 import { orders } from "../../db/schema/catalog.js";
 import { auditLog } from "../../db/schema/audit.js";
-import type { ResolvedHoldRule } from "./presets.js";
+import { isNumberedPreset, type PresetTable, type ResolvedHoldRule } from "./presets.js";
+import { buildEffectiveRules, type EffectiveRule } from "./effective-rules.js";
+import { HOLDS_CONFIG_DEFAULTS, type HoldsConfig } from "./holds-settings.js";
 import {
   evaluateCustomerRule,
   ordersRuleWouldHold,
@@ -18,17 +20,24 @@ import {
   type RuleOrder,
 } from "./rule-engine.js";
 
-// Rules look at open orders from this far back (same window as the
+// Default window for open orders a rule looks at (same window as the
 // dashboard hold widgets). Older still-unfulfilled orders are almost always
-// stale Shopify records, not parcels waiting at the warehouse.
-export const RULE_ORDER_LOOKBACK_DAYS = 30;
+// stale Shopify records, not parcels waiting at the warehouse. Live value:
+// Settings → holds_rule_order_lookback_days.
+export const RULE_ORDER_LOOKBACK_DAYS = HOLDS_CONFIG_DEFAULTS.ruleOrderLookbackDays;
 
-export function rowToRule(row: CustomerHoldRule): ResolvedHoldRule {
+/**
+ * Row → rule. With `presets` (the live Settings table), a preset row takes
+ * the CURRENT preset numbers rather than the snapshot stored on the row, so
+ * editing a preset moves every customer on it. Custom/never rows keep theirs.
+ */
+export function rowToRule(row: CustomerHoldRule, presets?: PresetTable): ResolvedHoldRule {
+  const live = presets && isNumberedPreset(row.preset) ? presets[row.preset] : null;
   return {
     preset: row.preset,
-    termsDays: row.termsDays,
-    holdWhenInvoiceDaysOver: row.holdWhenInvoiceDaysOver,
-    minBalance: Number(row.minBalance),
+    termsDays: live ? live.termsDays : row.termsDays,
+    holdWhenInvoiceDaysOver: live ? live.holdWhenInvoiceDaysOver : row.holdWhenInvoiceDaysOver,
+    minBalance: live ? live.minBalance : Number(row.minBalance),
     autoStartLadder: row.autoStartLadder,
     autoReleaseOnPayment: row.autoReleaseOnPayment,
     notifyWarehouse: row.notifyWarehouse,
@@ -48,7 +57,7 @@ function iso(d: Date | string): string {
   return d instanceof Date ? d.toISOString() : String(d);
 }
 
-export async function getRule(customerId: string): Promise<StoredRule | null> {
+export async function getRule(customerId: string, presets?: PresetTable): Promise<StoredRule | null> {
   const rows = await db
     .select({ rule: customerHoldRules, customerName: customers.displayName })
     .from(customerHoldRules)
@@ -58,7 +67,7 @@ export async function getRule(customerId: string): Promise<StoredRule | null> {
   const r = rows[0];
   if (!r) return null;
   return {
-    ...rowToRule(r.rule),
+    ...rowToRule(r.rule, presets),
     customerId: r.rule.customerId,
     customerName: r.customerName,
     setByUserId: r.rule.setByUserId,
@@ -67,15 +76,15 @@ export async function getRule(customerId: string): Promise<StoredRule | null> {
   };
 }
 
-export async function listRules(): Promise<StoredRule[]> {
+export async function listRules(presets?: PresetTable): Promise<StoredRule[]> {
   const rows = await db
     .select({ rule: customerHoldRules, customerName: customers.displayName })
     .from(customerHoldRules)
     .leftJoin(customers, eq(customers.id, customerHoldRules.customerId))
-    .limit(2000);
+    .limit(5000);
   return rows
     .map((r) => ({
-      ...rowToRule(r.rule),
+      ...rowToRule(r.rule, presets),
       customerId: r.rule.customerId,
       customerName: r.customerName,
       setByUserId: r.rule.setByUserId,
@@ -85,9 +94,10 @@ export async function listRules(): Promise<StoredRule[]> {
     .sort((a, b) => (a.customerName ?? "").localeCompare(b.customerName ?? ""));
 }
 
-/** Rules for a set of customers (the detection job / board / auto-release). */
+/** Explicit rules for a set of customers (or all), resolved on `presets`. */
 export async function loadRulesFor(
   customerIds?: readonly string[],
+  presets?: PresetTable,
 ): Promise<Map<string, ResolvedHoldRule>> {
   if (customerIds && customerIds.length === 0) return new Map();
   const rows = customerIds
@@ -96,7 +106,54 @@ export async function loadRulesFor(
         .from(customerHoldRules)
         .where(inArray(customerHoldRules.customerId, [...customerIds]))
     : await db.select().from(customerHoldRules).limit(5000);
-  return new Map(rows.map((r) => [r.customerId, rowToRule(r)]));
+  return new Map(rows.map((r) => [r.customerId, rowToRule(r, presets)]));
+}
+
+/**
+ * Customers in the default rule's scope ("b2b" = customers.customer_type
+ * 'b2b') that have NO explicit row. Optionally limited to `customerIds`.
+ */
+export async function loadDefaultRuleCustomerIds(customerIds?: readonly string[]): Promise<string[]> {
+  if (customerIds && customerIds.length === 0) return [];
+  const conds = [eq(customers.customerType, "b2b"), isNull(customerHoldRules.customerId)];
+  if (customerIds) conds.push(inArray(customers.id, [...customerIds]));
+  const rows = await db
+    .select({ id: customers.id })
+    .from(customers)
+    .leftJoin(customerHoldRules, eq(customerHoldRules.customerId, customers.id))
+    .where(and(...conds))
+    .limit(5000);
+  return rows.map((r) => r.id);
+}
+
+/**
+ * The rule every customer actually runs on today: explicit rows (live preset
+ * numbers) + the default b2b rule when it's switched on. See
+ * effective-rules.ts for precedence.
+ */
+export async function loadEffectiveRules(
+  config: HoldsConfig,
+  customerIds?: readonly string[],
+): Promise<Map<string, EffectiveRule>> {
+  const explicit = await loadRulesFor(customerIds, config.presets);
+  const defaultIds = config.defaultRuleEnabled ? await loadDefaultRuleCustomerIds(customerIds) : [];
+  return buildEffectiveRules(explicit, defaultIds, config);
+}
+
+/** Column values for an upsert (shared by single + bulk writes). */
+export function ruleRowValues(rule: ResolvedHoldRule, userId: string | null) {
+  return {
+    preset: rule.preset,
+    termsDays: rule.termsDays,
+    holdWhenInvoiceDaysOver: rule.holdWhenInvoiceDaysOver,
+    minBalance: rule.minBalance.toFixed(2),
+    autoStartLadder: rule.autoStartLadder,
+    autoReleaseOnPayment: rule.autoReleaseOnPayment,
+    notifyWarehouse: rule.notifyWarehouse,
+    note: rule.note,
+    setByUserId: userId,
+    setAt: new Date(),
+  };
 }
 
 export async function upsertRule(args: {
@@ -104,6 +161,7 @@ export async function upsertRule(args: {
   rule: ResolvedHoldRule;
   userId: string | null;
   actorEmail: string | null;
+  via?: string;
 }): Promise<{ ok: true } | { ok: false; reason: "customer_not_found" }> {
   const cust = await db
     .select({ id: customers.id })
@@ -113,18 +171,7 @@ export async function upsertRule(args: {
   if (!cust[0]) return { ok: false, reason: "customer_not_found" };
 
   const before = await getRule(args.customerId);
-  const values = {
-    preset: args.rule.preset,
-    termsDays: args.rule.termsDays,
-    holdWhenInvoiceDaysOver: args.rule.holdWhenInvoiceDaysOver,
-    minBalance: args.rule.minBalance.toFixed(2),
-    autoStartLadder: args.rule.autoStartLadder,
-    autoReleaseOnPayment: args.rule.autoReleaseOnPayment,
-    notifyWarehouse: args.rule.notifyWarehouse,
-    note: args.rule.note,
-    setByUserId: args.userId,
-    setAt: new Date(),
-  };
+  const values = ruleRowValues(args.rule, args.userId);
   await db
     .insert(customerHoldRules)
     .values({ customerId: args.customerId, ...values })
@@ -136,7 +183,7 @@ export async function upsertRule(args: {
     entityType: "customer_hold_rule",
     entityId: args.customerId,
     before: before ? { ...before } : {},
-    after: { ...args.rule, actorEmail: args.actorEmail },
+    after: { ...args.rule, actorEmail: args.actorEmail, ...(args.via ? { via: args.via } : {}) },
   });
   return { ok: true };
 }
@@ -167,31 +214,34 @@ export async function loadOpenInvoices(
 ): Promise<Map<string, RuleInvoice[]>> {
   const out = new Map<string, RuleInvoice[]>();
   if (customerIds.length === 0) return out;
-  const rows = await db
-    .select({
-      customerId: invoices.customerId,
-      docNumber: invoices.docNumber,
-      issueDate: invoices.issueDate,
-      dueDate: invoices.dueDate,
-      balance: invoices.balance,
-      status: invoices.status,
-      origin: invoices.origin,
-      disputeState: invoices.disputeState,
-    })
-    .from(invoices)
-    .where(and(inArray(invoices.customerId, [...customerIds]), gt(invoices.balance, "0")));
-  for (const r of rows) {
-    const list = out.get(r.customerId) ?? [];
-    list.push({
-      docNumber: r.docNumber,
-      issueDate: r.issueDate,
-      dueDate: r.dueDate,
-      balance: r.balance,
-      status: r.status,
-      origin: r.origin,
-      disputeState: r.disputeState,
-    });
-    out.set(r.customerId, list);
+  for (let i = 0; i < customerIds.length; i += 1000) {
+    const chunk = customerIds.slice(i, i + 1000);
+    const rows = await db
+      .select({
+        customerId: invoices.customerId,
+        docNumber: invoices.docNumber,
+        issueDate: invoices.issueDate,
+        dueDate: invoices.dueDate,
+        balance: invoices.balance,
+        status: invoices.status,
+        origin: invoices.origin,
+        disputeState: invoices.disputeState,
+      })
+      .from(invoices)
+      .where(and(inArray(invoices.customerId, [...chunk]), gt(invoices.balance, "0")));
+    for (const r of rows) {
+      const list = out.get(r.customerId) ?? [];
+      list.push({
+        docNumber: r.docNumber,
+        issueDate: r.issueDate,
+        dueDate: r.dueDate,
+        balance: r.balance,
+        status: r.status,
+        origin: r.origin,
+        disputeState: r.disputeState,
+      });
+      out.set(r.customerId, list);
+    }
   }
   return out;
 }
@@ -206,36 +256,40 @@ export type CandidateOrder = RuleOrder & {
 export async function loadCandidateOrders(
   customerIds: readonly string[],
   now: Date = new Date(),
+  lookbackDays: number = RULE_ORDER_LOOKBACK_DAYS,
 ): Promise<Map<string, CandidateOrder[]>> {
   const out = new Map<string, CandidateOrder[]>();
   if (customerIds.length === 0) return out;
-  const cutoff = new Date(now.getTime() - RULE_ORDER_LOOKBACK_DAYS * 86_400_000);
-  const rows = await db
-    .select({
-      orderId: orders.id,
-      customerId: orders.customerId,
-      orderNumber: orders.orderNumber,
-      shopifyOrderId: orders.shopifyOrderId,
-      total: orders.total,
-      holdState: orders.holdState,
-      cancelledAt: orders.cancelledAt,
-      fulfillmentStatus: orders.fulfillmentStatus,
-      shipmentStatus: orders.shipmentStatus,
-      orderDate: orders.orderDate,
-    })
-    .from(orders)
-    .where(
-      and(
-        inArray(orders.customerId, [...customerIds]),
-        isNull(orders.cancelledAt),
-        gte(orders.orderDate, cutoff),
-      ),
-    );
-  for (const r of rows) {
-    if (!r.customerId) continue;
-    const list = out.get(r.customerId) ?? [];
-    list.push({ ...r, customerId: r.customerId });
-    out.set(r.customerId, list);
+  const cutoff = new Date(now.getTime() - lookbackDays * 86_400_000);
+  for (let i = 0; i < customerIds.length; i += 1000) {
+    const chunk = customerIds.slice(i, i + 1000);
+    const rows = await db
+      .select({
+        orderId: orders.id,
+        customerId: orders.customerId,
+        orderNumber: orders.orderNumber,
+        shopifyOrderId: orders.shopifyOrderId,
+        total: orders.total,
+        holdState: orders.holdState,
+        cancelledAt: orders.cancelledAt,
+        fulfillmentStatus: orders.fulfillmentStatus,
+        shipmentStatus: orders.shipmentStatus,
+        orderDate: orders.orderDate,
+      })
+      .from(orders)
+      .where(
+        and(
+          inArray(orders.customerId, [...chunk]),
+          isNull(orders.cancelledAt),
+          gte(orders.orderDate, cutoff),
+        ),
+      );
+    for (const r of rows) {
+      if (!r.customerId) continue;
+      const list = out.get(r.customerId) ?? [];
+      list.push({ ...r, customerId: r.customerId });
+      out.set(r.customerId, list);
+    }
   }
   return out;
 }
@@ -250,10 +304,11 @@ export async function previewRule(
   customerId: string,
   rule: ResolvedHoldRule,
   now: Date = new Date(),
+  lookbackDays: number = RULE_ORDER_LOOKBACK_DAYS,
 ): Promise<RulePreview> {
   const [inv, ord] = await Promise.all([
     loadOpenInvoices([customerId]),
-    loadCandidateOrders([customerId], now),
+    loadCandidateOrders([customerId], now, lookbackDays),
   ]);
   const evaluation = evaluateCustomerRule(rule, inv.get(customerId) ?? [], now);
   const hit = ordersRuleWouldHold(evaluation, ord.get(customerId) ?? []);

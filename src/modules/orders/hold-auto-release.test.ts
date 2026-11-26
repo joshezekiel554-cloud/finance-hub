@@ -1,5 +1,6 @@
-// releaseResolvedHolds: claim-then-act + the H8 switch (auto-release emails
-// the warehouse "good to send" only when it was alerted about that hold).
+// releaseResolvedHolds: claim-then-act + the H8 switch (Settings
+// holds_auto_release_emails_warehouse, default ON: auto-release emails the
+// warehouse "good to send" only when it was alerted about that hold).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -8,16 +9,11 @@ const h = vi.hoisted(() => ({
   sends: [] as Array<Record<string, unknown>>,
   audits: [] as Array<Record<string, unknown>>,
   resolves: [] as Array<Record<string, unknown>>,
-  h8: false,
+  // Stored H8 value ("" = never set → default).
+  h8: "" as string,
 }));
 
 vi.mock("../../lib/env.js", () => ({ env: { SHADOW_MODE: false, PUBLIC_URL: "https://finance.example" } }));
-vi.mock("../hold-orders/decisions.js", () => ({
-  get AUTO_RELEASE_EMAILS_WAREHOUSE_IF_ALERTED() {
-    return h.h8;
-  },
-  RULE_HOLDS_RESPECT_PROMISE: false,
-}));
 vi.mock("../../db/index.js", () => {
   const chain = {
     from: () => chain,
@@ -49,10 +45,11 @@ vi.mock("../statements/settings.js", () => ({
     order_overdue_threshold_gbp: "1000",
     order_hold_warehouse_recipients: "wh@x.example",
     order_hold_team_recipients: "",
+    holds_auto_release_emails_warehouse: h.h8,
   })),
 }));
 vi.mock("../hold-orders/rules-store.js", () => ({
-  loadRulesFor: vi.fn(async () => new Map()),
+  loadEffectiveRules: vi.fn(async () => new Map()),
   loadOpenInvoices: vi.fn(async () => new Map()),
 }));
 vi.mock("../hold-orders/inbox-resolve.js", () => ({
@@ -93,19 +90,26 @@ beforeEach(() => {
   h.sends.length = 0;
   h.audits.length = 0;
   h.resolves.length = 0;
-  h.h8 = false;
+  h.h8 = "";
 });
 
 describe("releaseResolvedHolds", () => {
-  it("H8 off (today): releases silently", async () => {
+  it("H8 switched off in Settings: releases silently", async () => {
+    h.h8 = "false";
     h.rows = [paidRow()];
     expect(await releaseResolvedHolds()).toEqual({ released: 1 });
     expect(h.sends).toEqual([]);
     expect(h.resolves).toHaveLength(1);
   });
 
+  it("H8 never set → default ON (operator decision C): alerted warehouse gets good-to-send", async () => {
+    h.rows = [paidRow()];
+    await releaseResolvedHolds();
+    expect(h.sends).toHaveLength(1);
+  });
+
   it("H8 on + warehouse was alerted → one in-thread good-to-send", async () => {
-    h.h8 = true;
+    h.h8 = "true";
     h.rows = [paidRow()];
     await releaseResolvedHolds();
     expect(h.sends).toHaveLength(1);
@@ -113,14 +117,14 @@ describe("releaseResolvedHolds", () => {
   });
 
   it("H8 on but the warehouse was never alerted (record-only / no thread) → nobody emailed", async () => {
-    h.h8 = true;
+    h.h8 = "true";
     h.rows = [paidRow({ holdAlertThreadId: null, holdAlertMessageId: null })];
     await releaseResolvedHolds();
     expect(h.sends).toEqual([]);
   });
 
   it("someone released it between load and update → nothing (no email, audit, inbox call)", async () => {
-    h.h8 = true;
+    h.h8 = "true";
     h.rows = [paidRow()];
     h.claimable = 0;
     expect(await releaseResolvedHolds()).toEqual({ released: 0 });

@@ -24,7 +24,10 @@ import { emailLog } from "../../db/schema/crm.js";
 import { parseShipmentHtml } from "../b2b-invoicing/parser.js";
 import { listFlaggedOverdueOrders } from "../orders/overdue-alerts.js";
 import { classifyOrderHoldAlert } from "../orders/hold-alerts.js";
-import { loadCandidateOrders, loadOpenInvoices, loadRulesFor, RULE_ORDER_LOOKBACK_DAYS } from "./rules-store.js";
+import { loadCandidateOrders, loadEffectiveRules, loadOpenInvoices } from "./rules-store.js";
+import { loadAppSettings } from "../statements/settings.js";
+import { parseHoldsConfig } from "./holds-settings.js";
+import { loadPromiseSources } from "./promise-source.js";
 import { evaluateCustomerRule, isOrderOpen, ordersRuleWouldHold } from "./rule-engine.js";
 import {
   daysBetween,
@@ -70,7 +73,9 @@ export type HoldBoardRow = {
   chasing: boolean;
   pausedUntil: string | null;
   pauseNote: string | null;
-  promise: { payBy: string; note: string | null } | null;
+  // Active customer promise-to-pay. emailUrl = hub inbox link to the email
+  // it came from (null when typed by hand / no matching scan).
+  promise: { payBy: string; note: string | null; emailUrl: string | null } | null;
   releasedAt: string | null;
   invoiced: { docNumber: string; status: string | null; balance: string } | null;
   shipped: ShippedInfo | null;
@@ -197,6 +202,7 @@ export async function loadHoldBoard(opts: {
   extraOrderIds?: string[];
 }): Promise<HoldBoard> {
   const now = opts.now ?? new Date();
+  const config = parseHoldsConfig(await loadAppSettings());
   const releasedCutoff = new Date(now.getTime() - RELEASED_LOOKBACK_DAYS * 86_400_000);
 
   // 1) Held + recently released.
@@ -220,10 +226,13 @@ export async function loadHoldBoard(opts: {
     if (!list.includes(why)) list.push(why);
     atRiskWhy.set(orderId, list);
   };
-  const rules = await loadRulesFor();
+  const rules = await loadEffectiveRules(config);
   const ruleIds = [...rules.entries()].filter(([, r]) => r.preset !== "never").map(([id]) => id);
   if (ruleIds.length > 0) {
-    const [inv, ord] = await Promise.all([loadOpenInvoices(ruleIds), loadCandidateOrders(ruleIds, now)]);
+    const [inv, ord] = await Promise.all([
+      loadOpenInvoices(ruleIds),
+      loadCandidateOrders(ruleIds, now, config.ruleOrderLookbackDays),
+    ]);
     for (const id of ruleIds) {
       const rule = rules.get(id)!;
       const ev = evaluateCustomerRule(rule, inv.get(id) ?? [], now);
@@ -243,8 +252,8 @@ export async function loadHoldBoard(opts: {
     log.error({ err }, "at-risk: overdue review query failed");
   }
   // Account-state holds that standard detection didn't catch (it only
-  // auto-holds orders ≤3 days old).
-  const lookback = new Date(now.getTime() - RULE_ORDER_LOOKBACK_DAYS * 86_400_000);
+  // auto-holds orders inside its short new-order window).
+  const lookback = new Date(now.getTime() - config.ruleOrderLookbackDays * 86_400_000);
   const acctRows = await db
     .select({
       orderId: orders.id,
@@ -317,6 +326,18 @@ export async function loadHoldBoard(opts: {
   // 4) Shipped.
   const extensiv = await loadExtensivShipments(now);
 
+  // 5) Promise source emails (customers with an active promise only).
+  const promised = new Map<string, string>();
+  for (const r of all) {
+    if (r.customerId && r.promisedPayBy && promiseActive(r.promisedPayBy, now)) promised.set(r.customerId, r.promisedPayBy);
+  }
+  let promiseSources = new Map<string, { url: string }>();
+  try {
+    promiseSources = await loadPromiseSources([...promised].map(([customerId, payBy]) => ({ customerId, payBy })));
+  } catch (err) {
+    log.error({ err }, "promise source lookup failed — promises shown without email links");
+  }
+
   const counts: Record<HoldTab, number> = {
     held: 0,
     chasing: 0,
@@ -373,7 +394,11 @@ export async function loadHoldBoard(opts: {
       pausedUntil: iso(r.holdLadderPausedUntil),
       pauseNote: r.holdLadderPauseNote,
       promise: r.promisedPayBy && promiseActive(r.promisedPayBy, now)
-        ? { payBy: r.promisedPayBy, note: r.promiseNote ?? null }
+        ? {
+            payBy: r.promisedPayBy,
+            note: r.promiseNote ?? null,
+            emailUrl: (r.customerId ? promiseSources.get(r.customerId)?.url : undefined) ?? null,
+          }
         : null,
       releasedAt: iso(r.holdReleasedAt),
       invoiced: key ? (invoiceBy.get(key) ?? null) : null,

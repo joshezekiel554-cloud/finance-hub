@@ -12,11 +12,14 @@ import { customers } from "./customers";
 import { users } from "./auth";
 
 // Per-customer automatic hold rule (Hold Orders app). A row exists ONLY for
-// customers someone explicitly set a rule on — defaults are never applied to
-// customers automatically. Customers without a row keep today's standard
-// hold behaviour unchanged. Semantics of the numbers: see
-// src/modules/hold-orders/presets.ts. Every change is audit-logged
-// (entity "customer_hold_rule").
+// customers someone explicitly set a rule on. Customers without a row keep
+// the standard hold behaviour — unless an admin switches on the default b2b
+// rule in Hold Orders → Settings (ships off; see
+// src/modules/hold-orders/effective-rules.ts). A row always beats the
+// default, including "never". For preset rows the stored numbers are a
+// snapshot; evaluation uses the live preset numbers from Settings. Semantics
+// of the numbers: src/modules/hold-orders/presets.ts. Every change is
+// audit-logged (entity "customer_hold_rule").
 export const customerHoldRules = mysqlTable(
   "customer_hold_rules",
   {
